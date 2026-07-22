@@ -46,7 +46,7 @@ power + embedded simplicity** in one Rust library.
   h5i's design does not constrain this project.
 - **"For AI agents" is a UX property, not a storage-model property**: headless
   CLI, machine-readable output and errors, resource limits, trivial install.
-  (§7)
+  (§8)
 - **Fewer dependencies is better, but not at the price of rebuilding a SQL
   engine.** We take DataFusion (trimmed via feature flags) and Arrow/Parquet;
   we do not take a server, an ORM, or a framework.
@@ -151,7 +151,7 @@ and snapshots as extra GC roots pinning a set of version manifests.
   floats, dictionary for low-cardinality, RLE bitmaps for bools
   (`tsl/src/compression/`). Parquet gives us DELTA_BINARY_PACKED, dictionary,
   byte-stream-split + zstd/lz4 — close enough for v1; the Gorilla-class codecs
-  are the benchmark-gated custom-format escape hatch (§9).
+  are the benchmark-gated custom-format escape hatch (§10).
 - **segment_by / order_by** as the two user-visible layout knobs (partition
   column + sort order within segments), with auto-default heuristics.
 - **Sparse per-batch metadata** (min/max + bloom + first/last) as the scan
@@ -350,7 +350,70 @@ datetime, regex. Revisit umbrella-vs-granular crates once the build exists.
 
 ---
 
-## 7. Agent-facing UX (the actual "for AI agents" layer)
+## 7. Optimization strategy — how far to customize DataFusion
+
+DataFusion yes, "as it is" no. The optimizer work that pays off for this
+workload is mostly *not* a classical query optimizer: quant queries are
+shallow (scan → filter → bucket → aggregate, occasionally one as-of join), so
+there is no deep join-order search space, and DataFusion is already in
+DuckDB's ballpark on scan/aggregation benchmarks (ClickBench). The leverage
+is elsewhere. Three tiers, in strictly decreasing return-on-effort:
+
+**Tier 1 — optimize below the engine (mandatory; Phase 2).**
+For time-series, the decisive factor is how little data gets read, not how
+cleverly the plan is rearranged.
+
+- Segment pruning from manifest stats + exact filter/projection/limit
+  pushdown (§6) — a narrow time-range query over years of data must touch
+  only overlapping segments. No plan optimization competes with reading 1%
+  of the data.
+- **Metadata-only answers**: `COUNT(*)`, `MIN/MAX(ts)` served from the
+  manifest with zero scan. DataFusion's `AggregateStatistics` physical rule
+  performs this rewrite for free *if* our `TableProvider.statistics()`
+  reports honest exact statistics — a requirement on the provider, not new
+  optimizer code.
+- **Decoded-batch cache**: segments are immutable and content-addressed, so
+  caching decoded Arrow batches keyed by segment hash is trivially correct.
+  An embedded DB driven by an agent loop (describe → sample → query →
+  refine, repeatedly over the same table) re-reads the same segments
+  constantly; this cache likely buys more wall-clock than any optimizer
+  rule. LRU with a byte budget wired into `--memory-limit`.
+
+**Tier 2 — targeted custom rules injecting domain knowledge (planned;
+Phases 2 & 4).** DataFusion's rule-based optimizer is general-purpose and
+does not know our data is stored sorted by `(segment_by, time)`. A small set
+of custom `PhysicalOptimizerRule`s closes the gap — the same seam InfluxDB
+3.0 (IOx) and GreptimeDB spend their custom-rule budget on, which is good
+precedent that this is where domain engines win:
+
+- **Order preservation** (Phase 2): declare output ordering from the
+  `TableProvider`; ensure plans keep it — `SortPreservingMerge` across
+  segments, streaming (`InputOrderMode::Sorted`) aggregation for
+  `time_bucket` rollups, and no order-destroying round-robin repartition on
+  time-ordered scans. Streaming through a year of ticks in bounded memory
+  vs hash-aggregating it is the single biggest plan-level difference.
+- **Quant-idiom rewrites** (Phase 4): "latest row per key" (window top-1 /
+  `MAX(ts)` self-join patterns) → manifest-guided reverse scan that stops at
+  the first hit per key; recognizable rollup patterns → sorted-input
+  aggregation. Each rule is a few hundred lines against stable extension
+  APIs.
+- **Custom operators where DataFusion has none** (Phase 4): `AsOfJoinExec`
+  and gapfill (§6). Joins are DataFusion's weakest area relative to DuckDB;
+  our flagship join being custom sidesteps their weakest component rather
+  than inheriting it.
+
+**Tier 3 — replacing DataFusion internals (don't, without a benchmark that
+forces it).** Own aggregation executor, own vectorized kernels, a
+cost-based optimizer, or a fork: this is where maintenance cost explodes —
+DataFusion moves fast and forked internals turn every upgrade into a merge
+project. A CBO in particular buys almost nothing on shallow plans. The
+precedent systems all stopped at Tier 2; so do we. Any Tier-3 proposal needs
+a written benchmark case that Tiers 1–2 demonstrably cannot meet (same bar
+as the custom file format, §10).
+
+---
+
+## 8. Agent-facing UX (the actual "for AI agents" layer)
 
 No MCP, no protocol — a disciplined CLI and Python API that any shell-capable
 agent (Claude Code, Codex, scripts, CI) can drive.
@@ -388,7 +451,7 @@ Contract, enforced from the first release:
 
 ---
 
-## 8. Roadmap
+## 9. Roadmap
 
 Phases are cumulative; each ends with something demonstrable. Rough sizing
 assumes one focused developer + AI agents; phases 0–2 are the proof of value.
@@ -411,8 +474,10 @@ intact, orphans vacuumable). Concurrency stress test: N writers × M readers.
 **Phase 2 — Query performance.**
 `PruningStatistics` over manifests + `Exact` pushdown (benchmark: narrow
 time-range query over years of data touches only overlapping segments);
-declared output ordering → streaming ordered aggregation; `time_bucket` +
-`first`/`last` UDFs; DataFusion feature-flag trim; first public benchmark
+declared output ordering → order-preservation rules + streaming ordered
+aggregation (§7 Tier 2); metadata-only `COUNT`/`MIN`/`MAX` via exact
+provider statistics; decoded-batch cache keyed by segment hash (§7 Tier 1);
+`time_bucket` + `first`/`last` UDFs; DataFusion feature-flag trim; first public benchmark
 vs DuckDB-over-Parquet and ArcticDB (ingest rate, time-range scan, bucketed
 aggregation, cold version read).
 *Exit: pruning + ordered aggregation demonstrably working; honest numbers.*
@@ -425,9 +490,10 @@ for high-cardinality equality predicates (`contained()` hook).
 
 **Phase 4 — Time-series operators (the differentiator).**
 `AsOfJoinExec` (sorted-merge fast path + fallback sort path; SQL `ASOF JOIN`
-via RelationPlanner + DataFrame `join_asof`); `resample` sugar; gapfill +
-locf/interpolate operator; OHLC helper; benchmark as-of join vs DuckDB and
-pandas `merge_asof`.
+via RelationPlanner + DataFrame `join_asof`); quant-idiom rewrite rules
+(latest-row-per-key → manifest-guided reverse scan, §7 Tier 2); `resample`
+sugar; gapfill + locf/interpolate operator; OHLC helper; benchmark as-of
+join vs DuckDB and pandas `merge_asof`.
 *Exit: quote/trade as-of join + resample pipeline, faster than pandas,
 competitive with DuckDB, with time travel underneath.*
 
@@ -444,11 +510,11 @@ clean reformulation of Timescale's cagg design).
 package if ever), server/daemon mode, distributed query, multi-master writes,
 row-level MVCC transactions, vector search, RBAC, custom SQL dialect beyond
 listed extensions, ArcticDB API compatibility, custom columnar file format
-(see §9), agent/worktree/memory concepts in the engine.
+(see §10), agent/worktree/memory concepts in the engine.
 
 ---
 
-## 9. Risks and pre-committed fallbacks
+## 10. Risks and pre-committed fallbacks
 
 - **Parquet may underperform on tiny time-range reads or ultra-wide tables**
   (ArcticDB tiles columns at 127 per segment for a reason). *Mitigation:*
@@ -467,12 +533,12 @@ listed extensions, ArcticDB API compatibility, custom columnar file format
   backward vs forward). *Mitigation:* adopt DuckDB's semantics and port its
   test corpus (`benchmark/micro/join/asof_join*`, plus its SQL tests) before
   optimizing.
-- **Scope creep toward "agent platform".** *Mitigation:* §8 non-goals list;
+- **Scope creep toward "agent platform".** *Mitigation:* §9 non-goals list;
   anything agent-flavored must land in CLI/docs/skill, never in the engine.
 
 ---
 
-## 10. Open questions (fine to defer, recorded so they aren't lost)
+## 11. Open questions (fine to defer, recorded so they aren't lost)
 
 1. Manifest encoding: postcard vs flatbuffers (decide in Phase 0 with a
    micro-benchmark; both keep the JSON debug dump).
