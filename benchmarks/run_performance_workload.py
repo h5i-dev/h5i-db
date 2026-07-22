@@ -84,6 +84,8 @@ def execute_once(binary: Path, db: Path, case: dict[str, Any]) -> dict[str, Any]
         case["sql"],
         "--stats",
     ]
+    if case.get("predicate_cache"):
+        command.append("--predicate-cache")
     started = time.perf_counter_ns()
     result = subprocess.run(command, text=True, capture_output=True, check=False)
     wall_ns = time.perf_counter_ns() - started
@@ -110,6 +112,14 @@ def execute_once(binary: Path, db: Path, case: dict[str, Any]) -> dict[str, Any]
             "page_index_rows_pruned": report["page_index_rows_pruned"],
             "spill_count": report["spill_count"],
             "spilled_bytes": report["spilled_bytes"],
+            "predicate_cache_lookups": report["predicate_cache_lookups"],
+            "predicate_cache_hits": report["predicate_cache_hits"],
+            "predicate_cache_misses": report["predicate_cache_misses"],
+            "predicate_cache_builds": report["predicate_cache_builds"],
+            "predicate_cache_row_groups_reused": report[
+                "predicate_cache_row_groups_reused"
+            ],
+            "predicate_cache_evictions": report["predicate_cache_evictions"],
         },
     }
 

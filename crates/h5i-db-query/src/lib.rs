@@ -10,6 +10,7 @@ pub mod finance;
 pub mod functions;
 pub mod gapfill;
 pub mod metrics;
+mod predicate_cache;
 pub mod provider;
 pub mod pruning;
 pub mod session;
@@ -21,6 +22,7 @@ pub use metrics::{
     OperatorPerformanceMetrics, QueryPerformanceReport, QueryStatus, ReportedDataFrame,
     ReportedQueryStream, ScanMetrics, ScanMetricsCollector, WorkloadTelemetryEnvelope,
 };
+pub use predicate_cache::PredicateCacheMode;
 pub use provider::H5iTableProvider;
 pub use session::{H5iSession, SessionOptions};
 pub use tail::TailProvider;

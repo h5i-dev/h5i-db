@@ -29,6 +29,13 @@ REQUIRED_INTEGERS = (
     "spill_count",
     "spilled_bytes",
     "sort_operators",
+    "predicate_cache_lookups",
+    "predicate_cache_hits",
+    "predicate_cache_misses",
+    "predicate_cache_builds",
+    "predicate_cache_rejected",
+    "predicate_cache_row_groups_reused",
+    "predicate_cache_evictions",
 )
 
 

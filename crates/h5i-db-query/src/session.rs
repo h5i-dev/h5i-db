@@ -31,6 +31,7 @@ use crate::metrics::{
 use crate::provider::H5iTableProvider;
 use crate::tail::TailFunc;
 use crate::udtf::TimeTravelFunc;
+use crate::PredicateCacheMode;
 
 /// Resource and execution options for a session.
 #[derive(Debug, Clone, Default)]
@@ -45,6 +46,9 @@ pub struct SessionOptions {
     /// Privacy-preserving query reports retained in memory. Zero disables
     /// workload telemetry; collection is deliberately opt-in.
     pub telemetry_capacity: usize,
+    /// Disposable predicate sidecar policy. Disabled by default so opening a
+    /// query session never introduces hidden writes.
+    pub predicate_cache: PredicateCacheMode,
 }
 
 pub struct H5iSession {
@@ -54,6 +58,7 @@ pub struct H5iSession {
     metrics: ScanMetricsCollector,
     session_id: Uuid,
     telemetry: WorkloadTelemetryBuffer,
+    predicate_cache_mode: PredicateCacheMode,
     /// Catalog table names currently registered (kept for [`Self::refresh`]).
     registered: Mutex<HashSet<String>>,
 }
@@ -92,6 +97,7 @@ impl H5iSession {
         runtime: Arc<RuntimeEnv>,
     ) -> DfResult<Self> {
         let telemetry = WorkloadTelemetryBuffer::new(options.telemetry_capacity);
+        let predicate_cache_mode = options.predicate_cache;
         let mut config = SessionConfig::new().with_information_schema(true);
         if let Some(tp) = options.target_partitions {
             config = config.with_target_partitions(tp.max(1));
@@ -130,11 +136,10 @@ impl H5iSession {
             let name = resolved.entry.name.clone();
             ctx.register_table(
                 &name,
-                Arc::new(H5iTableProvider::new(
-                    resolved,
-                    url.clone(),
-                    metrics.clone(),
-                )),
+                Arc::new(
+                    H5iTableProvider::new(resolved, url.clone(), metrics.clone())
+                        .with_predicate_cache(db.backend().clone(), predicate_cache_mode),
+                ),
             )?;
             registered.insert(name);
         }
@@ -167,6 +172,7 @@ impl H5iSession {
             metrics,
             session_id: Uuid::new_v4(),
             telemetry,
+            predicate_cache_mode,
             registered: Mutex::new(registered),
         })
     }
@@ -190,11 +196,10 @@ impl H5iSession {
             }
             self.ctx.register_table(
                 &name,
-                Arc::new(H5iTableProvider::new(
-                    r,
-                    self.url.clone(),
-                    self.metrics.clone(),
-                )),
+                Arc::new(
+                    H5iTableProvider::new(r, self.url.clone(), self.metrics.clone())
+                        .with_predicate_cache(self.db.backend().clone(), self.predicate_cache_mode),
+                ),
             )?;
         }
         *registered = fresh;
@@ -252,11 +257,10 @@ impl H5iSession {
             .resolve(name, at)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let provider = Arc::new(H5iTableProvider::new(
-            resolved,
-            self.url.clone(),
-            self.metrics.clone(),
-        ));
+        let provider = Arc::new(
+            H5iTableProvider::new(resolved, self.url.clone(), self.metrics.clone())
+                .with_predicate_cache(self.db.backend().clone(), self.predicate_cache_mode),
+        );
         self.ctx.read_table(provider)
     }
 

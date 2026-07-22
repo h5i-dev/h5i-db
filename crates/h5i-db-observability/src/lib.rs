@@ -22,6 +22,20 @@ pub struct ScanMetrics {
     pub segments_pruned: usize,
     pub segments_scanned: usize,
     pub bytes_scheduled: u64,
+    #[serde(default)]
+    pub predicate_cache_lookups: usize,
+    #[serde(default)]
+    pub predicate_cache_hits: usize,
+    #[serde(default)]
+    pub predicate_cache_misses: usize,
+    #[serde(default)]
+    pub predicate_cache_builds: usize,
+    #[serde(default)]
+    pub predicate_cache_rejected: usize,
+    #[serde(default)]
+    pub predicate_cache_row_groups_reused: usize,
+    #[serde(default)]
+    pub predicate_cache_evictions: usize,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +75,20 @@ pub struct QueryPerformanceReport {
     pub spill_count: u64,
     pub spilled_bytes: u64,
     pub sort_operators: usize,
+    #[serde(default)]
+    pub predicate_cache_lookups: usize,
+    #[serde(default)]
+    pub predicate_cache_hits: usize,
+    #[serde(default)]
+    pub predicate_cache_misses: usize,
+    #[serde(default)]
+    pub predicate_cache_builds: usize,
+    #[serde(default)]
+    pub predicate_cache_rejected: usize,
+    #[serde(default)]
+    pub predicate_cache_row_groups_reused: usize,
+    #[serde(default)]
+    pub predicate_cache_evictions: usize,
     pub scans: Vec<ScanMetrics>,
     pub operators: Vec<OperatorPerformanceMetrics>,
 }
@@ -128,6 +156,13 @@ mod tests {
             spill_count: 0,
             spilled_bytes: 0,
             sort_operators: 0,
+            predicate_cache_lookups: 0,
+            predicate_cache_hits: 0,
+            predicate_cache_misses: 0,
+            predicate_cache_builds: 0,
+            predicate_cache_rejected: 0,
+            predicate_cache_row_groups_reused: 0,
+            predicate_cache_evictions: 0,
             scans: Vec::new(),
             operators: Vec::new(),
         }

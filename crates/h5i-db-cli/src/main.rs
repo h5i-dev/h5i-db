@@ -18,7 +18,7 @@ use futures::StreamExt;
 use h5i_db_core::{
     Database, Error, ReadAt, Result, ScanOptions, StorageOptions, TableOptions, WriteOptions,
 };
-use h5i_db_query::{H5iSession, SessionOptions};
+use h5i_db_query::{H5iSession, PredicateCacheMode, SessionOptions};
 
 use ingest::{align_batch, open_input, InputFormat};
 use output::{
@@ -149,6 +149,9 @@ enum Command {
         /// Print scan/pruning statistics to stderr after the query.
         #[arg(long)]
         stats: bool,
+        /// Read and build disposable immutable predicate-cache sidecars.
+        #[arg(long)]
+        predicate_cache: bool,
     },
 
     /// Ingest data into a table from Parquet/CSV/Arrow (or stdin with "-").
@@ -611,6 +614,7 @@ async fn run(cli: Cli) -> Result<()> {
             spill_dir,
             threads,
             stats,
+            predicate_cache,
         } => {
             let sql = if sql == "-" {
                 let mut buf = String::new();
@@ -631,6 +635,11 @@ async fn run(cli: Cli) -> Result<()> {
                     target_partitions: threads,
                     batch_size: None,
                     telemetry_capacity: 0,
+                    predicate_cache: if predicate_cache {
+                        PredicateCacheMode::ReadWrite
+                    } else {
+                        PredicateCacheMode::Disabled
+                    },
                 },
             )
             .await

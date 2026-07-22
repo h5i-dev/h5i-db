@@ -10,8 +10,10 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::common::stats::Precision;
 use datafusion::physical_plan::displayable;
-use h5i_db_core::{Database, TableOptions, WriteOptions};
-use h5i_db_query::{H5iSession, QueryStatus, SessionOptions, WorkloadTelemetryEnvelope};
+use h5i_db_core::{Database, StorageOptions, TableOptions, WriteOptions};
+use h5i_db_query::{
+    H5iSession, PredicateCacheMode, QueryStatus, SessionOptions, WorkloadTelemetryEnvelope,
+};
 use object_store::{path::Path as ObjectPath, ObjectStoreExt};
 
 fn trades_schema() -> SchemaRef {
@@ -629,4 +631,182 @@ async fn reported_queries_isolate_scans_and_persist_private_telemetry() {
     let envelope: WorkloadTelemetryEnvelope = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(envelope.format, 1);
     assert_eq!(envelope.reports, telemetry);
+}
+
+// ---------------------------------------------------------------------------
+// P2 immutable predicate cache.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn predicate_cache_reuses_row_group_selection_and_recovers_from_corruption() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table(
+        "trades",
+        trades_schema(),
+        TableOptions {
+            storage: StorageOptions {
+                target_segment_bytes: 2 * 1024 * 1024,
+                target_row_group_bytes: 16 * 1024,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // The writer intentionally floors row groups at 8K rows. Four groups let
+    // the first two encode a correlation that min/max statistics cannot see.
+    let rows = 32_768usize;
+    let timestamps = (0..rows).map(|i| i as i64).collect::<Vec<_>>();
+    let mut symbols = Vec::with_capacity(rows);
+    let mut prices = Vec::with_capacity(rows);
+    let mut sizes = Vec::with_capacity(rows);
+    for i in 0..rows {
+        let second_half = i >= rows / 2;
+        let symbol_a = i % 2 == 0;
+        symbols.push(if symbol_a { "A" } else { "B" });
+        prices.push(i as f64);
+        sizes.push(i64::from(symbol_a == second_half));
+    }
+    db.append(
+        "trades",
+        vec![trades_batch(&timestamps, &symbols, &prices, &sizes)],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let session = H5iSession::new(
+        db.clone(),
+        SessionOptions {
+            predicate_cache: PredicateCacheMode::ReadWrite,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let sql = "SELECT count(*) FROM trades WHERE symbol = 'A' AND size = 1";
+
+    let (cold_batches, cold) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let count = cold_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(count, (rows / 4) as i64);
+    assert_eq!(cold.predicate_cache_builds, 1, "{cold:#?}");
+    assert_eq!(cold.predicate_cache_hits, 0);
+
+    let (_, warm) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(warm.predicate_cache_hits, 1);
+    assert_eq!(warm.predicate_cache_builds, 0);
+    assert!(warm.predicate_cache_row_groups_reused > 1);
+    assert!(
+        warm.bytes_scanned < cold.bytes_scanned,
+        "warm={} cold={}",
+        warm.bytes_scanned,
+        cold.bytes_scanned
+    );
+
+    let cache_objects = db
+        .backend()
+        .list(&ObjectPath::from("cache/predicates/v1"))
+        .await
+        .unwrap();
+    assert_eq!(cache_objects.len(), 1);
+    db.backend()
+        .put(
+            &cache_objects[0].location,
+            bytes::Bytes::from_static(b"corrupt"),
+        )
+        .await
+        .unwrap();
+
+    let (recovered_batches, recovered) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let recovered_count = recovered_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(recovered_count, count);
+    assert_eq!(recovered.predicate_cache_hits, 0);
+    assert_eq!(recovered.predicate_cache_misses, 1);
+    assert_eq!(recovered.predicate_cache_builds, 1);
+
+    // A new version reuses the old segment sidecar and misses only for the
+    // newly added immutable segment.
+    let added = 8192usize;
+    let added_ts = (0..added).map(|i| (rows + i) as i64).collect::<Vec<_>>();
+    db.append(
+        "trades",
+        vec![trades_batch(
+            &added_ts,
+            &vec!["A"; added],
+            &vec![1.0; added],
+            &vec![1; added],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    session.refresh().await.unwrap();
+    let (appended_batches, appended) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let appended_count = appended_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(appended_count, count + added as i64);
+    assert_eq!(appended.predicate_cache_hits, 1);
+    assert_eq!(appended.predicate_cache_builds, 1);
+
+    // Compaction rewrites both segments under a new checksum: it is a clean
+    // miss, never a stale hit, and the result remains identical.
+    db.compact("trades", WriteOptions::default()).await.unwrap();
+    session.refresh().await.unwrap();
+    let (compacted_batches, compacted) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let compacted_count = compacted_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(compacted_count, appended_count);
+    assert_eq!(compacted.predicate_cache_hits, 0);
+    assert_eq!(compacted.predicate_cache_builds, 1);
 }

@@ -247,15 +247,14 @@ VWAP/window state, and ordering/statistics declarations are present with focused
 tests.
 
 Functional exit gate: passed for planner statistics, metadata-only `COUNT(*)`,
-exact-set pruning, ASOF paths, sortedness, and VWAP retraction. The original
-observability gate—account for at least 95% of planned segment bytes as read or
-pruned—moves to P0 because actual physical-byte accounting is not yet present.
+exact-set pruning, ASOF paths, sortedness, and VWAP retraction. Physical scan
+attribution is now supplied by the P0 report.
 
 ## 6. Phase P2: immutable predicate cache
 
-**Status: planned.** Exact distinct-set and range pruning are foundations, not a
-persistent predicate cache. No checksum-keyed row-group/range sidecar store was
-found in the checkpoint audit.
+**Status: row-group prototype delivered.** Exact deterministic conjunctions can
+now reuse checksum-keyed row-group selections. Fine-grained qualifying row
+ranges and workload-based admission remain future extensions.
 
 [Predicate Caching](https://www.amazon.science/publications/predicate-caching-query-driven-secondary-indexing-for-cloud-data-warehouses)
 stores qualifying tuple ranges from repeated base scans. h5i-db has an unusually
@@ -294,6 +293,13 @@ fed to the Parquet reader's row-selection facility, with the original predicate
 still applied. Run-length/delta encoding should be enough initially; choose a
 bitmap only after measuring density.
 
+**Delivered.** The first eligibility contract accepts only conjunctions of
+typed column/literal equality and range comparisons, requires an equality term,
+and rejects casts, functions, null predicates, and other semantics it cannot
+fingerprint exactly. The key hashes normalized typed terms together with the
+segment checksum, schema revision, and expression-semantics version. Cache hits
+attach a `ParquetAccessPlan`; DataFusion still evaluates the original predicate.
+
 ### P2.2 Sidecar lifecycle
 
 Keep cache objects outside manifests, for example under a database-local
@@ -312,6 +318,14 @@ Compaction creates new segment checksums and therefore causes misses, not stale
 hits. Old versions continue to hit entries for their old segments until normal
 cache eviction.
 
+**Delivered for the prototype.** Versioned JSON entries live under
+`cache/predicates/v1/`, contain no literal values, carry an envelope checksum,
+and publish with create-if-absent. Missing, corrupt, rewritten, or new segments
+degrade to misses. Corrupt entries are discarded and rebuilt. Oldest entries
+are evicted after successful publication to keep the namespace under a 256 MiB
+default bound. The CLI requires explicit `--predicate-cache`, so a normal
+read-only query session introduces no hidden sidecar writes.
+
 ### P2.3 Safe extensions
 
 After exact-match wins are demonstrated:
@@ -325,6 +339,13 @@ Exit gate: on a repeated selective query, warm predicate-cache execution reads
 materially fewer data bytes than a warm filesystem-cache execution; a forced
 cache corruption, schema revision, and segment rewrite all degrade to a miss
 without changing results.
+
+Prototype exit gate: passed for a correlated two-column predicate that ordinary
+per-column Parquet statistics cannot eliminate. The test asserts lower physical
+scan bytes on the warm hit, result stability after forced sidecar corruption,
+reuse across an append-only version, and a clean miss after compaction rewrites
+the segment checksum. Schema revision is part of every key; a dedicated schema
+evolution case remains before declaring the full P2 phase production-complete.
 
 ## 7. Phase P3: version-aware mergeable aggregate states
 
@@ -587,8 +608,8 @@ surface. Revisit full IVM after those cases demonstrate sustained demand.
 |---|---|---|---|---|
 | P0 | **done** | Query-local metrics, workload log, benchmark matrix | uncertainty | existing scan metrics |
 | P1 | **done** | Planner stats, exact-set pruning, existing pushdowns | bytes and rows | maintenance only |
-| P2 | **next prototype** | Immutable predicate cache | repeated scan and decode | P0 attribution; P1 pruning |
-| P3 | foundation only | Segment aggregate-state store, OHLCV/VWAP | recomputation | P0; reuse P2 sidecar lifecycle |
+| P2 | **row-group prototype done** | Immutable predicate cache | repeated scan and decode | P0 attribution; P1 pruning |
+| P3 | foundation only; **next** | Segment aggregate-state store, OHLCV/VWAP | recomputation | P0; reuse P2 sidecar lifecycle |
 | P4 | planned | `LayoutSpec`, health, partial optimize plan/apply | future scan and sort | P0 telemetry; existing plan/apply |
 | P5 | partial | Parquet adaptation, then optional hot tier/custom encoding | ingest/decode residuals | evidence from P0-P4 |
 

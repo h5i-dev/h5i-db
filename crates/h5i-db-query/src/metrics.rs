@@ -213,6 +213,16 @@ impl ReportedQueryStream {
         let spill_count = operators.iter().map(|m| m.spill_count).sum();
         let spilled_bytes = operators.iter().map(|m| m.spilled_bytes).sum();
         let sort_operators = operators.iter().filter(|m| m.name.contains("Sort")).count();
+        let predicate_cache_lookups = scans.iter().map(|m| m.predicate_cache_lookups).sum();
+        let predicate_cache_hits = scans.iter().map(|m| m.predicate_cache_hits).sum();
+        let predicate_cache_misses = scans.iter().map(|m| m.predicate_cache_misses).sum();
+        let predicate_cache_builds = scans.iter().map(|m| m.predicate_cache_builds).sum();
+        let predicate_cache_rejected = scans.iter().map(|m| m.predicate_cache_rejected).sum();
+        let predicate_cache_row_groups_reused = scans
+            .iter()
+            .map(|m| m.predicate_cache_row_groups_reused)
+            .sum();
+        let predicate_cache_evictions = scans.iter().map(|m| m.predicate_cache_evictions).sum();
         let report = QueryPerformanceReport {
             query_id: self.query_id,
             query_fingerprint: self.query_fingerprint.clone(),
@@ -230,6 +240,13 @@ impl ReportedQueryStream {
             spill_count,
             spilled_bytes,
             sort_operators,
+            predicate_cache_lookups,
+            predicate_cache_hits,
+            predicate_cache_misses,
+            predicate_cache_builds,
+            predicate_cache_rejected,
+            predicate_cache_row_groups_reused,
+            predicate_cache_evictions,
             scans,
             operators,
         };

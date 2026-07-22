@@ -8,6 +8,9 @@
 use std::sync::Arc;
 
 pub use crate::metrics::{ScanMetrics, ScanMetricsCollector};
+use crate::predicate_cache::{
+    eligible_predicate, PredicateCache, PredicateCacheMode, PredicateCacheStats,
+};
 use crate::pruning::ManifestPruningStats;
 use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
@@ -146,6 +149,7 @@ pub struct H5iTableProvider {
     resolved: ResolvedTable,
     object_store_url: ObjectStoreUrl,
     metrics: ScanMetricsCollector,
+    predicate_cache: Option<PredicateCache>,
 }
 
 impl H5iTableProvider {
@@ -158,7 +162,19 @@ impl H5iTableProvider {
             resolved,
             object_store_url,
             metrics,
+            predicate_cache: None,
         }
+    }
+
+    pub fn with_predicate_cache(
+        mut self,
+        backend: h5i_db_core::Backend,
+        mode: PredicateCacheMode,
+    ) -> Self {
+        if mode != PredicateCacheMode::Disabled {
+            self.predicate_cache = Some(PredicateCache::new(backend, mode));
+        }
+        self
     }
 
     pub fn resolved(&self) -> &ResolvedTable {
@@ -260,16 +276,14 @@ impl TableProvider for H5iTableProvider {
         limit: Option<usize>,
     ) -> DfResult<Arc<dyn ExecutionPlan>> {
         let survivors = self.prune_segments(state, filters)?;
-
-        self.metrics.record(ScanMetrics {
-            query_id: None,
-            table: self.resolved.entry.name.clone(),
-            version: self.resolved.manifest.sequence,
-            segments_total: self.resolved.manifest.segments.len(),
-            segments_pruned: self.resolved.manifest.segments.len() - survivors.len(),
-            segments_scanned: survivors.len(),
-            bytes_scheduled: survivors.iter().map(|s| s.bytes).sum(),
-        });
+        let predicate_cache = self
+            .predicate_cache
+            .as_ref()
+            .and_then(|_| eligible_predicate(&self.schema(), filters));
+        let mut cache_stats = PredicateCacheStats::default();
+        if self.predicate_cache.is_some() && predicate_cache.is_none() && !filters.is_empty() {
+            cache_stats.rejected = 1;
+        }
 
         let mut source = ParquetSource::new(self.schema());
         // Footer-metadata cache: segments are immutable and content-addressed,
@@ -315,9 +329,39 @@ impl TableProvider for H5iTableProvider {
         if let Some(ordering) = self.output_ordering() {
             builder = builder.with_output_ordering(vec![ordering]);
         }
-        for seg in survivors {
-            builder = builder.with_file(PartitionedFile::new(seg.path.clone(), seg.bytes));
+        for seg in &survivors {
+            let mut file = PartitionedFile::new(seg.path.clone(), seg.bytes);
+            if let (Some(cache), Some(predicate)) = (&self.predicate_cache, &predicate_cache) {
+                let application = cache.apply(state, seg, predicate).await;
+                cache_stats.lookups += application.stats.lookups;
+                cache_stats.hits += application.stats.hits;
+                cache_stats.misses += application.stats.misses;
+                cache_stats.builds += application.stats.builds;
+                cache_stats.rejected += application.stats.rejected;
+                cache_stats.row_groups_reused += application.stats.row_groups_reused;
+                cache_stats.evictions += application.stats.evictions;
+                if let Some(access_plan) = application.access_plan {
+                    file = file.with_extension(access_plan);
+                }
+            }
+            builder = builder.with_file(file);
         }
+        self.metrics.record(ScanMetrics {
+            query_id: None,
+            table: self.resolved.entry.name.clone(),
+            version: self.resolved.manifest.sequence,
+            segments_total: self.resolved.manifest.segments.len(),
+            segments_pruned: self.resolved.manifest.segments.len() - survivors.len(),
+            segments_scanned: survivors.len(),
+            bytes_scheduled: survivors.iter().map(|s| s.bytes).sum(),
+            predicate_cache_lookups: cache_stats.lookups,
+            predicate_cache_hits: cache_stats.hits,
+            predicate_cache_misses: cache_stats.misses,
+            predicate_cache_builds: cache_stats.builds,
+            predicate_cache_rejected: cache_stats.rejected,
+            predicate_cache_row_groups_reused: cache_stats.row_groups_reused,
+            predicate_cache_evictions: cache_stats.evictions,
+        });
         Ok(DataSourceExec::from_data_source(builder.build()))
     }
 }

@@ -13,6 +13,7 @@
       "name": "single_symbol_time_range",
       "regression_gate": true,
       "require_scan": true,
+      "predicate_cache": true,
       "sql": "SELECT count(*) AS trades, min(price) AS low, max(price) AS high, sum(size) AS volume FROM trades WHERE symbol = 'SYM0000' AND ts >= to_timestamp_nanos(1750000000000000000) AND ts < to_timestamp_nanos(1750000060000000000)"
     }
   ]
