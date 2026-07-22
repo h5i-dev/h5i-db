@@ -163,7 +163,7 @@ async fn plan_flow_via_ui_respects_read_only_and_applies() {
     let (status, detail) =
         get_json(&ro_router, &format!("/api/plan/trades/{}", plan.plan_id)).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(detail["before_sample"]["rows"].as_array().unwrap().len() > 0);
+    assert!(!detail["before_sample"]["rows"].as_array().unwrap().is_empty());
 
     // Read-only UI refuses to apply.
     let (status, err) = post_json(

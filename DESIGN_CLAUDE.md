@@ -693,3 +693,51 @@ authoritative one for implementation; DESIGN_CODEX.md remains a valuable
 second opinion, especially its benchmark workload matrix (§"Benchmark and
 acceptance plan"), which Phase 2 should mine when writing the benchmark
 suite.
+
+---
+
+## 13. Implementation status (2026-07-22)
+
+The roadmap above was implemented in full on branch `poc`, with several
+additions that emerged during build-out. Test suite: **65 tests, 0 failures**
+(37 core incl. kill-at-every-commit-step crash injection, 17 query, 5 CLI
+e2e, 6 review-UI API), zero clippy warnings.
+
+| Roadmap item | Status |
+|---|---|
+| Phase 0 walking skeleton (FORMAT/catalog/HEAD/manifests, Parquet segments + stats, CLI) | ✅ |
+| Phase 1 versioning (CAS commits, conflicts, time travel O(1)/O(log V), replace/delete range, snapshots, restore, compact, vacuum, verify, dedup, crash safety) | ✅ exit gates pass |
+| Phase 2 performance (manifest `PruningStatistics`, declared ordering, `time_bucket`, footer-metadata cache, benchmarks vs raw DF & Polars) | ✅ |
+| Phase 3 Python (`pip install h5i-db`, Arrow-IPC interop, plan/apply from Python) | ✅ wheel builds; CI smoke-tests it |
+| Phase 4 time-series ops (AsOfJoinExec w/ sort-elision, SQL `asof_join(...)` + DataFrame `asof_join`, `vwap`/`wavg`/`ewma`) | ✅ (gapfill: post-v1) |
+| Phase 5 (S3 backend, staged parallel ingest, manifest-log checkpoint, caggs) | ⏳ deferred as designed |
+| CI/CD (fmt+clippy+tests linux/macos, wheel build+smoke, bench canary; release binaries ×4 targets + wheels) | ✅ |
+
+Additions beyond the original roadmap (user-driven, adopted into the design):
+
+- **Previewable mutations** (§5): `plan_*`/`apply`/`discard` with exact
+  previews, TTL, vacuum protection — plus **mutation policy** (`POLICY`
+  object, per-op direct-vs-reviewed enforcement) and `execution_mode` +
+  `plan_hash` audit fields in every manifest. Direct and planned commits
+  share one write path.
+- **Review UI** (`h5i-db ui`): loopback axum server, embedded single-file
+  frontend (h5i visual language, herdr attention model): pending-plan
+  approval with before/after samples, version timeline with audit badges,
+  version diff, SQL scratchpad with pruning stats, snapshots.
+- **Finance primitives** (kdb+ lesson): `vwap`/`wavg` streaming aggregates,
+  `ewma` window function; formula packs stay out of core.
+- **Docs site** (`docs/`): landing page + two self-contained animated films
+  (overview, UI flow), h5i docs style.
+
+Headline benchmarks (20 M trades + 5 M quotes, disk-backed both sides — full
+table in `benchmarks/RESULTS.md`): narrow time-range scan **5.3 ms vs Polars
+14.9 ms**; 1-min OHLCV+VWAP **142 ms vs 1 575 ms**; ASOF join **364 ms vs
+475 ms**; ingest 3.2 M rows/s; old-version read 1.5 ms. Two measured
+optimizations came out of iteration: the immutable-segment footer-metadata
+cache, and disabling row-level filter pushdown (segment pruning already did
+the work).
+
+Known deliberate limitations (documented, tested to fail cleanly): schema
+evolution rejects mismatched writes rather than evolving (revision lineage is
+in the format, evolution rules are follow-up work); gapfill/LOCF and window
+join are design-listed but not yet operators; S3/staged ingest per Phase 5.
