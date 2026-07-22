@@ -23,14 +23,15 @@ rust-version = "1.85"
 h5i-db-core = { path = "crates/h5i-db-core" }
 h5i-db-query = { path = "crates/h5i-db-query" }
 
-arrow = { version = "59.1", default-features = false, features = [
+# arrow/parquet must match the versions datafusion 54.1 links against (58.x).
+arrow = { version = "58.3", default-features = false, features = [
     "csv",
     "ipc",
     "json",
     "prettyprint",
 ] }
-arrow-schema = { version = "59.1", features = ["serde"] }
-parquet = { version = "59.1", default-features = false, features = [
+arrow-schema = { version = "58.3", features = ["serde"] }
+parquet = { version = "58.3", default-features = false, features = [
     "arrow",
     "async",
     "object_store",
@@ -49,6 +50,7 @@ datafusion = { version = "54.1", default-features = false, features = [
     "unicode_expressions",
     "nested_expressions",
 ] }
+datafusion-pruning = "54.1"
 
 tokio = { version = "1", features = [
     "rt-multi-thread",
