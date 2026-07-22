@@ -660,12 +660,12 @@
         <tr><td>cold read of an old version</td><td><b>1.4 ms</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
       </table>
     </div>
-    <p class="bench-note reveal">Narrow scans win on manifest pruning. The OHLCV rollup wins 4.7–26×
+    <!--<p class="bench-note reveal">Narrow scans win on manifest pruning. The OHLCV rollup wins 4.7–26×
     because storage is already time-sorted and declared so — every baseline pays for a 20M-row sort.
     ASOF is a tie with Polars, full-scan decode a tie with DuckDB, both by design — and only one side
     has time travel, snapshots, previewable mutations, and crash-safe commits.
     ¹ PyArrow's experimental <code>join_asof</code>: 44.5 s at 2M rows, excluded. Full methodology in
-    <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p>
+    <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p> -->
   </div>
 </section>
 
