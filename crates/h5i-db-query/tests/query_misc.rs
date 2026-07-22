@@ -11,7 +11,8 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::common::stats::Precision;
 use datafusion::physical_plan::displayable;
 use h5i_db_core::{Database, TableOptions, WriteOptions};
-use h5i_db_query::{H5iSession, SessionOptions};
+use h5i_db_query::{H5iSession, QueryStatus, SessionOptions, WorkloadTelemetryEnvelope};
+use object_store::{path::Path as ObjectPath, ObjectStoreExt};
 
 fn trades_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -570,4 +571,62 @@ async fn time_bucket_timezone_tracks_dst_local_midnight() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("unknown IANA timezone"));
+}
+
+// ---------------------------------------------------------------------------
+// P0 query-local performance adapter (pure telemetry tests live in the
+// lightweight h5i-db-observability crate).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reported_queries_isolate_scans_and_persist_private_telemetry() {
+    let (_dir, db) = setup_trades().await;
+    let session = H5iSession::new(
+        db.clone(),
+        SessionOptions {
+            telemetry_capacity: 2,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (a, b) = tokio::join!(
+        session.sql_reported("SELECT * FROM trades WHERE symbol = 'A'"),
+        session.sql_reported("SELECT * FROM trades WHERE symbol = 'B'")
+    );
+    let (a, b) = tokio::join!(a.unwrap().collect(), b.unwrap().collect());
+    let (_, a) = a.unwrap();
+    let (_, b) = b.unwrap();
+
+    assert_eq!(a.status, QueryStatus::Succeeded);
+    assert_eq!(b.status, QueryStatus::Succeeded);
+    assert_ne!(a.query_id, b.query_id);
+    assert_eq!(a.output_rows, 2);
+    assert_eq!(b.output_rows, 2);
+    assert!(a.bytes_scanned > 0);
+    assert!(b.bytes_scanned > 0);
+    assert!(!a.scans.is_empty());
+    assert!(!b.scans.is_empty());
+    assert!(a.scans.iter().all(|scan| scan.query_id == Some(a.query_id)));
+    assert!(b.scans.iter().all(|scan| scan.query_id == Some(b.query_id)));
+
+    let telemetry = session.workload_telemetry();
+    assert_eq!(telemetry.len(), 2);
+    let serialized = serde_json::to_string(&telemetry).unwrap();
+    assert!(!serialized.contains("SELECT"));
+
+    let path = session.flush_workload_telemetry().await.unwrap().unwrap();
+    let bytes = db
+        .backend()
+        .store
+        .get(&ObjectPath::from(path.as_str()))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let envelope: WorkloadTelemetryEnvelope = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(envelope.format, 1);
+    assert_eq!(envelope.reports, telemetry);
 }

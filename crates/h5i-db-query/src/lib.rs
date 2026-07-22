@@ -9,6 +9,7 @@ pub mod asof;
 pub mod finance;
 pub mod functions;
 pub mod gapfill;
+pub mod metrics;
 pub mod provider;
 pub mod pruning;
 pub mod session;
@@ -16,7 +17,11 @@ pub mod tail;
 pub mod udtf;
 
 pub use asof::{asof_join, AsOfDirection, AsOfJoinExec, AsOfJoinNode, AsOfOptions};
-pub use provider::{H5iTableProvider, ScanMetrics, ScanMetricsCollector};
+pub use metrics::{
+    OperatorPerformanceMetrics, QueryPerformanceReport, QueryStatus, ReportedDataFrame,
+    ReportedQueryStream, ScanMetrics, ScanMetricsCollector, WorkloadTelemetryEnvelope,
+};
+pub use provider::H5iTableProvider;
 pub use session::{H5iSession, SessionOptions};
 pub use tail::TailProvider;
 

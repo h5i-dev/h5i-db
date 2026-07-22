@@ -1869,6 +1869,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "h5i-db-observability"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "h5i-db-python"
 version = "0.1.0"
 dependencies = [
@@ -1897,6 +1907,7 @@ dependencies = [
  "datafusion-pruning",
  "futures",
  "h5i-db-core",
+ "h5i-db-observability",
  "object_store 0.13.2",
  "parquet",
  "rand 0.9.5",

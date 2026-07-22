@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/h5i-db-observability",
     "crates/h5i-db-core",
     "crates/h5i-db-query",
     "crates/h5i-db-cli",
@@ -26,6 +27,7 @@ rust-version = "1.88"
 # version alongside path so `cargo publish` can rewrite these for crates.io.
 h5i-db-core = { path = "crates/h5i-db-core", version = "0.1.0" }
 h5i-db-query = { path = "crates/h5i-db-query", version = "0.1.0" }
+h5i-db-observability = { path = "crates/h5i-db-observability", version = "0.1.0" }
 
 # arrow/parquet must match the versions datafusion 54.1 links against (58.x).
 arrow = { version = "58.3", default-features = false, features = [

@@ -630,21 +630,25 @@ async fn run(cli: Cli) -> Result<()> {
                     spill_dir,
                     target_partitions: threads,
                     batch_size: None,
+                    telemetry_capacity: 0,
                 },
             )
             .await
             .map_err(Error::internal)?;
 
             let work = async {
-                let df = session.sql(&sql).await.map_err(classify_df_error)?;
+                let df = session
+                    .sql_reported(&sql)
+                    .await
+                    .map_err(classify_df_error)?;
                 let df = match max_rows {
                     Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
                     None => df,
                 };
                 // Stream result batches straight to stdout instead of
                 // collecting the full result first.
-                let schema: SchemaRef = Arc::new(df.schema().as_arrow().clone());
                 let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
+                let schema = stream.schema();
                 let mut writer = BatchWriter::new(format, schema, max_bytes)?;
                 let mut truncated = false;
                 while let Some(batch) = stream.next().await {
@@ -663,9 +667,9 @@ async fn run(cli: Cli) -> Result<()> {
                         ),
                     });
                 }
-                Ok(())
+                Ok(stream.report().cloned())
             };
-            match timeout {
+            let report = match timeout {
                 Some(t) => tokio::time::timeout(*t, work)
                     .await
                     .map_err(|_| Error::Timeout {
@@ -674,8 +678,8 @@ async fn run(cli: Cli) -> Result<()> {
                 None => work.await?,
             };
             if stats {
-                for m in session.take_scan_metrics() {
-                    eprintln!("{}", serde_json::to_string(&m)?);
+                if let Some(report) = report {
+                    eprintln!("{}", serde_json::to_string(&report)?);
                 }
             }
             Ok(())

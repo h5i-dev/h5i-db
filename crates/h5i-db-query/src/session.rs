@@ -16,12 +16,19 @@ use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use h5i_db_core::{Database, ReadAt, ResolvedTable};
+use h5i_db_observability::WorkloadTelemetryBuffer;
+use object_store::{path::Path as ObjectPath, ObjectStoreExt};
+use uuid::Uuid;
 
 use crate::asof::{AsOfJoinFunc, AsOfQueryPlanner};
 use crate::finance::{ewma_udwf, vwap_udaf, wavg_udaf};
 use crate::functions::time_bucket_udf;
 use crate::gapfill::GapFillFunc;
-use crate::provider::{H5iTableProvider, ScanMetrics, ScanMetricsCollector};
+use crate::metrics::{
+    QueryPerformanceReport, ReportedDataFrame, ScanMetrics, ScanMetricsCollector,
+    WorkloadTelemetryEnvelope,
+};
+use crate::provider::H5iTableProvider;
 use crate::tail::TailFunc;
 use crate::udtf::TimeTravelFunc;
 
@@ -35,6 +42,9 @@ pub struct SessionOptions {
     /// Parallelism (defaults to the number of cores).
     pub target_partitions: Option<usize>,
     pub batch_size: Option<usize>,
+    /// Privacy-preserving query reports retained in memory. Zero disables
+    /// workload telemetry; collection is deliberately opt-in.
+    pub telemetry_capacity: usize,
 }
 
 pub struct H5iSession {
@@ -42,6 +52,8 @@ pub struct H5iSession {
     db: Arc<Database>,
     url: ObjectStoreUrl,
     metrics: ScanMetricsCollector,
+    session_id: Uuid,
+    telemetry: WorkloadTelemetryBuffer,
     /// Catalog table names currently registered (kept for [`Self::refresh`]).
     registered: Mutex<HashSet<String>>,
 }
@@ -79,6 +91,7 @@ impl H5iSession {
         options: SessionOptions,
         runtime: Arc<RuntimeEnv>,
     ) -> DfResult<Self> {
+        let telemetry = WorkloadTelemetryBuffer::new(options.telemetry_capacity);
         let mut config = SessionConfig::new().with_information_schema(true);
         if let Some(tp) = options.target_partitions {
             config = config.with_target_partitions(tp.max(1));
@@ -152,6 +165,8 @@ impl H5iSession {
             db,
             url,
             metrics,
+            session_id: Uuid::new_v4(),
+            telemetry,
             registered: Mutex::new(registered),
         })
     }
@@ -214,6 +229,22 @@ impl H5iSession {
         self.ctx.sql(&rewritten).await
     }
 
+    /// Plan SQL for query-local physical metrics and workload telemetry.
+    /// Unlike [`Self::take_scan_metrics`], concurrent executions cannot drain
+    /// or mix one another's scan records.
+    pub async fn sql_reported(&self, query: &str) -> DfResult<ReportedDataFrame> {
+        let started = std::time::Instant::now();
+        let dataframe = self.sql(query).await?;
+        let logical_planning_ns = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        Ok(ReportedDataFrame::new(
+            dataframe,
+            query,
+            logical_planning_ns,
+            self.metrics.clone(),
+            self.telemetry.clone(),
+        ))
+    }
+
     /// DataFrame over a table at a given read point (DataFrame-API entry).
     pub async fn read_table(&self, name: &str, at: ReadAt) -> DfResult<DataFrame> {
         let resolved = self
@@ -232,6 +263,39 @@ impl H5iSession {
     /// Drain per-scan pruning metrics recorded since the last call.
     pub fn take_scan_metrics(&self) -> Vec<ScanMetrics> {
         self.metrics.take()
+    }
+
+    /// Snapshot the bounded telemetry ring without clearing it.
+    pub fn workload_telemetry(&self) -> Vec<QueryPerformanceReport> {
+        self.telemetry.snapshot()
+    }
+
+    pub fn clear_workload_telemetry(&self) {
+        self.telemetry.clear();
+    }
+
+    /// Persist this session's bounded telemetry snapshot as one replaceable
+    /// sidecar. Query text and literal values are never written.
+    pub async fn flush_workload_telemetry(&self) -> DfResult<Option<String>> {
+        let reports = self.telemetry.snapshot();
+        if reports.is_empty() {
+            return Ok(None);
+        }
+        let envelope = WorkloadTelemetryEnvelope {
+            format: 1,
+            session_id: self.session_id,
+            reports,
+        };
+        let bytes =
+            serde_json::to_vec(&envelope).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let path = ObjectPath::from(format!("telemetry/workload/v1/{}.json", self.session_id));
+        self.db
+            .backend()
+            .store
+            .put(&path, bytes.into())
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(Some(path.to_string()))
     }
 }
 

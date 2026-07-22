@@ -563,18 +563,19 @@ async fn run_query(State(st): State<UiState>, Json(body): Json<QueryBody>) -> Ap
         }
         // Fetch one row past the cap so truncation is detectable.
         let df = session
-            .sql(&body.sql)
+            .sql_reported(&body.sql)
             .await
             .and_then(|df| df.limit(0, Some(UI_ROW_LIMIT + 1)))
             .map_err(|e| ApiError::Db(Error::invalid(e.to_string())))?;
-        let schema = df.schema().inner().clone();
-        let batches = df
+        let schema = df.schema();
+        let (batches, report) = df
             .collect()
             .await
             .map_err(|e| ApiError::Db(Error::invalid(e.to_string())))?;
-        Ok::<_, ApiError>((schema, batches))
+        Ok::<_, ApiError>((schema, batches, report))
     };
-    let (schema, mut batches) = match tokio::time::timeout(st.query_timeout, execute).await {
+    let (schema, mut batches, report) = match tokio::time::timeout(st.query_timeout, execute).await
+    {
         Err(_) => {
             return Err(ApiError::Custom {
                 status: StatusCode::REQUEST_TIMEOUT,
@@ -591,7 +592,8 @@ async fn run_query(State(st): State<UiState>, Json(body): Json<QueryBody>) -> Ap
     let truncated = truncate_batches(&mut batches, UI_ROW_LIMIT);
     let mut out = batches_to_json_with_schema(&batches, Some(schema))?;
     out["truncated"] = json!(truncated);
-    out["scan_metrics"] = serde_json::to_value(session.take_scan_metrics()).map_err(Error::from)?;
+    out["scan_metrics"] = serde_json::to_value(&report.scans).map_err(Error::from)?;
+    out["performance"] = serde_json::to_value(report).map_err(Error::from)?;
     out["wall_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
     Ok(Json(out))
 }

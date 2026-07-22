@@ -5,8 +5,10 @@
 //! surviving segment objects (row-group/page pruning + row-level predicate
 //! pushdown handled by DataFusion's Parquet machinery).
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+pub use crate::metrics::{ScanMetrics, ScanMetricsCollector};
+use crate::pruning::ManifestPruningStats;
 use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -24,38 +26,6 @@ use datafusion::physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_pruning::PruningPredicate;
 use h5i_db_core::{ResolvedTable, SegmentMeta};
-use serde::Serialize;
-
-use crate::pruning::ManifestPruningStats;
-
-/// Pruning observability for one scan (DESIGN_CLAUDE.md §6.7).
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct ScanMetrics {
-    pub table: String,
-    pub version: u64,
-    pub segments_total: usize,
-    pub segments_pruned: usize,
-    pub segments_scanned: usize,
-    pub bytes_scheduled: u64,
-}
-
-/// Shared collector: sessions hand one to every provider they create and
-/// read it back after query execution.
-#[derive(Debug, Default, Clone)]
-pub struct ScanMetricsCollector {
-    inner: Arc<Mutex<Vec<ScanMetrics>>>,
-}
-
-impl ScanMetricsCollector {
-    pub fn record(&self, m: ScanMetrics) {
-        self.inner.lock().unwrap().push(m);
-    }
-
-    /// Drain all recorded scans (typically called once per query).
-    pub fn take(&self) -> Vec<ScanMetrics> {
-        std::mem::take(&mut self.inner.lock().unwrap())
-    }
-}
 
 /// Typed Arrow scalar from a manifest JSON stat (mirrors the conversion in
 /// `pruning.rs`, restricted to the types manifest stats are recorded for).
@@ -292,6 +262,7 @@ impl TableProvider for H5iTableProvider {
         let survivors = self.prune_segments(state, filters)?;
 
         self.metrics.record(ScanMetrics {
+            query_id: None,
             table: self.resolved.entry.name.clone(),
             version: self.resolved.manifest.sequence,
             segments_total: self.resolved.manifest.segments.len(),

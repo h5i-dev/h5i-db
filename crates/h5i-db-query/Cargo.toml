@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 h5i-db-core = { workspace = true }
+h5i-db-observability = { workspace = true }
 arrow = { workspace = true }
 parquet = { workspace = true }
 object_store = { workspace = true }
