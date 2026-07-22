@@ -67,6 +67,17 @@ eligibility contract. The cache's byte-reduction exit gate currently only
 fires on correlated int/string/timestamp predicates like the one in
 `query_misc.rs`.
 
+The case the cache exists for is demonstrated by
+`benchmarks/predicate_cache_scenario.py` (needs pyarrow and a built CLI): an
+episodic symbol trading only inside a narrow window of time-ordered segments,
+named so per-column min/max statistics cannot prune it. At the default
+4 M rows, warm hits scan **75% fewer physical bytes** (38.2 MB → 9.7 MB,
+3.69 M → 0.93 M rows) with identical results; the reduction tracks the
+clustering ratio and row-group granularity, and translates to proportionally
+fewer range GETs once segments live on remote object storage. Wall time
+barely moves against a warm local page cache — physical bytes, not local
+latency, is the metric this prototype optimizes.
+
 On small machines run one engine per invocation (`--engines <one>`), ideally
 under a cgroup cap (`systemd-run --user --scope -p MemoryMax=...`): a 20 M-row
 eager sort/join can otherwise OOM the whole machine. `ulimit -v` is *not* a
