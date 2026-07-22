@@ -1,0 +1,100 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/h5i-db-core",
+    "crates/h5i-db-query",
+    "crates/h5i-db-cli",
+    "crates/h5i-db-bench",
+    "crates/h5i-db-python",
+    "crates/h5i-db-ui",
+]
+default-members = [
+    "crates/h5i-db-core",
+    "crates/h5i-db-query",
+    "crates/h5i-db-cli",
+    "crates/h5i-db-ui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Koukyosyumei/h5i-db"
+rust-version = "1.85"
+
+[workspace.dependencies]
+h5i-db-core = { path = "crates/h5i-db-core" }
+h5i-db-query = { path = "crates/h5i-db-query" }
+
+# arrow/parquet must match the versions datafusion 54.1 links against (58.x).
+arrow = { version = "58.3", default-features = false, features = [
+    "csv",
+    "ipc",
+    "json",
+    "prettyprint",
+] }
+arrow-schema = { version = "58.3", features = ["serde"] }
+parquet = { version = "58.3", default-features = false, features = [
+    "arrow",
+    "async",
+    "object_store",
+    "zstd",
+    "lz4",
+    "snap",
+] }
+# Must match the object_store version parquet/datafusion link against.
+object_store = "0.13"
+datafusion = { version = "54.1", default-features = false, features = [
+    "parquet",
+    "sql",
+    "datetime_expressions",
+    "string_expressions",
+    "regex_expressions",
+    "unicode_expressions",
+    "nested_expressions",
+] }
+datafusion-pruning = "54.1"
+datafusion-datasource-parquet = "54.1"
+
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "fs",
+    "sync",
+    "time",
+    "signal",
+] }
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+blake3 = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", default-features = false, features = [
+    "clock",
+    "serde",
+] }
+url = "2"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
+tempfile = "3"
+rand = "0.9"
+clap = { version = "4", features = ["derive", "env"] }
+comfy-table = "7"
+anyhow = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.bench-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
+panic = "unwind"

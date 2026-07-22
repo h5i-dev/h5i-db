@@ -1,0 +1,27 @@
+[package]
+name = "h5i-db-bench"
+description = "Benchmark harness for h5i-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "h5i-db-bench"
+path = "src/main.rs"
+
+[dependencies]
+h5i-db-core = { workspace = true }
+h5i-db-query = { workspace = true }
+arrow = { workspace = true }
+datafusion = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+chrono = { workspace = true }
+rand = { workspace = true }
+tempfile = { workspace = true }

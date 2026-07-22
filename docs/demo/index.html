@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>h5i-db — overview film</title>
+<style>
+:root{
+  --bg:#08080b; --term:#0b0d11; --panel:#12161c; --border:#23262e; --border2:#2f333d;
+  --text:#e8e8ec; --dim:#9a9aa4; --faint:#6b6b75;
+  --mint:#42e2d0; --ok:#5ee2a0; --warn:#f0a050; --err:#ff6b6b; --vio:#b48bd9;
+  --mono:"Space Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --ui:"Space Grotesk",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:var(--bg);overflow:hidden}
+#stage{position:relative;width:1280px;height:720px;transform-origin:top left;
+  font-family:var(--ui);color:var(--text)}
+#hdr{position:absolute;top:0;left:0;right:0;height:72px;display:flex;align-items:center;
+  gap:14px;padding:0 40px;font-family:var(--mono)}
+#hdr .logo{font-size:20px;font-weight:700}
+#hdr .logo b{color:var(--mint)}
+#hdr .eyebrow{color:var(--faint);font-size:13px;letter-spacing:.16em;text-transform:uppercase}
+#bar{position:absolute;bottom:0;left:0;right:0;height:4px;background:var(--panel)}
+#bar i{display:block;height:100%;width:0;background:var(--mint)}
+.scene{position:absolute;inset:72px 56px 40px;opacity:0}
+.term{display:flex;flex-direction:column;background:var(--term);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;height:100%}
+.tbar{display:flex;gap:8px;padding:12px 18px;border-bottom:1px solid var(--border)}
+.tbar i{width:11px;height:11px;border-radius:50%;background:var(--border2)}
+.tbar span{margin-left:8px;color:var(--faint);font:13px var(--mono)}
+.tbody{flex:1;padding:18px 24px;font:16.5px/1.75 var(--mono);white-space:pre-wrap;overflow:hidden}
+.p{color:var(--mint)} .dim{color:var(--dim)} .faint{color:var(--faint)}
+.ok{color:var(--ok)} .err{color:var(--err)} .warn{color:var(--warn)} .vio{color:var(--vio)}
+.mint{color:var(--mint)} .wt{color:var(--text);font-weight:700}
+.cur{display:inline-block;width:10px;height:21px;background:var(--text);vertical-align:-4px}
+.titlecard{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;text-align:center;gap:22px}
+.titlecard h1{font-size:54px;font-weight:700;letter-spacing:-.01em}
+.titlecard h1 b{color:var(--mint)}
+.titlecard p{font-size:22px;color:var(--dim);max-width:760px;line-height:1.6}
+.titlecard .mono{font-family:var(--mono);font-size:17px;color:var(--faint)}
+.cols{display:flex;gap:28px;height:100%}
+.cols .term{flex:1}
+.sidecard{width:420px;background:var(--panel);border:1px solid var(--border);border-radius:12px;
+  padding:22px 26px;font:14.5px/1.9 var(--mono);align-self:flex-start}
+.sidecard .t{color:var(--faint);font-size:11px;letter-spacing:.16em;text-transform:uppercase;margin-bottom:10px}
+.sidecard .row{display:flex;justify-content:space-between;color:var(--dim)}
+.sidecard .row b{color:var(--text);font-weight:400}
+.sidecard .row .hl{color:var(--mint)}
+.bars{display:flex;flex-direction:column;gap:26px;padding:30px 10px}
+.barrow{display:grid;grid-template-columns:300px 1fr;gap:18px;align-items:center;opacity:0}
+.bl{font:16px var(--mono);color:var(--dim);text-align:right}
+.btrack{position:relative;height:56px}
+.bfill{position:absolute;top:4px;height:20px;border-radius:4px;background:var(--mint);width:0;
+  transition:width 1.1s cubic-bezier(.25,.7,.3,1)}
+.bfill.pol{top:32px;background:var(--border2)}
+.bnum{position:absolute;font:13px var(--mono);color:var(--faint);left:0;transform:translateX(6px)}
+.bnum.ours{top:5px;color:#05221e;font-weight:700}
+.bnum.pols{top:33px}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="hdr"><span class="logo">h5i-<b>db</b></span><span class="eyebrow" id="eyebrow"></span></div>
+
+  <!-- scene 0: title + first contact -->
+  <div class="scene" id="s0">
+    <div class="titlecard" id="s0t">
+      <h1>a database that remembers <b>every version</b></h1>
+      <p>Embedded, versioned time-series storage for quant workloads and AI agents.
+         Rust core · DataFusion SQL · immutable Parquet segments · atomic commits.</p>
+      <div class="mono">cargo install h5i-db &nbsp;·&nbsp; pip install h5i-db</div>
+    </div>
+    <div class="term" id="s0term" style="opacity:0">
+      <div class="tbar"><i></i><i></i><i></i><span>agent shell</span></div>
+      <div class="tbody" id="t0"></div>
+    </div>
+  </div>
+
+  <!-- scene 1: time travel -->
+  <div class="scene" id="s1">
+    <div class="cols">
+      <div class="term"><div class="tbar"><i></i><i></i><i></i><span>time travel</span></div>
+        <div class="tbody" id="t1"></div></div>
+      <div class="sidecard" id="s1card" style="opacity:0">
+        <div class="t">version log — trades</div>
+        <div class="row"><span>v0 create</span><b>0 rows</b></div>
+        <div class="row"><span>v1 write</span><b>4 rows</b></div>
+        <div class="row"><span>v2 append</span><b>5 rows</b></div>
+        <div class="row" id="s1v3" style="opacity:0"><span>v3 delete_range</span><b class="hl">3 rows · planned</b></div>
+        <div style="margin-top:14px" class="t">every version stays readable</div>
+        <div class="row"><span>read v1</span><b>O(1) — one manifest GET</b></div>
+        <div class="row"><span>as-of ts</span><b>O(log V) binary search</b></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- scene 2: previewable mutations -->
+  <div class="scene" id="s2">
+    <div class="term"><div class="tbar"><i></i><i></i><i></i><span>previewable mutations — plan / apply</span></div>
+      <div class="tbody" id="t2"></div></div>
+  </div>
+
+  <!-- scene 3: performance -->
+  <div class="scene" id="s3">
+    <div class="titlecard" style="justify-content:flex-start;padding-top:6px">
+      <h1 style="font-size:34px">disk-backed, 20M rows — <b>vs Polars 1.43</b></h1>
+    </div>
+    <div class="bars" style="margin-top:90px">
+      <div class="barrow" id="b0"><span class="bl">time-range scan 0.01%</span>
+        <span class="btrack"><i class="bfill" data-w="19%"></i><span class="bnum ours">h5i-db 5.3ms</span>
+        <i class="bfill pol" data-w="53%"></i><span class="bnum pols">polars 14.9ms</span></span></div>
+      <div class="barrow" id="b1"><span class="bl">1-min OHLCV + VWAP</span>
+        <span class="btrack"><i class="bfill" data-w="6%"></i><span class="bnum ours">142ms</span>
+        <i class="bfill pol" data-w="66%"></i><span class="bnum pols">polars 1575ms</span></span></div>
+      <div class="barrow" id="b2"><span class="bl">ASOF join 20M × 5M</span>
+        <span class="btrack"><i class="bfill" data-w="28%"></i><span class="bnum ours">364ms</span>
+        <i class="bfill pol" data-w="37%"></i><span class="bnum pols">polars 475ms</span></span></div>
+      <div class="barrow" id="b3"><span class="bl">full aggregation</span>
+        <span class="btrack"><i class="bfill" data-w="24%"></i><span class="bnum ours">61ms</span>
+        <i class="bfill pol" data-w="21%"></i><span class="bnum pols">polars 54ms</span></span></div>
+    </div>
+    <div class="titlecard" style="top:auto;bottom:8px;justify-content:flex-end">
+      <p class="mono" id="s3note" style="opacity:0">manifest pruning: narrow queries never open irrelevant segments —
+plus time travel, snapshots, and crash-safe commits Polars doesn't have</p>
+    </div>
+  </div>
+
+  <!-- scene 4: close -->
+  <div class="scene" id="s4">
+    <div class="titlecard">
+      <h1>version everything.<br><b>preview every change.</b></h1>
+      <p class="mono">h5i-db init market.db · h5i-db ui market.db · pip install h5i-db</p>
+    </div>
+  </div>
+
+  <div id="bar"><i id="barfill"></i></div>
+</div>
+
+<script>
+"use strict";
+const $=(id)=>document.getElementById(id);
+/* fit 1280x720 stage into window like a video frame */
+function fit(){const s=Math.min(innerWidth/1280,innerHeight/720);
+  const st=$("stage");st.style.transform=`scale(${s})`;
+  st.style.left=((innerWidth-1280*s)/2)+"px";st.style.top=((innerHeight-720*s)/2)+"px";
+  st.style.position="absolute";}
+addEventListener("resize",fit);fit();
+
+const DUR=64;               // film length (s), loops
+const esc=(s)=>s;
+/* terminal event renderer: {at, cmd, cps} types a prompt line; {at, out:[..], stagger} prints */
+function renderTerm(el,events,t){
+  let html="";
+  for(const ev of events){
+    if(t<ev.at)break;
+    if(ev.cmd!==undefined){
+      const shown=Math.floor((t-ev.at)*(ev.cps||30));
+      const txt=ev.cmd.slice(0,shown);
+      html+=`<span class="p">$ </span>${esc(txt)}`;
+      if(shown<ev.cmd.length){html+=`<span class="cur"></span>`;return void(el.innerHTML=html);}
+      html+="\n";
+    } else if(ev.out){
+      const stag=ev.stagger||0;
+      ev.out.forEach((line,i)=>{ if(t>=ev.at+i*stag) html+=line+"\n"; });
+    }
+  }
+  el.innerHTML=html;
+}
+function vis(el,on){el.style.opacity=on?1:0;}
+function pop(el,t,at,{d=0.5,dy=14}={}){
+  const k=Math.min(1,Math.max(0,(t-at)/d));
+  el.style.opacity=k;el.style.transform=`translateY(${(1-k)*dy}px)`;
+}
+
+/* ---------- scene 0: agent-first CLI (0 – 17s) ---------- */
+const ev0=[
+  {at:4.2, cmd:"h5i-db init market.db && h5i-db create-table market.db trades \\\n      --like ticks.parquet --time-column ts", cps:52},
+  {at:6.8, out:['<span class="ok">✔</span> table <span class="wt">trades</span> · time index <span class="mint">ts</span> · sorted parquet segments']},
+  {at:7.8, cmd:"h5i-db ingest market.db trades ticks.parquet --format json", cps:46},
+  {at:9.4, out:['{"sequence": <span class="mint">1</span>, "rows_total": 4, "op": "write"}   <span class="faint"># every write = a version</span>']},
+  {at:10.6, cmd:'h5i-db query market.db "SELECT symbol, vwap(price,size) FROM trades GROUP BY symbol"', cps:52},
+  {at:12.6, out:[
+    '<span class="dim">┌────────┬─────────┐</span>',
+    '<span class="dim">│</span> AAPL   <span class="dim">│</span>  210.63 <span class="dim">│</span>',
+    '<span class="dim">│</span> MSFT   <span class="dim">│</span>  455.12 <span class="dim">│</span>',
+    '<span class="dim">└────────┴─────────┘</span>'], stagger:.14},
+  {at:14.4, out:['<span class="faint"># json / jsonl / csv / arrow output · stable exit codes · machine-readable errors</span>']},
+];
+/* ---------- scene 1: time travel (17 – 30s) ---------- */
+const ev1=[
+  {at:1.2, cmd:"h5i-db ingest market.db trades more.parquet   # append → v2", cps:46},
+  {at:2.6, out:['<span class="ok">✔</span> version <span class="mint">2</span> committed <span class="faint">(CAS on HEAD — racing writers get an explicit conflict)</span>']},
+  {at:4.0, cmd:`h5i-db query market.db "SELECT count(*) FROM h5i('trades', 1)"`, cps:46},
+  {at:5.8, out:['4   <span class="faint"># the past is one manifest read away</span>']},
+  {at:7.0, cmd:`h5i-db query market.db "SELECT count(*) FROM h5i('trades', '2026-07-01T00:00:00Z')"`, cps:52},
+  {at:8.8, out:['4   <span class="faint"># as-of any commit timestamp</span>']},
+  {at:9.9, cmd:"h5i-db snapshot create market.db backtest-2026-07", cps:44},
+  {at:11.2, out:['<span class="ok">✔</span> pinned {trades: v2} — <span class="wt">reproducible research, forever</span>']},
+];
+/* ---------- scene 2: plan / apply (30 – 45s) ---------- */
+const ev2=[
+  {at:0.8, cmd:"h5i-db delete-range market.db trades --start 09:30 --end 09:31 --plan", cps:50},
+  {at:2.6, out:[
+    '{',
+    '  "plan_id": "<span class="vio">5c41f85d…</span>",  "op": "<span class="err">delete_range</span>",',
+    '  "base_version": <span class="mint">2</span>,',
+    '  "summary": { "rows_affected": <span class="wt">12 481</span>, "segments_reused": <span class="ok">127</span>,',
+    '               "segments_added": 3, "added_bytes": "18.2 MB" }',
+    '}'], stagger:.16},
+  {at:5.4, out:['<span class="faint"># nothing changed yet — a human (or policy) reviews first: h5i-db ui market.db</span>']},
+  {at:7.6, cmd:"h5i-db plan apply market.db trades 5c41f85d…", cps:44},
+  {at:9.2, out:['<span class="ok">✔</span> version <span class="mint">3</span> · execution_mode=<span class="mint">planned</span> · plan_hash recorded in the manifest']},
+  {at:10.8, out:['<span class="faint"># if HEAD moved since planning → version_conflict, never a silent re-plan</span>']},
+  {at:12.4, cmd:"h5i-db policy set market.db direct_delete=false   # agents must preview", cps:48},
+  {at:13.9, out:['<span class="ok">✔</span> deletes now require a reviewed plan — <span class="wt">bypassable by humans, enforceable for agents</span>']},
+];
+
+const SCENES=[
+  {el:"s0",start:0,end:17,eyebrow:"versioned time-series db · for ai agents",update(t){
+    pop($("s0t"),t,0.3,{d:.8});
+    if(t>3.4){vis($("s0term"),1);$("s0t").style.opacity=0;}
+    else vis($("s0term"),0);
+    renderTerm($("t0"),ev0,t);
+  }},
+  {el:"s1",start:17,end:30,eyebrow:"time travel — every version stays readable",update(t){
+    renderTerm($("t1"),ev1,t);
+    pop($("s1card"),t,2.0,{d:.6});
+    $("s1v3").style.opacity=0;
+  }},
+  {el:"s2",start:30,end:45,eyebrow:"previewable mutations — plan · review · apply",update(t){
+    renderTerm($("t2"),ev2,t);
+  }},
+  {el:"s3",start:45,end:58,eyebrow:"benchmarks — 20M trades, disk-backed",update(t){
+    [["b0",.6],["b1",1.4],["b2",2.2],["b3",3.0]].forEach(([id,at])=>{
+      const row=$(id);pop(row,t,at,{d:.5});
+      if(t>at+0.15)row.querySelectorAll(".bfill").forEach(f=>f.style.width=f.dataset.w);
+      else row.querySelectorAll(".bfill").forEach(f=>f.style.width=0);
+    });
+    pop($("s3note"),t,4.6,{d:.8,dy:8});
+  }},
+  {el:"s4",start:58,end:64,eyebrow:"",update(t){ pop($("s4").firstElementChild,t,0.4,{d:.8}); }},
+];
+
+let t0=performance.now();
+function frame(){
+  const t=((performance.now()-t0)/1000)%DUR;
+  $("barfill").style.width=(t/DUR*100)+"%";
+  for(const sc of SCENES){
+    const el=$(sc.el);
+    const on=t>=sc.start&&t<sc.end;
+    el.style.opacity=on?1:0;
+    if(on){$("eyebrow").textContent=sc.eyebrow;sc.update(t-sc.start);}
+  }
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>
