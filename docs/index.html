@@ -637,33 +637,34 @@
     <div class="section-head reveal">
       <span class="section-tag">Benchmarks</span>
       <h2 class="section-title">Fast where quant workloads live.</h2>
-      <p class="section-sub">20M trades and 5M quotes, disk-backed on both sides: h5i-db segments vs
-      Polars <code>scan_parquet</code> over the identical files. Reproduce with
-      <code>cargo run -p h5i-db-bench</code>.</p>
+      <p class="section-sub">20M trades and 5M quotes, disk-backed on all sides: h5i-db segments vs
+      Polars, DuckDB, pandas, and PyArrow over the identical Parquet files, measured back-to-back
+      in one session. Reproduce with <code>cargo run -p h5i-db-bench</code>.</p>
       <div class="divider"></div>
     </div>
     <div class="bench-stats reveal">
-      <div class="bench-stat"><div class="val">2.8×</div><div class="lbl">narrower scans vs Polars</div></div>
-      <div class="bench-stat"><div class="val">11×</div><div class="lbl">faster OHLCV rollups</div></div>
-      <div class="bench-stat"><div class="val">3.2M</div><div class="lbl">rows/s durable ingest</div></div>
-      <div class="bench-stat"><div class="val">1.5ms</div><div class="lbl">cold read, any version</div></div>
+      <div class="bench-stat"><div class="val">2×</div><div class="lbl">faster selective scans</div></div>
+      <div class="bench-stat"><div class="val">4.7×</div><div class="lbl">faster OHLCV than any engine</div></div>
+      <div class="bench-stat"><div class="val">3.7M</div><div class="lbl">rows/s durable ingest</div></div>
+      <div class="bench-stat"><div class="val">1.4ms</div><div class="lbl">cold read, any version</div></div>
     </div>
     <div class="bench-wrap reveal">
       <table class="bench">
-        <tr><th>workload</th><th>h5i-db</th><th>polars 1.43</th><th>raw datafusion</th></tr>
-        <tr><td>time-range scan 0.01% (48/50 segments pruned)</td><td><b>5.3 ms</b></td><td>14.9 ms</td><td>n/a</td></tr>
-        <tr><td>time-range scan 1%</td><td><b>6.7 ms</b></td><td>10.5 ms</td><td>7.1 ms</td></tr>
-        <tr><td>1-minute OHLCV + VWAP rollup</td><td><b>142 ms</b></td><td>1 575 ms</td><td>n/a</td></tr>
-        <tr><td>ASOF join trades × quotes (by symbol)</td><td><b>364 ms</b></td><td>475 ms</td><td>no native asof</td></tr>
-        <tr><td>full aggregation (group by symbol)</td><td>61 ms</td><td>54 ms</td><td>35 ms</td></tr>
-        <tr><td>ingest (50 durable commits)</td><td><b>3.2 M rows/s</b></td><td>n/a</td><td>n/a</td></tr>
-        <tr><td>cold read of an old version</td><td><b>1.5 ms</b></td><td>n/a</td><td>n/a</td></tr>
+        <tr><th>workload</th><th>h5i-db</th><th>polars 1.43</th><th>duckdb 1.5</th><th>pandas 3.0</th><th>pyarrow 25</th></tr>
+        <tr><td>time-range scan 0.01% (48/50 segments pruned)</td><td><b>7.3 ms</b></td><td>15.0 ms</td><td>17.0 ms</td><td>13.5 ms</td><td>10.1 ms</td></tr>
+        <tr><td>time-range scan 1%</td><td><b>6.3 ms</b></td><td>14.1 ms</td><td>15.0 ms</td><td>13.3 ms</td><td>10.3 ms</td></tr>
+        <tr><td>1-minute OHLCV + VWAP rollup</td><td><b>164 ms</b></td><td>2 392 ms</td><td>774 ms</td><td>4 242 ms</td><td>2 369 ms</td></tr>
+        <tr><td>ASOF join trades × quotes (by symbol)</td><td>439 ms</td><td>408 ms</td><td>952 ms</td><td>4 535 ms</td><td>n/a¹</td></tr>
+        <tr><td>full aggregation (group by symbol)</td><td>47 ms</td><td>90 ms</td><td>47 ms</td><td>653 ms</td><td>113 ms</td></tr>
+        <tr><td>ingest (50 durable commits)</td><td><b>3.7 M rows/s</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
+        <tr><td>cold read of an old version</td><td><b>1.4 ms</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
       </table>
     </div>
-    <p class="bench-note reveal">Narrow scans win on manifest pruning. The OHLCV rollup wins because
-    storage is already time-sorted, while Polars must sort 20M rows first. Full-scan decode is a draw
-    by design, and only one side has time travel, snapshots, previewable mutations, and crash-safe
-    commits. Full methodology in
+    <p class="bench-note reveal">Narrow scans win on manifest pruning. The OHLCV rollup wins 4.7–26×
+    because storage is already time-sorted and declared so — every baseline pays for a 20M-row sort.
+    ASOF is a tie with Polars, full-scan decode a tie with DuckDB, both by design — and only one side
+    has time travel, snapshots, previewable mutations, and crash-safe commits.
+    ¹ PyArrow's experimental <code>join_asof</code>: 44.5 s at 2M rows, excluded. Full methodology in
     <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p>
   </div>
 </section>

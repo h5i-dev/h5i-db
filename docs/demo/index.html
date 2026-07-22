@@ -106,25 +106,25 @@ html,body{height:100%;background:var(--bg);overflow:hidden}
   <!-- scene 3: performance -->
   <div class="scene" id="s3">
     <div class="titlecard" style="justify-content:flex-start;padding-top:6px">
-      <h1 style="font-size:34px">disk-backed, 20M rows · <b>vs Polars 1.43</b></h1>
+      <h1 style="font-size:34px">disk-backed, 20M rows · <b>vs the best of Polars · DuckDB · pandas · PyArrow</b></h1>
     </div>
     <div class="bars" style="margin-top:90px">
       <div class="barrow" id="b0"><span class="bl">time-range scan 0.01%</span>
-        <span class="btrack"><i class="bfill" data-w="19%"></i><span class="bnum ours">h5i-db 5.3ms</span>
-        <i class="bfill pol" data-w="53%"></i><span class="bnum pols">polars 14.9ms</span></span></div>
+        <span class="btrack"><i class="bfill" data-w="43%"></i><span class="bnum ours">h5i-db 7.3ms</span>
+        <i class="bfill pol" data-w="60%"></i><span class="bnum pols">pyarrow 10.1ms</span></span></div>
       <div class="barrow" id="b1"><span class="bl">1-min OHLCV + VWAP</span>
-        <span class="btrack"><i class="bfill" data-w="6%"></i><span class="bnum ours">142ms</span>
-        <i class="bfill pol" data-w="66%"></i><span class="bnum pols">polars 1575ms</span></span></div>
+        <span class="btrack"><i class="bfill" data-w="14%"></i><span class="bnum ours">164ms</span>
+        <i class="bfill pol" data-w="66%"></i><span class="bnum pols">duckdb 774ms</span></span></div>
       <div class="barrow" id="b2"><span class="bl">ASOF join 20M × 5M</span>
-        <span class="btrack"><i class="bfill" data-w="28%"></i><span class="bnum ours">364ms</span>
-        <i class="bfill pol" data-w="37%"></i><span class="bnum pols">polars 475ms</span></span></div>
+        <span class="btrack"><i class="bfill" data-w="38%"></i><span class="bnum ours">439ms</span>
+        <i class="bfill pol" data-w="35%"></i><span class="bnum pols">polars 408ms</span></span></div>
       <div class="barrow" id="b3"><span class="bl">full aggregation</span>
-        <span class="btrack"><i class="bfill" data-w="24%"></i><span class="bnum ours">61ms</span>
-        <i class="bfill pol" data-w="21%"></i><span class="bnum pols">polars 54ms</span></span></div>
+        <span class="btrack"><i class="bfill" data-w="30%"></i><span class="bnum ours">47ms</span>
+        <i class="bfill pol" data-w="30%"></i><span class="bnum pols">duckdb 47ms</span></span></div>
     </div>
     <div class="titlecard" style="top:auto;bottom:8px;justify-content:flex-end">
       <p class="mono" id="s3note" style="opacity:0">manifest pruning: narrow queries never open irrelevant segments,
-plus time travel, snapshots, and crash-safe commits Polars doesn't have</p>
+plus time travel, snapshots, and crash-safe commits none of the baselines have</p>
     </div>
   </div>
 
