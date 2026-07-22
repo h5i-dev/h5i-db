@@ -28,21 +28,22 @@ h5i-db ui market.db                                                # review surf
 
 ## Why
 
-| | DuckDB | Polars | ArcticDB | **h5i-db** |
-|---|---|---|---|---|
-| User-facing versioning / time travel | ✗¹ | ✗ | ✓ | ✓ (O(1) version reads) |
-| SQL joins/windows/CTEs | ✓ | partial | ✗ | ✓ (DataFusion) |
-| ASOF join | ✓ | ✓ | ✗ | ✓ (sort-free on sorted storage) |
-| Previewable mutations (plan/apply) | ✗ | ✗ | ✗ | ✓, policy-enforceable |
-| Concurrent writers | MVCC | n/a | unsafe² | CAS + explicit conflict |
-| 20M-row narrow time-range scan | 17.0 ms | 15.0 ms | — | **7.3 ms** |
-| 20M-row 1-min OHLCV+VWAP | 774 ms | 2 392 ms | — | **164 ms** |
+| | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
+|---|---|---|---|---|---|---|
+| User-facing versioning / time travel | ✗¹ | ✗ | ✗ | ✗ | ✓ | ✓ (O(1) version reads) |
+| SQL joins/windows/CTEs | ✓ | partial | ✗ | ✗ | ✗ | ✓ (DataFusion) |
+| ASOF join | ✓ | ✓ | ✓ | ✗² | ✗ | ✓ (sort-free on sorted storage) |
+| Previewable mutations (plan/apply) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓, policy-enforceable |
+| Concurrent writers | MVCC | n/a | n/a | n/a | unsafe³ | CAS + explicit conflict |
+| 20M-row narrow time-range scan | 17.0 ms | 15.0 ms | 13.5 ms | 10.1 ms | — | **7.3 ms** |
+| 20M-row 1-min OHLCV+VWAP | 774 ms | 2 392 ms | 4 242 ms | 2 369 ms | — | **164 ms** |
 
 ¹ `AT (VERSION …)` syntax exists but native storage rejects it.
-² Documented single-writer-per-symbol assumption.
+² Experimental `join_asof` exists but is ~1000× slower — impractical at this scale.
+³ Documented single-writer-per-symbol assumption.
 
 All engines disk-backed over identical Parquet segments, measured in one
-session; pandas and PyArrow baselines in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+session; full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Workspace
 
