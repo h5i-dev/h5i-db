@@ -32,6 +32,7 @@ allow = [
     "0BSD",
     "BSL-1.0",
     "CC0-1.0",          # blake3 (dual CC0-1.0 OR Apache-2.0)
+    "CDLA-Permissive-2.0", # Mozilla root-certificate data via rustls verifier
     "Unicode-3.0",      # unicode-ident, icu_* (idna/url stack)
     "Unicode-DFS-2016", # older unicode-ident releases
 ]
