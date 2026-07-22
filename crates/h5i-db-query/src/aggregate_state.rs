@@ -541,6 +541,21 @@ fn f64_value(array: &dyn Array, row: usize) -> h5i_db_core::Result<f64> {
     ))
 }
 
+fn string_value(array: &dyn Array, row: usize) -> h5i_db_core::Result<String> {
+    if array.is_null(row) {
+        return Err(h5i_db_core::Error::invalid("null aggregate group"));
+    }
+    if let Some(array) = array.as_any().downcast_ref::<StringArray>() {
+        return Ok(array.value(row).to_string());
+    }
+    if let Some(array) = array.as_any().downcast_ref::<LargeStringArray>() {
+        return Ok(array.value(row).to_string());
+    }
+    Err(h5i_db_core::Error::invalid(
+        "unsupported aggregate group representation",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,19 +620,4 @@ mod tests {
             "JSON round-trip must reproduce the sealed bytes exactly"
         );
     }
-}
-
-fn string_value(array: &dyn Array, row: usize) -> h5i_db_core::Result<String> {
-    if array.is_null(row) {
-        return Err(h5i_db_core::Error::invalid("null aggregate group"));
-    }
-    if let Some(array) = array.as_any().downcast_ref::<StringArray>() {
-        return Ok(array.value(row).to_string());
-    }
-    if let Some(array) = array.as_any().downcast_ref::<LargeStringArray>() {
-        return Ok(array.value(row).to_string());
-    }
-    Err(h5i_db_core::Error::invalid(
-        "unsupported aggregate group representation",
-    ))
 }
