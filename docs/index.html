@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>h5i-db — versioned time-series database for AI agents</title>
+<meta name="description" content="Embedded, versioned time-series database for quant workloads and AI agents. Rust core, DataFusion SQL, time travel, previewable mutations, crash-safe commits.">
+<style>
+:root{
+  --bg:#08080b; --panel:#0e1116; --surface:#12161c; --border:#23262e; --border2:#2f333d;
+  --text:#e8e8ec; --dim:#9a9aa4; --faint:#6b6b75;
+  --mint:#42e2d0; --mint-hi:#7cefe0; --mintbg:rgba(66,226,208,.12);
+  --green:#5ee2a0; --orange:#f0a050; --red:#ff6b6b; --vio:#b48bd9;
+  --mono:"Space Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --ui:"Space Grotesk",system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--ui);line-height:1.6}
+a{color:var(--mint);text-decoration:none}
+a:hover{color:var(--mint-hi)}
+.wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+header{display:flex;align-items:center;gap:22px;padding:20px 0}
+header .logo{font-size:19px;font-weight:700}
+header .logo b{color:var(--mint)}
+header nav{margin-left:auto;display:flex;gap:22px;font-size:14px}
+header nav a{color:var(--dim)}
+header nav a:hover{color:var(--text)}
+.hero{text-align:center;padding:64px 0 8px}
+.hero h1{font-size:clamp(34px,5.4vw,58px);font-weight:700;letter-spacing:-.015em;line-height:1.12}
+.hero h1 b{color:var(--mint)}
+.hero p.sub{margin:22px auto 0;max-width:720px;font-size:19px;color:var(--dim)}
+.hero .install{margin:26px auto 0;display:inline-flex;gap:14px;flex-wrap:wrap;justify-content:center}
+.pill{font-family:var(--mono);font-size:13.5px;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:9px 16px;color:var(--dim)}
+.pill b{color:var(--text);font-weight:400}
+.film{width:min(980px,94vw);margin:56px auto 0}
+.film-frame{position:relative;width:100%;aspect-ratio:16/9;border-radius:16px;overflow:hidden;
+  border:1px solid rgba(255,255,255,.1);box-shadow:0 24px 70px rgba(0,0,0,.55);background:#08080b}
+.film-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.film-fs{display:inline-block;margin-top:12px;font-family:var(--mono);font-size:13px;color:var(--faint)}
+.film-fs:hover{color:var(--text)}
+section{padding:74px 0 8px}
+section>.wrap>h2{font-size:13px;font-family:var(--mono);letter-spacing:.18em;text-transform:uppercase;
+  color:var(--mint);margin-bottom:12px}
+section>.wrap>h3{font-size:30px;font-weight:700;letter-spacing:-.01em;margin-bottom:14px;max-width:760px}
+section>.wrap>p.lead{color:var(--dim);font-size:16.5px;max-width:760px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:34px}
+.feature{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:22px 24px}
+.feature h4{font-size:16.5px;margin-bottom:8px}
+.feature h4 span{color:var(--mint);margin-right:8px;font-family:var(--mono)}
+.feature p{color:var(--dim);font-size:14.5px}
+.feature code{font-family:var(--mono);font-size:12.5px;color:var(--mint);background:var(--mintbg);
+  padding:1px 6px;border-radius:4px}
+pre{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px 24px;
+  overflow-x:auto;font:13.5px/1.8 var(--mono);color:var(--text);margin-top:26px}
+pre .c{color:var(--faint)} pre .p{color:var(--mint)} pre .s{color:var(--green)}
+table.bench{border-collapse:collapse;margin-top:30px;width:100%;font-family:var(--mono);
+  font-size:14px;font-variant-numeric:tabular-nums}
+table.bench th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.12em;
+  color:var(--faint);font-weight:400;padding:8px 18px 10px 0;border-bottom:1px solid var(--border2)}
+table.bench td{padding:9px 18px 9px 0;border-bottom:1px solid var(--border);color:var(--dim)}
+table.bench td:first-child{color:var(--text)}
+table.bench td b{color:var(--mint);font-weight:700}
+.note{margin-top:14px;font-size:13px;color:var(--faint)}
+footer{margin-top:90px;padding:34px 0 44px;border-top:1px solid var(--border);
+  font-size:13.5px;color:var(--faint)}
+footer .wrap{display:flex;gap:24px;flex-wrap:wrap}
+footer a{color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="logo">h5i-<b>db</b></span>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#agents">For agents</a>
+      <a href="#ui">Review UI</a>
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="https://github.com/Koukyosyumei/h5i-db">GitHub</a>
+    </nav>
+  </header>
+</div>
+
+<div class="hero wrap">
+  <h1>a database that remembers<br><b>every version</b></h1>
+  <p class="sub">h5i-db is an embedded, versioned time-series database for quantitative
+  workloads and AI agents — a Rust storage kernel with immutable Parquet segments,
+  DataFusion SQL, time travel, and mutations you can preview before they commit.</p>
+  <div class="install">
+    <span class="pill">$ <b>cargo install h5i-db-cli</b></span>
+    <span class="pill">$ <b>pip install h5i-db</b></span>
+  </div>
+</div>
+
+<div class="film">
+  <div class="film-frame"><iframe src="demo/" title="h5i-db overview film" loading="lazy"></iframe></div>
+  <div style="text-align:center"><a class="film-fs" href="demo/" target="_blank">⛶ open film fullscreen</a></div>
+</div>
+
+<section id="features"><div class="wrap">
+  <h2>what it is</h2>
+  <h3>ArcticDB's storage model, redesigned — with DuckDB-class queries</h3>
+  <p class="lead">Every write is an atomic commit producing an immutable version. Reads never block,
+  writers never clobber each other, and any past state is one manifest read away.</p>
+  <div class="grid">
+    <div class="feature"><h4><span>▚</span>Versioned storage</h4>
+      <p>Immutable Parquet segments + per-version manifests, directly addressed by sequence:
+      version reads are O(1), <code>as_of</code> is O(log V). Commits are compare-and-swap on
+      a single HEAD — racing writers get an explicit <code>version_conflict</code>, never last-writer-wins.</p></div>
+    <div class="feature"><h4><span>◫</span>DataFusion SQL &amp; DataFrames</h4>
+      <p>Full SQL — joins, windows, CTEs — plus time-series operators: a native
+      <code>ASOF JOIN</code>, <code>time_bucket</code>, <code>vwap</code>/<code>wavg</code>,
+      <code>ewma</code>. Storage is time-sorted, so bucketed aggregations stream instead of sorting.</p></div>
+    <div class="feature"><h4><span>⧗</span>Time travel &amp; snapshots</h4>
+      <p><code>h5i('trades', 42)</code> reads version 42; RFC3339 reads as-of a commit time;
+      named snapshots pin exact versions across tables — reproducible backtests forever.</p></div>
+    <div class="feature"><h4><span>▦</span>Manifest pruning</h4>
+      <p>Per-segment time ranges and column min/max live in the version manifest. Narrow
+      time-range queries never open irrelevant files — 48 of 50 segments pruned before I/O
+      in the benchmark, visible per query in <code>--stats</code>.</p></div>
+    <div class="feature"><h4><span>✓</span>Previewable mutations</h4>
+      <p><code>--plan</code> runs the full write path but stops before publish: exact affected
+      rows, segments rewritten vs reused, before/after samples. <code>plan apply</code> is a
+      metadata-only CAS. A mutation policy can force agents through review.</p></div>
+    <div class="feature"><h4><span>⚿</span>Crash-safe by construction</h4>
+      <p>fsync-before-swap, checksums on every object, a manifest hash chain, and tests that
+      kill the writer at every commit step: the old head survives, always. <code>verify --deep</code>
+      re-checks the whole store.</p></div>
+  </div>
+</div></section>
+
+<section id="agents"><div class="wrap">
+  <h2>for ai agents</h2>
+  <h3>a normal tool, with guardrails that hold</h3>
+  <p class="lead">No MCP server, no protocol — agents drive the same CLI and Python API as
+  everyone else. The contract is what makes it agent-ready.</p>
+  <pre>
+<span class="p">$</span> h5i-db query market.db <span class="s">"SELECT symbol, vwap(price,size) FROM trades GROUP BY symbol"</span> \
+    --format json --max-rows 1000 --timeout 30s        <span class="c"># machine formats + hard limits</span>
+
+<span class="p">$</span> h5i-db delete-range market.db trades --start 09:30 --end 09:31 --plan
+<span class="c"># {"plan_id": "5c41…", "summary": {"rows_affected": 12481, "segments_reused": 127}}</span>
+<span class="c"># errors are {code, message, retryable, hint} on stderr; exit codes are stable</span>
+
+<span class="p">$</span> h5i-db policy set market.db direct_delete=false    <span class="c"># agents must preview; humans can too</span></pre>
+  <div class="grid">
+    <div class="feature"><h4><span>{}</span>Machine-readable everything</h4>
+      <p>json / jsonl / csv / arrow output, structured errors with a <code>retryable</code> flag
+      and an actionable hint, stable exit codes (0/2/3/4/5).</p></div>
+    <div class="feature"><h4><span>◔</span>Resource limits as flags</h4>
+      <p><code>--max-rows</code>, <code>--timeout</code>, <code>--memory-limit-mb</code> with
+      disk spilling, <code>--read-only</code>. A supervisor can hard-cap any call.</p></div>
+    <div class="feature"><h4><span>◎</span>Policy-enforceable review</h4>
+      <p>Direct writes and reviewed plans share one write path; the policy chooses which ops
+      may skip preview. Every manifest records <code>execution_mode</code> and the plan hash.</p></div>
+  </div>
+</div></section>
+
+<section id="ui"><div class="wrap">
+  <h2>review ui</h2>
+  <h3>the approval surface for a versioned database</h3>
+  <p class="lead"><code>h5i-db ui market.db</code> serves a loopback-only review surface:
+  pending plans with exact previews, apply/reject, version timeline with audit badges,
+  version diffs, and an SQL scratchpad that shows pruning on every query. Read-only unless
+  started with <code>--allow-mutations</code>.</p>
+  <div class="film">
+    <div class="film-frame"><iframe src="demo/ui/" title="h5i-db review UI film" loading="lazy"></iframe></div>
+    <div style="text-align:center"><a class="film-fs" href="demo/ui/" target="_blank">⛶ open film fullscreen</a></div>
+  </div>
+</div></section>
+
+<section id="benchmarks"><div class="wrap">
+  <h2>benchmarks</h2>
+  <h3>Polars-class analytics, plus a database underneath</h3>
+  <p class="lead">20M trades + 5M quotes, disk-backed on both sides (h5i-db segments vs Polars
+  <code>scan_parquet</code> over the identical files). Reproduce with
+  <code>cargo run -p h5i-db-bench</code>.</p>
+  <table class="bench">
+    <tr><th>workload</th><th>h5i-db</th><th>polars 1.43</th><th>raw datafusion</th></tr>
+    <tr><td>time-range scan 0.01% (48/50 segments pruned)</td><td><b>5.3 ms</b></td><td>14.9 ms</td><td>—</td></tr>
+    <tr><td>time-range scan 1%</td><td><b>6.7 ms</b></td><td>10.5 ms</td><td>7.1 ms</td></tr>
+    <tr><td>1-minute OHLCV + VWAP rollup</td><td><b>142 ms</b></td><td>1 575 ms</td><td>—</td></tr>
+    <tr><td>ASOF join trades × quotes (by symbol)</td><td><b>364 ms</b></td><td>475 ms</td><td>no native asof</td></tr>
+    <tr><td>full aggregation (group by symbol)</td><td>61 ms</td><td>54 ms</td><td>35 ms</td></tr>
+    <tr><td>ingest (50 durable commits)</td><td>3.2 M rows/s</td><td>—</td><td>—</td></tr>
+    <tr><td>cold read of an old version</td><td>1.5 ms</td><td>n/a</td><td>n/a</td></tr>
+  </table>
+  <p class="note">Narrow scans win on manifest pruning; the OHLCV rollup wins because storage is
+  already time-sorted (Polars must sort 20M rows first). Full-scan decode is a draw by design —
+  and only one side has time travel, snapshots, previewable mutations, and crash-safe commits.
+  Full methodology in <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p>
+</div></section>
+
+<section><div class="wrap">
+  <h2>quickstart</h2>
+  <h3>five commands to a versioned database</h3>
+  <pre>
+<span class="p">$</span> h5i-db init market.db
+<span class="p">$</span> h5i-db create-table market.db trades --like ticks.parquet --time-column ts
+<span class="p">$</span> h5i-db ingest market.db trades ticks.parquet
+<span class="p">$</span> h5i-db query market.db <span class="s">"SELECT * FROM asof_join('trades','quotes','ts','ts','symbol')"</span>
+<span class="p">$</span> h5i-db ui market.db                      <span class="c"># review surface on localhost</span>
+
+<span class="c"># python</span>
+<span class="p">&gt;&gt;&gt;</span> db = h5i_db.Database(<span class="s">"market.db"</span>)
+<span class="p">&gt;&gt;&gt;</span> db.sql(<span class="s">"SELECT * FROM h5i('trades', 42)"</span>).to_pandas()   <span class="c"># time travel</span>
+<span class="p">&gt;&gt;&gt;</span> plan = db.plan_delete_range(<span class="s">"trades"</span>, start, end); plan.apply()</pre>
+</div></section>
+
+<footer><div class="wrap">
+  <span>h5i-db · Apache-2.0</span>
+  <a href="https://github.com/Koukyosyumei/h5i-db">source</a>
+  <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/DESIGN_CLAUDE.md">design document</a>
+  <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks</a>
+  <span style="margin-left:auto">part of the h5i toolchain for auditable AI development</span>
+</div></footer>
+</body>
+</html>

@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>h5i-db — review UI film</title>
+<style>
+:root{
+  --bg:#0a0c10; --surface:#12161c; --surface-2:#1a1f26; --elev:#232931;
+  --border:#2a3138; --text:#f6f7f9; --muted:#abb3bf; --dim:#6b7785;
+  --mint:#42e2d0; --mintbg:rgba(66,226,208,.14); --mintglow:rgba(66,226,208,.32);
+  --green:#5ee2a0; --orange:#f0a050; --red:#ff6b6b; --vio:#b48bd9;
+  --mono:"Space Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --ui:"Space Grotesk",system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;background:#08080b;overflow:hidden}
+#stage{position:absolute;width:1280px;height:720px;transform-origin:top left;
+  font-family:var(--ui);color:var(--text);font-size:14px}
+.browser{position:absolute;inset:26px 60px 34px;background:var(--bg);border:1px solid var(--border);
+  border-radius:12px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+.chrome{display:flex;align-items:center;gap:8px;height:38px;padding:0 14px;background:#0d1015;
+  border-bottom:1px solid var(--border)}
+.chrome i{width:10px;height:10px;border-radius:50%;background:var(--elev)}
+.chrome .url{margin-left:12px;flex:1;max-width:420px;background:var(--surface);border-radius:6px;
+  padding:4px 12px;font:11.5px var(--mono);color:var(--dim)}
+.appbar{display:flex;align-items:center;gap:18px;height:44px;padding:0 16px;background:var(--surface)}
+.appbar .logo{font-weight:700}
+.appbar .logo b{color:var(--mint)}
+.appbar .logo span{color:var(--dim);font-weight:400}
+nav{display:flex;gap:2px}
+nav b{padding:5px 12px;border-radius:4px;color:var(--muted);font-weight:400;cursor:default}
+nav b.on{background:var(--elev);color:var(--text)}
+nav .badge{display:inline-block;min-width:15px;padding:0 4px;margin-left:5px;border-radius:8px;
+  background:var(--mint);color:#05221e;font:700 10px/15px var(--mono)}
+.mode{margin-left:auto;font:10px var(--mono);text-transform:uppercase;letter-spacing:.1em;
+  padding:3px 8px;border-radius:3px;color:var(--mint);background:var(--mintbg)}
+.view{position:absolute;inset:82px 0 0;padding:16px 20px;opacity:0;overflow:hidden}
+.micro{font:9.5px var(--mono);text-transform:uppercase;letter-spacing:.14em;color:var(--dim);margin:0 0 8px}
+.card{background:var(--surface);border-radius:8px;padding:13px 15px;margin-bottom:12px}
+.card.attn{box-shadow:0 0 0 1px var(--mintglow)}
+.phead{display:flex;gap:10px;align-items:baseline}
+.phead .title{font-weight:600;font-size:14px}
+.tag{font:10px var(--mono);text-transform:uppercase;letter-spacing:.08em;padding:2px 6px;
+  border-radius:3px;background:var(--elev);color:var(--muted)}
+.tag.del{color:var(--red)} .tag.planned{color:var(--mint);background:var(--mintbg)}
+.tag.append{color:var(--green)} .tag.write{color:var(--orange)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 16px;font:11.5px var(--mono);margin:8px 0;
+  font-variant-numeric:tabular-nums}
+.kv .k{color:var(--dim)}
+.samples{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px}
+.sbox{background:var(--bg);border-radius:6px;padding:8px 10px}
+table{border-collapse:collapse;width:100%;font:10.5px var(--mono);font-variant-numeric:tabular-nums}
+th{text-align:left;font-size:8.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);
+  font-weight:400;padding:2px 8px 4px 0;border-bottom:1px solid var(--border)}
+td{padding:3px 8px 3px 0;border-bottom:1px solid rgba(42,49,56,.4);white-space:nowrap}
+.actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+.btn{font-size:12px;padding:6px 14px;border-radius:5px;border:1px solid var(--border);
+  background:var(--elev);color:var(--text)}
+.btn.primary{background:var(--mint);border-color:var(--mint);color:#05221e;font-weight:700}
+.statusline{font:10.5px var(--mono);color:var(--dim);min-height:14px;margin-top:6px}
+.statusline .okx{color:var(--green)}
+#cursor{position:absolute;width:18px;height:18px;z-index:50;pointer-events:none;
+  transition:left .55s cubic-bezier(.3,.7,.3,1),top .55s cubic-bezier(.3,.7,.3,1)}
+#cursor svg{filter:drop-shadow(0 1px 3px rgba(0,0,0,.7))}
+#cursor.click{transform:scale(.82)}
+.chart{height:120px;background:var(--surface);border-radius:6px;margin:8px 0;position:relative;overflow:hidden}
+.chart svg{position:absolute;inset:0}
+.sql{background:var(--surface);border:1px solid var(--border);border-radius:6px;
+  font:12px/1.6 var(--mono);padding:10px 12px;color:var(--text);min-height:56px;white-space:pre-wrap}
+.caption{position:absolute;left:0;right:0;bottom:0;height:34px;display:flex;align-items:center;
+  justify-content:center;font:12.5px var(--mono);color:var(--dim);letter-spacing:.04em}
+#bar{position:absolute;bottom:0;left:0;right:0;height:3px;background:var(--surface)}
+#bar i{display:block;height:100%;width:0;background:var(--mint)}
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="browser">
+    <div class="chrome"><i></i><i></i><i></i>
+      <span class="url">http://127.0.0.1:7351 — h5i-db ui market.db --allow-mutations</span></div>
+    <div class="appbar">
+      <span class="logo">h5i-<b>db</b> <span>review</span></span>
+      <nav id="tabs"></nav>
+      <span class="mode">mutations allowed</span>
+    </div>
+
+    <!-- review view -->
+    <div class="view" id="v-review">
+      <p class="micro">pending mutation plans</p>
+      <div class="card attn" id="plancard">
+        <div class="phead">
+          <span class="title">delete range trades</span>
+          <span class="tag del">delete_range</span>
+          <span style="margin-left:auto;font:10.5px var(--mono);color:var(--dim)">2026-07-22 04:52Z · agent: claude</span>
+        </div>
+        <div class="kv">
+          <span class="k">base version</span><span>v42</span>
+          <span class="k">rows affected</span><span>12,481</span>
+          <span class="k">rows before → after</span><span>1,204,110 → 1,191,629</span>
+          <span class="k">segments</span><span>3 rewritten, 127 reused</span>
+          <span class="k">new data</span><span>18.2 MiB</span>
+          <span class="k">note</span><span>drop bad feed window 09:30–09:31</span>
+        </div>
+        <div class="samples">
+          <div class="sbox"><p class="micro">before (sample)</p>
+            <table><tr><th>ts</th><th>symbol</th><th>price</th></tr>
+              <tr><td>09:30:00.120</td><td>AAPL</td><td style="color:var(--red)">0.01</td></tr>
+              <tr><td>09:30:00.480</td><td>AAPL</td><td style="color:var(--red)">0.01</td></tr>
+              <tr><td>09:30:01.010</td><td>MSFT</td><td style="color:var(--red)">0.02</td></tr></table></div>
+          <div class="sbox"><p class="micro">after (sample)</p>
+            <table><tr><th>ts</th><th>symbol</th><th>price</th></tr>
+              <tr><td colspan="3" style="color:var(--dim)">rows removed — range deleted</td></tr></table></div>
+        </div>
+        <div class="statusline" id="applystatus"></div>
+        <div class="actions">
+          <span class="btn" id="rejectbtn">Reject</span>
+          <span class="btn primary" id="applybtn">Apply plan</span>
+        </div>
+      </div>
+      <div class="card" id="emptycard" style="opacity:0">
+        <span style="color:var(--dim);font-size:13px">Nothing needs review.</span>
+      </div>
+    </div>
+
+    <!-- history view -->
+    <div class="view" id="v-history">
+      <p class="micro">version timeline — trades</p>
+      <div class="card">
+        <table id="vtable">
+          <tr><th>v</th><th>op</th><th>mode</th><th>committed</th><th>rows</th><th>note</th></tr>
+          <tr id="vrow43" style="opacity:0"><td style="color:var(--mint)">v43</td>
+            <td><span class="tag del">delete_range</span></td>
+            <td><span class="tag planned">planned</span></td>
+            <td>04:53:10Z</td><td>1,191,629</td><td>drop bad feed window</td></tr>
+          <tr><td>v42</td><td><span class="tag append">append</span></td><td><span class="tag">direct</span></td>
+            <td>04:31:02Z</td><td>1,204,110</td><td></td></tr>
+          <tr><td>v41</td><td><span class="tag append">append</span></td><td><span class="tag">direct</span></td>
+            <td>04:16:44Z</td><td>1,180,004</td><td></td></tr>
+          <tr><td>v40</td><td><span class="tag write">write</span></td><td><span class="tag">direct</span></td>
+            <td>03:58:19Z</td><td>1,144,921</td><td>daily load</td></tr>
+        </table>
+      </div>
+      <div class="card" id="diffcard" style="opacity:0">
+        <p class="micro">diff v42 → v43</p>
+        <div class="kv">
+          <span class="k">rows</span><span>1,204,110 → 1,191,629 <span style="color:var(--red)">(−12,481)</span></span>
+          <span class="k">segments</span><span>3 added, 5 removed, 127 kept</span>
+          <span class="k">schema</span><span>unchanged</span>
+          <span class="k">produced by</span><span>delete_range (planned) — plan hash 8c11f0…</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- sql view -->
+    <div class="view" id="v-sql">
+      <p class="micro">sql scratchpad — read-only session, 1 000 row cap</p>
+      <div class="sql" id="sqlbox"></div>
+      <div class="statusline" id="sqlstatus"></div>
+      <div class="chart" id="chart" style="opacity:0">
+        <svg viewBox="0 0 1000 120" preserveAspectRatio="none">
+          <polyline id="chartline" fill="none" stroke="#42e2d0" stroke-width="2"
+            points="" stroke-dasharray="3000" stroke-dashoffset="3000"/>
+        </svg>
+      </div>
+      <div class="card" id="sqlresult" style="opacity:0">
+        <table><tr><th>bucket</th><th>open</th><th>high</th><th>low</th><th>close</th><th>vwap</th></tr>
+          <tr><td>09:30</td><td>210.50</td><td>211.20</td><td>210.31</td><td>211.05</td><td>210.77</td></tr>
+          <tr><td>09:31</td><td>211.06</td><td>211.44</td><td>210.90</td><td>211.31</td><td>211.19</td></tr>
+          <tr><td>09:32</td><td>211.30</td><td>211.86</td><td>211.14</td><td>211.72</td><td>211.55</td></tr></table>
+      </div>
+    </div>
+
+    <div class="caption" id="caption"></div>
+  </div>
+  <div id="cursor"><svg width="18" height="18" viewBox="0 0 18 18">
+    <path d="M2 1 L2 14 L5.5 11 L8 16.5 L10.3 15.4 L7.8 10 L12.5 9.6 Z" fill="#f6f7f9" stroke="#0a0c10"/>
+  </svg></div>
+  <div id="bar"><i id="barfill"></i></div>
+</div>
+
+<script>
+"use strict";
+const $=(id)=>document.getElementById(id);
+function fit(){const s=Math.min(innerWidth/1280,innerHeight/720);
+  const st=$("stage");st.style.transform=`scale(${s})`;
+  st.style.left=((innerWidth-1280*s)/2)+"px";st.style.top=((innerHeight-720*s)/2)+"px";}
+addEventListener("resize",fit);fit();
+
+const DUR=42;
+const TABS=[["review","Review",1],["tables","Tables",0],["history","History",0],["sql","SQL",0],["snapshots","Snapshots",0]];
+let activeTab="review",planPending=true;
+function renderTabs(){
+  $("tabs").innerHTML=TABS.map(([id,label])=>{
+    const badge=(id==="review"&&planPending)?'<span class="badge">1</span>':"";
+    return `<b class="${id===activeTab?"on":""}">${label}${badge}</b>`;
+  }).join("");
+}
+function show(view){["review","history","sql"].forEach(v=>{
+  $("v-"+v).style.opacity=(v===view)?1:0;});}
+function cursorTo(x,y){$("cursor").style.left=x+"px";$("cursor").style.top=y+"px";}
+function caption(s){$("caption").textContent=s;}
+const sqlText=`SELECT time_bucket('1m', ts) AS bucket,
+       first_value(price ORDER BY ts) AS open, max(price) AS high,
+       min(price) AS low, last_value(price ORDER BY ts) AS close,
+       vwap(price, size) AS vwap
+FROM trades WHERE symbol = 'AAPL' GROUP BY bucket`;
+/* chart points */
+(function(){
+  let pts=[];let y=70;
+  for(let x=0;x<=1000;x+=12){y+=Math.sin(x/90)*4+(Math.random()-0.48)*7;y=Math.max(14,Math.min(106,y));pts.push(x+","+y.toFixed(1));}
+  $("chartline").setAttribute("points",pts.join(" "));
+})();
+
+/* timeline of the film */
+const STEPS=[
+  {at:0.0, run(){activeTab="review";planPending=true;renderTabs();show("review");
+    $("plancard").style.opacity=1;$("emptycard").style.opacity=0;$("applystatus").textContent="";
+    $("vrow43").style.opacity=0;$("diffcard").style.opacity=0;
+    $("sqlbox").textContent="";$("sqlstatus").textContent="";$("chart").style.opacity=0;$("sqlresult").style.opacity=0;
+    cursorTo(640,600);caption("an agent proposed a mutation — the plan waits for review");}},
+  {at:2.2, run(){cursorTo(660,320);caption("exact preview: rows affected, segments reused, before/after samples");}},
+  {at:6.0, run(){cursorTo(1054,505);}},
+  {at:6.8, run(){$("cursor").classList.add("click");}},
+  {at:7.0, run(){$("cursor").classList.remove("click");
+    $("applystatus").innerHTML='<span class="okx">applied → version 43</span> · CAS against base v42 — a moved HEAD would be a version_conflict';
+    caption("apply is atomic: what was previewed is byte-identical to what commits");}},
+  {at:9.6, run(){planPending=false;renderTabs();$("plancard").style.opacity=.35;$("emptycard").style.opacity=1;}},
+  {at:11.4, run(){activeTab="history";renderTabs();show("history");cursorTo(330,120);
+    caption("the version timeline records how each change was made");}},
+  {at:12.4, run(){$("vrow43").style.opacity=1;}},
+  {at:14.6, run(){cursorTo(420,205);caption("planned commits carry the reviewed plan's hash — an audit trail, not a vibe");}},
+  {at:17.2, run(){$("diffcard").style.opacity=1;cursorTo(500,430);
+    caption("version diff: rows, segments added/removed/kept, schema drift");}},
+  {at:21.4, run(){activeTab="sql";renderTabs();show("sql");cursorTo(500,150);caption("sql scratchpad with time-series functions");}},
+  {at:22.0, run(){typeSql=true;}},
+  {at:28.6, run(){$("sqlstatus").innerHTML='3 rows in 9.4 ms — trades@v43: <b style="color:var(--mint)">48/50 segments pruned</b>, 5.8 MiB scheduled';
+    $("chart").style.opacity=1;$("chartline").style.transition="stroke-dashoffset 2.4s linear";
+    $("chartline").style.strokeDashoffset="0";$("sqlresult").style.opacity=1;
+    caption("pruning is visible on every query — 48 of 50 segments never opened");}},
+  {at:34.0, run(){activeTab="review";renderTabs();show("review");
+    caption("read-only by default · --allow-mutations to approve · policy can require review for agents");}},
+  {at:38.0, run(){caption("h5i-db ui market.db — the review surface for a versioned database");}},
+];
+let typeSql=false,typedChars=0,lastStep=-1;
+let t0=performance.now();
+function frame(){
+  const t=((performance.now()-t0)/1000)%DUR;
+  $("barfill").style.width=(t/DUR*100)+"%";
+  // reset on loop
+  if(t<0.05&&lastStep>0){lastStep=-1;typeSql=false;typedChars=0;
+    $("chartline").style.transition="none";$("chartline").style.strokeDashoffset="3000";}
+  STEPS.forEach((s,i)=>{if(t>=s.at&&i>lastStep){s.run();lastStep=i;}});
+  if(typeSql&&typedChars<sqlText.length){
+    typedChars=Math.min(sqlText.length,typedChars+2);
+    $("sqlbox").textContent=sqlText.slice(0,typedChars);
+  }
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>
