@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>h5i-db — review UI film</title>
+<title>h5i-db · review UI film</title>
+<link rel="icon" type="image/png" href="../../_static/logo.png">
 <style>
 :root{
   --bg:#0a0c10; --surface:#12161c; --surface-2:#1a1f26; --elev:#232931;
   --border:#2a3138; --text:#f6f7f9; --muted:#abb3bf; --dim:#6b7785;
-  --mint:#42e2d0; --mintbg:rgba(66,226,208,.14); --mintglow:rgba(66,226,208,.32);
-  --green:#5ee2a0; --orange:#f0a050; --red:#ff6b6b; --vio:#b48bd9;
+  --accent:#e0241b; --accenttext:#ff6258; --accentbg:rgba(224,36,27,.14); --accentglow:rgba(224,36,27,.38);
+  --green:#62c98c; --orange:#d6a94e; --red:#ff6b6b; --vio:#b48bd9;
   --mono:"Space Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
   --ui:"Space Grotesk",system-ui,sans-serif;
 }
@@ -26,24 +27,24 @@ html,body{height:100%;background:#08080b;overflow:hidden}
   padding:4px 12px;font:11.5px var(--mono);color:var(--dim)}
 .appbar{display:flex;align-items:center;gap:18px;height:44px;padding:0 16px;background:var(--surface)}
 .appbar .logo{font-weight:700}
-.appbar .logo b{color:var(--mint)}
+.appbar .logo b{color:var(--accenttext)}
 .appbar .logo span{color:var(--dim);font-weight:400}
 nav{display:flex;gap:2px}
 nav b{padding:5px 12px;border-radius:4px;color:var(--muted);font-weight:400;cursor:default}
 nav b.on{background:var(--elev);color:var(--text)}
 nav .badge{display:inline-block;min-width:15px;padding:0 4px;margin-left:5px;border-radius:8px;
-  background:var(--mint);color:#05221e;font:700 10px/15px var(--mono)}
+  background:var(--accent);color:#fff;font:700 10px/15px var(--mono)}
 .mode{margin-left:auto;font:10px var(--mono);text-transform:uppercase;letter-spacing:.1em;
-  padding:3px 8px;border-radius:3px;color:var(--mint);background:var(--mintbg)}
+  padding:3px 8px;border-radius:3px;color:var(--accenttext);background:var(--accentbg)}
 .view{position:absolute;inset:82px 0 0;padding:16px 20px;opacity:0;overflow:hidden}
 .micro{font:9.5px var(--mono);text-transform:uppercase;letter-spacing:.14em;color:var(--dim);margin:0 0 8px}
 .card{background:var(--surface);border-radius:8px;padding:13px 15px;margin-bottom:12px}
-.card.attn{box-shadow:0 0 0 1px var(--mintglow)}
+.card.attn{box-shadow:0 0 0 1px var(--accentglow)}
 .phead{display:flex;gap:10px;align-items:baseline}
 .phead .title{font-weight:600;font-size:14px}
 .tag{font:10px var(--mono);text-transform:uppercase;letter-spacing:.08em;padding:2px 6px;
   border-radius:3px;background:var(--elev);color:var(--muted)}
-.tag.del{color:var(--red)} .tag.planned{color:var(--mint);background:var(--mintbg)}
+.tag.del{color:var(--red)} .tag.planned{color:var(--accenttext);background:var(--accentbg)}
 .tag.append{color:var(--green)} .tag.write{color:var(--orange)}
 .kv{display:grid;grid-template-columns:max-content 1fr;gap:2px 16px;font:11.5px var(--mono);margin:8px 0;
   font-variant-numeric:tabular-nums}
@@ -57,7 +58,7 @@ td{padding:3px 8px 3px 0;border-bottom:1px solid rgba(42,49,56,.4);white-space:n
 .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
 .btn{font-size:12px;padding:6px 14px;border-radius:5px;border:1px solid var(--border);
   background:var(--elev);color:var(--text)}
-.btn.primary{background:var(--mint);border-color:var(--mint);color:#05221e;font-weight:700}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
 .statusline{font:10.5px var(--mono);color:var(--dim);min-height:14px;margin-top:6px}
 .statusline .okx{color:var(--green)}
 #cursor{position:absolute;width:18px;height:18px;z-index:50;pointer-events:none;
@@ -71,14 +72,14 @@ td{padding:3px 8px 3px 0;border-bottom:1px solid rgba(42,49,56,.4);white-space:n
 .caption{position:absolute;left:0;right:0;bottom:0;height:34px;display:flex;align-items:center;
   justify-content:center;font:12.5px var(--mono);color:var(--dim);letter-spacing:.04em}
 #bar{position:absolute;bottom:0;left:0;right:0;height:3px;background:var(--surface)}
-#bar i{display:block;height:100%;width:0;background:var(--mint)}
+#bar i{display:block;height:100%;width:0;background:var(--accent)}
 </style>
 </head>
 <body>
 <div id="stage">
   <div class="browser">
     <div class="chrome"><i></i><i></i><i></i>
-      <span class="url">http://127.0.0.1:7351 — h5i-db ui market.db --allow-mutations</span></div>
+      <span class="url">http://127.0.0.1:7351 · h5i-db ui market.db --allow-mutations</span></div>
     <div class="appbar">
       <span class="logo">h5i-<b>db</b> <span>review</span></span>
       <nav id="tabs"></nav>
@@ -110,7 +111,7 @@ td{padding:3px 8px 3px 0;border-bottom:1px solid rgba(42,49,56,.4);white-space:n
               <tr><td>09:30:01.010</td><td>MSFT</td><td style="color:var(--red)">0.02</td></tr></table></div>
           <div class="sbox"><p class="micro">after (sample)</p>
             <table><tr><th>ts</th><th>symbol</th><th>price</th></tr>
-              <tr><td colspan="3" style="color:var(--dim)">rows removed — range deleted</td></tr></table></div>
+              <tr><td colspan="3" style="color:var(--dim)">rows removed: range deleted</td></tr></table></div>
         </div>
         <div class="statusline" id="applystatus"></div>
         <div class="actions">
@@ -125,11 +126,11 @@ td{padding:3px 8px 3px 0;border-bottom:1px solid rgba(42,49,56,.4);white-space:n
 
     <!-- history view -->
     <div class="view" id="v-history">
-      <p class="micro">version timeline — trades</p>
+      <p class="micro">version timeline · trades</p>
       <div class="card">
         <table id="vtable">
           <tr><th>v</th><th>op</th><th>mode</th><th>committed</th><th>rows</th><th>note</th></tr>
-          <tr id="vrow43" style="opacity:0"><td style="color:var(--mint)">v43</td>
+          <tr id="vrow43" style="opacity:0"><td style="color:var(--accenttext)">v43</td>
             <td><span class="tag del">delete_range</span></td>
             <td><span class="tag planned">planned</span></td>
             <td>04:53:10Z</td><td>1,191,629</td><td>drop bad feed window</td></tr>
@@ -147,19 +148,19 @@ td{padding:3px 8px 3px 0;border-bottom:1px solid rgba(42,49,56,.4);white-space:n
           <span class="k">rows</span><span>1,204,110 → 1,191,629 <span style="color:var(--red)">(−12,481)</span></span>
           <span class="k">segments</span><span>3 added, 5 removed, 127 kept</span>
           <span class="k">schema</span><span>unchanged</span>
-          <span class="k">produced by</span><span>delete_range (planned) — plan hash 8c11f0…</span>
+          <span class="k">produced by</span><span>delete_range (planned) · plan hash 8c11f0…</span>
         </div>
       </div>
     </div>
 
     <!-- sql view -->
     <div class="view" id="v-sql">
-      <p class="micro">sql scratchpad — read-only session, 1 000 row cap</p>
+      <p class="micro">sql scratchpad · read-only session, 1 000 row cap</p>
       <div class="sql" id="sqlbox"></div>
       <div class="statusline" id="sqlstatus"></div>
       <div class="chart" id="chart" style="opacity:0">
         <svg viewBox="0 0 1000 120" preserveAspectRatio="none">
-          <polyline id="chartline" fill="none" stroke="#42e2d0" stroke-width="2"
+          <polyline id="chartline" fill="none" stroke="#ff6258" stroke-width="2"
             points="" stroke-dasharray="3000" stroke-dashoffset="3000"/>
         </svg>
       </div>
@@ -218,29 +219,29 @@ const STEPS=[
     $("plancard").style.opacity=1;$("emptycard").style.opacity=0;$("applystatus").textContent="";
     $("vrow43").style.opacity=0;$("diffcard").style.opacity=0;
     $("sqlbox").textContent="";$("sqlstatus").textContent="";$("chart").style.opacity=0;$("sqlresult").style.opacity=0;
-    cursorTo(640,600);caption("an agent proposed a mutation — the plan waits for review");}},
+    cursorTo(640,600);caption("an agent proposed a mutation: the plan waits for review");}},
   {at:2.2, run(){cursorTo(660,320);caption("exact preview: rows affected, segments reused, before/after samples");}},
   {at:6.0, run(){cursorTo(1054,505);}},
   {at:6.8, run(){$("cursor").classList.add("click");}},
   {at:7.0, run(){$("cursor").classList.remove("click");
-    $("applystatus").innerHTML='<span class="okx">applied → version 43</span> · CAS against base v42 — a moved HEAD would be a version_conflict';
+    $("applystatus").innerHTML='<span class="okx">applied → version 43</span> · CAS against base v42, a moved HEAD would be a version_conflict';
     caption("apply is atomic: what was previewed is byte-identical to what commits");}},
   {at:9.6, run(){planPending=false;renderTabs();$("plancard").style.opacity=.35;$("emptycard").style.opacity=1;}},
   {at:11.4, run(){activeTab="history";renderTabs();show("history");cursorTo(330,120);
     caption("the version timeline records how each change was made");}},
   {at:12.4, run(){$("vrow43").style.opacity=1;}},
-  {at:14.6, run(){cursorTo(420,205);caption("planned commits carry the reviewed plan's hash — an audit trail, not a vibe");}},
+  {at:14.6, run(){cursorTo(420,205);caption("planned commits carry the reviewed plan's hash: an audit trail, not a vibe");}},
   {at:17.2, run(){$("diffcard").style.opacity=1;cursorTo(500,430);
     caption("version diff: rows, segments added/removed/kept, schema drift");}},
   {at:21.4, run(){activeTab="sql";renderTabs();show("sql");cursorTo(500,150);caption("sql scratchpad with time-series functions");}},
   {at:22.0, run(){typeSql=true;}},
-  {at:28.6, run(){$("sqlstatus").innerHTML='3 rows in 9.4 ms — trades@v43: <b style="color:var(--mint)">48/50 segments pruned</b>, 5.8 MiB scheduled';
+  {at:28.6, run(){$("sqlstatus").innerHTML='3 rows in 9.4 ms · trades@v43: <b style="color:var(--accenttext)">48/50 segments pruned</b>, 5.8 MiB scheduled';
     $("chart").style.opacity=1;$("chartline").style.transition="stroke-dashoffset 2.4s linear";
     $("chartline").style.strokeDashoffset="0";$("sqlresult").style.opacity=1;
-    caption("pruning is visible on every query — 48 of 50 segments never opened");}},
+    caption("pruning is visible on every query: 48 of 50 segments never opened");}},
   {at:34.0, run(){activeTab="review";renderTabs();show("review");
     caption("read-only by default · --allow-mutations to approve · policy can require review for agents");}},
-  {at:38.0, run(){caption("h5i-db ui market.db — the review surface for a versioned database");}},
+  {at:38.0, run(){caption("h5i-db ui market.db: the review surface for a versioned database");}},
 ];
 let typeSql=false,typedChars=0,lastStep=-1;
 let t0=performance.now();
