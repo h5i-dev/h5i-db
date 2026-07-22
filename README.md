@@ -35,11 +35,14 @@ h5i-db ui market.db                                                # review surf
 | ASOF join | ✓ | ✓ | ✗ | ✓ (sort-free on sorted storage) |
 | Previewable mutations (plan/apply) | ✗ | ✗ | ✗ | ✓, policy-enforceable |
 | Concurrent writers | MVCC | n/a | unsafe² | CAS + explicit conflict |
-| 20M-row narrow time-range scan | — | 14.9 ms | — | **5.3 ms** |
-| 20M-row 1-min OHLCV+VWAP | — | 1 575 ms | — | **142 ms** |
+| 20M-row narrow time-range scan | 17.0 ms | 15.0 ms | — | **7.3 ms** |
+| 20M-row 1-min OHLCV+VWAP | 774 ms | 2 392 ms | — | **164 ms** |
 
 ¹ `AT (VERSION …)` syntax exists but native storage rejects it.
 ² Documented single-writer-per-symbol assumption.
+
+All engines disk-backed over identical Parquet segments, measured in one
+session; pandas and PyArrow baselines in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Workspace
 
@@ -50,7 +53,7 @@ h5i-db ui market.db                                                # review surf
 | `h5i-db-cli` | `h5i-db` binary — the agent-facing contract |
 | `h5i-db-ui` | loopback review UI (plan approval, version diff, SQL scratchpad) |
 | `h5i-db-python` | `pip install h5i-db` (pyarrow interop) |
-| `h5i-db-bench` | benchmark harness + Polars comparison |
+| `h5i-db-bench` | benchmark harness + polars/duckdb/pandas/pyarrow comparison |
 
 ## Development
 
