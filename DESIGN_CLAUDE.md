@@ -338,6 +338,20 @@ day one, policy-driven (small-segment-count threshold) later. **Retention** =
 `delete_range` + `vacuum`; because segments are time-partitioned, expiring old
 data drops whole segments (TimescaleDB's `drop_chunks` insight).
 
+**Previewable mutations (plan / apply).** The riskiest agent operations are
+mutations, so every write-path operation has a plan variant: `plan_write` /
+`plan_replace_range` (… delete) runs the full write path — including
+uploading the new segments — but stops before the HEAD swap, returning a
+persisted `MutationPlan`: base version, exact affected-row count, segments
+reused vs added, byte estimates, and before/after row samples. `apply` is
+then a metadata-only CAS against the plan's base version (`VersionConflict`
+if the head moved — no re-execution race: what was previewed is
+byte-identical to what commits). `discard` or plan expiry (default TTL
+7 days) releases the staged segments to vacuum; live plans' segments are
+vacuum-protected. This falls out of the commit protocol almost for free and
+is strictly stronger than `--dry-run`. (Suggested by the user from the
+Dinobase preview/confirm pattern; adopted 2026-07.)
+
 **Vacuum and repair** are conservative by construction: vacuum is
 mark-and-sweep from table heads, retained version ancestry, and named
 snapshots, with a grace period so in-flight writers' objects survive, and it

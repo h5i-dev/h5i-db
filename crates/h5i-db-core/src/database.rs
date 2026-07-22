@@ -641,6 +641,57 @@ impl Database {
         })
     }
 
+    /// Commit a manifest prepared by a `MutationPlan`: pure metadata CAS
+    /// against the plan's base version. Segments were already uploaded at
+    /// planning time.
+    pub(crate) async fn commit_planned(
+        &self,
+        name: &str,
+        table_id: Uuid,
+        base_version: u64,
+        base_manifest_checksum: &str,
+        plan: &crate::plan::MutationPlan,
+    ) -> Result<CommitResult> {
+        self.ensure_writable("apply_plan")?;
+        let head = self.head(name, table_id).await?;
+        if head.head.sequence != base_version
+            || head.head.manifest_checksum != base_manifest_checksum
+        {
+            return Err(Error::VersionConflict {
+                table: name.into(),
+                expected: base_version,
+                actual: head.head.sequence,
+            });
+        }
+        let mut manifest = VersionManifest {
+            format: layout::FORMAT_VERSION,
+            table_id,
+            sequence: base_version + 1,
+            parent: Some(base_version),
+            parent_checksum: None, // filled by commit_manifest
+            committed_at_ns: 0,    // filled by commit_manifest
+            op: plan.op,
+            note: plan.note.clone(),
+            user_meta: plan.user_meta.clone(),
+            schema_revision: plan.schema_revision,
+            rows: 0,
+            bytes: 0,
+            time_range: None,
+            segments: plan.segments.clone(),
+        };
+        let mut res = self
+            .commit_manifest(
+                name,
+                table_id,
+                Some(&head),
+                &mut manifest,
+                plan.summary.segments_added,
+            )
+            .await?;
+        res.segments_deduped = plan.summary.segments_reused;
+        Ok(res)
+    }
+
     /// Shared prologue for write-path ops: resolve entry/spec/head and check
     /// the caller's expected_version.
     async fn write_prologue(
@@ -1273,7 +1324,8 @@ impl Database {
             let head = self.head(&entry.name, entry.table_id).await?;
             let head_seq = head.head.sequence;
 
-            // Referenced set: every segment in every committed manifest.
+            // Referenced set: every segment in every committed manifest,
+            // plus segments staged by live (unexpired) mutation plans.
             let mut referenced: BTreeSet<String> = BTreeSet::new();
             for seq in 0..=head_seq {
                 let m = self.manifest_at(entry.table_id, seq).await?;
@@ -1281,6 +1333,7 @@ impl Database {
                     referenced.insert(s.path.clone());
                 }
             }
+            referenced.extend(self.plan_protected_paths(entry.table_id).await?);
 
             let objects = self
                 .backend
@@ -1404,7 +1457,7 @@ fn validate_table_name(name: &str) -> Result<()> {
 
 /// Exact schema check for append/replace inputs: same field names, types, and
 /// no nullable input column feeding a non-nullable table column.
-fn validate_batches_schema(schema: &SchemaRef, batches: &[RecordBatch]) -> Result<()> {
+pub(crate) fn validate_batches_schema(schema: &SchemaRef, batches: &[RecordBatch]) -> Result<()> {
     for batch in batches {
         let got = batch.schema();
         if got.fields().len() != schema.fields().len() {
@@ -1486,7 +1539,7 @@ fn child_manifest(
 /// Replace newly written segments identical (by content hash) to a parent
 /// segment with a reference to the existing object; delete the redundant new
 /// object best-effort. Returns how many were deduped.
-fn dedup_segments(new_segments: &mut [SegmentMeta], parent: &VersionManifest) -> usize {
+pub(crate) fn dedup_segments(new_segments: &mut [SegmentMeta], parent: &VersionManifest) -> usize {
     let by_hash = parent.segments_by_checksum();
     let mut deduped = 0;
     for seg in new_segments.iter_mut() {
