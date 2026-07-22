@@ -39,5 +39,5 @@ pub use policy::MutationPolicy;
 pub use retention::{RetentionCut, RetentionFloor};
 pub use snapshot::{Snapshot, SnapshotEntry};
 pub use spec::{Codec, StorageOptions, TableOptions, TableSpec};
-pub use tail::TailEvent;
+pub use tail::{TailEvent, TailStream};
 pub use transaction::Transaction;

@@ -3,7 +3,8 @@
 //! Semantics follow DuckDB/TimescaleDB: fixed-width buckets are aligned to
 //! origin 2000-01-03 00:00:00 UTC (a Monday, so weekly buckets start on
 //! Mondays); month/year widths use calendar bucketing from 2000-01-01.
-//! An optional third argument overrides the origin.
+//! An optional third argument supplies either an origin or an IANA timezone;
+//! the four-argument form accepts both `(width, timestamp, origin, timezone)`.
 
 use std::sync::Arc;
 
@@ -12,7 +13,8 @@ use arrow::datatypes::{
     DataType, TimeUnit, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType,
 };
-use chrono::{Datelike, NaiveDate};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use datafusion::common::ScalarValue;
 use datafusion::error::{DataFusionError, Result as DfResult};
 use datafusion::logical_expr::{
@@ -228,9 +230,9 @@ impl ScalarUDFImpl for TimeBucketUdf {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> DfResult<DataType> {
-        if arg_types.len() < 2 || arg_types.len() > 3 {
+        if arg_types.len() < 2 || arg_types.len() > 4 {
             return Err(DataFusionError::Plan(
-                "time_bucket(interval, timestamp [, origin]) takes 2 or 3 arguments".into(),
+                "time_bucket(interval, timestamp [, origin|timezone [, timezone]]) takes 2 to 4 arguments".into(),
             ));
         }
         match &arg_types[1] {
@@ -243,9 +245,9 @@ impl ScalarUDFImpl for TimeBucketUdf {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DfResult<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        if args.len() < 2 || args.len() > 3 {
+        if args.len() < 2 || args.len() > 4 {
             return Err(DataFusionError::Plan(
-                "time_bucket(interval, timestamp [, origin]) takes 2 or 3 arguments".into(),
+                "time_bucket(interval, timestamp [, origin|timezone [, timezone]]) takes 2 to 4 arguments".into(),
             ));
         }
         let width = match &args[0] {
@@ -256,7 +258,24 @@ impl ScalarUDFImpl for TimeBucketUdf {
                 ))
             }
         };
-        let origin_ns = match args.get(2) {
+        let third_is_timezone = args.len() == 3
+            && matches!(
+                &args[2],
+                ColumnarValue::Scalar(ScalarValue::Utf8(Some(value)))
+                    if value.parse::<Tz>().is_ok() || value.contains('/')
+            );
+        let timezone = if args.len() == 4 || third_is_timezone {
+            let index = if args.len() == 4 { 3 } else { 2 };
+            Some(parse_timezone(&args[index])?)
+        } else {
+            None
+        };
+        let origin_arg = if args.len() == 4 || (args.len() == 3 && !third_is_timezone) {
+            args.get(2)
+        } else {
+            None
+        };
+        let origin_ns = match origin_arg {
             None => match width {
                 Width::Nanos(_) => DEFAULT_ORIGIN_SECS * 1_000_000_000,
                 Width::Months(_) => NaiveDate::from_ymd_opt(MONTH_ORIGIN_YEAR, 1, 1)
@@ -286,9 +305,12 @@ impl ScalarUDFImpl for TimeBucketUdf {
         };
         let uf = unit_factor(&unit);
         let bucket = |v: i64| -> Option<i64> {
-            match width {
-                Width::Nanos(w) => bucket_fixed(v, uf, w, origin_ns),
-                Width::Months(m) => bucket_months(v, uf, m, origin_ns),
+            match timezone {
+                Some(tz) => bucket_in_timezone(v, uf, width, origin_ns, tz),
+                None => match width {
+                    Width::Nanos(w) => bucket_fixed(v, uf, w, origin_ns),
+                    Width::Months(m) => bucket_months(v, uf, m, origin_ns),
+                },
             }
         };
 
@@ -314,6 +336,53 @@ impl ScalarUDFImpl for TimeBucketUdf {
         };
         Ok(ColumnarValue::Array(out))
     }
+}
+
+fn parse_timezone(value: &ColumnarValue) -> DfResult<Tz> {
+    let ColumnarValue::Scalar(ScalarValue::Utf8(Some(value))) = value else {
+        return Err(DataFusionError::Plan(
+            "time_bucket: timezone must be an IANA timezone string literal".into(),
+        ));
+    };
+    value
+        .parse::<Tz>()
+        .map_err(|_| DataFusionError::Plan(format!("time_bucket: unknown IANA timezone {value:?}")))
+}
+
+fn bucket_in_timezone(
+    value: i64,
+    unit_ns: i64,
+    width: Width,
+    origin_ns: i64,
+    timezone: Tz,
+) -> Option<i64> {
+    let instant_ns = value.checked_mul(unit_ns)?;
+    let instant = datetime_from_ns(instant_ns)?;
+    let local = instant.with_timezone(&timezone).naive_local();
+    let local_ns = local.and_utc().timestamp_nanos_opt()?;
+    let bucket_local_ns = match width {
+        Width::Nanos(width) => bucket_fixed(local_ns, 1, width, origin_ns),
+        Width::Months(months) => bucket_months(local_ns, 1, months, origin_ns),
+    }?;
+    let bucket_local = datetime_from_ns(bucket_local_ns)?.naive_utc();
+    // DST can make a local boundary ambiguous or nonexistent. Pick the first
+    // occurrence when ambiguous and advance to the first valid instant for a
+    // gap, matching common resampling behavior.
+    let mut candidate = bucket_local;
+    for _ in 0..=180 {
+        if let Some(bucket) = timezone.from_local_datetime(&candidate).earliest() {
+            return bucket.timestamp_nanos_opt()?.checked_div(unit_ns);
+        }
+        candidate = candidate.checked_add_signed(ChronoDuration::minutes(1))?;
+    }
+    None
+}
+
+fn datetime_from_ns(value: i64) -> Option<DateTime<Utc>> {
+    DateTime::from_timestamp(
+        value.div_euclid(1_000_000_000),
+        value.rem_euclid(1_000_000_000) as u32,
+    )
 }
 
 fn scalar_ts_to_ns(s: &ScalarValue) -> DfResult<i64> {

@@ -4,10 +4,11 @@
 agents, written in Rust.**
 
 Every write is an atomic commit producing an immutable version. Full SQL via
-DataFusion with native time-series operators (ASOF join, `time_bucket`,
-`vwap`, `ewma`). Mutations can be previewed before they commit and gated by
-policy. Crash-safe by construction and proven by tests that kill the writer
-at every commit step.
+DataFusion with native time-series operators (SQL ASOF join, timezone-aware
+`time_bucket`, gapfill/resample, rolling windows, `vwap`, `ewma`) and
+append-only streaming tails. Mutations can be previewed before they commit and
+gated by policy. Crash-safe by construction and proven by tests that kill the
+writer at every commit step.
 
 📖 **[Documentation & demo films](https://h5i-dev.github.io/h5i-db/)** ·
 [Design document](DESIGN.md) · [Benchmarks](benchmarks/RESULTS.md) ·

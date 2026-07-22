@@ -14,7 +14,7 @@
 //! must never be used for wheels.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use arrow::array::RecordBatch;
@@ -238,12 +238,8 @@ fn check_timeout(timeout: Option<f64>) -> PyResult<()> {
     Ok(())
 }
 
-/// Live handle state. One multi-thread Tokio runtime *per handle* rather
-/// than a process-global one: handles stay fully isolated, `close()` can
-/// shut the runtime down deterministically, and runtime startup failure is
-/// reportable as an exception (a global static would have to panic). Worker
-/// threads are capped so a process holding several handles does not
-/// oversubscribe the machine.
+/// Live handle state. All handles share one bounded multi-thread runtime;
+/// database ownership and close state remain per handle.
 #[derive(Clone)]
 struct Inner {
     db: Arc<Database>,
@@ -253,6 +249,34 @@ struct Inner {
 #[pyclass]
 struct NativeDatabase {
     inner: Mutex<Option<Inner>>,
+}
+
+fn shared_runtime() -> PyResult<Arc<tokio::runtime::Runtime>> {
+    static RUNTIME: OnceLock<Arc<tokio::runtime::Runtime>> = OnceLock::new();
+    if let Some(runtime) = RUNTIME.get() {
+        return Ok(runtime.clone());
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+        .min(8);
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(workers)
+            .enable_all()
+            .build()
+            .map_err(|e| {
+                tagged(
+                    StorageError::new_err(format!("[io] failed to start runtime: {e}")),
+                    "io",
+                    None,
+                    false,
+                )
+            })?,
+    );
+    // A racing constructor may win; use the installed runtime in that case.
+    let _ = RUNTIME.set(runtime.clone());
+    Ok(RUNTIME.get().cloned().unwrap_or(runtime))
 }
 
 impl NativeDatabase {
@@ -304,22 +328,7 @@ impl NativeDatabase {
     #[new]
     #[pyo3(signature = (path, create = false, read_only = false))]
     fn new(py: Python<'_>, path: PathBuf, create: bool, read_only: bool) -> PyResult<Self> {
-        let workers = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(2)
-            .min(8);
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(workers)
-            .enable_all()
-            .build()
-            .map_err(|e| {
-                tagged(
-                    StorageError::new_err(format!("[io] failed to start runtime: {e}")),
-                    "io",
-                    None,
-                    false,
-                )
-            })?;
+        let runtime = shared_runtime()?;
         let db = py
             .detach(|| {
                 runtime.block_on(async {
@@ -336,12 +345,13 @@ impl NativeDatabase {
         Ok(Self {
             inner: Mutex::new(Some(Inner {
                 db: Arc::new(db),
-                runtime: Arc::new(runtime),
+                runtime,
             })),
         })
     }
 
-    /// Release the handle: drops the database and shuts the runtime down.
+    /// Release this database handle. The shared runtime stays alive for other
+    /// handles and is reclaimed by the process at interpreter shutdown.
     /// Idempotent. In-flight operations on other threads hold their own
     /// reference and finish normally; later calls on this handle raise
     /// `H5iError` with `code == "closed"`.
@@ -351,12 +361,21 @@ impl NativeDatabase {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .take();
-        if let Some(inner) = taken {
-            drop(inner.db);
-            if let Ok(runtime) = Arc::try_unwrap(inner.runtime) {
-                runtime.shutdown_background();
-            }
-        }
+        drop(taken);
+    }
+
+    fn __enter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
+        slf.inner()?;
+        Ok(slf)
+    }
+
+    fn __exit__(
+        &self,
+        _exc_type: &Bound<'_, PyAny>,
+        _exc_value: &Bound<'_, PyAny>,
+        _traceback: &Bound<'_, PyAny>,
+    ) {
+        self.close();
     }
 
     #[getter]

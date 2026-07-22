@@ -14,10 +14,19 @@
 //! `Unsupported` from `diff_scan`; tailers handle that by re-anchoring on
 //! the current head (documented in the consumers).
 
+use std::collections::VecDeque;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::database::Database;
+use arrow::record_batch::RecordBatch;
+use futures::{stream, Stream};
+
+use crate::database::{Database, ScanOptions};
 use crate::error::{Error, Result};
+
+/// An unbounded stream of rows appended after a known table version.
+pub type TailStream = Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>;
 
 /// Outcome of one wait.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,5 +63,73 @@ impl Database {
             }
             tokio::time::sleep(interval.min(timeout.saturating_sub(start.elapsed()))).await;
         }
+    }
+
+    /// Stream batches appended after `after` until the consumer drops the
+    /// stream. A non-append version terminates it with [`Error::Unsupported`].
+    pub fn tail_stream(
+        self: Arc<Self>,
+        name: impl Into<String>,
+        after: u64,
+        poll_interval: Duration,
+    ) -> TailStream {
+        struct State {
+            db: Arc<Database>,
+            name: String,
+            after: u64,
+            poll_interval: Duration,
+            pending: VecDeque<RecordBatch>,
+            failed: bool,
+        }
+
+        let state = State {
+            db: self,
+            name: name.into(),
+            after,
+            poll_interval: poll_interval.max(Duration::from_millis(10)),
+            pending: VecDeque::new(),
+            failed: false,
+        };
+        Box::pin(stream::unfold(state, |mut state| async move {
+            if state.failed {
+                return None;
+            }
+            loop {
+                if let Some(batch) = state.pending.pop_front() {
+                    return Some((Ok(batch), state));
+                }
+                let next = match state
+                    .db
+                    .wait_for_version(
+                        &state.name,
+                        state.after,
+                        state.poll_interval,
+                        Duration::from_secs(1),
+                    )
+                    .await
+                {
+                    Ok(TailEvent::Advanced(sequence)) => sequence,
+                    Ok(TailEvent::TimedOut) => continue,
+                    Err(error) => {
+                        state.failed = true;
+                        return Some((Err(error), state));
+                    }
+                };
+                match state
+                    .db
+                    .diff_scan(&state.name, state.after, next, ScanOptions::default())
+                    .await
+                {
+                    Ok((batches, _)) => {
+                        state.after = next;
+                        state.pending.extend(batches);
+                    }
+                    Err(error) => {
+                        state.failed = true;
+                        return Some((Err(error), state));
+                    }
+                }
+            }
+        }))
     }
 }

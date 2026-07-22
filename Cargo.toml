@@ -48,7 +48,7 @@ parquet = { version = "58.3", default-features = false, features = [
     "crc",
 ] }
 # Must match the object_store version parquet/datafusion link against.
-object_store = "0.13"
+object_store = { version = "0.13", features = ["aws"] }
 datafusion = { version = "54.1", default-features = false, features = [
     "parquet",
     "sql",
@@ -83,6 +83,7 @@ chrono = { version = "0.4", default-features = false, features = [
     "clock",
     "serde",
 ] }
+chrono-tz = "0.10"
 url = "2"
 thiserror = "2"
 tracing = "0.1"

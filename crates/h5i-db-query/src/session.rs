@@ -22,6 +22,7 @@ use crate::finance::{ewma_udwf, vwap_udaf, wavg_udaf};
 use crate::functions::time_bucket_udf;
 use crate::gapfill::GapFillFunc;
 use crate::provider::{H5iTableProvider, ScanMetrics, ScanMetricsCollector};
+use crate::tail::TailFunc;
 use crate::udtf::TimeTravelFunc;
 
 /// Resource and execution options for a session.
@@ -139,6 +140,8 @@ impl H5iSession {
             Arc::new(AsOfJoinFunc::new(db.clone(), url.clone(), metrics.clone())),
         );
         ctx.register_udtf("gapfill", Arc::new(GapFillFunc::new(db.clone())));
+        ctx.register_udtf("resample", Arc::new(GapFillFunc::new(db.clone())));
+        ctx.register_udtf("tail", Arc::new(TailFunc::new(db.clone())));
         ctx.register_udf(time_bucket_udf());
         ctx.register_udaf(vwap_udaf());
         ctx.register_udaf(wavg_udaf());
@@ -207,7 +210,7 @@ impl H5iSession {
 
     /// Run SQL and return a lazy DataFrame.
     pub async fn sql(&self, query: &str) -> DfResult<DataFrame> {
-        let rewritten = rewrite_asof_join(query)?;
+        let rewritten = rewrite_rolling_sugar(&rewrite_asof_join(query)?)?;
         self.ctx.sql(&rewritten).await
     }
 
@@ -230,6 +233,153 @@ impl H5iSession {
     pub fn take_scan_metrics(&self) -> Vec<ScanMetrics> {
         self.metrics.take()
     }
+}
+
+/// Expand `rolling_avg(value, order_by, rows)` (and sum/min/max variants)
+/// into a standard SQL window frame. This keeps the convenience spelling in
+/// the h5i layer while leaving execution and optimization to DataFusion.
+fn rewrite_rolling_sugar(query: &str) -> DfResult<String> {
+    const FUNCTIONS: [(&str, &str); 4] = [
+        ("rolling_avg", "AVG"),
+        ("rolling_sum", "SUM"),
+        ("rolling_min", "MIN"),
+        ("rolling_max", "MAX"),
+    ];
+    let mut rewritten = query.to_string();
+    loop {
+        let found = FUNCTIONS
+            .iter()
+            .filter_map(|(name, aggregate)| {
+                find_function_call(&rewritten, name).map(|start| (start, *name, *aggregate))
+            })
+            .min_by_key(|(start, _, _)| *start);
+        let Some((start, name, aggregate)) = found else {
+            return Ok(rewritten);
+        };
+        let open = start + name.len();
+        let close = matching_paren(&rewritten, open)
+            .ok_or_else(|| DataFusionError::Plan(format!("{name}: missing closing parenthesis")))?;
+        let args = split_function_args(&rewritten[open + 1..close]);
+        if args.len() != 3 {
+            return Err(DataFusionError::Plan(format!(
+                "{name}(value, order_by, rows) takes exactly 3 arguments"
+            )));
+        }
+        let rows = args[2].trim().parse::<u64>().map_err(|_| {
+            DataFusionError::Plan(format!("{name}: rows must be a positive integer literal"))
+        })?;
+        if rows == 0 || rows > 1_000_000 {
+            return Err(DataFusionError::Plan(format!(
+                "{name}: rows must be between 1 and 1000000"
+            )));
+        }
+        let replacement = format!(
+            "{aggregate}({}) OVER (ORDER BY {} ROWS BETWEEN {} PRECEDING AND CURRENT ROW)",
+            args[0].trim(),
+            args[1].trim(),
+            rows - 1
+        );
+        rewritten.replace_range(start..=close, &replacement);
+    }
+}
+
+fn find_function_call(haystack: &str, name: &str) -> Option<usize> {
+    let bytes = haystack.as_bytes();
+    let mut quote = None;
+    let mut i = 0;
+    while i + name.len() < bytes.len() {
+        match bytes[i] {
+            b'\'' | b'"' => {
+                let current = bytes[i];
+                if quote == Some(current) {
+                    if i + 1 < bytes.len() && bytes[i + 1] == current {
+                        i += 2;
+                        continue;
+                    }
+                    quote = None;
+                } else if quote.is_none() {
+                    quote = Some(current);
+                }
+            }
+            _ if quote.is_none()
+                && bytes[i..i + name.len()].eq_ignore_ascii_case(name.as_bytes())
+                && bytes.get(i + name.len()) == Some(&b'(')
+                && (i == 0 || !is_identifier_byte(bytes[i - 1])) =>
+            {
+                return Some(i);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_identifier_byte(value: u8) -> bool {
+    value.is_ascii_alphanumeric() || value == b'_'
+}
+
+fn matching_paren(value: &str, open: usize) -> Option<usize> {
+    let bytes = value.as_bytes();
+    let mut depth = 0_u32;
+    let mut quote = None;
+    let mut i = open;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if let Some(active) = quote {
+            if byte == active {
+                if bytes.get(i + 1) == Some(&active) {
+                    i += 2;
+                    continue;
+                }
+                quote = None;
+            }
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == b'(' {
+            depth += 1;
+        } else if byte == b')' {
+            depth = depth.checked_sub(1)?;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn split_function_args(value: &str) -> Vec<&str> {
+    let bytes = value.as_bytes();
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut depth = 0_u32;
+    let mut quote = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if let Some(active) = quote {
+            if byte == active {
+                if bytes.get(i + 1) == Some(&active) {
+                    i += 2;
+                    continue;
+                }
+                quote = None;
+            }
+        } else if byte == b'\'' || byte == b'"' {
+            quote = Some(byte);
+        } else if byte == b'(' {
+            depth += 1;
+        } else if byte == b')' {
+            depth = depth.saturating_sub(1);
+        } else if byte == b',' && depth == 0 {
+            result.push(&value[start..i]);
+            start = i + 1;
+        }
+        i += 1;
+    }
+    result.push(&value[start..]);
+    result
 }
 
 /// Translate sqlparser's ASOF keyword form into the native `asof_join` table

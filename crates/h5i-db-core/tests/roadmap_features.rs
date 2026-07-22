@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use arrow::array::{Float64Array, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use futures::StreamExt;
 use h5i_db_core::{
     Backend, Database, Error, ReadAt, RetentionCut, ScanOptions, TableOptions, TailEvent,
     WriteOptions,
@@ -199,4 +200,48 @@ async fn in_memory_object_backend_is_constructible_and_commits() {
             .rows,
         1
     );
+}
+
+#[test]
+fn s3_backend_is_constructible_without_network_io() {
+    let url = Url::parse("s3://test-bucket/prefix").unwrap();
+    let backend = Backend::from_url(
+        &url,
+        [
+            ("aws_access_key_id", "test"),
+            ("aws_secret_access_key", "test"),
+            ("aws_region", "us-east-1"),
+        ],
+    )
+    .unwrap();
+    assert!(backend.local_root.is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tail_stream_yields_the_next_append_without_hanging() {
+    let (_dir, db) = local_db().await;
+    db.create_table("ticks", schema_v1(), options())
+        .await
+        .unwrap();
+    db.append("ticks", vec![batch_v1(&[1])], WriteOptions::default())
+        .await
+        .unwrap();
+    let db = Arc::new(db);
+    let mut tail = db
+        .clone()
+        .tail_stream("ticks", 1, Duration::from_millis(10));
+    let writer = db.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        writer
+            .append("ticks", vec![batch_v1(&[2])], WriteOptions::default())
+            .await
+            .unwrap();
+    });
+    let batch = tokio::time::timeout(Duration::from_secs(2), tail.next())
+        .await
+        .expect("tail timed out")
+        .expect("tail ended")
+        .unwrap();
+    assert_eq!(batch.num_rows(), 1);
 }

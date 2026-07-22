@@ -169,9 +169,18 @@ impl FsLock {
     }
 }
 
+#[cfg(unix)]
 fn fsync_dir(dir: &Path) -> Result<()> {
     let f = std::fs::File::open(dir).map_err(|e| Error::io(dir.display(), e))?;
     f.sync_all().map_err(|e| Error::io(dir.display(), e))
+}
+
+// Windows does not expose a portable directory handle that `File::sync_all`
+// can flush. File data is flushed through writable handles, and rename uses
+// the platform's atomic replacement primitive.
+#[cfg(windows)]
+fn fsync_dir(_dir: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn read_head_file(path: &Path) -> Result<Option<(Head, HeadTag)>> {
@@ -406,7 +415,13 @@ impl Backend {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut dirs = std::collections::BTreeSet::new();
             for p in &paths {
-                let f = std::fs::File::open(p).map_err(|e| Error::io(p.display(), e))?;
+                // `FlushFileBuffers` requires a write-capable handle on
+                // Windows; read-only `File::open` returns AccessDenied.
+                let f = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(p)
+                    .map_err(|e| Error::io(p.display(), e))?;
                 f.sync_all().map_err(|e| Error::io(p.display(), e))?;
                 if let Some(dir) = p.parent() {
                     dirs.insert(dir.to_path_buf());

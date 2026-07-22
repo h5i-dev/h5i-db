@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
-use arrow::datatypes::{DataType, SchemaRef, TimeUnit};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::{TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result as DfResult};
@@ -223,9 +223,28 @@ impl TableFunctionImpl for GapFillFunc {
                 "gapfill: {time_col:?} is not the table's declared time column"
             )));
         }
-        let batch = build_gapfilled(resolved.schema.clone(), &batches, &time_col, step, mode)?;
+        // Generated grid rows can contain nulls even when the stored schema is
+        // non-nullable. The provider must advertise that honestly or MemTable
+        // rejects a valid null-mode resample.
+        let output_schema = Arc::new(Schema::new_with_metadata(
+            resolved
+                .schema
+                .fields()
+                .iter()
+                .map(|field| {
+                    if field.name() == &time_col {
+                        field.as_ref().clone()
+                    } else {
+                        Field::new(field.name(), field.data_type().clone(), true)
+                            .with_metadata(field.metadata().clone())
+                    }
+                })
+                .collect::<Vec<_>>(),
+            resolved.schema.metadata().clone(),
+        ));
+        let batch = build_gapfilled(output_schema.clone(), &batches, &time_col, step, mode)?;
         Ok(Arc::new(MemTable::try_new(
-            resolved.schema,
+            output_schema,
             vec![vec![batch]],
         )?))
     }

@@ -359,6 +359,48 @@ async fn gapfill_supports_locf_and_linear_interpolation() {
         .downcast_ref::<Float64Array>()
         .unwrap();
     assert_eq!(price.values(), &[0.0, 0.0, 20.0]);
+
+    let resampled = s
+        .sql("SELECT count(*) AS n FROM resample('trades', 'ts', 10, 'null')")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        resampled[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0),
+        3
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rolling_sugar_expands_to_bounded_window_frames() {
+    let (_dir, db) = setup_trades().await;
+    let s = session(&db).await;
+    let batches = s
+        .sql("SELECT rolling_avg(price, ts, 2) AS value FROM trades ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let values = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    assert_eq!(values.values(), &[10.0, 15.0, 16.0, 17.0]);
+
+    let err = s
+        .sql("SELECT rolling_sum(size, ts, 0) FROM trades")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("between 1 and 1000000"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -451,4 +493,81 @@ async fn exact_symbol_sets_prune_unrelated_segments() {
     let metrics = s.take_scan_metrics();
     assert_eq!(metrics[0].segments_total, 2);
     assert_eq!(metrics[0].segments_scanned, 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn tail_table_function_is_an_unbounded_append_stream() {
+    let (_dir, db) = setup_trades().await;
+    let s = session(&db).await;
+    let query = tokio::spawn(async move {
+        s.sql("SELECT ts FROM tail('trades', 1, 10) LIMIT 1")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    db.append(
+        "trades",
+        vec![trades_batch(&[5_000], &["A"], &[13.0], &[1])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let batches = tokio::time::timeout(std::time::Duration::from_secs(2), query)
+        .await
+        .expect("tail query timed out")
+        .unwrap();
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn time_bucket_timezone_tracks_dst_local_midnight() {
+    let (_dir, db) = setup_trades().await;
+    let ns = |value: &str| {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .timestamp_nanos_opt()
+            .unwrap()
+    };
+    db.append(
+        "trades",
+        vec![trades_batch(
+            &[ns("2024-03-10T07:30:00Z"), ns("2024-03-11T07:30:00Z")],
+            &["A", "A"],
+            &[1.0, 2.0],
+            &[1, 1],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+    let batches = s
+        .sql(
+            "SELECT time_bucket('1d', ts, 'America/New_York') AS bucket \
+             FROM trades WHERE price < 3 ORDER BY ts",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let values = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<TimestampNanosecondArray>()
+        .unwrap();
+    assert_eq!(values.value(0), ns("2024-03-10T05:00:00Z"));
+    assert_eq!(values.value(1), ns("2024-03-11T04:00:00Z"));
+
+    let err = s
+        .sql("SELECT time_bucket('1d', ts, 'Mars/Olympus') FROM trades")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown IANA timezone"));
 }

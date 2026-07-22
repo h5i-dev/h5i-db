@@ -20,6 +20,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { workspace = true }
 url = { workspace = true }
 tracing = { workspace = true }
 
