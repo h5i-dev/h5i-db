@@ -620,4 +620,147 @@ mod tests {
             "JSON round-trip must reproduce the sealed bytes exactly"
         );
     }
+
+    fn key(timestamp: i64, row: u64) -> PointKey {
+        PointKey {
+            timestamp,
+            segment_checksum: "seg".into(),
+            row,
+        }
+    }
+
+    fn segment_meta(rows: u64) -> SegmentMeta {
+        SegmentMeta {
+            id: uuid::Uuid::nil(),
+            path: "tables/t/segments/s.parquet".into(),
+            rows,
+            bytes: 1,
+            checksum: "seg".into(),
+            time_range: None,
+            sorted: true,
+            schema_revision: 1,
+            created_by_sequence: 1,
+            columns: Default::default(),
+        }
+    }
+
+    fn sealed_entry() -> AggregateStateEntry {
+        let mut state = GroupState::new(Some("A".into()), key(10, 0), 5.0, 1.0);
+        assert!(state.add(key(20, 1), 7.0, 2.0));
+        let mut entry = AggregateStateEntry {
+            format: FORMAT,
+            segment_checksum: "seg".into(),
+            schema_revision: 1,
+            aggregate_plan_hash: "plan".into(),
+            expression_semantics_version: SEMANTICS_VERSION,
+            source_row_count: 2,
+            groups: vec![state],
+            checksum: String::new(),
+        };
+        entry.seal().unwrap();
+        entry
+    }
+
+    #[test]
+    fn open_and_close_follow_key_order_not_insertion_order() {
+        // Rows arrive out of time order; open/close must track the total
+        // (timestamp, checksum, row) key, not arrival.
+        let mut state = GroupState::new(Some("A".into()), key(20, 5), 200.0, 1.0);
+        assert!(state.add(key(10, 0), 100.0, 1.0)); // earlier → becomes open
+        assert!(state.add(key(30, 9), 300.0, 1.0)); // later → becomes close
+        assert!(state.add(key(10, 1), 150.0, 1.0)); // same ts, higher row → not open
+        let done = state.finish();
+        assert_eq!((done.open, done.close), (100.0, 300.0));
+        assert_eq!((done.first_timestamp, done.last_timestamp), (10, 30));
+        assert_eq!(done.high, 300.0);
+        assert_eq!(done.low, 100.0);
+    }
+
+    #[test]
+    fn merge_matches_sequential_accumulation() {
+        let mut left = GroupState::new(None, key(10, 0), 1.0, 1.0);
+        assert!(left.add(key(20, 1), 2.0, 2.0));
+        let mut right = GroupState::new(None, key(5, 0), 9.0, 1.0);
+        assert!(right.add(key(40, 3), 4.0, 1.0));
+
+        let mut merged = left.clone();
+        assert!(merged.merge(right));
+        let done = merged.finish();
+        assert_eq!(done.rows, 4);
+        assert_eq!((done.open, done.close), (9.0, 4.0));
+        assert_eq!((done.first_timestamp, done.last_timestamp), (5, 40));
+        assert_eq!(done.volume, 5.0);
+    }
+
+    #[test]
+    fn non_finite_accumulation_is_reported_not_cached() {
+        let mut state = GroupState::new(None, key(1, 0), f64::MAX, 1.0);
+        assert!(
+            !state.add(key(2, 1), f64::MAX, 1.0),
+            "overflow to infinity must fail the add"
+        );
+    }
+
+    #[test]
+    fn verify_accepts_the_sealed_entry_and_rejects_tampering() {
+        let entry = sealed_entry();
+        entry.verify(&segment_meta(2), "plan").expect("valid entry");
+
+        // Key mismatches: wrong segment, wrong plan, wrong row count.
+        assert!(entry.verify(&segment_meta(3), "plan").is_err());
+        let mut other = segment_meta(2);
+        other.checksum = "other".into();
+        assert!(entry.verify(&other, "plan").is_err());
+        assert!(entry.verify(&segment_meta(2), "other-plan").is_err());
+
+        // Payload tampering breaks the checksum.
+        let mut tampered = sealed_entry();
+        tampered.groups[0].volume += 1.0;
+        assert!(tampered.verify(&segment_meta(2), "plan").is_err());
+
+        // Duplicate groups are an invalid payload even with a valid checksum.
+        let mut duplicated = sealed_entry();
+        let clone = duplicated.groups[0].clone();
+        duplicated.groups.push(clone);
+        duplicated.source_row_count = 4;
+        duplicated.seal().unwrap();
+        assert!(duplicated.verify(&segment_meta(4), "plan").is_err());
+
+        // Group rows not summing to the segment row count.
+        let mut short = sealed_entry();
+        short.source_row_count = 5;
+        short.seal().unwrap();
+        assert!(short.verify(&segment_meta(5), "plan").is_err());
+    }
+
+    #[test]
+    fn int64_values_must_be_exactly_representable_as_f64() {
+        use arrow::array::{Float64Array, Int64Array};
+        let exact = Int64Array::from(vec![1i64 << 53]);
+        assert_eq!(f64_value(&exact, 0).unwrap(), (1i64 << 53) as f64);
+        let inexact = Int64Array::from(vec![(1i64 << 53) + 1]);
+        assert!(f64_value(&inexact, 0).is_err());
+        let floats = Float64Array::from(vec![1.5]);
+        assert_eq!(f64_value(&floats, 0).unwrap(), 1.5);
+        // Unsupported representation.
+        let strings = StringArray::from(vec!["x"]);
+        assert!(f64_value(&strings, 0).is_err());
+    }
+
+    #[test]
+    fn timestamp_and_group_value_extraction_rejects_unsupported_arrays() {
+        use arrow::array::{Float64Array, Int64Array};
+        let ts = TimestampNanosecondArray::from(vec![7i64]);
+        assert_eq!(timestamp_value(&ts, 0).unwrap(), 7);
+        let ints = Int64Array::from(vec![9i64]);
+        assert_eq!(timestamp_value(&ints, 0).unwrap(), 9);
+        let floats = Float64Array::from(vec![1.0]);
+        assert!(timestamp_value(&floats, 0).is_err());
+
+        let strings = StringArray::from(vec!["A"]);
+        assert_eq!(string_value(&strings, 0).unwrap(), "A");
+        let large = LargeStringArray::from(vec!["B"]);
+        assert_eq!(string_value(&large, 0).unwrap(), "B");
+        assert!(string_value(&ints, 0).is_err());
+    }
 }

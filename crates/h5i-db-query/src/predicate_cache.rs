@@ -445,3 +445,130 @@ fn cache_path(segment: &SegmentMeta, predicate_hash: &str) -> ObjectPath {
 fn external(error: impl std::error::Error + Send + Sync + 'static) -> DataFusionError {
     DataFusionError::External(Box::new(error))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion::prelude::{col, lit};
+    use datafusion::scalar::ScalarValue;
+    use std::sync::Arc;
+
+    fn schema() -> arrow::datatypes::SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                false,
+            ),
+            Field::new("symbol", DataType::Utf8, false),
+            Field::new("price", DataType::Float64, false),
+            Field::new("size", DataType::Int64, false),
+        ]))
+    }
+
+    fn ts_lit(value: i64) -> Expr {
+        Expr::Literal(
+            ScalarValue::TimestampNanosecond(Some(value), Some("UTC".into())),
+            None,
+        )
+    }
+
+    #[test]
+    fn accepts_equality_plus_typed_ranges_in_file_schema_order() {
+        let filters = [
+            col("ts").gt_eq(ts_lit(1)),
+            col("symbol").eq(lit("AAPL")),
+            col("ts").lt(ts_lit(2)),
+        ];
+        let eligible = eligible_predicate(&schema(), &filters).expect("eligible");
+        // Columns must follow file-schema order for ProjectionMask alignment,
+        // not predicate order.
+        assert_eq!(
+            eligible.columns,
+            vec!["ts".to_string(), "symbol".to_string()]
+        );
+        assert_eq!(eligible.hash.len(), 64);
+    }
+
+    #[test]
+    fn hash_is_order_insensitive_but_literal_sensitive() {
+        let a = eligible_predicate(
+            &schema(),
+            &[col("symbol").eq(lit("AAPL")), col("ts").gt_eq(ts_lit(1))],
+        )
+        .unwrap();
+        let b = eligible_predicate(
+            &schema(),
+            &[col("ts").gt_eq(ts_lit(1)), col("symbol").eq(lit("AAPL"))],
+        )
+        .unwrap();
+        assert_eq!(a.hash, b.hash, "term order must not change the key");
+
+        let c = eligible_predicate(
+            &schema(),
+            &[col("symbol").eq(lit("MSFT")), col("ts").gt_eq(ts_lit(1))],
+        )
+        .unwrap();
+        assert_ne!(a.hash, c.hash, "different literals must key differently");
+    }
+
+    #[test]
+    fn literal_on_left_normalizes_to_the_reversed_operator() {
+        let a = eligible_predicate(
+            &schema(),
+            &[col("symbol").eq(lit("A")), col("ts").lt(ts_lit(9))],
+        )
+        .unwrap();
+        let b = eligible_predicate(
+            &schema(),
+            &[col("symbol").eq(lit("A")), ts_lit(9).gt(col("ts"))],
+        )
+        .unwrap();
+        assert_eq!(a.hash, b.hash);
+    }
+
+    #[test]
+    fn rejects_ineligible_shapes() {
+        let s = schema();
+        // Float64 term: outside the typed contract.
+        assert!(eligible_predicate(
+            &s,
+            &[col("symbol").eq(lit("A")), col("price").gt(lit(1.0_f64))]
+        )
+        .is_none());
+        // Range-only conjunction: an equality term is required.
+        assert!(
+            eligible_predicate(&s, &[col("ts").gt_eq(ts_lit(1)), col("ts").lt(ts_lit(2))])
+                .is_none()
+        );
+        // Disjunctions are not fingerprintable.
+        assert!(eligible_predicate(
+            &s,
+            &[col("symbol").eq(lit("A")).or(col("symbol").eq(lit("B")))]
+        )
+        .is_none());
+        // Null semantics are rejected, both as predicate and literal.
+        assert!(eligible_predicate(&s, &[col("symbol").is_null()]).is_none());
+        assert!(eligible_predicate(
+            &s,
+            &[col("symbol").eq(Expr::Literal(ScalarValue::Utf8(None), None))]
+        )
+        .is_none());
+        // Unknown column.
+        assert!(eligible_predicate(&s, &[col("venue").eq(lit("X"))]).is_none());
+        // No filters at all.
+        assert!(eligible_predicate(&s, &[]).is_none());
+    }
+
+    #[test]
+    fn rejects_more_than_eight_terms() {
+        let mut filters = vec![col("symbol").eq(lit("A"))];
+        for value in 0..8 {
+            filters.push(col("size").gt(lit(value as i64)));
+        }
+        assert_eq!(filters.len(), 9);
+        assert!(eligible_predicate(&schema(), &filters).is_none());
+        assert!(eligible_predicate(&schema(), &filters[..8]).is_some());
+    }
+}

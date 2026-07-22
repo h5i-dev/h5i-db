@@ -469,6 +469,19 @@ async fn main() {
     })
     .await;
     assert_eq!(warm_states.groups, cold_states.groups);
+    // Silent-corruption canary: the float_roundtrip regression showed a warm
+    // run can silently rebuild everything while results stay equal. Reuse
+    // accounting must therefore be asserted, not only reported.
+    assert_eq!(
+        warm_states.metrics.corrupt_entries, 0,
+        "{:?}",
+        warm_states.metrics
+    );
+    assert_eq!(
+        warm_states.metrics.states_reused, warm_states.metrics.states_requested,
+        "warm rollup must reuse every published state: {:?}",
+        warm_states.metrics
+    );
     r.rows = Some(warm_states.groups.len() as u64);
     r.detail = Some(serde_json::to_value(&warm_states.metrics).unwrap());
     results.push(r);
