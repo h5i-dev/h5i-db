@@ -247,6 +247,16 @@ enum Command {
         apply: bool,
     },
 
+    /// Launch the local review UI (loopback only).
+    Ui {
+        db: PathBuf,
+        #[arg(long, default_value_t = 7351)]
+        port: u16,
+        /// Enable plan apply/discard from the UI (default: read-only).
+        #[arg(long)]
+        allow_mutations: bool,
+    },
+
     /// Check structural integrity (checksums, object existence).
     Verify {
         db: PathBuf,
@@ -779,6 +789,20 @@ async fn run(cli: Cli) -> Result<()> {
             let db = Database::open(&db).await?;
             let report = db.vacuum(table.as_deref(), grace_seconds, apply).await?;
             write_value(&report, format)
+        }
+
+        Command::Ui {
+            db,
+            port,
+            allow_mutations,
+        } => {
+            let label = db.display().to_string();
+            let database = if allow_mutations {
+                Database::open(&db).await?
+            } else {
+                Database::open_read_only(&db).await?
+            };
+            h5i_db_ui::serve(Arc::new(database), label, port, allow_mutations).await
         }
 
         Command::Verify { db, table, deep } => {

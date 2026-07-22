@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>h5i-db review</title>
+<style>
+/* h5i-db review surface.
+   Palette follows h5i (near-black surface tiers + mint accent); interaction
+   follows herdr: the page answers "what needs a human right now?" —
+   pending plans outrank everything, saturated color is reserved for state,
+   acknowledgement never hides live conditions. */
+:root {
+  --bg: #0a0c10; --surface: #12161c; --surface-2: #1a1f26; --elev: #232931;
+  --border: #2a3138; --border-strong: #3a424b;
+  --text: #f6f7f9; --muted: #abb3bf; --dim: #6b7785;
+  --accent: #42e2d0; --accent-hi: #7cefe0;
+  --accent-bg: rgba(66,226,208,.14); --accent-glow: rgba(66,226,208,.32);
+  --green: #5ee2a0; --orange: #f0a050; --red: #ff6b6b; --violet: #b48bd9;
+  --font-ui: "Space Grotesk", system-ui, -apple-system, sans-serif;
+  --font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font-family: var(--font-ui); font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.app { display: grid; grid-template-rows: 48px 1fr; height: 100vh; }
+header { display: flex; align-items: center; gap: 20px; padding: 0 18px;
+  background: var(--surface); }
+header .logo { font-weight: 700; letter-spacing: .02em; }
+header .logo b { color: var(--accent); }
+header .dbpath { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+header .mode { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px;
+  text-transform: uppercase; letter-spacing: .1em; padding: 3px 9px; border-radius: 3px; }
+.mode.ro { color: var(--muted); background: var(--surface-2); }
+.mode.rw { color: var(--accent); background: var(--accent-bg); }
+
+nav { display: flex; gap: 2px; }
+nav button { background: none; border: 0; color: var(--muted); padding: 6px 13px;
+  font: inherit; font-size: 13px; cursor: pointer; border-radius: 4px; position: relative; }
+nav button:hover { background: var(--surface-2); color: var(--text); }
+nav button.active { background: var(--elev); color: var(--text); }
+nav button .badge { display: inline-block; min-width: 16px; padding: 0 4px; margin-left: 6px;
+  border-radius: 8px; background: var(--accent); color: #05221e; font-family: var(--font-mono);
+  font-size: 10.5px; line-height: 16px; font-weight: 700; }
+
+main { overflow: auto; padding: 20px 22px 60px; }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 1100px) { .cols { grid-template-columns: 1fr; } }
+
+.micro { font-family: var(--font-mono); font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: .14em; color: var(--dim); margin: 0 0 8px; }
+.card { background: var(--surface); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+.card.attn { box-shadow: 0 0 0 1px var(--accent-glow); }
+.quiet { color: var(--dim); font-size: 13px; padding: 18px 0; }
+
+table.grid { border-collapse: collapse; width: 100%; font-family: var(--font-mono);
+  font-size: 12px; font-variant-numeric: tabular-nums; }
+table.grid th { text-align: left; font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--dim); font-weight: 400; padding: 4px 12px 6px 0;
+  border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.grid td { padding: 5px 12px 5px 0; color: var(--text); border-bottom: 1px solid
+  rgba(42,49,56,.4); white-space: nowrap; max-width: 320px; overflow: hidden;
+  text-overflow: ellipsis; }
+table.grid tr.sel td { background: var(--surface-2); }
+table.grid tr.click { cursor: pointer; }
+table.grid tr.click:hover td { background: var(--surface-2); }
+.num { text-align: right; }
+
+.tag { display: inline-block; font-family: var(--font-mono); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .08em; padding: 2px 7px; border-radius: 3px;
+  background: var(--elev); color: var(--muted); }
+.tag.append { color: var(--green); } .tag.write { color: var(--orange); }
+.tag.replace_range, .tag.delete_range { color: var(--red); }
+.tag.restore { color: var(--violet); } .tag.compact { color: var(--muted); }
+.tag.planned { color: var(--accent); background: var(--accent-bg); }
+.tag.stale { color: var(--red); background: rgba(255,107,107,.12); }
+.tag.expired { color: var(--dim); }
+
+.plan-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.plan-head .title { font-weight: 600; font-size: 15px; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 18px;
+  font-family: var(--font-mono); font-size: 12px; margin: 10px 0;
+  font-variant-numeric: tabular-nums; }
+.kv .k { color: var(--dim); }
+.samples { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+@media (max-width: 900px) { .samples { grid-template-columns: 1fr; } }
+.sample-box { background: var(--bg); border-radius: 6px; padding: 10px 12px; overflow-x: auto; }
+
+.actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 12px; }
+button.act { font: inherit; font-size: 13px; padding: 7px 16px; border-radius: 5px;
+  border: 1px solid var(--border-strong); background: var(--elev); color: var(--text);
+  cursor: pointer; }
+button.act:hover { border-color: var(--dim); }
+button.act.primary { background: var(--accent); border-color: var(--accent);
+  color: #05221e; font-weight: 700; }
+button.act.primary:hover { background: var(--accent-hi); }
+button.act:disabled { opacity: .4; cursor: not-allowed; }
+.hintline { font-size: 12px; color: var(--dim); margin-top: 8px; }
+
+textarea.sql { width: 100%; min-height: 110px; background: var(--surface);
+  color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  font-family: var(--font-mono); font-size: 13px; padding: 12px; resize: vertical; }
+textarea.sql:focus { outline: none; border-color: var(--accent); }
+.statusline { font-family: var(--font-mono); font-size: 11px; color: var(--dim);
+  margin: 8px 0; min-height: 16px; }
+.statusline .err { color: var(--red); }
+.statusline .hint { color: var(--muted); }
+canvas.chart { width: 100%; height: 180px; background: var(--surface); border-radius: 6px;
+  margin-bottom: 12px; }
+.scroll-x { overflow-x: auto; }
+a.vlink { color: var(--accent); cursor: pointer; text-decoration: none; }
+a.vlink:hover { text-decoration: underline; }
+.difbar { display:flex; gap: 10px; align-items: center; margin: 10px 0;
+  font-family: var(--font-mono); font-size: 12px; }
+select { background: var(--elev); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; font: inherit; font-size: 12px; padding: 4px 8px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo">h5i-<b>db</b> <span style="color:var(--dim);font-weight:400">review</span></div>
+    <nav id="nav"></nav>
+    <span class="dbpath" id="dbpath"></span>
+    <span class="mode ro" id="mode">…</span>
+  </header>
+  <main id="main"><div class="quiet">loading…</div></main>
+</div>
+<script>
+"use strict";
+// ---------------------------------------------------------------- utilities
+const $ = (sel, el) => (el || document).querySelector(sel);
+const h = (tag, attrs, ...kids) => {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") el.className = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  for (const kid of kids.flat()) {
+    if (kid == null) continue;
+    el.append(kid.nodeType ? kid : document.createTextNode(kid));
+  }
+  return el;
+};
+const fmtNum = (n) => n == null ? "—" : Number(n).toLocaleString("en-US");
+const fmtBytes = (b) => {
+  if (b == null) return "—";
+  const u = ["B","KiB","MiB","GiB","TiB"]; let i = 0; let v = Number(b);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return i ? v.toFixed(1) + " " + u[i] : v + " B";
+};
+const fmtTs = (ns) => ns == null ? "—" : new Date(Number(ns) / 1e6).toISOString().replace("T", " ").slice(0, 19) + "Z";
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const e = new Error(body.message || res.statusText);
+    e.envelope = body;
+    throw e;
+  }
+  return body;
+}
+const post = (path) => api(path, { method: "POST", headers: {"content-type": "application/json"} });
+
+// ---------------------------------------------------------------- state
+let OV = null;               // /api/overview payload
+let view = "review";         // current view
+let tableSel = null;         // selected table for the tables/history views
+
+// ---------------------------------------------------------------- shell
+const VIEWS = [
+  ["review",   "Review"],
+  ["tables",   "Tables"],
+  ["history",  "History"],
+  ["sql",      "SQL"],
+  ["snapshots","Snapshots"],
+];
+function renderNav() {
+  const nav = $("#nav");
+  nav.replaceChildren(...VIEWS.map(([id, label]) => {
+    const pending = id === "review" ? OV.plans.filter(p => !p.expired).length : 0;
+    return h("button", { class: view === id ? "active" : "", onclick: () => { view = id; render(); } },
+      label, pending ? h("span", { class: "badge" }, String(pending)) : null);
+  }));
+}
+async function refresh() {
+  OV = await api("/api/overview");
+  $("#dbpath").textContent = OV.db;
+  const mode = $("#mode");
+  mode.textContent = OV.allow_mutations ? "mutations allowed" : "read-only";
+  mode.className = "mode " + (OV.allow_mutations ? "rw" : "ro");
+  if (!tableSel && OV.tables.length) tableSel = OV.tables[0].name;
+  render();
+}
+function render() {
+  renderNav();
+  const main = $("#main");
+  main.replaceChildren();
+  ({ review: renderReview, tables: renderTables, history: renderHistory,
+     sql: renderSql, snapshots: renderSnapshots })[view](main);
+}
+
+// ---------------------------------------------------------------- data grid
+function dataGrid(payload) {
+  const t = h("table", { class: "grid" });
+  t.append(h("tr", {}, payload.schema.map(f => h("th", {}, f.name))));
+  for (const row of payload.rows) {
+    t.append(h("tr", {}, row.map(v => h("td", {},
+      v == null ? "∅" : typeof v === "number" ? String(v) : String(v)))));
+  }
+  if (!payload.rows.length) t.append(h("tr", {}, h("td", { class: "quiet" }, "no rows")));
+  return h("div", { class: "scroll-x" }, t);
+}
+
+// ---------------------------------------------------------------- review
+function renderReview(main) {
+  main.append(h("p", { class: "micro" }, "pending mutation plans"));
+  const live = OV.plans.filter(p => !p.expired);
+  const expired = OV.plans.filter(p => p.expired);
+  if (!live.length) {
+    main.append(h("div", { class: "quiet" },
+      "Nothing needs review. Plans created with --plan (or when policy forbids direct mutations) appear here."));
+  }
+  // Fresh, applicable plans first; stale ones (head moved) after.
+  live.sort((a, b) => (a.stale - b.stale) || (b.created_at_ns - a.created_at_ns));
+  for (const p of live) main.append(planCard(p));
+  if (expired.length) {
+    main.append(h("p", { class: "micro" }, "expired plans"));
+    for (const p of expired) main.append(planCard(p));
+  }
+  main.append(h("p", { class: "micro", style: "margin-top:26px" }, "mutation policy"));
+  const pol = OV.policy;
+  main.append(h("div", { class: "card" }, h("div", { class: "kv" },
+    Object.entries(pol).map(([k, v]) => [
+      h("span", { class: "k" }, k),
+      h("span", {}, v ? "direct allowed" : h("span", { style: "color:var(--accent)" }, "review required")),
+    ]).flat())));
+}
+function planCard(p) {
+  const s = p.summary;
+  const card = h("div", { class: "card" + (p.stale || p.expired ? "" : " attn") });
+  card.append(h("div", { class: "plan-head" },
+    h("span", { class: "title" }, `${p.op.replace("_", " ")} ${p.table}`),
+    h("span", { class: "tag " + p.op }, p.op),
+    p.stale ? h("span", { class: "tag stale" }, `stale: head is v${p.head_version}`) : null,
+    p.expired ? h("span", { class: "tag expired" }, "expired") : null,
+    h("span", { style: "margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--dim)" },
+      fmtTs(p.created_at_ns)),
+  ));
+  card.append(h("div", { class: "kv" },
+    h("span", { class: "k" }, "base version"), h("span", {}, `v${p.base_version}` + (p.stale ? ` (head is v${p.head_version} — apply will conflict)` : "")),
+    h("span", { class: "k" }, "rows affected"), h("span", {}, fmtNum(s.rows_affected)),
+    h("span", { class: "k" }, "rows before → after"), h("span", {}, `${fmtNum(s.rows_before)} → ${fmtNum(s.rows_after)}`),
+    h("span", { class: "k" }, "segments"), h("span", {}, `${s.segments_added} rewritten, ${s.segments_reused} reused`),
+    h("span", { class: "k" }, "new data"), h("span", {}, fmtBytes(s.added_bytes)),
+    s.affected_time_range ? h("span", { class: "k" }, "time range") : null,
+    s.affected_time_range ? h("span", {}, `${s.affected_time_range[0]} → ${s.affected_time_range[1]}`) : null,
+    p.note ? h("span", { class: "k" }, "note") : null,
+    p.note ? h("span", {}, p.note) : null,
+  ));
+  const detail = h("div");
+  const status = h("div", { class: "statusline" });
+  const btnRow = h("div", { class: "actions" });
+  const load = async () => {
+    const d = await api(`/api/plan/${encodeURIComponent(p.table)}/${p.plan_id}`);
+    const boxes = [];
+    if (d.before_sample) boxes.push(h("div", { class: "sample-box" },
+      h("p", { class: "micro" }, "before (sample)"), dataGrid(d.before_sample)));
+    if (d.after_sample) boxes.push(h("div", { class: "sample-box" },
+      h("p", { class: "micro" }, "after (sample)"), dataGrid(d.after_sample)));
+    if (boxes.length) detail.replaceChildren(h("div", { class: "samples" }, boxes));
+    else detail.replaceChildren(h("div", { class: "quiet" }, "no sample rows (empty range or pure delete)"));
+  };
+  load().catch(e => { detail.replaceChildren(h("div", { class: "statusline" }, h("span", { class: "err" }, e.message))); });
+
+  const discard = h("button", { class: "act", onclick: async () => {
+    discard.disabled = apply.disabled = true;
+    try { await post(`/api/plan/${encodeURIComponent(p.table)}/${p.plan_id}/discard`); await refresh(); }
+    catch (e) { showErr(status, e); discard.disabled = apply.disabled = false; }
+  }}, "Reject");
+  const apply = h("button", { class: "act primary", onclick: async () => {
+    discard.disabled = apply.disabled = true;
+    try {
+      const r = await post(`/api/plan/${encodeURIComponent(p.table)}/${p.plan_id}/apply`);
+      status.replaceChildren(`applied → version ${r.sequence}`);
+      await refresh();
+    } catch (e) { showErr(status, e); discard.disabled = apply.disabled = false; }
+  }}, "Apply plan");
+  if (!OV.allow_mutations) {
+    discard.disabled = apply.disabled = true;
+    card.append(h("div", { class: "hintline" },
+      "read-only session — restart with `h5i-db ui <db> --allow-mutations` to approve or reject"));
+  }
+  if (p.expired) apply.disabled = true;
+  btnRow.append(discard, apply);
+  card.append(detail, status, btnRow);
+  return card;
+}
+function showErr(status, e) {
+  const env = e.envelope || {};
+  status.replaceChildren(
+    h("span", { class: "err" }, `${env.code || "error"}: ${e.message}`),
+    env.hint ? h("span", { class: "hint" }, ` — ${env.hint}`) : null);
+}
+
+// ---------------------------------------------------------------- tables
+function renderTables(main) {
+  main.append(h("p", { class: "micro" }, "tables"));
+  const t = h("table", { class: "grid" });
+  t.append(h("tr", {},
+    ["table", "head", "rows", "size", "segments", "time range", "last op"].map(x => h("th", {}, x))));
+  for (const tb of OV.tables) {
+    t.append(h("tr", { class: "click" + (tb.name === tableSel ? " sel" : ""), onclick: () => { tableSel = tb.name; render(); } },
+      h("td", {}, tb.name),
+      h("td", { class: "num" }, "v" + tb.version),
+      h("td", { class: "num" }, fmtNum(tb.rows)),
+      h("td", { class: "num" }, fmtBytes(tb.bytes)),
+      h("td", { class: "num" }, String(tb.segments)),
+      h("td", {}, tb.time_range ? `${tb.time_range[0]} → ${tb.time_range[1]}` : "—"),
+      h("td", {}, h("span", { class: "tag " + tb.op }, tb.op)),
+    ));
+  }
+  main.append(h("div", { class: "card scroll-x" }, t));
+  if (!tableSel) return;
+  const schemaCard = h("div", { class: "card" }, h("p", { class: "micro" }, `schema — ${tableSel}`));
+  const sampleCard = h("div", { class: "card" }, h("p", { class: "micro" }, `sample — ${tableSel}`));
+  main.append(h("div", { class: "cols" }, schemaCard, sampleCard));
+  api(`/api/table/${encodeURIComponent(tableSel)}`).then(d => {
+    const st = h("table", { class: "grid" });
+    st.append(h("tr", {}, ["column", "type", "nullable", ""].map(x => h("th", {}, x))));
+    for (const f of d.schema) {
+      st.append(h("tr", {},
+        h("td", {}, f.name), h("td", {}, f.type), h("td", {}, f.nullable ? "yes" : "no"),
+        h("td", {}, f.name === d.time_column ? h("span", { class: "tag planned" }, "time index") : "")));
+    }
+    schemaCard.append(h("div", { class: "scroll-x" }, st));
+  });
+  api(`/api/table/${encodeURIComponent(tableSel)}/sample?rows=20`).then(d => {
+    sampleCard.append(dataGrid(d));
+  });
+}
+
+// ---------------------------------------------------------------- history
+function renderHistory(main) {
+  const sel = h("select", { onchange: (e) => { tableSel = e.target.value; render(); } },
+    OV.tables.map(tb => {
+      const o = h("option", { value: tb.name }, tb.name);
+      if (tb.name === tableSel) o.selected = true;
+      return o;
+    }));
+  main.append(h("div", { class: "difbar" }, h("span", { class: "micro", style: "margin:0" }, "version timeline"), sel));
+  if (!tableSel) { main.append(h("div", { class: "quiet" }, "no tables")); return; }
+  const timeline = h("div", { class: "card scroll-x" });
+  const diffCard = h("div", { class: "card" }, h("div", { class: "quiet" },
+    "pick two versions (click = from, shift-click = to) to diff"));
+  main.append(timeline, diffCard);
+  let from = null, to = null;
+  api(`/api/table/${encodeURIComponent(tableSel)}`).then(d => {
+    const t = h("table", { class: "grid" });
+    t.append(h("tr", {}, ["v", "op", "mode", "committed", "rows", "size", "segs", "note"].map(x => h("th", {}, x))));
+    for (const v of [...d.versions].reverse()) {
+      const tr = h("tr", { class: "click", onclick: (e) => {
+        if (e.shiftKey) to = v.version; else from = v.version;
+        if (from != null && to != null && from !== to) loadDiff();
+        [...t.rows].forEach(r => r.classList.remove("sel"));
+        tr.classList.add("sel");
+      }},
+        h("td", { class: "num" }, h("a", { class: "vlink" }, "v" + v.version)),
+        h("td", {}, h("span", { class: "tag " + v.op }, v.op)),
+        h("td", {}, v.execution_mode === "planned"
+          ? h("span", { class: "tag planned", title: "went through plan review; hash " + (v.plan_hash || "").slice(0, 12) }, "planned")
+          : h("span", { class: "tag" }, v.execution_mode || "—")),
+        h("td", {}, fmtTs(v.committed_at_ns)),
+        h("td", { class: "num" }, fmtNum(v.rows)),
+        h("td", { class: "num" }, fmtBytes(v.bytes)),
+        h("td", { class: "num" }, String(v.segments)),
+        h("td", {}, v.note || ""));
+      t.append(tr);
+    }
+    timeline.replaceChildren(h("p", { class: "micro" },
+      `versions of ${tableSel} (newest first)`), t);
+  });
+  async function loadDiff() {
+    const d = await api(`/api/table/${encodeURIComponent(tableSel)}/diff?from=${Math.min(from,to)}&to=${Math.max(from,to)}`);
+    diffCard.replaceChildren(
+      h("p", { class: "micro" }, `diff v${d.from.version} → v${d.to.version}`),
+      h("div", { class: "kv" },
+        h("span", { class: "k" }, "rows"), h("span", {},
+          `${fmtNum(d.from.rows)} → ${fmtNum(d.to.rows)} (${d.rows_delta >= 0 ? "+" : ""}${fmtNum(d.rows_delta)})`),
+        h("span", { class: "k" }, "bytes"), h("span", {},
+          `${fmtBytes(d.from.bytes)} → ${fmtBytes(d.to.bytes)}`),
+        h("span", { class: "k" }, "schema"), h("span", {}, d.schema_changed ?
+          h("span", { style: "color:var(--orange)" }, `changed (rev ${d.from.schema_revision} → ${d.to.schema_revision})`) : "unchanged"),
+        h("span", { class: "k" }, "segments"), h("span", {},
+          `${d.segments.added.length} added, ${d.segments.removed.length} removed, ${d.segments.kept} kept`),
+        h("span", { class: "k" }, "produced by"), h("span", {},
+          `${d.to.op} (${d.to.execution_mode || "?"})${d.to.note ? " — " + d.to.note : ""}`),
+      ));
+  }
+}
+
+// ---------------------------------------------------------------- sql
+let lastSql = "SELECT * FROM h5i('" + "') LIMIT 100";
+function renderSql(main) {
+  if (OV.tables.length && lastSql.includes("h5i('')")) {
+    lastSql = `SELECT * FROM ${OV.tables[0].name} LIMIT 100`;
+  }
+  main.append(h("p", { class: "micro" }, "sql scratchpad — read-only session, 1 000 row cap"));
+  const ta = h("textarea", { class: "sql", spellcheck: "false" });
+  ta.value = lastSql;
+  const status = h("div", { class: "statusline" });
+  const out = h("div");
+  const chart = h("canvas", { class: "chart", style: "display:none" });
+  const run = async () => {
+    lastSql = ta.value;
+    status.textContent = "running…";
+    out.replaceChildren(); chart.style.display = "none";
+    try {
+      const r = await api("/api/query", { method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ sql: ta.value }) });
+      const scans = (r.scan_metrics || []).map(m =>
+        `${m.table}@v${m.version}: ${m.segments_pruned}/${m.segments_total} segments pruned, ${fmtBytes(m.bytes_scheduled)} scheduled`).join("; ");
+      status.textContent = `${r.rows.length} rows in ${r.wall_ms.toFixed(1)} ms` + (scans ? ` — ${scans}` : "");
+      maybeChart(chart, r);
+      out.append(dataGrid(r));
+    } catch (e) { status.replaceChildren(); showErr(status, e); }
+  };
+  ta.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); }
+  });
+  main.append(h("div", { class: "card" }, ta,
+    h("div", { class: "actions", style: "margin-top:8px" },
+      h("span", { class: "hintline", style: "margin:6px auto 0 0" },
+        "Ctrl+Enter to run — time travel: h5i('table', 42) · asof_join('l','r','ts','ts','symbol') · time_bucket('1m', ts) · vwap(price, size)"),
+      h("button", { class: "act primary", onclick: run }, "Run"))));
+  main.append(status, chart, h("div", { class: "card scroll-x" }, out));
+}
+// Draw a line preview when the result looks like (time-ish, numeric, ...).
+function maybeChart(canvas, r) {
+  if (r.rows.length < 3 || r.schema.length < 2) return;
+  const tIdx = r.schema.findIndex(f => /Timestamp|Date/.test(f.type));
+  const vIdx = r.schema.findIndex((f, i) => i !== tIdx && /Int|Float|Decimal/.test(f.type));
+  if (tIdx < 0 || vIdx < 0) return;
+  const pts = r.rows
+    .map(row => [Date.parse(row[tIdx]), Number(row[vIdx])])
+    .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+    .sort((a, b) => a[0] - b[0]);
+  if (pts.length < 3) return;
+  canvas.style.display = "block";
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth * dpr, H = 180 * dpr;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const px = (x) => 10 * dpr + (W - 20 * dpr) * (x - x0) / Math.max(1, x1 - x0);
+  const py = (y) => H - 14 * dpr - (H - 28 * dpr) * (y - y0) / Math.max(1e-12, y1 - y0);
+  ctx.strokeStyle = "#42e2d0"; ctx.lineWidth = 1.5 * dpr; ctx.beginPath();
+  pts.forEach(([x, y], i) => i ? ctx.lineTo(px(x), py(y)) : ctx.moveTo(px(x), py(y)));
+  ctx.stroke();
+  ctx.fillStyle = "#6b7785"; ctx.font = `${10 * dpr}px Space Mono, monospace`;
+  ctx.fillText(String(y1.toPrecision(6)), 12 * dpr, 12 * dpr);
+  ctx.fillText(String(y0.toPrecision(6)), 12 * dpr, H - 4 * dpr);
+  ctx.fillText(r.schema[vIdx].name + " over " + r.schema[tIdx].name, W / 2 - 60 * dpr, 12 * dpr);
+}
+
+// ---------------------------------------------------------------- snapshots
+function renderSnapshots(main) {
+  main.append(h("p", { class: "micro" }, "named snapshots (reproducibility pins & GC roots)"));
+  if (!OV.snapshots.length) {
+    main.append(h("div", { class: "quiet" },
+      "No snapshots. Create one with `h5i-db snapshot create <db> <name>` to pin the exact versions a backtest saw."));
+    return;
+  }
+  for (const s of OV.snapshots) {
+    main.append(h("div", { class: "card" },
+      h("div", { class: "plan-head" },
+        h("span", { class: "title" }, s.name),
+        h("span", { style: "margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--dim)" }, fmtTs(s.created_at_ns))),
+      s.note ? h("div", { class: "hintline" }, s.note) : null,
+      h("div", { class: "kv" }, s.tables.map(t => [
+        h("span", { class: "k" }, t.table), h("span", {}, "v" + t.version)]).flat())));
+  }
+}
+
+// ---------------------------------------------------------------- boot
+refresh().catch(e => {
+  $("#main").replaceChildren(h("div", { class: "statusline" }, h("span", { class: "err" }, e.message)));
+});
+</script>
+</body>
+</html>
