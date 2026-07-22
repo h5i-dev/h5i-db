@@ -66,7 +66,7 @@ enum Sink {
     Table(Vec<RecordBatch>),
     Json(arrow::json::Writer<Out, JsonArray>),
     Jsonl(arrow::json::Writer<Out, LineDelimited>),
-    Csv(arrow::csv::Writer<Out>),
+    Csv(Box<arrow::csv::Writer<Out>>),
     Arrow(arrow::ipc::writer::StreamWriter<Out>),
 }
 
@@ -108,7 +108,9 @@ impl BatchWriter {
                     .with_explicit_nulls(true)
                     .build::<_, LineDelimited>(out()),
             ),
-            Format::Csv => Sink::Csv(CsvWriterBuilder::new().with_header(true).build(out())),
+            Format::Csv => Sink::Csv(Box::new(
+                CsvWriterBuilder::new().with_header(true).build(out()),
+            )),
             Format::Arrow => Sink::Arrow(
                 arrow::ipc::writer::StreamWriter::try_new(out(), &schema).map_err(Error::Arrow)?,
             ),

@@ -1295,7 +1295,9 @@ impl Database {
         self.backend
             .put(&journal_path, serde_json::to_vec_pretty(&journal)?.into())
             .await?;
-        self.backend.sync_objects(&[journal_path.clone()]).await?;
+        self.backend
+            .sync_objects(std::slice::from_ref(&journal_path))
+            .await?;
 
         let mut results = Vec::with_capacity(staged.len());
         for (commit, new_head) in staged.iter().zip(new_heads) {
