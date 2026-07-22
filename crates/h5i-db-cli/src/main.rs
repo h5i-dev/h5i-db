@@ -645,29 +645,53 @@ async fn run(cli: Cli) -> Result<()> {
             .await
             .map_err(Error::internal)?;
 
-            let work = async {
-                let df = session
-                    .sql_reported(&sql)
-                    .await
-                    .map_err(classify_df_error)?;
-                let df = match max_rows {
-                    Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
-                    None => df,
-                };
-                // Stream result batches straight to stdout instead of
-                // collecting the full result first.
-                let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
-                let schema = stream.schema();
-                let mut writer = BatchWriter::new(format, schema, max_bytes)?;
-                let mut truncated = false;
+            // Stream result batches straight to stdout instead of collecting
+            // the full result first. Returns whether output was truncated.
+            async fn drain(
+                mut stream: impl futures::Stream<
+                    Item = datafusion::error::Result<arrow::record_batch::RecordBatch>,
+                > + Unpin,
+                writer: &mut BatchWriter,
+            ) -> Result<bool> {
                 while let Some(batch) = stream.next().await {
                     let batch = batch.map_err(classify_df_error)?;
                     if !writer.write(&batch)? {
-                        truncated = true;
-                        break;
+                        return Ok(true);
                     }
                 }
-                writer.finish()?;
+                Ok(false)
+            }
+            let work = async {
+                // Only pay for query-local performance reporting when the
+                // caller asked for it; the default path plans and streams
+                // without constructing a report.
+                let (truncated, report) = if stats {
+                    let df = session
+                        .sql_reported(&sql)
+                        .await
+                        .map_err(classify_df_error)?;
+                    let df = match max_rows {
+                        Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
+                        None => df,
+                    };
+                    let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
+                    let mut writer = BatchWriter::new(format, stream.schema(), max_bytes)?;
+                    let truncated = drain(&mut stream, &mut writer).await?;
+                    writer.finish()?;
+                    (truncated, stream.report().cloned())
+                } else {
+                    let df = session.sql(&sql).await.map_err(classify_df_error)?;
+                    let df = match max_rows {
+                        Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
+                        None => df,
+                    };
+                    let schema: SchemaRef = Arc::new(df.schema().as_arrow().clone());
+                    let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
+                    let mut writer = BatchWriter::new(format, schema, max_bytes)?;
+                    let truncated = drain(&mut stream, &mut writer).await?;
+                    writer.finish()?;
+                    (truncated, None)
+                };
                 if truncated {
                     return Err(Error::LimitExceeded {
                         detail: format!(
@@ -676,7 +700,7 @@ async fn run(cli: Cli) -> Result<()> {
                         ),
                     });
                 }
-                Ok(stream.report().cloned())
+                Ok(report)
             };
             let report = match timeout {
                 Some(t) => tokio::time::timeout(*t, work)

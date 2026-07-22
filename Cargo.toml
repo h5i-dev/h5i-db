@@ -105,6 +105,12 @@ anyhow = "1"
 # package keeps the dependency identity expected by upstream crates.
 object_store = { path = "compat/object-store-0.13" }
 
+# No debuginfo in dev/test builds: DataFusion-sized debuginfo grows
+# target/debug to tens of GB on this workspace. Agents debug with prints /
+# tracing output instead of a debugger; flip locally if you need symbols.
+[profile.dev]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
