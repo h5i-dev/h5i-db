@@ -89,11 +89,19 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 base64 = "0.22"
+
 tempfile = "3"
 rand = "0.9"
 clap = { version = "4", features = ["derive", "env"] }
 comfy-table = "7"
 anyhow = "1"
+
+[patch.crates-io]
+# DataFusion 54/Parquet 58 constrain `object_store` to 0.13, whose AWS
+# feature pins vulnerable quick-xml 0.39. The 0.14 implementation preserves
+# the API we consume and carries the fixed parser; this tiny compatibility
+# package keeps the dependency identity expected by upstream crates.
+object_store = { path = "compat/object-store-0.13" }
 
 [profile.release]
 lto = "thin"

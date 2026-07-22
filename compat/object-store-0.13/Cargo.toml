@@ -1,0 +1,20 @@
+[package]
+name = "object_store"
+version = "0.13.2"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+default = ["fs"]
+fs = ["object_store_new/fs"]
+tokio = ["object_store_new/tokio"]
+aws = ["object_store_new/aws"]
+azure = ["object_store_new/azure"]
+gcp = ["object_store_new/gcp"]
+http = ["object_store_new/http"]
+integration = ["object_store_new/integration"]
+tls-webpki-roots = ["object_store_new/tls-webpki-roots"]
+
+[dependencies]
+object_store_new = { package = "object_store", version = "0.14.1", default-features = false }
