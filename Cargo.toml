@@ -76,7 +76,11 @@ futures = "0.3"
 bytes = "1"
 
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+# float_roundtrip: sidecar integrity checksums (aggregate states) verify by
+# re-serializing parsed JSON, which requires parse∘serialize to be the
+# identity for f64. serde_json's default float parse is lossy (~1 ulp), which
+# made every full-mantissa aggregate state fail verification and rebuild.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 
 blake3 = "1"
 fs4 = { version = "0.13", features = ["sync"] }

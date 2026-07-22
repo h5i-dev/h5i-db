@@ -541,6 +541,73 @@ fn f64_value(array: &dyn Array, row: usize) -> h5i_db_core::Result<f64> {
     ))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sealed-entry checksum verifies by re-serializing parsed JSON, so
+    /// parse∘serialize must be the identity for f64. Full-mantissa values —
+    /// like the random-walk sums real tick data produces — caught serde_json's
+    /// default lossy float parse marking every state corrupt at bench scale;
+    /// the `float_roundtrip` feature is the fix this test pins down.
+    #[test]
+    fn sealed_checksum_survives_json_round_trip_with_full_mantissa_floats() {
+        // Deterministic xorshift so the test needs no rand dependency.
+        let mut state = 0x9e3779b97f4a7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut groups = Vec::new();
+        let mut price = 100.0_f64;
+        for index in 0..512 {
+            price += next() - 0.5;
+            let volume = (next() * 1e6).floor() + 1.0;
+            let key = PointKey {
+                timestamp: 1_750_000_000_000_000_000 + index,
+                segment_checksum: "seg".into(),
+                row: index as u64,
+            };
+            groups.push(GroupState {
+                group: Some(format!("SYM{index:04}")),
+                rows: 1,
+                open_key: key.clone(),
+                close_key: key,
+                open: price,
+                high: price,
+                low: price,
+                close: price,
+                volume,
+                price_volume: price * volume,
+            });
+        }
+        let mut entry = AggregateStateEntry {
+            format: FORMAT,
+            segment_checksum: "seg".into(),
+            schema_revision: 1,
+            aggregate_plan_hash: "plan".into(),
+            expression_semantics_version: SEMANTICS_VERSION,
+            source_row_count: 512,
+            groups,
+            checksum: String::new(),
+        };
+        entry.seal().unwrap();
+
+        let published = serde_json::to_vec(&entry).unwrap();
+        let parsed: AggregateStateEntry = serde_json::from_slice(&published).unwrap();
+        let mut unsigned = parsed.clone();
+        let stored = std::mem::take(&mut unsigned.checksum);
+        let recomputed =
+            h5i_db_core::util::checksum_hex(&serde_json::to_vec(&unsigned).unwrap());
+        assert_eq!(
+            stored, recomputed,
+            "JSON round-trip must reproduce the sealed bytes exactly"
+        );
+    }
+}
+
 fn string_value(array: &dyn Array, row: usize) -> h5i_db_core::Result<String> {
     if array.is_null(row) {
         return Err(h5i_db_core::Error::invalid("null aggregate group"));
