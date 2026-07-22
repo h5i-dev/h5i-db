@@ -649,8 +649,8 @@ async fn run(cli: Cli) -> Result<()> {
             // the full result first. Returns whether output was truncated.
             async fn drain(
                 mut stream: impl futures::Stream<
-                    Item = datafusion::error::Result<arrow::record_batch::RecordBatch>,
-                > + Unpin,
+                        Item = datafusion::error::Result<arrow::record_batch::RecordBatch>,
+                    > + Unpin,
                 writer: &mut BatchWriter,
             ) -> Result<bool> {
                 while let Some(batch) = stream.next().await {

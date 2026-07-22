@@ -599,8 +599,7 @@ mod tests {
         let parsed: AggregateStateEntry = serde_json::from_slice(&published).unwrap();
         let mut unsigned = parsed.clone();
         let stored = std::mem::take(&mut unsigned.checksum);
-        let recomputed =
-            h5i_db_core::util::checksum_hex(&serde_json::to_vec(&unsigned).unwrap());
+        let recomputed = h5i_db_core::util::checksum_hex(&serde_json::to_vec(&unsigned).unwrap());
         assert_eq!(
             stored, recomputed,
             "JSON round-trip must reproduce the sealed bytes exactly"
