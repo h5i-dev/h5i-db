@@ -84,8 +84,8 @@ impl SegmentMeta {
         match self.time_range {
             None => true,
             Some((seg_min, seg_max)) => {
-                let after_start = end.map_or(true, |e| seg_min < e);
-                let before_end = start.map_or(true, |s| seg_max >= s);
+                let after_start = end.is_none_or(|e| seg_min < e);
+                let before_end = start.is_none_or(|s| seg_max >= s);
                 after_start && before_end
             }
         }

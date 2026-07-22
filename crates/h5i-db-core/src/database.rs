@@ -1220,16 +1220,15 @@ impl Database {
         let mut current: Vec<SegmentMeta> = Vec::new();
         let mut current_bytes = 0u64;
         let mut untouched: Vec<SegmentMeta> = Vec::new();
-        let mut close_current =
-            |current: &mut Vec<SegmentMeta>,
-             untouched: &mut Vec<SegmentMeta>,
-             groups: &mut Vec<Vec<SegmentMeta>>| {
-                if current.len() > 1 {
-                    groups.push(std::mem::take(current));
-                } else {
-                    untouched.append(current);
-                }
-            };
+        let close_current = |current: &mut Vec<SegmentMeta>,
+                             untouched: &mut Vec<SegmentMeta>,
+                             groups: &mut Vec<Vec<SegmentMeta>>| {
+            if current.len() > 1 {
+                groups.push(std::mem::take(current));
+            } else {
+                untouched.append(current);
+            }
+        };
         for seg in ordered {
             if seg.bytes < small_threshold {
                 current_bytes += seg.bytes;

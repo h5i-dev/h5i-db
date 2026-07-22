@@ -80,12 +80,12 @@ impl ColumnAcc {
             return;
         }
         if let Some(m) = min {
-            if self.min.as_ref().map_or(true, |cur| m.less_than(cur)) {
+            if self.min.as_ref().is_none_or(|cur| m.less_than(cur)) {
                 self.min = Some(m);
             }
         }
         if let Some(m) = max {
-            if self.max.as_ref().map_or(true, |cur| cur.less_than(&m)) {
+            if self.max.as_ref().is_none_or(|cur| cur.less_than(&m)) {
                 self.max = Some(m);
             }
         }
@@ -542,8 +542,8 @@ pub async fn read_segment(
                     let col = rg.column(col_idx);
                     let stats = col.statistics()?;
                     let (min, max) = parquet_i64_stats(stats)?;
-                    let after_start = end.map_or(true, |e| min < e);
-                    let before_end = start.map_or(true, |s| max >= s);
+                    let after_start = end.is_none_or(|e| min < e);
+                    let before_end = start.is_none_or(|s| max >= s);
                     (after_start && before_end).then_some(rg_idx)
                 })
                 .collect();
@@ -613,7 +613,7 @@ pub fn filter_batches_by_time(
             .iter()
             .map(|v| {
                 let v = v.expect("time column is non-null");
-                Some(start.map_or(true, |s| v >= s) && end.map_or(true, |e| v < e))
+                Some(start.is_none_or(|s| v >= s) && end.is_none_or(|e| v < e))
             })
             .collect();
         let filtered = arrow::compute::filter_record_batch(&batch, &mask).map_err(Error::Arrow)?;

@@ -1549,6 +1549,7 @@ name = "h5i-db-cli"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "bytes",
  "chrono",
  "clap",
  "comfy-table",
@@ -1556,6 +1557,7 @@ dependencies = [
  "futures",
  "h5i-db-core",
  "h5i-db-query",
+ "humantime",
  "parquet",
  "serde",
  "serde_json",
@@ -1563,6 +1565,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

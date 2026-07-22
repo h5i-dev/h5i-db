@@ -5,7 +5,6 @@
 //! surviving segment objects (row-group/page pruning + row-level predicate
 //! pushdown handled by DataFusion's Parquet machinery).
 
-use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use arrow::datatypes::SchemaRef;

@@ -5,7 +5,6 @@
 //! Mondays); month/year widths use calendar bucketing from 2000-01-01.
 //! An optional third argument overrides the origin.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, PrimitiveArray};

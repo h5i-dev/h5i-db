@@ -29,3 +29,12 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[dependencies.humantime]
+version = "2"
+
+[dependencies.uuid]
+workspace = true
+
+[dependencies.bytes]
+workspace = true

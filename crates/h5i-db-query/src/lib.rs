@@ -6,6 +6,7 @@
 //! `h5i-db-core` is engine-free.
 
 pub mod asof;
+pub mod finance;
 pub mod functions;
 pub mod provider;
 pub mod pruning;

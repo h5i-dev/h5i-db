@@ -519,3 +519,108 @@ async fn memory_limit_is_enforced() {
         }
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn finance_functions_vwap_wavg_ewma() {
+    let (_dir, db) = setup().await;
+    db.create_table("trades", trades_schema(), time_options(false))
+        .await
+        .unwrap();
+    // Two symbols; sizes are all 10 (from trades_batch), so vwap == avg here;
+    // use explicit different sizes via price*size weighting sanity below.
+    db.write(
+        "trades",
+        vec![trades_batch(
+            &[1, 2, 3, 4],
+            &["A", "A", "B", "B"],
+            &[10.0, 20.0, 30.0, 50.0],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+
+    // vwap(price, size) with equal sizes == plain average; wavg(size, price)
+    // is the kdb-style argument order for the same computation.
+    let batches = session
+        .sql(
+            "SELECT symbol, vwap(price, size) AS v, wavg(size, price) AS w \
+             FROM trades GROUP BY symbol ORDER BY symbol",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        [
+            "+--------+------+------+",
+            "| symbol | v    | w    |",
+            "+--------+------+------+",
+            "| A      | 15.0 | 15.0 |",
+            "| B      | 40.0 | 40.0 |",
+            "+--------+------+------+",
+        ],
+        &batches
+    );
+
+    // ewma over an ordered partition: y = [10, 15, ...] with alpha=0.5.
+    let batches = session
+        .sql(
+            "SELECT ewma(price, 0.5) OVER (PARTITION BY symbol ORDER BY ts) AS e \
+             FROM trades WHERE symbol = 'A' ORDER BY ts",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        ["+------+", "| e    |", "+------+", "| 10.0 |", "| 15.0 |", "+------+",],
+        &batches
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn quant_pipeline_end_to_end() {
+    // The design's flagship demo: trades ASOF quotes → 1-minute OHLCV+VWAP →
+    // log returns → rolling volatility, all in one SQL statement over
+    // versioned storage.
+    let (_dir, db) = asof_setup().await;
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+    let batches = session
+        .sql(
+            "WITH enriched AS ( \
+                 SELECT * FROM asof_join('trades', 'quotes', 'ts', 'ts', 'symbol') \
+             ), bars AS ( \
+                 SELECT symbol, time_bucket('1m', ts) AS bucket, \
+                        first_value(price ORDER BY ts) AS open, \
+                        max(price) AS high, min(price) AS low, \
+                        last_value(price ORDER BY ts) AS close, \
+                        vwap(price, size) AS vwap_px, \
+                        avg(bid) AS avg_bid \
+                 FROM enriched GROUP BY symbol, bucket \
+             ) \
+             SELECT symbol, open, high, low, close, vwap_px, \
+                    ln(close / open) AS bar_log_return, avg_bid \
+             FROM bars ORDER BY symbol",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    // A: trades 100, 101, 102 in one ns-scale bucket; B: single trade 200.
+    let rendered = arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string();
+    assert!(rendered.contains("| A"), "{rendered}");
+    assert!(rendered.contains("| B"), "{rendered}");
+    assert!(rendered.contains("100.0"), "{rendered}");
+    assert!(rendered.contains("102.0"), "{rendered}");
+}

@@ -568,7 +568,7 @@ async fn crash_at_every_commit_step_never_corrupts() {
         // Orphans from the failed commit are vacuumable, and a later commit
         // succeeds normally.
         let report = reopened.vacuum(Some("t"), 0, true).await.unwrap();
-        assert_eq!(report.dry_run, false);
+        assert!(!report.dry_run);
         reopened
             .append(
                 "t",

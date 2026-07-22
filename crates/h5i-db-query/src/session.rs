@@ -17,6 +17,7 @@ use datafusion::prelude::{SessionConfig, SessionContext};
 use h5i_db_core::{Database, ReadAt};
 
 use crate::asof::{AsOfJoinFunc, AsOfQueryPlanner};
+use crate::finance::{ewma_udwf, vwap_udaf, wavg_udaf};
 use crate::functions::time_bucket_udf;
 use crate::provider::{H5iTableProvider, ScanMetrics, ScanMetricsCollector};
 use crate::udtf::TimeTravelFunc;
@@ -123,6 +124,9 @@ impl H5iSession {
             Arc::new(AsOfJoinFunc::new(db.clone(), url.clone(), metrics.clone())),
         );
         ctx.register_udf(time_bucket_udf());
+        ctx.register_udaf(vwap_udaf());
+        ctx.register_udaf(wavg_udaf());
+        ctx.register_udwf(ewma_udwf());
 
         Ok(Self {
             ctx,

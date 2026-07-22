@@ -12,7 +12,6 @@
 //! - SQL table function `asof_join('left', 'right', 'l_ts', 'r_ts', 'by,...')`
 //! - The physical operator itself (`AsOfJoinExec`) for plan composition.
 
-use std::any::Any;
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::HashMap;
 use std::fmt;
@@ -502,6 +501,7 @@ impl RightRuns {
             empty_converter.convert_columns(&[arr])?.row(0).owned()
         };
 
+        #[allow(clippy::needless_range_loop)]
         for (bi, batch) in batches.iter().enumerate() {
             let time = crate::asof::time_column_i64(batch, time_idx)?;
             let rows = match (&converter, by_idx.is_empty()) {
@@ -626,6 +626,7 @@ impl Joiner {
 
         // Match every left row.
         let mut matches: Vec<Option<(usize, usize)>> = Vec::with_capacity(left.num_rows());
+        #[allow(clippy::needless_range_loop)]
         for ri in 0..left.num_rows() {
             let key = match &left_rows {
                 Some(rows) => rows.row(ri).owned(),

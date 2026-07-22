@@ -18,9 +18,9 @@ use uuid::Uuid;
 
 use crate::database::{CommitResult, Database, ReadAt, ScanOptions, WriteOptions};
 use crate::error::{Error, Result};
-use crate::manifest::{OpKind, SegmentMeta, VersionManifest};
+use crate::manifest::{OpKind, SegmentMeta};
 use crate::segment::{sort_batches, SegmentWriter};
-use crate::{layout, util};
+use crate::util;
 
 /// Default plan time-to-live. An unapplied plan older than this is expired:
 /// `apply` refuses it and vacuum stops protecting its segments.
