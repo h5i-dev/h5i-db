@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/h5i-db-observability",
     "crates/h5i-db-core",
     "crates/h5i-db-query",
     "crates/h5i-db-cli",
@@ -26,6 +27,7 @@ rust-version = "1.88"
 # version alongside path so `cargo publish` can rewrite these for crates.io.
 h5i-db-core = { path = "crates/h5i-db-core", version = "0.1.0" }
 h5i-db-query = { path = "crates/h5i-db-query", version = "0.1.0" }
+h5i-db-observability = { path = "crates/h5i-db-observability", version = "0.1.0" }
 
 # arrow/parquet must match the versions datafusion 54.1 links against (58.x).
 arrow = { version = "58.3", default-features = false, features = [
@@ -74,7 +76,11 @@ futures = "0.3"
 bytes = "1"
 
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
+# float_roundtrip: sidecar integrity checksums (aggregate states) verify by
+# re-serializing parsed JSON, which requires parse∘serialize to be the
+# identity for f64. serde_json's default float parse is lossy (~1 ulp), which
+# made every full-mantissa aggregate state fail verification and rebuild.
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 
 blake3 = "1"
 fs4 = { version = "0.13", features = ["sync"] }
@@ -102,6 +108,12 @@ anyhow = "1"
 # the API we consume and carries the fixed parser; this tiny compatibility
 # package keeps the dependency identity expected by upstream crates.
 object_store = { path = "compat/object-store-0.13" }
+
+# No debuginfo in dev/test builds: DataFusion-sized debuginfo grows
+# target/debug to tens of GB on this workspace. Agents debug with prints /
+# tracing output instead of a debugger; flip locally if you need symbols.
+[profile.dev]
+debug = false
 
 [profile.release]
 lto = "thin"

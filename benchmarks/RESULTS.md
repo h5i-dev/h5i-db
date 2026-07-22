@@ -15,6 +15,69 @@ python benchmarks/compare_baselines.py <dir>/bench.db \
     [--engines polars,duckdb,pandas,pyarrow]   # needs those packages
 ```
 
+The query-local P0 regression workload reuses the generated `bench.db` and an
+already-built CLI binary, so it does not compile or link another DataFusion
+test target:
+
+```bash
+python benchmarks/run_performance_workload.py \
+    --binary target/bench-fast/h5i-db \
+    --db <dir>/bench.db \
+    --output current-performance.json
+
+# On the same machine and dataset, require identical results and no gated
+# median query-time regression greater than 10%.
+python benchmarks/run_performance_workload.py \
+    --binary target/bench-fast/h5i-db \
+    --db <dir>/bench.db \
+    --baseline baseline-performance.json \
+    --output current-performance.json
+```
+
+The checked-in workload runs one warm-up and five measured repetitions of a
+cross-sectional control and the symbol/time predicate shape targeted by P2.
+Each result records physical scan metrics, a result checksum, the binary and
+workload hashes, and machine/compiler metadata. Raw SQL and result rows are not
+copied into the result artifact.
+
+The Rust harness also emits `aggregate states: cold OHLCV + VWAP` and
+`aggregate states: warm OHLCV + VWAP`. Their detail objects report state hits,
+builds, scanned segments/rows/bytes, corruption recovery, and eviction counts.
+The warm result is value-equivalent in-process and reports zero segments
+scanned. Full 20 M-row run (50 segments, 64 symbols, release profile,
+2026-07-22, WSL2):
+
+| case | wall | detail |
+|---|---|---|
+| aggregate states: cold OHLCV + VWAP | 2445 ms | 50 built, 20 M rows scanned |
+| aggregate states: warm OHLCV + VWAP | 30.9 ms | 50/50 reused, 0 rows scanned |
+
+Warm reuse requires serde_json's `float_roundtrip` feature (workspace-enabled):
+sidecar verification re-serializes parsed JSON, and the default lossy f64
+parse made every full-mantissa state fail its checksum and silently rebuild —
+warm equaled cold until that fix. The regression is pinned by a unit test in
+`aggregate_state.rs`.
+
+Two honest limits observed on this dataset: the checked-in P2 workload case
+(`symbol = … AND ts range`) gets **no** physical-scan reduction from the
+predicate cache because symbols interleave uniformly, so every surviving row
+group contains the symbol; and the predicate shape that *does* cluster
+(symbol + price band) is rejected because Float64 columns are outside the
+eligibility contract. The cache's byte-reduction exit gate currently only
+fires on correlated int/string/timestamp predicates like the one in
+`query_misc.rs`.
+
+The case the cache exists for is demonstrated by
+`benchmarks/predicate_cache_scenario.py` (needs pyarrow and a built CLI): an
+episodic symbol trading only inside a narrow window of time-ordered segments,
+named so per-column min/max statistics cannot prune it. At the default
+4 M rows, warm hits scan **75% fewer physical bytes** (38.2 MB → 9.7 MB,
+3.69 M → 0.93 M rows) with identical results; the reduction tracks the
+clustering ratio and row-group granularity, and translates to proportionally
+fewer range GETs once segments live on remote object storage. Wall time
+barely moves against a warm local page cache — physical bytes, not local
+latency, is the metric this prototype optimizes.
+
 On small machines run one engine per invocation (`--engines <one>`), ideally
 under a cgroup cap (`systemd-run --user --scope -p MemoryMax=...`): a 20 M-row
 eager sort/join can otherwise OOM the whole machine. `ulimit -v` is *not* a

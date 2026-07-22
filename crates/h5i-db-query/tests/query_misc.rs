@@ -10,8 +10,12 @@ use arrow::array::{
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::common::stats::Precision;
 use datafusion::physical_plan::displayable;
-use h5i_db_core::{Database, TableOptions, WriteOptions};
-use h5i_db_query::{H5iSession, SessionOptions};
+use h5i_db_core::{Database, StorageOptions, TableOptions, WriteOptions};
+use h5i_db_query::{
+    AggregateStateMode, AggregateStateStore, FinanceAggregateSpec, H5iSession, PredicateCacheMode,
+    QueryStatus, SessionOptions, WorkloadTelemetryEnvelope,
+};
+use object_store::{path::Path as ObjectPath, ObjectStoreExt};
 
 fn trades_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -570,4 +574,365 @@ async fn time_bucket_timezone_tracks_dst_local_midnight() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("unknown IANA timezone"));
+}
+
+// ---------------------------------------------------------------------------
+// P0 query-local performance adapter (pure telemetry tests live in the
+// lightweight h5i-db-observability crate).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reported_queries_isolate_scans_and_persist_private_telemetry() {
+    let (_dir, db) = setup_trades().await;
+    let session = H5iSession::new(
+        db.clone(),
+        SessionOptions {
+            telemetry_capacity: 2,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let (a, b) = tokio::join!(
+        session.sql_reported("SELECT * FROM trades WHERE symbol = 'A'"),
+        session.sql_reported("SELECT * FROM trades WHERE symbol = 'B'")
+    );
+    let (a, b) = tokio::join!(a.unwrap().collect(), b.unwrap().collect());
+    let (_, a) = a.unwrap();
+    let (_, b) = b.unwrap();
+
+    assert_eq!(a.status, QueryStatus::Succeeded);
+    assert_eq!(b.status, QueryStatus::Succeeded);
+    assert_ne!(a.query_id, b.query_id);
+    assert_eq!(a.output_rows, 2);
+    assert_eq!(b.output_rows, 2);
+    assert!(a.bytes_scanned > 0);
+    assert!(b.bytes_scanned > 0);
+    assert!(!a.scans.is_empty());
+    assert!(!b.scans.is_empty());
+    assert!(a.scans.iter().all(|scan| scan.query_id == Some(a.query_id)));
+    assert!(b.scans.iter().all(|scan| scan.query_id == Some(b.query_id)));
+
+    let telemetry = session.workload_telemetry();
+    assert_eq!(telemetry.len(), 2);
+    let serialized = serde_json::to_string(&telemetry).unwrap();
+    assert!(!serialized.contains("SELECT"));
+
+    let path = session.flush_workload_telemetry().await.unwrap().unwrap();
+    let bytes = db
+        .backend()
+        .store
+        .get(&ObjectPath::from(path.as_str()))
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    let envelope: WorkloadTelemetryEnvelope = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(envelope.format, 1);
+    assert_eq!(envelope.reports, telemetry);
+}
+
+// ---------------------------------------------------------------------------
+// P2 immutable predicate cache.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn predicate_cache_reuses_row_group_selection_and_recovers_from_corruption() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table(
+        "trades",
+        trades_schema(),
+        TableOptions {
+            storage: StorageOptions {
+                target_segment_bytes: 2 * 1024 * 1024,
+                target_row_group_bytes: 16 * 1024,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // The writer intentionally floors row groups at 8K rows. Four groups let
+    // the first two encode a correlation that min/max statistics cannot see.
+    let rows = 32_768usize;
+    let timestamps = (0..rows).map(|i| i as i64).collect::<Vec<_>>();
+    let mut symbols = Vec::with_capacity(rows);
+    let mut prices = Vec::with_capacity(rows);
+    let mut sizes = Vec::with_capacity(rows);
+    for i in 0..rows {
+        let second_half = i >= rows / 2;
+        let symbol_a = i % 2 == 0;
+        symbols.push(if symbol_a { "A" } else { "B" });
+        prices.push(i as f64);
+        sizes.push(i64::from(symbol_a == second_half));
+    }
+    db.append(
+        "trades",
+        vec![trades_batch(&timestamps, &symbols, &prices, &sizes)],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let session = H5iSession::new(
+        db.clone(),
+        SessionOptions {
+            predicate_cache: PredicateCacheMode::ReadWrite,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let sql = "SELECT count(*) FROM trades WHERE symbol = 'A' AND size = 1";
+
+    let (cold_batches, cold) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let count = cold_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(count, (rows / 4) as i64);
+    assert_eq!(cold.predicate_cache_builds, 1, "{cold:#?}");
+    assert_eq!(cold.predicate_cache_hits, 0);
+
+    let (_, warm) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(warm.predicate_cache_hits, 1);
+    assert_eq!(warm.predicate_cache_builds, 0);
+    assert!(warm.predicate_cache_row_groups_reused > 1);
+    assert!(
+        warm.bytes_scanned < cold.bytes_scanned,
+        "warm={} cold={}",
+        warm.bytes_scanned,
+        cold.bytes_scanned
+    );
+
+    let cache_objects = db
+        .backend()
+        .list(&ObjectPath::from("cache/predicates/v1"))
+        .await
+        .unwrap();
+    assert_eq!(cache_objects.len(), 1);
+    db.backend()
+        .put(
+            &cache_objects[0].location,
+            bytes::Bytes::from_static(b"corrupt"),
+        )
+        .await
+        .unwrap();
+
+    let (recovered_batches, recovered) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let recovered_count = recovered_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(recovered_count, count);
+    assert_eq!(recovered.predicate_cache_hits, 0);
+    assert_eq!(recovered.predicate_cache_misses, 1);
+    assert_eq!(recovered.predicate_cache_builds, 1);
+
+    // A new version reuses the old segment sidecar and misses only for the
+    // newly added immutable segment.
+    let added = 8192usize;
+    let added_ts = (0..added).map(|i| (rows + i) as i64).collect::<Vec<_>>();
+    db.append(
+        "trades",
+        vec![trades_batch(
+            &added_ts,
+            &vec!["A"; added],
+            &vec![1.0; added],
+            &vec![1; added],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    session.refresh().await.unwrap();
+    let (appended_batches, appended) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let appended_count = appended_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(appended_count, count + added as i64);
+    assert_eq!(appended.predicate_cache_hits, 1);
+    assert_eq!(appended.predicate_cache_builds, 1);
+
+    // Compaction rewrites both segments under a new checksum: it is a clean
+    // miss, never a stale hit, and the result remains identical.
+    db.compact("trades", WriteOptions::default()).await.unwrap();
+    session.refresh().await.unwrap();
+    let (compacted_batches, compacted) = session
+        .sql_reported(sql)
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let compacted_count = compacted_batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(compacted_count, appended_count);
+    assert_eq!(compacted.predicate_cache_hits, 0);
+    assert_eq!(compacted.predicate_cache_builds, 1);
+}
+
+// ---------------------------------------------------------------------------
+// P3 version-aware aggregate state store.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn aggregate_states_reuse_unchanged_segments_and_match_full_recomputation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), TableOptions::default())
+        .await
+        .unwrap();
+    for (offset, prices, sizes) in [
+        (0_i64, vec![10.0, 20.0, 12.0, 18.0], vec![1, 2, 3, 4]),
+        (4_i64, vec![11.0, 21.0, 13.0, 19.0], vec![5, 6, 7, 8]),
+    ] {
+        db.append(
+            "trades",
+            vec![trades_batch(
+                &[offset + 1, offset + 2, offset + 3, offset + 4],
+                &["A", "B", "A", "B"],
+                &prices,
+                &sizes,
+            )],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    let spec = FinanceAggregateSpec::ohlcv("ts", "price", "size").grouped_by("symbol");
+    let store = AggregateStateStore::new(db.clone(), AggregateStateMode::ReadWrite);
+
+    let cold = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(cold.metrics.states_built, 2);
+    assert_eq!(cold.metrics.states_reused, 0);
+    assert_eq!(cold.metrics.segments_scanned, 2);
+    let a = cold
+        .groups
+        .iter()
+        .find(|group| group.group.as_deref() == Some("A"))
+        .unwrap();
+    assert_eq!(a.rows, 4);
+    assert_eq!((a.open, a.high, a.low, a.close), (10.0, 13.0, 10.0, 13.0));
+    assert_eq!(a.volume, 16.0);
+    assert!((a.vwap.unwrap() - 12.0).abs() < 1e-12);
+
+    let warm = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(warm.groups, cold.groups);
+    assert_eq!(warm.metrics.states_reused, 2);
+    assert_eq!(warm.metrics.states_built, 0);
+    assert_eq!(warm.metrics.segments_scanned, 0);
+
+    db.append(
+        "trades",
+        vec![trades_batch(
+            &[9, 10, 11, 12],
+            &["A", "B", "A", "B"],
+            &[14.0, 22.0, 15.0, 23.0],
+            &[9, 10, 11, 12],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let appended = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(appended.metrics.states_reused, 2);
+    assert_eq!(appended.metrics.states_built, 1);
+    assert_eq!(appended.metrics.segments_scanned, 1);
+
+    let historical = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Version(2), &spec)
+        .await
+        .unwrap();
+    assert_eq!(historical.groups, cold.groups);
+    assert_eq!(historical.metrics.states_reused, 2);
+    assert_eq!(historical.metrics.segments_scanned, 0);
+
+    let forced = AggregateStateStore::new(db.clone(), AggregateStateMode::Disabled)
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(appended.groups, forced.groups);
+    assert_eq!(forced.metrics.segments_scanned, 3);
+
+    let objects = db
+        .backend()
+        .list(&ObjectPath::from("cache/aggregates/v1"))
+        .await
+        .unwrap();
+    assert_eq!(objects.len(), 3);
+    db.backend()
+        .put(&objects[0].location, bytes::Bytes::from_static(b"corrupt"))
+        .await
+        .unwrap();
+    let recovered = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(recovered.groups, forced.groups);
+    assert_eq!(recovered.metrics.corrupt_entries, 1);
+    assert_eq!(recovered.metrics.states_reused, 2);
+    assert_eq!(recovered.metrics.states_built, 1);
+
+    db.compact("trades", WriteOptions::default()).await.unwrap();
+    let compacted = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    let compacted_forced = AggregateStateStore::new(db.clone(), AggregateStateMode::Disabled)
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(compacted.groups, compacted_forced.groups);
+    assert_eq!(compacted.metrics.states_reused, 0);
+    assert_eq!(compacted.metrics.states_built, 1);
 }
