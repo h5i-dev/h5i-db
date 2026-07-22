@@ -153,8 +153,25 @@ const fmtBytes = (b) => {
   return i ? v.toFixed(1) + " " + u[i] : v + " B";
 };
 const fmtTs = (ns) => ns == null ? "—" : new Date(Number(ns) / 1e6).toISOString().replace("T", " ").slice(0, 19) + "Z";
+// Access token: arrives once as ?token= on the startup URL, persisted for
+// the tab so reloads work, then stripped from the address bar. Every API
+// call sends it as a bearer header; POSTs add the CSRF header (cross-origin
+// pages cannot set either without a CORS preflight, which is never granted).
+const TOKEN = (() => {
+  const u = new URL(location.href);
+  const t = u.searchParams.get("token");
+  if (t) {
+    sessionStorage.setItem("h5i_token", t);
+    u.searchParams.delete("token");
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
+  return sessionStorage.getItem("h5i_token") || "";
+})();
 async function api(path, opts) {
-  const res = await fetch(path, opts);
+  opts = opts || {};
+  const headers = Object.assign({ "authorization": "Bearer " + TOKEN }, opts.headers);
+  if (opts.method && opts.method !== "GET") headers["x-h5i-csrf"] = "1";
+  const res = await fetch(path, Object.assign({}, opts, { headers }));
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const e = new Error(body.message || res.statusText);
@@ -424,7 +441,7 @@ function renderSql(main) {
         body: JSON.stringify({ sql: ta.value }) });
       const scans = (r.scan_metrics || []).map(m =>
         `${m.table}@v${m.version}: ${m.segments_pruned}/${m.segments_total} segments pruned, ${fmtBytes(m.bytes_scheduled)} scheduled`).join("; ");
-      status.textContent = `${r.rows.length} rows in ${r.wall_ms.toFixed(1)} ms` + (scans ? ` — ${scans}` : "");
+      status.textContent = `${r.rows.length} rows${r.truncated ? " (truncated at 1 000)" : ""} in ${r.wall_ms.toFixed(1)} ms` + (scans ? ` — ${scans}` : "");
       maybeChart(chart, r);
       out.append(dataGrid(r));
     } catch (e) { status.replaceChildren(); showErr(status, e); }

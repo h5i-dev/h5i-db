@@ -70,14 +70,15 @@ pub async fn load(backend: &Backend, name: &str) -> Result<Snapshot> {
 
 pub async fn store(backend: &Backend, snapshot: &Snapshot) -> Result<()> {
     let path = layout::snapshot_path(&snapshot.name);
-    if backend.get_opt(&path).await?.is_some() {
+    let bytes = serde_json::to_vec_pretty(snapshot)?;
+    // Atomic create-if-absent: two racing creators of the same name cannot
+    // both succeed (snapshots are immutable, so overwrite is never right).
+    if !backend.put_if_absent(&path, bytes.into()).await? {
         return Err(Error::invalid(format!(
             "snapshot {:?} already exists; snapshots are immutable — pick a new name or delete it first",
             snapshot.name
         )));
     }
-    let bytes = serde_json::to_vec_pretty(snapshot)?;
-    backend.put(&path, bytes.into()).await?;
     backend.sync_objects(&[path]).await
 }
 

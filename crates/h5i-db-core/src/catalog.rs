@@ -64,10 +64,26 @@ pub async fn load_entry(backend: &Backend, name: &str) -> Result<Option<CatalogE
     }
 }
 
+/// Store a catalog entry, overwriting any existing object (update semantics —
+/// callers must hold the database metadata lock; see `Backend::meta_lock`).
 pub async fn store_entry(backend: &Backend, entry: &CatalogEntry) -> Result<()> {
     let path = layout::catalog_entry_path(&entry.name);
     let bytes = serde_json::to_vec_pretty(entry)?;
     backend.put(&path, bytes.into()).await?;
+    backend.sync_objects(&[path]).await
+}
+
+/// Store a NEW catalog entry with atomic create-if-absent semantics; fails
+/// with `TableExists` when the name is already cataloged. This closes the
+/// check-then-put race at the storage layer even without the metadata lock.
+pub async fn create_entry(backend: &Backend, entry: &CatalogEntry) -> Result<()> {
+    let path = layout::catalog_entry_path(&entry.name);
+    let bytes = serde_json::to_vec_pretty(entry)?;
+    if !backend.put_if_absent(&path, bytes.into()).await? {
+        return Err(Error::TableExists {
+            name: entry.name.clone(),
+        });
+    }
     backend.sync_objects(&[path]).await
 }
 

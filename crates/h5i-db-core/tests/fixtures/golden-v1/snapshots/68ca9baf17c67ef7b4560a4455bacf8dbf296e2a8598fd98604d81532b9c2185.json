@@ -1,0 +1,18 @@
+{
+  "name": "golden",
+  "created_at_ns": 1784738021712317016,
+  "note": "format-compat fixture",
+  "entries": {
+    "3cf9c66a-e413-4733-8f21-60e7482410b4": {
+      "table_name": "quotes",
+      "sequence": 1,
+      "manifest_checksum": "99d3e86aeca39d455c9b1d354bef4803851e723a0de0aa03a93f126e1ade10d4"
+    },
+    "701147a8-f7e7-4998-91f2-7cb94fdf2252": {
+      "table_name": "trades",
+      "sequence": 3,
+      "manifest_checksum": "43e016bd1fb86589b7fbc9ef0b52833955158c34b293f93a8cac9fb16351fa9f"
+    }
+  },
+  "checksum": "ef60bd80c9ce2251cfee0d7adce8ef0dba7988acef06795d1bc4d7198a53df3a"
+}

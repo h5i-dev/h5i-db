@@ -1,0 +1,42 @@
+[package]
+name = "h5i-db-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+h5i-db-core = { path = "../crates/h5i-db-core" }
+# Mirrors the CLI ingest path (arrow CSV inference + read) — the CLI is a
+# binary crate, so the fuzz target reproduces its exact parse sequence.
+arrow = { version = "58.3", default-features = false, features = ["csv"] }
+# The SQL text surface: DataFusion's parser crate (what H5iSession feeds).
+datafusion-sql = "54.1"
+
+[[bin]]
+name = "manifest_json"
+path = "fuzz_targets/manifest_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "csv_ingest"
+path = "fuzz_targets/csv_ingest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sql_parse"
+path = "fuzz_targets/sql_parse.rs"
+test = false
+doc = false
+bench = false
+
+# Detach from the workspace: fuzz builds use nightly + sanitizer flags and
+# must not inherit the workspace's `panic = "abort"` release profile.
+[workspace]

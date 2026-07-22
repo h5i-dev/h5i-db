@@ -698,20 +698,43 @@ suite.
 
 ## 13. Implementation status (2026-07-22)
 
-The roadmap above was implemented in full on branch `poc`, with several
-additions that emerged during build-out. Test suite: **65 tests, 0 failures**
-(37 core incl. kill-at-every-commit-step crash injection, 17 query, 5 CLI
-e2e, 6 review-UI API), zero clippy warnings.
+The roadmap above was implemented incrementally, with several additions that
+emerged during build-out. CI keeps format, Clippy, cross-platform tests,
+format-compatibility fixtures, dependency audits, wheels, and benchmark smoke
+tests as explicit gates.
 
 | Roadmap item | Status |
 |---|---|
 | Phase 0 walking skeleton (FORMAT/catalog/HEAD/manifests, Parquet segments + stats, CLI) | ✅ |
 | Phase 1 versioning (CAS commits, conflicts, time travel O(1)/O(log V), replace/delete range, snapshots, restore, compact, vacuum, verify, dedup, crash safety) | ✅ exit gates pass |
-| Phase 2 performance (manifest `PruningStatistics`, declared ordering, `time_bucket`, footer-metadata cache, benchmarks vs raw DF & Polars) | ✅ |
-| Phase 3 Python (`pip install h5i-db`, Arrow-IPC interop, plan/apply from Python) | ✅ wheel builds; CI smoke-tests it |
-| Phase 4 time-series ops (AsOfJoinExec w/ sort-elision, SQL `asof_join(...)` + DataFrame `asof_join`, `vwap`/`wavg`/`ewma`) | ✅ (gapfill: post-v1) |
-| Phase 5 (S3 backend, staged parallel ingest, manifest-log checkpoint, caggs) | ⏳ deferred as designed |
+| Phase 2 performance (manifest `PruningStatistics`, declared ordering, `time_bucket`, footer-metadata cache, benchmarks vs raw DF & Polars) | ◐ see honesty ledger |
+| Phase 3 Python (`pip install h5i-db`, Arrow-IPC interop, plan/apply from Python) | ◐ wheel builds; CI smoke-tests it; not yet on PyPI |
+| Phase 4 time-series ops (ASOF keyword + UDTF/DataFrame paths, gapfill/resample, rolling sugar, timezone buckets, streaming tail, `vwap`/`wavg`/`ewma`) | ◐ core operators shipped; quant-idiom rewrites remain |
+| Phase 5 (S3 conditional-PUT backend, staged parallel ingest, manifest-log checkpoint, caggs) | ◐ S3 CAS shipped; remaining scale-out items deferred |
 | CI/CD (fmt+clippy+tests linux/macos, wheel build+smoke, bench canary; release binaries ×4 targets + wheels) | ✅ |
+
+**Honesty ledger — items promised inside "done" phases that are not yet
+delivered** (kept here so a ✅ never overstates; struck through when landed):
+
+- *Metadata-only aggregates* (§7 Tier-1, Phase 2): manifest statistics are
+  exposed exactly to the planner; aggregate coverage still depends on
+  DataFusion's optimizer rules.
+- *Decoded-batch cache* (Phase 2): shipped as a Parquet **footer-metadata**
+  cache only; decoded record batches are not cached.
+- *≤10 % overhead gate* (Phase 2 exit gate): measured overhead vs. raw
+  DataFusion on generic scans is ~20 %.
+- *DuckDB differential test harness* (Phase 2): benchmark comparisons exist;
+  automated differential *correctness* testing does not.
+- *Quant-idiom rewrite rules* (Phase 4): "latest row per key" and friends
+  are not rewritten; they run as generic window plans.
+- *SQL `ASOF JOIN` keyword syntax* (Phase 4): shipped for the documented
+  equality-key/match-condition form; more general SQL forms remain explicit
+  planner errors.
+- *`resample`/`rolling` sugar* (Phase 4): `resample(...)` and bounded
+  `rolling_avg`/`sum`/`min`/`max` spellings ship over the native operators.
+- *Bloom/distinct-set pruning for symbol predicates* (Phase 3 storage tier):
+  exact low-cardinality distinct sets drive `contained()`; high-cardinality
+  probabilistic blooms remain future work.
 
 Additions beyond the original roadmap (user-driven, adopted into the design):
 
@@ -738,6 +761,7 @@ cache, and disabling row-level filter pushdown (segment pruning already did
 the work).
 
 Known deliberate limitations (documented, tested to fail cleanly): schema
-evolution rejects mismatched writes rather than evolving (revision lineage is
-in the format, evolution rules are follow-up work); gapfill/LOCF and window
-join are design-listed but not yet operators; S3/staged ingest per Phase 5.
+evolution is restricted to nullable trailing columns, numeric widening, and
+nullability relaxation; SQL ASOF syntax intentionally supports the common
+equality-key form; S3-compatible stores must provide reliable conditional
+puts; continuous aggregates and distributed compute remain out of scope.

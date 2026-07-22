@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
-use futures::stream::{self, StreamExt};
+use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::{path::Path as ObjPath, ObjectStoreExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -17,7 +17,9 @@ use crate::catalog::{self, CatalogEntry};
 use crate::error::{Error, Result};
 use crate::layout;
 use crate::manifest::{Head, OpKind, SegmentMeta, VersionManifest};
-use crate::segment::{batch_is_sorted, read_segment, sort_batches, time_values_i64, SegmentWriter};
+use crate::segment::{
+    batch_is_sorted, read_segment, sort_batches, time_values_i64, SegmentWriter, MERGE_CHUNK_ROWS,
+};
 use crate::snapshot::{self, Snapshot, SnapshotEntry};
 use crate::spec::{TableOptions, TableSpec, SEGMENT_COUNT_WARN};
 
@@ -57,6 +59,10 @@ pub struct ScanOptions {
     pub limit: Option<usize>,
     /// Concurrent segment reads (default 4).
     pub concurrency: Option<usize>,
+    /// Verify each segment's full-file blake3 checksum against the manifest
+    /// before decoding (3.6). Reads whole objects, so row-group pruning does
+    /// not apply — integrity over speed.
+    pub verify_checksums: bool,
 }
 
 /// What a scan touched — the observability half of pruning.
@@ -81,6 +87,17 @@ pub struct CommitResult {
     /// Segments reused verbatim from the parent via content-hash dedup.
     pub segments_deduped: usize,
     pub committed_at_ns: i64,
+}
+
+/// A per-table commit prepared for a journaled multi-table transaction.
+/// Segments are durable but unreachable until the transaction advances HEAD.
+pub(crate) struct StagedCommit {
+    pub(crate) entry: CatalogEntry,
+    pub(crate) head: HeadState,
+    pub(crate) manifest: VersionManifest,
+    pub(crate) segments_added: usize,
+    pub(crate) segments_deduped: usize,
+    pub(crate) lease: Option<ObjPath>,
 }
 
 /// Options common to write-path operations.
@@ -190,6 +207,32 @@ impl Database {
         })
     }
 
+    /// Create a database on a caller-supplied backend (for example S3,
+    /// GCS, Azure, MinIO, or an in-memory object store).
+    pub async fn create_with_backend(backend: Backend) -> Result<Self> {
+        let format = FormatFile {
+            format_version: layout::FORMAT_VERSION,
+            min_reader_version: layout::MIN_READER_VERSION,
+            created_at_ns: crate::util::monotonic_commit_ts(None),
+            created_by: format!("h5i-db {}", env!("CARGO_PKG_VERSION")),
+        };
+        let bytes = serde_json::to_vec_pretty(&format)?;
+        if !backend
+            .put_if_absent(&layout::format_path(), bytes.into())
+            .await?
+        {
+            return Err(Error::DatabaseExists {
+                path: backend.base_url.to_string(),
+            });
+        }
+        backend.sync_objects(&[layout::format_path()]).await?;
+        Ok(Self {
+            backend,
+            read_only: false,
+            commit_hook: None,
+        })
+    }
+
     /// Open an existing database.
     pub async fn open(path: &Path) -> Result<Self> {
         Self::open_with(path, false).await
@@ -197,6 +240,33 @@ impl Database {
 
     pub async fn open_read_only(path: &Path) -> Result<Self> {
         Self::open_with(path, true).await
+    }
+
+    /// Open an existing database on a caller-supplied backend.
+    pub async fn open_backend(backend: Backend, read_only: bool) -> Result<Self> {
+        let bytes = backend
+            .get_opt(&layout::format_path())
+            .await?
+            .ok_or_else(|| Error::DatabaseNotFound {
+                path: backend.base_url.to_string(),
+            })?;
+        let format: FormatFile = serde_json::from_slice(&bytes)
+            .map_err(|e| Error::corruption(layout::FORMAT_FILE, format!("parse: {e}")))?;
+        if format.min_reader_version > layout::FORMAT_VERSION {
+            return Err(Error::FormatTooNew {
+                found: format.min_reader_version,
+                supported: layout::FORMAT_VERSION,
+            });
+        }
+        let db = Self {
+            backend,
+            read_only,
+            commit_hook: None,
+        };
+        if !read_only {
+            crate::transaction::recover(&db).await?;
+        }
+        Ok(db)
     }
 
     async fn open_with(path: &Path, read_only: bool) -> Result<Self> {
@@ -217,11 +287,15 @@ impl Database {
                 supported: layout::FORMAT_VERSION,
             });
         }
-        Ok(Self {
+        let db = Self {
             backend,
             read_only,
             commit_hook: None,
-        })
+        };
+        if !read_only {
+            crate::transaction::recover(&db).await?;
+        }
+        Ok(db)
     }
 
     /// Open, creating if absent.
@@ -242,10 +316,27 @@ impl Database {
         crate::policy::load(&self.backend).await
     }
 
-    /// Persist a new mutation policy.
+    /// Persist a new mutation policy (whole-value overwrite). Prefer
+    /// [`Database::update_policy`] for read-modify-write edits.
     pub async fn set_policy(&self, policy: &crate::policy::MutationPolicy) -> Result<()> {
         self.ensure_writable("set_policy")?;
+        let _meta = self.backend.meta_lock().await?;
         crate::policy::store(&self.backend, policy).await
+    }
+
+    /// Atomically read-modify-write the mutation policy under the database
+    /// metadata lock, closing the load/store TOCTOU between concurrent
+    /// policy editors (3.5).
+    pub async fn update_policy(
+        &self,
+        f: impl FnOnce(&mut crate::policy::MutationPolicy) -> Result<()>,
+    ) -> Result<crate::policy::MutationPolicy> {
+        self.ensure_writable("set_policy")?;
+        let _meta = self.backend.meta_lock().await?;
+        let mut policy = crate::policy::load(&self.backend).await?;
+        f(&mut policy)?;
+        crate::policy::store(&self.backend, &policy).await?;
+        Ok(policy)
     }
 
     pub fn is_read_only(&self) -> bool {
@@ -283,6 +374,10 @@ impl Database {
     ) -> Result<CommitResult> {
         self.ensure_writable("create_table")?;
         validate_table_name(name)?;
+        // Serialize catalog mutations (3.5): the metadata lock closes the
+        // check-then-put window, and `create_entry` below is additionally an
+        // atomic create-if-absent as defense in depth.
+        let _meta = self.backend.meta_lock().await?;
         if catalog::load_entry(&self.backend, name).await?.is_some() {
             return Err(Error::TableExists { name: name.into() });
         }
@@ -318,7 +413,7 @@ impl Database {
         };
         manifest.recompute_rollups();
         let result = self
-            .commit_manifest(name, table_id, None, &mut manifest, 0)
+            .commit_manifest_locked(name, table_id, None, &mut manifest, 0)
             .await?;
 
         let entry = CatalogEntry {
@@ -329,13 +424,17 @@ impl Database {
             checksum: String::new(),
         }
         .seal()?;
-        catalog::store_entry(&self.backend, &entry).await?;
+        catalog::create_entry(&self.backend, &entry).await?;
         Ok(result)
     }
 
     /// Drop a table: remove the catalog entry, HEAD, and all objects.
     pub async fn drop_table(&self, name: &str) -> Result<()> {
         self.ensure_writable("drop_table")?;
+        // Catalog mutations are serialized (3.5); HEAD removal below
+        // additionally takes the table's writer lock so it cannot interleave
+        // with an in-flight commit.
+        let _meta = self.backend.meta_lock().await?;
         let entry = self.entry(name).await?;
         // Refuse to drop a table pinned by any snapshot.
         for snap in snapshot::list(&self.backend).await? {
@@ -362,13 +461,14 @@ impl Database {
     pub async fn rename_table(&self, from: &str, to: &str) -> Result<()> {
         self.ensure_writable("rename_table")?;
         validate_table_name(to)?;
-        if catalog::load_entry(&self.backend, to).await?.is_some() {
-            return Err(Error::TableExists { name: to.into() });
-        }
+        let _meta = self.backend.meta_lock().await?;
         let mut entry = self.entry(from).await?;
         entry.name = to.to_string();
         let entry = entry.seal()?;
-        catalog::store_entry(&self.backend, &entry).await?;
+        // Atomic create of the target name (fails TableExists on a race),
+        // then removal of the source: a crash in between leaves the table
+        // reachable under both names, never under none.
+        catalog::create_entry(&self.backend, &entry).await?;
         catalog::remove_entry(&self.backend, from).await?;
         Ok(())
     }
@@ -417,7 +517,11 @@ impl Database {
             })
     }
 
-    async fn manifest_at(&self, table_id: Uuid, sequence: u64) -> Result<VersionManifest> {
+    pub(crate) async fn manifest_at(
+        &self,
+        table_id: Uuid,
+        sequence: u64,
+    ) -> Result<VersionManifest> {
         let path = layout::manifest_path(table_id, sequence);
         let bytes = self.backend.get_opt(&path).await?.ok_or_else(|| {
             Error::corruption(path.as_ref(), "manifest missing for committed sequence")
@@ -431,28 +535,31 @@ impl Database {
         let entry = self.entry(name).await?;
         let head = self.head(name, entry.table_id).await?;
         let head_seq = head.head.sequence;
+        let retention_floor = self.retention_min_seq(entry.table_id).await?;
 
         let (sequence, verify_checksum) = match &at {
             ReadAt::Latest => (head_seq, Some(head.head.manifest_checksum.clone())),
             ReadAt::Version(v) => {
-                if *v > head_seq {
+                if *v < retention_floor || *v > head_seq {
                     return Err(Error::VersionNotFound {
                         table: name.into(),
                         requested: v.to_string(),
-                        hint: format!("latest is {head_seq}"),
+                        hint: format!("retained versions are {retention_floor}..={head_seq}"),
                     });
                 }
                 (*v, None)
             }
             ReadAt::AsOf(ts) => {
-                let seq = self.as_of_sequence(entry.table_id, head_seq, *ts).await?;
+                let seq = self
+                    .as_of_sequence(entry.table_id, retention_floor, head_seq, *ts)
+                    .await?;
                 match seq {
                     Some(s) => (s, None),
                     None => {
                         return Err(Error::VersionNotFound {
                             table: name.into(),
                             requested: format!("as_of {ts}"),
-                            hint: "timestamp precedes the first commit".into(),
+                            hint: "timestamp precedes the oldest retained commit".into(),
                         })
                     }
                 }
@@ -468,7 +575,19 @@ impl Database {
             }
         };
 
-        // Integrity: HEAD (or snapshot) carries the manifest checksum.
+        // Integrity: HEAD (or snapshot) carries the manifest checksum. For
+        // Version/AsOf reads no root of trust points at the manifest
+        // directly, so verify it against its child's parent_checksum — a
+        // one-hop slice of the chain that `verify` walks in full (3.6).
+        let verify_checksum = match verify_checksum {
+            Some(c) => Some(c),
+            None if sequence == head_seq => Some(head.head.manifest_checksum.clone()),
+            None => {
+                self.manifest_at(entry.table_id, sequence + 1)
+                    .await?
+                    .parent_checksum
+            }
+        };
         let path = layout::manifest_path(entry.table_id, sequence);
         let bytes = self
             .backend
@@ -498,11 +617,17 @@ impl Database {
 
     /// Largest sequence whose committed_at <= ts, via O(log V) binary search
     /// over directly-addressed manifests.
-    async fn as_of_sequence(&self, table_id: Uuid, head_seq: u64, ts: i64) -> Result<Option<u64>> {
-        let mut lo = 0u64;
+    async fn as_of_sequence(
+        &self,
+        table_id: Uuid,
+        floor_seq: u64,
+        head_seq: u64,
+        ts: i64,
+    ) -> Result<Option<u64>> {
+        let mut lo = floor_seq;
         let mut hi = head_seq;
         // First check bounds to avoid degenerate loads.
-        let first = self.manifest_at(table_id, 0).await?;
+        let first = self.manifest_at(table_id, floor_seq).await?;
         if ts < first.committed_at_ns {
             return Ok(None);
         }
@@ -526,6 +651,7 @@ impl Database {
     pub async fn list_versions(&self, name: &str) -> Result<Vec<VersionSummary>> {
         let entry = self.entry(name).await?;
         let head = self.head(name, entry.table_id).await?;
+        let retention_floor = self.retention_min_seq(entry.table_id).await?;
         let metas = self
             .backend
             .list(&layout::manifest_prefix(entry.table_id))
@@ -533,7 +659,7 @@ impl Database {
         let mut sequences: Vec<u64> = metas
             .iter()
             .filter_map(|m| layout::manifest_sequence_from_path(&m.location))
-            .filter(|s| *s <= head.head.sequence)
+            .filter(|s| *s >= retention_floor && *s <= head.head.sequence)
             .collect();
         sequences.sort_unstable();
         let mut out = Vec::with_capacity(sequences.len());
@@ -560,6 +686,25 @@ impl Database {
     /// head state (None = first commit). Fills in parent linkage and the
     /// monotonic commit timestamp.
     async fn commit_manifest(
+        &self,
+        name: &str,
+        table_id: Uuid,
+        parent: Option<&HeadState>,
+        manifest: &mut VersionManifest,
+        segments_added: usize,
+    ) -> Result<CommitResult> {
+        // Serialize every writer at the database level. Per-table HEAD CAS is
+        // still the authority, while this outer lock lets a multi-table
+        // transaction validate all bases and durably journal its roll-forward
+        // before any ordinary writer can interleave. Object-store transactions
+        // are rejected (their metadata guard is intentionally a no-op).
+        let _meta = self.backend.meta_lock().await?;
+        self.commit_manifest_locked(name, table_id, parent, manifest, segments_added)
+            .await
+    }
+
+    /// Commit while the caller already holds the database metadata lock.
+    async fn commit_manifest_locked(
         &self,
         name: &str,
         table_id: Uuid,
@@ -620,15 +765,39 @@ impl Database {
 
         // Everything inside `publish` runs in the writer critical section,
         // after head revalidation.
+        //
+        // Durability (1.1): the segments this commit introduces are fsynced
+        // *together with* the manifest before the head swap, so a committed
+        // HEAD can never reference torn or unflushed Parquet objects after
+        // power loss. Parent segments were made durable by their own commits.
         let backend = self.backend.clone();
         let hook = self.commit_hook.clone();
         let mp = manifest_path.clone();
+        let manifest_sequence = new_head.sequence;
+        let mut sync_paths: Vec<ObjPath> = manifest
+            .segments
+            .iter()
+            .filter(|s| s.created_by_sequence == manifest.sequence)
+            .map(|s| ObjPath::from(s.path.as_str()))
+            .collect();
         let publish = Box::pin(async move {
-            backend.put(&mp, manifest_bytes.into()).await?;
+            if backend.local_root.is_some() {
+                backend.put(&mp, manifest_bytes.into()).await?;
+            } else {
+                crate::backend_object::create_manifest_slot(
+                    &backend.store,
+                    name,
+                    table_id,
+                    manifest_sequence,
+                    manifest_bytes,
+                )
+                .await?;
+            }
             if let Some(h) = &hook {
                 h("post_manifest_put")?;
             }
-            backend.sync_objects(&[mp]).await?;
+            sync_paths.push(mp);
+            backend.sync_objects(&sync_paths).await?;
             if let Some(h) = &hook {
                 h("pre_head_swap")?;
             }
@@ -735,6 +904,59 @@ impl Database {
         Ok((entry, spec, head, manifest))
     }
 
+    /// Commit a metadata-only schema revision. Existing immutable segments
+    /// remain in place and are adapted on read (nullable trailing columns are
+    /// null-filled; supported numeric widenings are cast).
+    pub async fn evolve_schema(
+        &self,
+        name: &str,
+        new_schema: SchemaRef,
+        opts: WriteOptions,
+    ) -> Result<CommitResult> {
+        self.ensure_writable("evolve_schema")?;
+        let (entry, mut spec, head, parent_manifest) = self
+            .write_prologue(name, OpKind::EvolveSchema, &opts)
+            .await?;
+        let old_schema = spec.schema()?;
+        crate::evolution::validate_evolution(&old_schema, &new_schema)?;
+
+        let _meta = self.backend.meta_lock().await?;
+        let current = self.head(name, entry.table_id).await?;
+        if current.tag != head.tag {
+            return Err(Error::VersionConflict {
+                table: name.into(),
+                expected: head.head.sequence,
+                actual: current.head.sequence,
+            });
+        }
+
+        spec.schema_revision =
+            spec.schema_revision
+                .checked_add(1)
+                .ok_or_else(|| Error::LimitExceeded {
+                    detail: "schema revision overflow".into(),
+                })?;
+        spec.schema_ipc_b64 = crate::util::schema_to_b64(new_schema.as_ref());
+        spec.checksum = spec.compute_checksum()?;
+        let spec_path = layout::spec_path(entry.table_id, spec.schema_revision);
+        self.backend
+            .put(&spec_path, serde_json::to_vec_pretty(&spec)?.into())
+            .await?;
+        self.backend.sync_objects(&[spec_path]).await?;
+
+        let next_seq = head.head.sequence + 1;
+        let mut manifest = child_manifest(
+            &parent_manifest,
+            next_seq,
+            OpKind::EvolveSchema,
+            &opts,
+            &spec,
+        );
+        manifest.segments = parent_manifest.segments.clone();
+        self.commit_manifest_locked(name, entry.table_id, Some(&head), &mut manifest, 0)
+            .await
+    }
+
     // ------------------------------------------------------------------
     // write operations
     // ------------------------------------------------------------------
@@ -747,36 +969,56 @@ impl Database {
         batches: Vec<RecordBatch>,
         opts: WriteOptions,
     ) -> Result<CommitResult> {
+        let staged = self.stage_write(name, batches, &opts).await?;
+        self.commit_staged(staged).await
+    }
+
+    pub(crate) async fn stage_write(
+        &self,
+        name: &str,
+        batches: Vec<RecordBatch>,
+        opts: &WriteOptions,
+    ) -> Result<StagedCommit> {
         let (entry, spec, head, parent_manifest) =
-            self.write_prologue(name, OpKind::Write, &opts).await?;
+            self.write_prologue(name, OpKind::Write, opts).await?;
         let schema = spec.schema()?;
         validate_batches_schema(&schema, &batches)?;
         validate_time_column(&spec, &batches)?;
 
         let next_seq = head.head.sequence + 1;
-        let sorted = if spec.sort_key.is_empty() {
-            batches
-        } else {
-            vec![sort_batches(&schema, &batches, &spec.sort_key)?]
-        };
-
         let mut writer = SegmentWriter::new(&self.backend, &spec, schema.clone(), next_seq);
-        for b in sorted {
-            writer.push(b).await?;
+        if spec.sort_key.is_empty() {
+            for b in batches {
+                writer.push(b).await?;
+            }
+        } else {
+            // Chunked sort + k-way merge (2.4): sort each input batch, then
+            // merge into bounded chunks — no full concatenation, and
+            // `target_segment_bytes` actually splits the output.
+            let sorted = crate::segment::sort_each_batch(&batches, &spec.sort_key)?;
+            drop(batches);
+            let mut merger =
+                crate::segment::SortedBatchMerger::new(sorted, &spec.sort_key, MERGE_CHUNK_ROWS)?;
+            while let Some(chunk) = merger.next_chunk()? {
+                writer.push(chunk).await?;
+            }
         }
-        let (mut segments, _) = writer.finish().await?;
+        let (mut segments, _, lease) = writer.finish().await?;
 
         // Content-hash dedup against the parent version.
-        let deduped = dedup_segments(&mut segments, &parent_manifest);
+        let deduped = dedup_segments(&self.backend, &mut segments, &parent_manifest).await;
 
-        let mut manifest = child_manifest(&parent_manifest, next_seq, OpKind::Write, &opts, &spec);
+        let mut manifest = child_manifest(&parent_manifest, next_seq, OpKind::Write, opts, &spec);
         manifest.segments = segments;
         let added = manifest.segments.len() - deduped;
-        let mut res = self
-            .commit_manifest(name, entry.table_id, Some(&head), &mut manifest, added)
-            .await?;
-        res.segments_deduped = deduped;
-        Ok(res)
+        Ok(StagedCommit {
+            entry,
+            head,
+            manifest,
+            segments_added: added,
+            segments_deduped: deduped,
+            lease,
+        })
     }
 
     /// Strict ordered append: exact schema, input sorted by the sort key, and
@@ -787,11 +1029,67 @@ impl Database {
         batches: Vec<RecordBatch>,
         opts: WriteOptions,
     ) -> Result<CommitResult> {
+        self.append_inner(name, batches, opts, true).await
+    }
+
+    async fn append_inner(
+        &self,
+        name: &str,
+        batches: Vec<RecordBatch>,
+        opts: WriteOptions,
+        auto_compact: bool,
+    ) -> Result<CommitResult> {
+        let staged = self
+            .stage_append(name, batches, &opts, auto_compact)
+            .await?;
+        self.commit_staged(staged).await
+    }
+
+    pub(crate) async fn stage_append(
+        &self,
+        name: &str,
+        batches: Vec<RecordBatch>,
+        opts: &WriteOptions,
+        auto_compact: bool,
+    ) -> Result<StagedCommit> {
         let (entry, spec, head, parent_manifest) =
-            self.write_prologue(name, OpKind::Append, &opts).await?;
+            self.write_prologue(name, OpKind::Append, opts).await?;
         let schema = spec.schema()?;
         validate_batches_schema(&schema, &batches)?;
         validate_time_column(&spec, &batches)?;
+
+        // Segment budget (3.13): fail — or compact — *before* uploading
+        // anything; the commit-time check would only fire after the new
+        // segments were already staged.
+        if parent_manifest.segments.len() >= spec.max_segments_per_manifest {
+            // At most ONE compaction attempt: if it cannot shrink the
+            // segment count (nothing groupable), the retry below fails with
+            // LimitExceeded instead of looping.
+            let can_compact = auto_compact
+                && opts.expected_version.is_none()
+                && crate::policy::load(&self.backend)
+                    .await?
+                    .check_direct(OpKind::Compact)
+                    .is_ok();
+            if !can_compact {
+                return Err(Error::LimitExceeded {
+                    detail: format!(
+                        "table already references {} segments (hard limit {}); \
+                         run `compact` first",
+                        parent_manifest.segments.len(),
+                        spec.max_segments_per_manifest
+                    ),
+                });
+            }
+            tracing::warn!(
+                table = name,
+                segments = parent_manifest.segments.len(),
+                "segment budget exhausted; compacting opportunistically before append"
+            );
+            self.compact(name, WriteOptions::default()).await?;
+            // Head may have moved; restart against the compacted version.
+            return Box::pin(self.stage_append(name, batches, opts, false)).await;
+        }
 
         // Sortedness within and across input batches.
         if !spec.sort_key.is_empty() {
@@ -806,15 +1104,17 @@ impl Database {
                     });
                 }
                 if let Some(tc) = &spec.time_column {
-                    let vals = time_values_i64(b, tc)?;
-                    if let (Some(prev), Some(first)) = (prev_last, vals.first()) {
-                        if *first < prev {
-                            return Err(Error::SortOrderViolation {
-                                detail: "append input batches are not mutually ordered".into(),
-                            });
+                    // Batch is sorted, so min/max are first/last.
+                    if let Some((bmin, bmax)) = crate::segment::time_min_max(b, tc)? {
+                        if let Some(prev) = prev_last {
+                            if bmin < prev {
+                                return Err(Error::SortOrderViolation {
+                                    detail: "append input batches are not mutually ordered".into(),
+                                });
+                            }
                         }
+                        prev_last = Some(bmax);
                     }
-                    prev_last = vals.last().copied();
                 }
             }
             // Input must start at or after the current table max.
@@ -824,9 +1124,10 @@ impl Database {
                 let input_min = batches
                     .iter()
                     .filter(|b| b.num_rows() > 0)
-                    .map(|b| time_values_i64(b, tc).map(|v| v[0]))
+                    .map(|b| crate::segment::time_min_max(b, tc).map(|r| r.map(|(mn, _)| mn)))
                     .next()
-                    .transpose()?;
+                    .transpose()?
+                    .flatten();
                 if let Some(min) = input_min {
                     if min < table_max {
                         return Err(Error::SortOrderViolation {
@@ -845,18 +1146,184 @@ impl Database {
         for b in batches {
             writer.push(b).await?;
         }
-        let (mut new_segments, _) = writer.finish().await?;
-        let deduped = dedup_segments(&mut new_segments, &parent_manifest);
+        let (mut new_segments, _, lease) = writer.finish().await?;
+        let deduped = dedup_segments(&self.backend, &mut new_segments, &parent_manifest).await;
 
-        let mut manifest = child_manifest(&parent_manifest, next_seq, OpKind::Append, &opts, &spec);
+        let mut manifest = child_manifest(&parent_manifest, next_seq, OpKind::Append, opts, &spec);
         manifest.segments = parent_manifest.segments.clone();
         let added = new_segments.len() - deduped;
         manifest.segments.extend(new_segments);
-        let mut res = self
-            .commit_manifest(name, entry.table_id, Some(&head), &mut manifest, added)
+        Ok(StagedCommit {
+            entry,
+            head,
+            manifest,
+            segments_added: added,
+            segments_deduped: deduped,
+            lease,
+        })
+    }
+
+    async fn commit_staged(&self, mut staged: StagedCommit) -> Result<CommitResult> {
+        let result = self
+            .commit_manifest(
+                &staged.entry.name,
+                staged.entry.table_id,
+                Some(&staged.head),
+                &mut staged.manifest,
+                staged.segments_added,
+            )
+            .await;
+        self.release_staging(staged.lease).await;
+        let mut result = result?;
+        result.segments_deduped = staged.segments_deduped;
+        Ok(result)
+    }
+
+    pub(crate) async fn commit_staged_transaction(
+        &self,
+        mut staged: Vec<StagedCommit>,
+    ) -> Result<Vec<CommitResult>> {
+        if self.backend.local_root.is_none() {
+            return Err(Error::Unsupported {
+                detail: "multi-table transactions currently require the local backend".into(),
+            });
+        }
+        let txn_id = Uuid::new_v4();
+        let txn_path = crate::transaction::txn_path(txn_id);
+        let result = self
+            .commit_staged_transaction_inner(txn_id, &mut staged)
+            .await;
+
+        // Before the durable journal exists, failed staging is ordinary
+        // unreachable debris and its leases can be released. Once journaled,
+        // retain leases until open-time recovery completes the transaction.
+        let journal_exists = self.backend.get_opt(&txn_path).await?.is_some();
+        if result.is_ok() || !journal_exists {
+            for commit in staged {
+                self.release_staging(commit.lease).await;
+            }
+        }
+        result
+    }
+
+    async fn commit_staged_transaction_inner(
+        &self,
+        txn_id: Uuid,
+        staged: &mut [StagedCommit],
+    ) -> Result<Vec<CommitResult>> {
+        let _meta = self.backend.meta_lock().await?;
+
+        // Validate every base while the global writer lock excludes ordinary
+        // commits. A conflict aborts before a journal (the commit point) exists.
+        for commit in staged.iter() {
+            let current = self.backend.heads.read(commit.entry.table_id).await?;
+            if current.as_ref().map(|h| &h.tag) != Some(&commit.head.tag) {
+                return Err(Error::VersionConflict {
+                    table: commit.entry.name.clone(),
+                    expected: commit.head.head.sequence,
+                    actual: current.map(|h| h.head.sequence).unwrap_or(0),
+                });
+            }
+        }
+
+        let mut new_heads = Vec::with_capacity(staged.len());
+        let mut durable_paths = Vec::new();
+        for commit in staged.iter_mut() {
+            let spec = self
+                .spec(commit.entry.table_id, commit.manifest.schema_revision)
+                .await?;
+            if commit.manifest.segments.len() > spec.max_segments_per_manifest {
+                return Err(Error::LimitExceeded {
+                    detail: format!(
+                        "manifest would reference {} segments (hard limit {}); run `compact` first",
+                        commit.manifest.segments.len(),
+                        spec.max_segments_per_manifest
+                    ),
+                });
+            }
+
+            commit.manifest.parent = Some(commit.head.head.sequence);
+            commit.manifest.parent_checksum = Some(commit.head.head.manifest_checksum.clone());
+            let parent_committed = self
+                .manifest_at(commit.entry.table_id, commit.head.head.sequence)
+                .await?
+                .committed_at_ns;
+            commit.manifest.committed_at_ns =
+                crate::util::monotonic_commit_ts(Some(parent_committed));
+            commit.manifest.recompute_rollups();
+
+            let bytes = commit.manifest.to_bytes()?;
+            let manifest_checksum = crate::util::checksum_hex(&bytes);
+            let manifest_path =
+                layout::manifest_path(commit.entry.table_id, commit.manifest.sequence);
+            self.backend.put(&manifest_path, bytes.into()).await?;
+            durable_paths.extend(
+                commit
+                    .manifest
+                    .segments
+                    .iter()
+                    .filter(|s| s.created_by_sequence == commit.manifest.sequence)
+                    .map(|s| ObjPath::from(s.path.as_str())),
+            );
+            durable_paths.push(manifest_path);
+            new_heads.push(Head {
+                format: layout::FORMAT_VERSION,
+                table_id: commit.entry.table_id,
+                sequence: commit.manifest.sequence,
+                manifest_checksum,
+            });
+        }
+        self.backend.sync_objects(&durable_paths).await?;
+
+        let journal = crate::transaction::TxnJournal {
+            txn_id,
+            created_at_ns: crate::util::monotonic_commit_ts(None),
+            entries: staged
+                .iter()
+                .zip(&new_heads)
+                .map(|(commit, new_head)| crate::transaction::TxnEntry {
+                    table_id: commit.entry.table_id,
+                    table_name: commit.entry.name.clone(),
+                    base_sequence: commit.head.head.sequence,
+                    new_head: new_head.clone(),
+                })
+                .collect(),
+            checksum: String::new(),
+        }
+        .seal()?;
+        let journal_path = crate::transaction::txn_path(txn_id);
+        self.backend
+            .put(&journal_path, serde_json::to_vec_pretty(&journal)?.into())
             .await?;
-        res.segments_deduped = deduped;
-        Ok(res)
+        self.backend
+            .sync_objects(std::slice::from_ref(&journal_path))
+            .await?;
+
+        let mut results = Vec::with_capacity(staged.len());
+        for (commit, new_head) in staged.iter().zip(new_heads) {
+            self.backend
+                .heads
+                .commit(
+                    commit.entry.table_id,
+                    &commit.entry.name,
+                    Some(&commit.head.tag),
+                    &new_head,
+                    Box::pin(async { Ok(()) }),
+                )
+                .await?;
+            results.push(CommitResult {
+                table: commit.entry.name.clone(),
+                sequence: commit.manifest.sequence,
+                op: commit.manifest.op.to_string(),
+                rows_total: commit.manifest.rows,
+                segments_total: commit.manifest.segments.len(),
+                segments_added: commit.segments_added,
+                segments_deduped: commit.segments_deduped,
+                committed_at_ns: commit.manifest.committed_at_ns,
+            });
+        }
+        self.backend.delete(&journal_path).await?;
+        Ok(results)
     }
 
     /// Append with automatic rebase on `VersionConflict` (safe for pure
@@ -872,7 +1339,11 @@ impl Database {
         let mut attempt = 0;
         loop {
             match self.append(name, batches.clone(), opts.clone()).await {
-                Err(Error::VersionConflict { .. }) if attempt < max_retries => {
+                // LockTimeout is classified retryable and races exactly like
+                // a conflict (another writer held the section) — retry both.
+                Err(Error::VersionConflict { .. }) | Err(Error::LockTimeout { .. })
+                    if attempt < max_retries =>
+                {
                     attempt += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(
                         10 * (1 << attempt.min(6)) as u64,
@@ -976,8 +1447,8 @@ impl Database {
             let sorted = sort_batches(&schema, &new_batches, &spec.sort_key)?;
             writer.push(sorted).await?;
         }
-        let (mut rewritten, _) = writer.finish().await?;
-        let deduped = dedup_segments(&mut rewritten, &parent_manifest);
+        let (mut rewritten, _, lease) = writer.finish().await?;
+        let deduped = dedup_segments(&self.backend, &mut rewritten, &parent_manifest).await;
 
         let mut manifest = child_manifest(&parent_manifest, next_seq, op, &opts, &spec);
         manifest.segments = kept;
@@ -987,6 +1458,7 @@ impl Database {
             .commit_manifest(name, entry.table_id, Some(&head), &mut manifest, added)
             .await?;
         res.segments_deduped = deduped;
+        self.release_staging(lease).await;
         Ok(res)
     }
 
@@ -1045,6 +1517,40 @@ impl Database {
         resolved: &ResolvedTable,
         options: ScanOptions,
     ) -> Result<(Vec<RecordBatch>, ScanReport)> {
+        let (stream, mut report) = self.scan_stream_resolved(resolved, options)?;
+        let batches: Vec<RecordBatch> = stream.try_collect().await?;
+        report.rows_returned = batches.iter().map(|b| b.num_rows() as u64).sum();
+        Ok((batches, report))
+    }
+
+    /// Streaming scan (2.4): batches are yielded as segments decode instead
+    /// of being collected first, so memory stays bounded by
+    /// `concurrency × segment size` regardless of result size.
+    pub async fn scan_stream(
+        &self,
+        name: &str,
+        at: ReadAt,
+        options: ScanOptions,
+    ) -> Result<(
+        futures::stream::BoxStream<'static, Result<RecordBatch>>,
+        ScanReport,
+    )> {
+        let resolved = self.resolve(name, at).await?;
+        self.scan_stream_resolved(&resolved, options)
+    }
+
+    /// Streaming twin of [`Database::scan_resolved`]. The returned report
+    /// carries the pruning counts up front; `rows_returned` stays 0 — the
+    /// caller counts rows as it consumes the stream.
+    pub fn scan_stream_resolved(
+        &self,
+        resolved: &ResolvedTable,
+        options: ScanOptions,
+    ) -> Result<(
+        futures::stream::BoxStream<'static, Result<RecordBatch>>,
+        ScanReport,
+    )> {
+        use futures::future;
         let spec = &resolved.spec;
         let time_filter_requested = options.time_start.is_some() || options.time_end.is_some();
         if time_filter_requested && spec.time_column.is_none() {
@@ -1095,49 +1601,89 @@ impl Database {
             None
         };
 
-        let futures_iter = survivors.into_iter().map(|seg| {
+        let verify = options.verify_checksums;
+        let backend = self.backend.clone();
+        let target_schema = resolved.schema.clone();
+        let target_revision = resolved.spec.schema_revision;
+        let futures_iter = survivors.into_iter().map(move |seg| {
             let proj = effective_projection.clone();
             let tf = time_filter.clone();
-            let backend = self.backend.clone();
+            let backend = backend.clone();
+            let target_schema = target_schema.clone();
             async move {
-                read_segment(
-                    &backend,
-                    &seg,
-                    proj.as_deref(),
-                    tf.as_ref().map(|(c, s, e)| (c.as_str(), *s, *e)),
-                )
-                .await
+                let tf = tf.as_ref().map(|(c, s, e)| (c.as_str(), *s, *e));
+                if seg.schema_revision != target_revision {
+                    let batches = if verify {
+                        crate::segment::read_segment_verified(&backend, &seg, None, tf).await?
+                    } else {
+                        read_segment(&backend, &seg, None, tf).await?
+                    };
+                    batches
+                        .into_iter()
+                        .map(|batch| {
+                            let adapted = crate::evolution::adapt_batch(&target_schema, batch)?;
+                            match &proj {
+                                None => Ok(adapted),
+                                Some(columns) => {
+                                    let indices = columns
+                                        .iter()
+                                        .map(|name| {
+                                            target_schema.index_of(name).map_err(Error::Arrow)
+                                        })
+                                        .collect::<Result<Vec<_>>>()?;
+                                    adapted.project(&indices).map_err(Error::Arrow)
+                                }
+                            }
+                        })
+                        .collect()
+                } else if verify {
+                    crate::segment::read_segment_verified(&backend, &seg, proj.as_deref(), tf).await
+                } else {
+                    read_segment(&backend, &seg, proj.as_deref(), tf).await
+                }
             }
         });
-        let results: Vec<Result<Vec<RecordBatch>>> = stream::iter(futures_iter)
-            .buffered(concurrency)
-            .collect()
-            .await;
 
-        let mut out: Vec<RecordBatch> = Vec::new();
-        let mut rows: usize = 0;
-        'outer: for r in results {
-            for mut batch in r? {
-                if drop_time_col {
-                    batch = project_out(&batch, spec.time_column.as_deref().unwrap())?;
-                }
-                if let Some(limit) = options.limit {
-                    if rows + batch.num_rows() > limit {
-                        let keep = limit - rows;
-                        batch = batch.slice(0, keep);
-                        rows += batch.num_rows();
-                        if batch.num_rows() > 0 {
-                            out.push(batch);
+        let time_col = spec.time_column.clone();
+        let limit = options.limit;
+        let stream = stream::iter(futures_iter)
+            .buffered(concurrency)
+            .flat_map(|r: Result<Vec<RecordBatch>>| match r {
+                Ok(batches) => stream::iter(batches.into_iter().map(Ok)).left_stream(),
+                Err(e) => stream::once(future::ready(Err(e))).right_stream(),
+            })
+            .scan(0usize, move |rows, item| {
+                let out = match item {
+                    Err(e) => Some(Err(e)),
+                    Ok(mut batch) => {
+                        if let Some(lim) = limit {
+                            if *rows >= lim {
+                                return future::ready(None);
+                            }
+                            if *rows + batch.num_rows() > lim {
+                                batch = batch.slice(0, lim - *rows);
+                            }
                         }
-                        break 'outer;
+                        *rows += batch.num_rows();
+                        if drop_time_col {
+                            match project_out(&batch, time_col.as_deref().unwrap()) {
+                                Ok(b) => Some(Ok(b)),
+                                Err(e) => Some(Err(e)),
+                            }
+                        } else {
+                            Some(Ok(batch))
+                        }
                     }
-                }
-                rows += batch.num_rows();
-                out.push(batch);
-            }
-        }
-        report.rows_returned = rows as u64;
-        Ok((out, report))
+                };
+                future::ready(out)
+            })
+            .filter(|r| {
+                future::ready(match r {
+                    Ok(b) => b.num_rows() > 0,
+                    Err(_) => true,
+                })
+            });
+        Ok((Box::pin(stream), report))
     }
 
     // ------------------------------------------------------------------
@@ -1154,6 +1700,10 @@ impl Database {
     ) -> Result<Snapshot> {
         self.ensure_writable("snapshot")?;
         validate_table_name(name)?;
+        // Snapshot creation is a catalog-level mutation (3.5): serialized so
+        // the name-uniqueness check and the store cannot interleave (the
+        // store itself is also an atomic create-if-absent).
+        let _meta = self.backend.meta_lock().await?;
         let entries = if tables.is_empty() {
             self.list_tables().await?
         } else {
@@ -1283,12 +1833,29 @@ impl Database {
             for seg in group {
                 batches.extend(read_segment(&self.backend, seg, None, None).await?);
             }
-            let sorted = sort_batches(&schema, &batches, &spec.sort_key)?;
-            writer.push(sorted).await?;
+            if spec.sort_key.is_empty() {
+                for b in batches {
+                    writer.push(b).await?;
+                }
+            } else {
+                // Sort-each + k-way merge instead of concat + lexsort (2.4):
+                // stored segments are typically already sorted, so this is
+                // usually a pure merge with no per-batch sort at all.
+                let sorted = crate::segment::sort_each_batch(&batches, &spec.sort_key)?;
+                drop(batches);
+                let mut merger = crate::segment::SortedBatchMerger::new(
+                    sorted,
+                    &spec.sort_key,
+                    MERGE_CHUNK_ROWS,
+                )?;
+                while let Some(chunk) = merger.next_chunk()? {
+                    writer.push(chunk).await?;
+                }
+            }
             // Flush per group so groups stay time-clustered.
             writer.flush().await?;
         }
-        let (rewritten, _) = writer.finish().await?;
+        let (rewritten, _, lease) = writer.finish().await?;
 
         let mut manifest =
             child_manifest(&parent_manifest, next_seq, OpKind::Compact, &opts, &spec);
@@ -1307,8 +1874,20 @@ impl Database {
                 new_rows, parent_manifest.rows
             )));
         }
-        self.commit_manifest(name, entry.table_id, Some(&head), &mut manifest, added)
-            .await
+        let res = self
+            .commit_manifest(name, entry.table_id, Some(&head), &mut manifest, added)
+            .await?;
+        self.release_staging(lease).await;
+        Ok(res)
+    }
+
+    /// Best-effort removal of a staging lease once its segments are reachable
+    /// from a committed manifest (or a stored plan). Failure is harmless: the
+    /// lease expires and vacuum collects it.
+    async fn release_staging(&self, lease: Option<ObjPath>) {
+        if let Some(path) = lease {
+            let _ = self.backend.delete(&path).await;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1316,8 +1895,10 @@ impl Database {
     // ------------------------------------------------------------------
 
     /// Remove unreachable objects (lost-CAS debris, orphaned segments from
-    /// crashed writers). Dry-run unless `apply` is set. Objects newer than
-    /// `grace_seconds` are never touched, protecting in-flight writers.
+    /// crashed writers, expired staging leases, orphaned table directories).
+    /// Dry-run unless `apply` is set. Objects newer than `grace_seconds` are
+    /// never touched, and staged-but-uncommitted segments are additionally
+    /// protected by their staging lease regardless of age (3.4).
     pub async fn vacuum(
         &self,
         table: Option<&str>,
@@ -1327,29 +1908,58 @@ impl Database {
         if apply {
             self.ensure_writable("vacuum")?;
         }
+        let all_entries = self.list_tables().await?;
         let entries = match table {
             Some(t) => vec![self.entry(t).await?],
-            None => self.list_tables().await?,
+            None => all_entries.clone(),
         };
         let mut report = VacuumReport {
             dry_run: !apply,
             ..Default::default()
         };
         let now = chrono::Utc::now();
-        for entry in entries {
+        for entry in &entries {
             let head = self.head(&entry.name, entry.table_id).await?;
             let head_seq = head.head.sequence;
+            let retention_floor = self.retention_min_seq(entry.table_id).await?;
 
             // Referenced set: every segment in every committed manifest,
             // plus segments staged by live (unexpired) mutation plans.
             let mut referenced: BTreeSet<String> = BTreeSet::new();
-            for seq in 0..=head_seq {
+            for seq in retention_floor..=head_seq {
                 let m = self.manifest_at(entry.table_id, seq).await?;
                 for s in &m.segments {
                     referenced.insert(s.path.clone());
                 }
             }
             referenced.extend(self.plan_protected_paths(entry.table_id).await?);
+
+            // Staging leases: an unexpired lease protects its staged
+            // segments no matter how old they are (large ingests stage long
+            // before they commit); an expired lease is itself debris and its
+            // segments fall through to normal orphan collection.
+            let mut expired_leases: BTreeSet<String> = BTreeSet::new();
+            for meta in self
+                .backend
+                .list(&layout::staging_prefix(entry.table_id))
+                .await?
+            {
+                let bytes = self.backend.get(&meta.location).await?;
+                let lease: crate::segment::StagingLeaseFile = serde_json::from_slice(&bytes)
+                    .map_err(|e| {
+                        // Fail closed: an unreadable lease aborts vacuum
+                        // rather than risking collection of covered segments.
+                        Error::corruption(
+                            meta.location.as_ref(),
+                            format!("staging lease parse: {e}"),
+                        )
+                    })?;
+                if lease.is_expired() {
+                    expired_leases.insert(meta.location.as_ref().to_string());
+                } else {
+                    referenced.extend(lease.segment_paths);
+                }
+            }
 
             let objects = self
                 .backend
@@ -1367,9 +1977,63 @@ impl Database {
                     && layout::manifest_sequence_from_path(&meta.location)
                         .map(|s| s > head_seq)
                         .unwrap_or(true);
-                let is_debris = loc.ends_with(".lock") || loc.contains("HEAD.tmp");
-                if is_orphan_segment || is_uncommitted_manifest || is_debris {
+                let is_expired_manifest = loc.contains("/manifests/")
+                    && layout::manifest_sequence_from_path(&meta.location)
+                        .map(|s| s < retention_floor)
+                        .unwrap_or(false);
+                // NOTE: lock files are deliberately NOT debris — with the
+                // flock-based writer lock (1.3), unlinking a held lock file
+                // would let a later opener lock a fresh inode and break
+                // mutual exclusion.
+                let is_debris = loc.contains("HEAD.tmp") || expired_leases.contains(loc);
+                if is_orphan_segment || is_uncommitted_manifest || is_expired_manifest || is_debris
+                {
                     report.candidates.push(loc.to_string());
+                    report.candidate_bytes += meta.size;
+                    if apply {
+                        self.backend.delete(&meta.location).await?;
+                        report.deleted += 1;
+                    }
+                }
+            }
+        }
+
+        // Orphaned table directories (3.4): a crashed create_table or a
+        // lost drop race leaves a `tables/<uuid>/` dir no catalog entry
+        // references — unreachable forever without this sweep. Snapshot-
+        // pinned ids are protected, and a dir is only collected when EVERY
+        // object in it is past the grace period (an in-flight create has
+        // young objects).
+        if table.is_none() {
+            let cataloged: BTreeSet<Uuid> = all_entries.iter().map(|e| e.table_id).collect();
+            let mut pinned: BTreeSet<Uuid> = BTreeSet::new();
+            for snap in snapshot::list(&self.backend).await? {
+                pinned.extend(snap.entries.keys().copied());
+            }
+            let mut by_table: BTreeMap<Uuid, Vec<object_store::ObjectMeta>> = BTreeMap::new();
+            for meta in self.backend.list(&ObjPath::from("tables")).await? {
+                if let Some(id) = meta
+                    .location
+                    .parts()
+                    .nth(1)
+                    .and_then(|p| Uuid::parse_str(p.as_ref()).ok())
+                {
+                    by_table.entry(id).or_default().push(meta);
+                }
+            }
+            for (id, metas) in by_table {
+                if cataloged.contains(&id) || pinned.contains(&id) {
+                    continue;
+                }
+                let all_old = metas
+                    .iter()
+                    .all(|m| (now - m.last_modified).num_seconds() >= grace_seconds as i64);
+                if !all_old {
+                    continue;
+                }
+                for meta in metas {
+                    report.scanned_objects += 1;
+                    report.candidates.push(meta.location.as_ref().to_string());
                     report.candidate_bytes += meta.size;
                     if apply {
                         self.backend.delete(&meta.location).await?;
@@ -1386,6 +2050,7 @@ impl Database {
     pub async fn verify(&self, name: &str, deep: bool) -> Result<VerifyReport> {
         let entry = self.entry(name).await?;
         let head = self.head(name, entry.table_id).await?;
+        let retention_floor = self.retention_min_seq(entry.table_id).await?;
         let mut report = VerifyReport {
             table: name.to_string(),
             head_sequence: head.head.sequence,
@@ -1394,7 +2059,7 @@ impl Database {
 
         // Verify manifests: checksum chain from head backwards.
         let mut expected_checksum = Some(head.head.manifest_checksum.clone());
-        for seq in (0..=head.head.sequence).rev() {
+        for seq in (retention_floor..=head.head.sequence).rev() {
             let path = layout::manifest_path(entry.table_id, seq);
             let bytes = match self.backend.get_opt(&path).await? {
                 Some(b) => b,
@@ -1555,18 +2220,27 @@ fn child_manifest(
 }
 
 /// Replace newly written segments identical (by content hash) to a parent
-/// segment with a reference to the existing object; delete the redundant new
-/// object best-effort. Returns how many were deduped.
-pub(crate) fn dedup_segments(new_segments: &mut [SegmentMeta], parent: &VersionManifest) -> usize {
+/// segment with a reference to the existing object, then delete each
+/// redundant new object best-effort (a failed delete leaves an orphan for
+/// vacuum). Returns how many were deduped.
+pub(crate) async fn dedup_segments(
+    backend: &Backend,
+    new_segments: &mut [SegmentMeta],
+    parent: &VersionManifest,
+) -> usize {
     let by_hash = parent.segments_by_checksum();
     let mut deduped = 0;
+    let mut redundant: Vec<String> = Vec::new();
     for seg in new_segments.iter_mut() {
         if let Some(existing) = by_hash.get(seg.checksum.as_str()) {
             if existing.bytes == seg.bytes && existing.rows == seg.rows {
-                *seg = (*existing).clone();
+                redundant.push(std::mem::replace(seg, (*existing).clone()).path);
                 deduped += 1;
             }
         }
+    }
+    for path in redundant {
+        let _ = backend.delete(&ObjPath::from(path.as_str())).await;
     }
     deduped
 }

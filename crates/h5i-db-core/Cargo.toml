@@ -22,6 +22,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 blake3 = { workspace = true }
+fs4 = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 url = { workspace = true }

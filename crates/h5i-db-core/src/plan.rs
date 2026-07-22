@@ -263,8 +263,10 @@ impl Database {
         for b in &after_sample_src {
             writer.push(b.clone()).await?;
         }
-        let (mut rewritten, _) = writer.finish().await?;
-        let deduped = crate::database::dedup_segments(&mut rewritten, &resolved.manifest);
+        let (mut rewritten, _, lease) = writer.finish().await?;
+        let deduped =
+            crate::database::dedup_segments(self.backend(), &mut rewritten, &resolved.manifest)
+                .await;
 
         let mut segments = kept.clone();
         segments.extend(rewritten.clone());
@@ -314,6 +316,11 @@ impl Database {
         .seal()?;
 
         self.store_plan(&plan).await?;
+        // The stored plan now protects the staged segments; the staging
+        // lease is redundant.
+        if let Some(lp) = lease {
+            let _ = self.backend().delete(&lp).await;
+        }
         Ok(plan)
     }
 
@@ -340,17 +347,37 @@ impl Database {
             .await?;
 
         let next_seq = resolved.head_sequence + 1;
-        let sorted = if spec.sort_key.is_empty() {
-            batches
-        } else {
-            vec![sort_batches(&schema, &batches, &spec.sort_key)?]
-        };
         let mut writer = SegmentWriter::new(self.backend(), spec, schema.clone(), next_seq);
-        for b in &sorted {
-            writer.push(b.clone()).await?;
+        // First rows of the post-write table, captured while streaming.
+        let mut after_head: Option<RecordBatch> = None;
+        if spec.sort_key.is_empty() {
+            for b in &batches {
+                if after_head.is_none() && b.num_rows() > 0 {
+                    after_head = Some(b.slice(0, b.num_rows().min(SAMPLE_ROWS)));
+                }
+                writer.push(b.clone()).await?;
+            }
+        } else {
+            // Chunked sort + k-way merge, mirroring Database::write (2.4).
+            let sorted = crate::segment::sort_each_batch(&batches, &spec.sort_key)?;
+            drop(batches);
+            let mut merger = crate::segment::SortedBatchMerger::new(
+                sorted,
+                &spec.sort_key,
+                crate::segment::MERGE_CHUNK_ROWS,
+            )?;
+            while let Some(chunk) = merger.next_chunk()? {
+                if after_head.is_none() && chunk.num_rows() > 0 {
+                    after_head = Some(chunk.slice(0, chunk.num_rows().min(SAMPLE_ROWS)));
+                }
+                writer.push(chunk).await?;
+            }
         }
-        let (mut segments, _) = writer.finish().await?;
-        let deduped = crate::database::dedup_segments(&mut segments, &resolved.manifest);
+        let after_sample_src: Vec<RecordBatch> = after_head.into_iter().collect();
+        let (mut segments, _, lease) = writer.finish().await?;
+        let deduped =
+            crate::database::dedup_segments(self.backend(), &mut segments, &resolved.manifest)
+                .await;
         let rows_after: u64 = segments.iter().map(|s| s.rows).sum();
         let added_bytes: u64 = segments
             .iter()
@@ -388,11 +415,16 @@ impl Database {
                 affected_time_range: resolved.manifest.time_range,
             },
             before_sample_ipc_b64: encode_sample(&before_batches, SAMPLE_ROWS)?,
-            after_sample_ipc_b64: encode_sample(&sorted, SAMPLE_ROWS)?,
+            after_sample_ipc_b64: encode_sample(&after_sample_src, SAMPLE_ROWS)?,
             checksum: String::new(),
         }
         .seal()?;
         self.store_plan(&plan).await?;
+        // The stored plan now protects the staged segments; the staging
+        // lease is redundant.
+        if let Some(lp) = lease {
+            let _ = self.backend().delete(&lp).await;
+        }
         Ok(plan)
     }
 
@@ -495,23 +527,20 @@ impl Database {
     }
 
     /// Segment paths protected by live plans (used by vacuum).
+    ///
+    /// Fails *closed* (3.4): a storage error or an unreadable plan aborts the
+    /// caller (vacuum) instead of silently unprotecting staged segments.
     pub(crate) async fn plan_protected_paths(
         &self,
         table_id: Uuid,
     ) -> Result<std::collections::BTreeSet<String>> {
         let mut protected = std::collections::BTreeSet::new();
-        let metas = match self.backend().list(&plans_prefix(table_id)).await {
-            Ok(m) => m,
-            Err(_) => return Ok(protected),
-        };
-        for m in metas {
-            if let Ok(bytes) = self.backend().get(&m.location).await {
-                if let Ok(plan) = MutationPlan::from_bytes(&bytes, m.location.as_ref()) {
-                    if !plan.is_expired() {
-                        for seg in &plan.segments {
-                            protected.insert(seg.path.clone());
-                        }
-                    }
+        for m in self.backend().list(&plans_prefix(table_id)).await? {
+            let bytes = self.backend().get(&m.location).await?;
+            let plan = MutationPlan::from_bytes(&bytes, m.location.as_ref())?;
+            if !plan.is_expired() {
+                for seg in &plan.segments {
+                    protected.insert(seg.path.clone());
                 }
             }
         }

@@ -72,3 +72,65 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: crates/h5i-db-python/dist/*.whl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}
+          path: crates/h5i-db-python/dist/*.whl
+
+  sdist:
+    name: sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/h5i-db-python
+          command: sdist
+          args: -o dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: crates/h5i-db-python/dist/*.tar.gz
+
+  # Publish wheels + sdist to PyPI via trusted publishing (OIDC — no long
+  # lived token). One-time setup on pypi.org: project "h5i-db" → Publishing →
+  # add this repository / workflow "release.yml" / environment "pypi".
+  publish-pypi:
+    name: publish to PyPI
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: "{wheel-*,sdist}"
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+  # Publish the Rust crates in dependency order. Requires the
+  # CARGO_REGISTRY_TOKEN secret; the job is a no-op (skipped steps) until
+  # the secret is configured, so tagging a release never fails on it.
+  publish-crates:
+    name: publish to crates.io
+    needs: [binaries]
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish (dependency order)
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          for pkg in h5i-db-core h5i-db-query h5i-db-ui h5i-db-cli; do
+            cargo publish -p "$pkg" --locked
+            # crates.io indexing is eventually consistent; give the next
+            # crate's dependency resolution a moment to see the new version.
+            sleep 30
+          done

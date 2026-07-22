@@ -3,7 +3,7 @@
 //! Segments are immutable: written once under a fresh UUID path, referenced
 //! by manifests, and only ever deleted by vacuum when unreachable.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::compute::SortColumn;
@@ -26,6 +26,7 @@ use crate::Backend;
 /// still a valid upper bound only if we extend it, so we mark truncated
 /// values conservatively (drop the stat rather than store a wrong bound).
 const MAX_STRING_STAT_LEN: usize = 64;
+const MAX_DISTINCT_VALUES: usize = 128;
 
 // ---------------------------------------------------------------------------
 // statistics accumulation
@@ -71,6 +72,9 @@ struct ColumnAcc {
     /// Set when the column type is not stats-eligible or a string stat blew
     /// the length budget — min/max are then omitted from the manifest.
     stats_dropped: bool,
+    distinct: BTreeSet<String>,
+    distinct_eligible: bool,
+    distinct_dropped: bool,
 }
 
 impl ColumnAcc {
@@ -98,11 +102,77 @@ impl ColumnAcc {
         self.max = None;
     }
 
+    fn observe_distinct(&mut self, array: &ArrayRef) {
+        if self.distinct_dropped {
+            return;
+        }
+        match array.data_type() {
+            DataType::Utf8 => {
+                let a = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()
+                    .unwrap();
+                self.distinct_eligible = true;
+                for value in a.iter().flatten() {
+                    self.insert_distinct(value);
+                    if self.distinct_dropped {
+                        return;
+                    }
+                }
+            }
+            DataType::LargeUtf8 => {
+                let a = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::LargeStringArray>()
+                    .unwrap();
+                self.distinct_eligible = true;
+                for value in a.iter().flatten() {
+                    self.insert_distinct(value);
+                    if self.distinct_dropped {
+                        return;
+                    }
+                }
+            }
+            DataType::Dictionary(_, value) if **value == DataType::Utf8 => {
+                let Ok(materialized) = arrow::compute::cast(array, &DataType::Utf8) else {
+                    self.distinct_dropped = true;
+                    return;
+                };
+                let a = materialized
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()
+                    .unwrap();
+                self.distinct_eligible = true;
+                for value in a.iter().flatten() {
+                    self.insert_distinct(value);
+                    if self.distinct_dropped {
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn insert_distinct(&mut self, value: &str) {
+        self.distinct.insert(value.to_string());
+        if self.distinct.len() > MAX_DISTINCT_VALUES {
+            self.distinct.clear();
+            self.distinct_dropped = true;
+        }
+    }
+
     fn finish(self) -> ColumnStats {
         ColumnStats {
             min: self.min.map(|s| s.to_json()),
             max: self.max.map(|s| s.to_json()),
             null_count: self.null_count,
+            distinct_values: (self.distinct_eligible && !self.distinct_dropped).then(|| {
+                self.distinct
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect()
+            }),
         }
     }
 }
@@ -192,47 +262,117 @@ fn array_minmax(array: &ArrayRef) -> Option<(Option<ScalarStat>, Option<ScalarSt
 // time-column helpers
 // ---------------------------------------------------------------------------
 
+/// Borrow the raw i64 values of an i64-backed time column (Int64, Date64, or
+/// any Timestamp unit) without casting or copying.
+fn time_slice_i64(col: &ArrayRef) -> Option<&[i64]> {
+    use arrow::array::*;
+    use arrow::datatypes::TimeUnit;
+    let any = col.as_any();
+    let values: &[i64] = match col.data_type() {
+        DataType::Int64 => &any.downcast_ref::<Int64Array>()?.values()[..],
+        DataType::Date64 => &any.downcast_ref::<Date64Array>()?.values()[..],
+        DataType::Timestamp(TimeUnit::Second, _) => {
+            &any.downcast_ref::<TimestampSecondArray>()?.values()[..]
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, _) => {
+            &any.downcast_ref::<TimestampMillisecondArray>()?.values()[..]
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, _) => {
+            &any.downcast_ref::<TimestampMicrosecondArray>()?.values()[..]
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+            &any.downcast_ref::<TimestampNanosecondArray>()?.values()[..]
+        }
+        _ => return None,
+    };
+    Some(values)
+}
+
 /// Read the time column of a batch as raw i64 values (unit per schema).
 pub fn time_values_i64(batch: &RecordBatch, time_col: &str) -> Result<Vec<i64>> {
     let idx = batch.schema().index_of(time_col).map_err(Error::Arrow)?;
     let col = batch.column(idx);
+    if col.null_count() > 0 {
+        return Err(Error::invalid(format!(
+            "time column {time_col:?} contains nulls"
+        )));
+    }
+    // Fast path: i64-backed types are reinterpreted with a single copy.
+    if let Some(values) = time_slice_i64(col) {
+        return Ok(values.to_vec());
+    }
     let casted = arrow::compute::cast(col, &DataType::Int64).map_err(Error::Arrow)?;
     let arr = casted
         .as_any()
         .downcast_ref::<arrow::array::Int64Array>()
         .ok_or_else(|| Error::internal("time column cast to i64 failed"))?;
-    if arr.null_count() > 0 {
+    Ok(arr.values().to_vec())
+}
+
+/// Min/max of a batch's time column without materializing a copy.
+pub fn time_min_max(batch: &RecordBatch, time_col: &str) -> Result<Option<(i64, i64)>> {
+    if batch.num_rows() == 0 {
+        return Ok(None);
+    }
+    let idx = batch.schema().index_of(time_col).map_err(Error::Arrow)?;
+    let col = batch.column(idx);
+    if col.null_count() > 0 {
         return Err(Error::invalid(format!(
             "time column {time_col:?} contains nulls"
         )));
     }
-    Ok(arr.values().to_vec())
+    if let Some(values) = time_slice_i64(col) {
+        let mut mn = i64::MAX;
+        let mut mx = i64::MIN;
+        for &v in values {
+            mn = mn.min(v);
+            mx = mx.max(v);
+        }
+        return Ok(Some((mn, mx)));
+    }
+    let casted = arrow::compute::cast(col, &DataType::Int64).map_err(Error::Arrow)?;
+    let arr = casted
+        .as_any()
+        .downcast_ref::<arrow::array::Int64Array>()
+        .ok_or_else(|| Error::internal("time column cast to i64 failed"))?;
+    match (arrow::compute::min(arr), arrow::compute::max(arr)) {
+        (Some(mn), Some(mx)) => Ok(Some((mn, mx))),
+        _ => Ok(None),
+    }
 }
 
 /// Check that `batch` is sorted ascending by the sort key columns.
+///
+/// Pairwise O(n·k) comparator walk (short-circuits on the first violation) —
+/// deliberately not a lexsort, which would cost O(n log n) and allocate the
+/// full index vector on the append hot path.
 pub fn batch_is_sorted(batch: &RecordBatch, sort_key: &[String]) -> Result<bool> {
     if sort_key.is_empty() || batch.num_rows() < 2 {
         return Ok(true);
     }
-    let columns: Vec<SortColumn> = sort_key
+    let comparators: Vec<_> = sort_key
         .iter()
-        .map(|name| -> Result<SortColumn> {
+        .map(|name| {
             let idx = batch.schema().index_of(name).map_err(Error::Arrow)?;
-            Ok(SortColumn {
-                values: batch.column(idx).clone(),
-                options: None,
-            })
+            let col = batch.column(idx);
+            arrow::array::make_comparator(
+                col.as_ref(),
+                col.as_ref(),
+                arrow::compute::SortOptions::default(),
+            )
+            .map_err(Error::Arrow)
         })
         .collect::<Result<_>>()?;
-    let ranks = arrow::compute::lexsort_to_indices(&columns, None).map_err(Error::Arrow)?;
-    Ok(ranks.values().windows(2).all(|w| w[0] < w[1]) || {
-        // lexsort_to_indices is stable, so sorted input yields identity.
-        ranks
-            .values()
-            .iter()
-            .enumerate()
-            .all(|(i, &v)| v as usize == i)
-    })
+    for i in 1..batch.num_rows() {
+        for cmp in &comparators {
+            match cmp(i - 1, i) {
+                std::cmp::Ordering::Less => break,
+                std::cmp::Ordering::Equal => continue,
+                std::cmp::Ordering::Greater => return Ok(false),
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// Sort a set of batches by the sort key, returning a single concatenated,
@@ -264,6 +404,147 @@ pub fn sort_batches(
         .collect::<Result<_>>()?;
     RecordBatch::try_new(schema.clone(), cols).map_err(Error::Arrow)
 }
+
+/// Sort each batch individually by `sort_key` (no concatenation).
+pub fn sort_each_batch(batches: &[RecordBatch], sort_key: &[String]) -> Result<Vec<RecordBatch>> {
+    batches
+        .iter()
+        .filter(|b| b.num_rows() > 0)
+        .map(|b| {
+            if sort_key.is_empty() || b.num_rows() < 2 || batch_is_sorted(b, sort_key)? {
+                return Ok(b.clone());
+            }
+            let columns: Vec<SortColumn> = sort_key
+                .iter()
+                .map(|name| -> Result<SortColumn> {
+                    let idx = b.schema().index_of(name).map_err(Error::Arrow)?;
+                    Ok(SortColumn {
+                        values: b.column(idx).clone(),
+                        options: None,
+                    })
+                })
+                .collect::<Result<_>>()?;
+            let indices =
+                arrow::compute::lexsort_to_indices(&columns, None).map_err(Error::Arrow)?;
+            let cols: Vec<ArrayRef> = b
+                .columns()
+                .iter()
+                .map(|c| arrow::compute::take(c, &indices, None).map_err(Error::Arrow))
+                .collect::<Result<_>>()?;
+            RecordBatch::try_new(b.schema(), cols).map_err(Error::Arrow)
+        })
+        .collect()
+}
+
+/// K-way merge over individually sorted batches, yielding globally sorted
+/// chunks of at most `chunk_rows` rows.
+///
+/// Unlike concat-then-lexsort this never materializes the full input twice:
+/// peak extra memory is the row-encoded sort keys plus one output chunk, and
+/// downstream `SegmentWriter::push` sees bounded batches so
+/// `target_segment_bytes` actually takes effect.
+pub struct SortedBatchMerger {
+    batches: Vec<RecordBatch>,
+    rows: Vec<arrow::row::Rows>,
+    positions: Vec<usize>,
+    chunk_rows: usize,
+}
+
+impl SortedBatchMerger {
+    /// `batches` must each be sorted by `sort_key` (see [`sort_each_batch`]).
+    pub fn new(batches: Vec<RecordBatch>, sort_key: &[String], chunk_rows: usize) -> Result<Self> {
+        use arrow::row::{RowConverter, SortField};
+        let batches: Vec<RecordBatch> = batches.into_iter().filter(|b| b.num_rows() > 0).collect();
+        let fields: Vec<SortField> = match batches.first() {
+            None => vec![],
+            Some(first) => sort_key
+                .iter()
+                .map(|name| -> Result<SortField> {
+                    let idx = first.schema().index_of(name).map_err(Error::Arrow)?;
+                    Ok(SortField::new(
+                        first.schema().field(idx).data_type().clone(),
+                    ))
+                })
+                .collect::<Result<_>>()?,
+        };
+        let converter = RowConverter::new(fields).map_err(Error::Arrow)?;
+        let rows = batches
+            .iter()
+            .map(|b| {
+                let cols: Vec<ArrayRef> = sort_key
+                    .iter()
+                    .map(|name| -> Result<ArrayRef> {
+                        let idx = b.schema().index_of(name).map_err(Error::Arrow)?;
+                        Ok(b.column(idx).clone())
+                    })
+                    .collect::<Result<_>>()?;
+                converter.convert_columns(&cols).map_err(Error::Arrow)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let positions = vec![0; batches.len()];
+        Ok(Self {
+            batches,
+            rows,
+            positions,
+            chunk_rows: chunk_rows.max(1),
+        })
+    }
+
+    /// Next globally sorted chunk, or `None` when the input is exhausted.
+    pub fn next_chunk(&mut self) -> Result<Option<RecordBatch>> {
+        if self.batches.is_empty() {
+            return Ok(None);
+        }
+        let schema = self.batches[0].schema();
+        let mut picks: Vec<(usize, usize)> = Vec::with_capacity(self.chunk_rows);
+        while picks.len() < self.chunk_rows {
+            // Linear scan over the K batch heads; K is the number of input
+            // batches, which is small relative to row count.
+            let mut best: Option<usize> = None;
+            for (b, &pos) in self.positions.iter().enumerate() {
+                if pos >= self.batches[b].num_rows() {
+                    continue;
+                }
+                best = match best {
+                    None => Some(b),
+                    Some(cur) => {
+                        let cur_row = self.rows[cur].row(self.positions[cur]);
+                        let cand_row = self.rows[b].row(pos);
+                        if cand_row < cur_row {
+                            Some(b)
+                        } else {
+                            Some(cur)
+                        }
+                    }
+                };
+            }
+            match best {
+                None => break,
+                Some(b) => {
+                    picks.push((b, self.positions[b]));
+                    self.positions[b] += 1;
+                }
+            }
+        }
+        if picks.is_empty() {
+            return Ok(None);
+        }
+        let cols: Vec<ArrayRef> = (0..schema.fields().len())
+            .map(|c| {
+                let sources: Vec<&dyn Array> =
+                    self.batches.iter().map(|b| b.column(c).as_ref()).collect();
+                arrow::compute::interleave(&sources, &picks).map_err(Error::Arrow)
+            })
+            .collect::<Result<_>>()?;
+        Ok(Some(
+            RecordBatch::try_new(schema, cols).map_err(Error::Arrow)?,
+        ))
+    }
+}
+
+/// Rows per merged chunk fed to the segment writer (small enough to bound
+/// interleave cost, large enough to amortize per-batch overhead).
+pub const MERGE_CHUNK_ROWS: usize = 64 * 1024;
 
 // ---------------------------------------------------------------------------
 // segment writing
@@ -306,6 +587,30 @@ pub struct WrittenSegment {
     pub meta: SegmentMeta,
 }
 
+/// How long a staging lease protects uploaded-but-uncommitted segments from
+/// vacuum. Long enough for any realistic ingest + review latency on the
+/// direct path; the plan/apply path is additionally protected by the plan
+/// file itself until plan expiry.
+pub const STAGING_LEASE_TTL_SECONDS: u64 = 24 * 3600;
+
+/// On-disk staging lease: written *before* each segment upload, so every
+/// staged object is covered from the moment it exists. Vacuum protects the
+/// listed paths while the lease is unexpired and collects the lease file
+/// afterwards.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct StagingLeaseFile {
+    pub writer_id: Uuid,
+    pub created_at_ns: i64,
+    pub expires_at_ns: i64,
+    pub segment_paths: Vec<String>,
+}
+
+impl StagingLeaseFile {
+    pub(crate) fn is_expired(&self) -> bool {
+        crate::util::monotonic_commit_ts(None) > self.expires_at_ns
+    }
+}
+
 /// Writes record batches into one or more Parquet segment objects, splitting
 /// at `target_segment_bytes` of in-memory Arrow data, collecting statistics
 /// and the content checksum along the way.
@@ -321,6 +626,9 @@ pub struct SegmentWriter<'a> {
     buffered_bytes: usize,
     input_sorted: bool,
     last_sort_row: Option<Vec<ScalarStat>>,
+    // staging lease (created lazily on first upload)
+    writer_id: Uuid,
+    lease: Option<StagingLeaseFile>,
 }
 
 impl<'a> SegmentWriter<'a> {
@@ -340,7 +648,36 @@ impl<'a> SegmentWriter<'a> {
             buffered_bytes: 0,
             input_sorted: true,
             last_sort_row: None,
+            writer_id: Uuid::new_v4(),
+            lease: None,
         }
+    }
+
+    /// Path of this writer's staging lease, if any segment was uploaded.
+    /// Callers delete it (best-effort) once the segments are referenced by a
+    /// committed manifest or a stored plan.
+    pub fn lease_path(&self) -> Option<object_store::path::Path> {
+        self.lease
+            .as_ref()
+            .map(|_| crate::layout::staging_lease_path(self.spec.table_id, self.writer_id))
+    }
+
+    /// Record `path` in the staging lease and persist it — called before the
+    /// segment object itself is uploaded so vacuum can never see an
+    /// unprotected staged segment.
+    async fn record_staged(&mut self, path: &str) -> Result<()> {
+        let now = crate::util::monotonic_commit_ts(None);
+        let lease = self.lease.get_or_insert_with(|| StagingLeaseFile {
+            writer_id: self.writer_id,
+            created_at_ns: now,
+            expires_at_ns: now + (STAGING_LEASE_TTL_SECONDS as i64) * 1_000_000_000,
+            segment_paths: Vec::new(),
+        });
+        lease.segment_paths.push(path.to_string());
+        let lease_path = crate::layout::staging_lease_path(self.spec.table_id, self.writer_id);
+        self.backend
+            .put(&lease_path, serde_json::to_vec(&self.lease)?.into())
+            .await
     }
 
     /// Feed one batch; flushes a segment whenever the buffer crosses the
@@ -408,6 +745,7 @@ impl<'a> SegmentWriter<'a> {
                     Some((min, max)) => acc.observe(min, max, arr.null_count() as u64),
                     None => acc.drop_stats(arr.null_count() as u64),
                 }
+                acc.observe_distinct(arr);
             }
         }
 
@@ -416,10 +754,9 @@ impl<'a> SegmentWriter<'a> {
                 let mut mn = i64::MAX;
                 let mut mx = i64::MIN;
                 for b in &batches {
-                    let vals = time_values_i64(b, tc)?;
-                    for v in vals {
-                        mn = mn.min(v);
-                        mx = mx.max(v);
+                    if let Some((bmn, bmx)) = time_min_max(b, tc)? {
+                        mn = mn.min(bmn);
+                        mx = mx.max(bmx);
                     }
                 }
                 if mn <= mx {
@@ -435,6 +772,7 @@ impl<'a> SegmentWriter<'a> {
         let id = Uuid::new_v4();
         let path = crate::layout::segment_path(self.spec.table_id, id);
         let encoded_len = buf.len() as u64;
+        self.record_staged(path.as_ref()).await?;
         self.backend.put(&path, Bytes::from(buf)).await?;
 
         self.written.push(WrittenSegment {
@@ -454,11 +792,21 @@ impl<'a> SegmentWriter<'a> {
         Ok(())
     }
 
-    /// Finish: flush the tail and return all segment metadata.
-    pub async fn finish(mut self) -> Result<(Vec<SegmentMeta>, bool)> {
+    /// Finish: flush the tail and return all segment metadata, whether the
+    /// input was sorted, and the staging lease path (if any segment was
+    /// uploaded) for the caller to delete once the segments are referenced
+    /// by a committed manifest or stored plan.
+    pub async fn finish(
+        mut self,
+    ) -> Result<(Vec<SegmentMeta>, bool, Option<object_store::path::Path>)> {
         self.flush().await?;
         let sorted = self.input_sorted;
-        Ok((self.written.into_iter().map(|w| w.meta).collect(), sorted))
+        let lease = self.lease_path();
+        Ok((
+            self.written.into_iter().map(|w| w.meta).collect(),
+            sorted,
+            lease,
+        ))
     }
 }
 
@@ -497,6 +845,57 @@ fn row_less_than(a: &[ScalarStat], b: &[ScalarStat]) -> bool {
 // ---------------------------------------------------------------------------
 // segment reading
 // ---------------------------------------------------------------------------
+
+/// Read one segment with its full-file blake3 checksum verified against the
+/// manifest before decoding — the strong integrity path for readers that opt
+/// in (`ScanOptions::verify_checksums`). Necessarily fetches the whole
+/// object, so row-group pruning does not apply; the exact row-level time
+/// filter and projection still do.
+///
+/// (parquet-rs 58 cannot *write* page-level CRCs — the writer always emits
+/// `crc: None` — so whole-file verification is the only self-contained
+/// integrity check available for our own segments. The `crc` read feature is
+/// enabled for externally written files that do carry page CRCs.)
+pub async fn read_segment_verified(
+    backend: &Backend,
+    segment: &SegmentMeta,
+    projection: Option<&[String]>,
+    time_filter: Option<(&str, Option<i64>, Option<i64>)>,
+) -> Result<Vec<RecordBatch>> {
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    let path = object_store::path::Path::from(segment.path.as_str());
+    let bytes = backend.get(&path).await?;
+    let actual = crate::util::checksum_hex(&bytes);
+    if actual != segment.checksum {
+        return Err(Error::corruption(
+            &segment.path,
+            format!(
+                "segment content checksum mismatch (manifest {}, object {actual})",
+                segment.checksum
+            ),
+        ));
+    }
+    let mut builder = ParquetRecordBatchReaderBuilder::try_new(bytes).map_err(Error::Parquet)?;
+    if let Some(cols) = projection {
+        let arrow_schema = builder.schema().clone();
+        let indices: Vec<usize> = cols
+            .iter()
+            .map(|c| arrow_schema.index_of(c).map_err(Error::Arrow))
+            .collect::<Result<_>>()?;
+        let mask = ProjectionMask::roots(builder.parquet_schema(), indices);
+        builder = builder.with_projection(mask);
+    }
+    let reader = builder.build().map_err(Error::Parquet)?;
+    let mut batches: Vec<RecordBatch> = reader
+        .collect::<std::result::Result<_, _>>()
+        .map_err(Error::Arrow)?;
+    if let Some((time_col, start, end)) = time_filter {
+        if start.is_some() || end.is_some() {
+            batches = filter_batches_by_time(batches, time_col, start, end)?;
+        }
+    }
+    Ok(batches)
+}
 
 /// Stream one segment's batches with optional projection and time-range
 /// filtering (`[start, end)` in raw time units). Row groups whose metadata
@@ -608,13 +1007,19 @@ pub fn filter_batches_by_time(
         let arr = casted
             .as_any()
             .downcast_ref::<arrow::array::Int64Array>()
-            .unwrap();
+            .ok_or_else(|| Error::internal("time column cast to i64 failed"))?;
+        // A null here means a corrupt segment (writes reject null time
+        // values) — fail with a diagnosable error instead of panicking.
+        if arr.null_count() > 0 {
+            return Err(Error::corruption(
+                time_col,
+                "null time value in stored segment (writes reject nulls; segment is corrupt)",
+            ));
+        }
         let mask: arrow::array::BooleanArray = arr
+            .values()
             .iter()
-            .map(|v| {
-                let v = v.expect("time column is non-null");
-                Some(start.is_none_or(|s| v >= s) && end.is_none_or(|e| v < e))
-            })
+            .map(|&v| Some(start.is_none_or(|s| v >= s) && end.is_none_or(|e| v < e)))
             .collect();
         let filtered = arrow::compute::filter_record_batch(&batch, &mask).map_err(Error::Arrow)?;
         if filtered.num_rows() > 0 {

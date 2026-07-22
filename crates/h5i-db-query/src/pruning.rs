@@ -130,10 +130,42 @@ impl PruningStatistics for ManifestPruningStats<'_> {
 
     fn contained(
         &self,
-        _column: &Column,
-        _values: &std::collections::HashSet<ScalarValue>,
+        column: &Column,
+        values: &std::collections::HashSet<ScalarValue>,
     ) -> Option<BooleanArray> {
-        // No bloom filters in the manifest (yet).
-        None
+        let field = self.schema.field_with_name(&column.name).ok()?;
+        let dt = match field.data_type() {
+            DataType::Dictionary(_, value) if **value == DataType::Utf8 => DataType::Utf8,
+            other => other.clone(),
+        };
+        let result: Vec<Option<bool>> = self
+            .segments
+            .iter()
+            .map(|segment| {
+                let stats = segment.columns.get(&column.name)?;
+                let distinct = stats.distinct_values.as_ref()?;
+                if distinct.is_empty() {
+                    return None;
+                }
+                let stored: Vec<ScalarValue> = distinct
+                    .iter()
+                    .filter_map(|v| json_stat_to_scalar(v, &dt))
+                    .collect();
+                if stored.len() != distinct.len() {
+                    return None;
+                }
+                if stored.iter().all(|v| values.contains(v)) {
+                    Some(true)
+                } else if stored.iter().all(|v| !values.contains(v)) {
+                    Some(false)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        result
+            .iter()
+            .any(Option::is_some)
+            .then(|| BooleanArray::from(result))
     }
 }

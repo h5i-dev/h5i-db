@@ -84,6 +84,7 @@ impl AggregateUDFImpl for WeightedAvgUdaf {
         Ok(Box::new(WeightedAvgAccumulator {
             sum_vw: 0.0,
             sum_w: 0.0,
+            count: 0,
             weight_first: self.weight_first,
         }))
     }
@@ -111,6 +112,10 @@ impl AggregateUDFImpl for WeightedAvgUdaf {
 struct WeightedAvgAccumulator {
     sum_vw: f64,
     sum_w: f64,
+    /// Live (update − retract) contribution count: makes "window is empty"
+    /// exact under retraction, where float cancellation can leave `sum_w`
+    /// slightly off zero.
+    count: u64,
     weight_first: bool,
 }
 
@@ -131,13 +136,39 @@ impl Accumulator for WeightedAvgAccumulator {
             if v.is_valid(i) && w.is_valid(i) {
                 self.sum_vw += v.value(i) * w.value(i);
                 self.sum_w += w.value(i);
+                self.count += 1;
             }
         }
         Ok(())
     }
 
+    /// Sliding-window support: remove rows leaving the frame so rolling
+    /// `vwap`/`wavg` are O(n) instead of re-accumulating O(n·w).
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> DfResult<()> {
+        let (v_idx, w_idx) = if self.weight_first { (1, 0) } else { (0, 1) };
+        let v = to_f64_array(&values[v_idx])?;
+        let w = to_f64_array(&values[w_idx])?;
+        for i in 0..v.len() {
+            if v.is_valid(i) && w.is_valid(i) {
+                self.sum_vw -= v.value(i) * w.value(i);
+                self.sum_w -= w.value(i);
+                self.count = self.count.saturating_sub(1);
+            }
+        }
+        if self.count == 0 {
+            // Empty frame: snap accumulated float error back to exact zero.
+            self.sum_vw = 0.0;
+            self.sum_w = 0.0;
+        }
+        Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+
     fn evaluate(&mut self) -> DfResult<ScalarValue> {
-        if self.sum_w == 0.0 {
+        if self.count == 0 || self.sum_w == 0.0 {
             Ok(ScalarValue::Float64(None))
         } else {
             Ok(ScalarValue::Float64(Some(self.sum_vw / self.sum_w)))
@@ -161,6 +192,7 @@ impl Accumulator for WeightedAvgAccumulator {
         for i in 0..vw.len() {
             if vw.is_valid(i) {
                 self.sum_vw += vw.value(i);
+                self.count += 1;
             }
             if w.is_valid(i) {
                 self.sum_w += w.value(i);

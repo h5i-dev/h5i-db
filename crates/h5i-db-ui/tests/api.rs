@@ -42,6 +42,15 @@ fn batch(ts: &[i64], price: f64) -> RecordBatch {
     .unwrap()
 }
 
+const TEST_TOKEN: &str = "test-token";
+
+/// Router with a fixed token so the helpers can authenticate.
+fn router_for(db: &Arc<Database>, allow_mutations: bool) -> axum::Router {
+    let mut state = UiState::new(db.clone(), "test.db".into(), allow_mutations);
+    state.token = TEST_TOKEN.into();
+    build_router(state)
+}
+
 async fn setup(allow_mutations: bool) -> (tempfile::TempDir, axum::Router, Arc<Database>) {
     let dir = tempfile::tempdir().unwrap();
     let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
@@ -69,18 +78,21 @@ async fn setup(allow_mutations: bool) -> (tempfile::TempDir, axum::Router, Arc<D
     db.append("trades", vec![batch(&ts2, 101.0)], WriteOptions::default())
         .await
         .unwrap();
-    let router = build_router(UiState {
-        db: db.clone(),
-        allow_mutations,
-        db_label: "test.db".into(),
-    });
+    let router = router_for(&db, allow_mutations);
     (dir, router, db)
 }
 
 async fn get_json(router: &axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
     let res = router
         .clone()
-        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("host", "127.0.0.1:8000")
+                .header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = res.status();
@@ -97,6 +109,9 @@ async fn post_json(
         .method("POST")
         .uri(path)
         .header("content-type", "application/json")
+        .header("host", "127.0.0.1:8000")
+        .header("authorization", format!("Bearer {TEST_TOKEN}"))
+        .header("x-h5i-csrf", "1")
         .body(Body::from(body.map(|b| b.to_string()).unwrap_or_default()))
         .unwrap();
     let res = router.clone().oneshot(req).await.unwrap();
@@ -179,11 +194,7 @@ async fn plan_flow_via_ui_respects_read_only_and_applies() {
     assert_eq!(err["code"], "read_only");
 
     // A mutations-enabled UI applies it.
-    let rw_router = build_router(UiState {
-        db: db.clone(),
-        allow_mutations: true,
-        db_label: "test.db".into(),
-    });
+    let rw_router = router_for(&db, true);
     let (status, applied) = post_json(
         &rw_router,
         &format!("/api/plan/trades/{}/apply", plan.plan_id),
@@ -216,11 +227,7 @@ async fn stale_plan_conflicts_with_409() {
     db.append("trades", vec![batch(&[5000], 1.0)], WriteOptions::default())
         .await
         .unwrap();
-    let rw_router = build_router(UiState {
-        db: db.clone(),
-        allow_mutations: true,
-        db_label: "test.db".into(),
-    });
+    let rw_router = router_for(&db, true);
     // The overview marks it stale…
     let (_, ov) = get_json(&rw_router, "/api/overview").await;
     assert_eq!(ov["plans"][0]["stale"], true);
@@ -249,6 +256,7 @@ async fn sql_scratchpad_returns_rows_and_metrics() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(out["rows"][0][1], 800);
+    assert_eq!(out["truncated"], false);
     assert!(out["wall_ms"].as_f64().unwrap() > 0.0);
     assert!(!out["scan_metrics"].as_array().unwrap().is_empty());
 
@@ -266,9 +274,16 @@ async fn sql_scratchpad_returns_rows_and_metrics() {
 #[tokio::test]
 async fn index_serves_embedded_html() {
     let (_dir, router, _db) = setup(false).await;
+    // The index page needs no token — only a loopback Host.
     let res = router
         .clone()
-        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .header("host", "localhost:7777")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
@@ -276,4 +291,171 @@ async fn index_serves_embedded_html() {
     let html = String::from_utf8_lossy(&bytes);
     assert!(html.contains("h5i-db review"));
     assert!(html.contains("Apply plan"));
+}
+
+async fn raw_status(router: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
+    let res = router.clone().oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+#[tokio::test]
+async fn guard_rejects_foreign_hosts_missing_tokens_and_csrf() {
+    let (_dir, router, _db) = setup(false).await;
+
+    // No token → 401 with the standard envelope.
+    let (status, err) = raw_status(
+        &router,
+        Request::builder()
+            .uri("/api/overview")
+            .header("host", "127.0.0.1:8000")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(err["code"], "unauthorized");
+    assert_eq!(err["retryable"], false);
+
+    // Wrong token → 401.
+    let (status, _) = raw_status(
+        &router,
+        Request::builder()
+            .uri("/api/overview")
+            .header("host", "127.0.0.1:8000")
+            .header("authorization", "Bearer wrong")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Foreign Host (DNS rebinding) → 403 even with the right token.
+    let (status, err) = raw_status(
+        &router,
+        Request::builder()
+            .uri("/api/overview")
+            .header("host", "evil.example:80")
+            .header("authorization", format!("Bearer {TEST_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(err["code"], "forbidden_host");
+
+    // Missing Host header → 403.
+    let (status, _) = raw_status(
+        &router,
+        Request::builder()
+            .uri("/api/overview")
+            .header("authorization", format!("Bearer {TEST_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // POST without the CSRF header → 403, even authenticated.
+    let (status, err) = raw_status(
+        &router,
+        Request::builder()
+            .method("POST")
+            .uri("/api/query")
+            .header("host", "127.0.0.1:8000")
+            .header("authorization", format!("Bearer {TEST_TOKEN}"))
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"sql":"SELECT 1"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(err["code"], "csrf_required");
+
+    // Foreign Host on the index page → 403 too.
+    let (status, _) = raw_status(
+        &router,
+        Request::builder()
+            .uri("/")
+            .header("host", "evil.example")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Bracketed IPv6 loopback with a port is accepted.
+    let (status, _) = raw_status(
+        &router,
+        Request::builder()
+            .uri("/api/overview")
+            .header("host", "[::1]:9000")
+            .header("authorization", format!("Bearer {TEST_TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn scratchpad_query_times_out_with_envelope() {
+    let (_dir, _router, db) = setup(false).await;
+    let mut state = UiState::new(db.clone(), "test.db".into(), false);
+    state.token = TEST_TOKEN.into();
+    // Force the timeout path deterministically; wall-clock races against a
+    // small cross join are inherently runner-speed dependent.
+    state.query_timeout = std::time::Duration::from_millis(1);
+    state.query_start_delay = std::time::Duration::from_millis(10);
+    let router = build_router(state);
+    let (status, err) = post_json(
+        &router,
+        "/api/query",
+        Some(serde_json::json!({
+            // Force an asynchronous Parquet read; metadata-only COUNT(*) can
+            // complete in the timeout future's first poll.
+            "sql": "SELECT * FROM trades"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::REQUEST_TIMEOUT);
+    assert_eq!(err["code"], "query_timeout");
+    assert_eq!(err["retryable"], false);
+    assert!(err["hint"].as_str().unwrap().contains("CLI"));
+}
+
+#[tokio::test]
+async fn scratchpad_disambiguates_duplicate_columns_and_flags_truncation() {
+    let (_dir, router, _db) = setup(false).await;
+    // Self-join: both sides expose a column whose output name is `price`.
+    let (status, out) = post_json(
+        &router,
+        "/api/query",
+        Some(serde_json::json!({
+            "sql": "SELECT a.price, b.price FROM trades a JOIN trades b ON a.ts = b.ts LIMIT 3"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["schema"][0]["name"], "price");
+    assert_eq!(out["schema"][1]["name"], "price_1");
+    let r0 = out["rows"][0].as_array().unwrap();
+    assert!(r0[0].is_number());
+    assert_eq!(r0[0], r0[1], "second column must not collapse to null");
+    assert_eq!(out["truncated"], false);
+
+    // 640 000-row cross join hits the 1 000-row cap and says so.
+    let (status, out) = post_json(
+        &router,
+        "/api/query",
+        Some(serde_json::json!({
+            "sql": "SELECT a.symbol FROM trades a CROSS JOIN trades b"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["rows"].as_array().unwrap().len(), 1000);
+    assert_eq!(out["truncated"], true);
 }

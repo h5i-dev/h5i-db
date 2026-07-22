@@ -400,6 +400,289 @@ fn policy_enforcement_through_cli() {
     assert_eq!(out.status.code(), Some(2));
 }
 
+/// init + create trades + ingest the 3-row CSV fixture.
+fn setup_trades(cwd: &Path) {
+    std::fs::write(cwd.join("trades.csv"), CSV).unwrap();
+    stdout_json(&run(&["init", "m.db", "--format", "json"], cwd));
+    stdout_json(&run(
+        &[
+            "create-table",
+            "m.db",
+            "trades",
+            "--like",
+            "trades.csv",
+            "--time-column",
+            "ts",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    stdout_json(&run(
+        &[
+            "ingest",
+            "m.db",
+            "trades",
+            "trades.csv",
+            "--mode",
+            "write",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+}
+
+#[test]
+fn empty_result_keeps_schema_in_arrow_and_csv() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    setup_trades(cwd);
+
+    // arrow: schema-only IPC stream, not zero bytes.
+    let out = run(
+        &[
+            "query",
+            "m.db",
+            "SELECT * FROM trades WHERE price < 0",
+            "--format",
+            "arrow",
+        ],
+        cwd,
+    );
+    assert!(out.status.success());
+    assert!(
+        !out.stdout.is_empty(),
+        "empty result must still emit schema"
+    );
+    let reader =
+        arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(&out.stdout[..]), None)
+            .expect("valid IPC stream");
+    assert_eq!(reader.schema().fields().len(), 4);
+    let batches: Vec<_> = reader.collect::<Result<_, _>>().unwrap();
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, 0);
+
+    // csv: header line survives.
+    let out = run(
+        &[
+            "query",
+            "m.db",
+            "SELECT symbol, price FROM trades WHERE price < 0",
+            "--format",
+            "csv",
+        ],
+        cwd,
+    );
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "symbol,price");
+
+    // json: empty array.
+    let rows = stdout_json(&run(
+        &[
+            "query",
+            "m.db",
+            "SELECT * FROM trades WHERE price < 0",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(rows, serde_json::json!([]));
+}
+
+#[test]
+fn max_bytes_truncates_with_limit_exit_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    setup_trades(cwd);
+
+    // Tiny cap: batch-boundary truncation → exit 4 + limit_exceeded envelope,
+    // with the already-produced output still well-formed.
+    let out = run(
+        &[
+            "query",
+            "m.db",
+            "SELECT * FROM trades",
+            "--max-bytes",
+            "10",
+            "--format",
+            "csv",
+        ],
+        cwd,
+    );
+    assert_eq!(out.status.code(), Some(4), "limit exit code");
+    let env = stderr_envelope(&out);
+    assert_eq!(env["code"], "limit_exceeded");
+    assert!(String::from_utf8_lossy(&out.stdout).starts_with("ts,"));
+
+    // Generous cap: unaffected.
+    let out = run(
+        &[
+            "query",
+            "m.db",
+            "SELECT * FROM trades",
+            "--max-bytes",
+            "1000000",
+            "--format",
+            "csv",
+        ],
+        cwd,
+    );
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
+fn broken_pipe_exits_quietly() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+
+    // Enough rows that the CSV output (~1.9 MB) overflows the 64 KiB pipe
+    // buffer, so the write blocks until the reader closes → EPIPE.
+    let mut csv = String::from("ts,symbol,price,size\n");
+    for i in 0..50_000u64 {
+        csv.push_str(&format!(
+            "2026-07-01T09:{:02}:{:02}.{:06}Z,AAPL,210.5,100\n",
+            30 + i / 60_000_000,
+            (i / 1_000_000) % 60,
+            i % 1_000_000,
+        ));
+    }
+    std::fs::write(cwd.join("big.csv"), &csv).unwrap();
+    stdout_json(&run(&["init", "m.db", "--format", "json"], cwd));
+    stdout_json(&run(
+        &[
+            "create-table",
+            "m.db",
+            "trades",
+            "--like",
+            "big.csv",
+            "--time-column",
+            "ts",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    stdout_json(&run(
+        &[
+            "ingest", "m.db", "trades", "big.csv", "--mode", "write", "--format", "json",
+        ],
+        cwd,
+    ));
+
+    let mut child = Command::new(bin())
+        .args(["query", "m.db", "SELECT * FROM trades", "--format", "csv"])
+        .current_dir(cwd)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn h5i-db");
+    // Close the read end immediately: the writer gets EPIPE.
+    drop(child.stdout.take());
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(out.status.code(), Some(0), "broken pipe must exit quietly");
+    assert!(
+        out.stderr.is_empty(),
+        "no envelope on broken pipe: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn stdin_ingest_sniffs_csv_and_rejects_garbage() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    setup_trades(cwd);
+
+    // CSV on stdin without --input-format: sniffed.
+    let mut child = Command::new(bin())
+        .args([
+            "ingest", "m.db", "trades", "-", "--mode", "write", "--format", "json",
+        ])
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn h5i-db");
+    use std::io::Write as _;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(CSV.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().expect("wait");
+    let ingested = stdout_json(&out);
+    assert_eq!(ingested["rows_total"], 3);
+
+    // Unrecognizable bytes: clear user error pointing at --input-format.
+    let mut child = Command::new(bin())
+        .args(["ingest", "m.db", "trades", "-", "--format", "json"])
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn h5i-db");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(&[0x00, 0x01, 0x02, 0x03, 0xFE])
+        .unwrap();
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(out.status.code(), Some(2));
+    let env = stderr_envelope(&out);
+    assert_eq!(env["code"], "invalid_input");
+    assert!(env["message"].as_str().unwrap().contains("--input-format"));
+}
+
+#[test]
+fn invalid_segment_size_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    std::fs::write(cwd.join("trades.csv"), CSV).unwrap();
+    stdout_json(&run(&["init", "m.db", "--format", "json"], cwd));
+    let out = run(
+        &[
+            "create-table",
+            "m.db",
+            "trades",
+            "--like",
+            "trades.csv",
+            "--target-segment-mb",
+            "0",
+        ],
+        cwd,
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(stderr_envelope(&out)["code"], "invalid_input");
+}
+
+#[test]
+fn runtime_query_errors_are_user_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    setup_trades(cwd);
+
+    // Cast failure surfaces at execution time, not plan time — it must still
+    // classify as a user error (exit 2), not internal (exit 5).
+    let out = run(
+        &[
+            "query",
+            "m.db",
+            "SELECT CAST(symbol AS INT) FROM trades",
+            "--format",
+            "json",
+        ],
+        cwd,
+    );
+    assert_eq!(out.status.code(), Some(2), "runtime error exit code");
+    assert_eq!(stderr_envelope(&out)["code"], "invalid_input");
+}
+
 #[test]
 fn restore_verify_and_arrow_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
