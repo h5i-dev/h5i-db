@@ -624,3 +624,168 @@ async fn quant_pipeline_end_to_end() {
     assert!(rendered.contains("100.0"), "{rendered}");
     assert!(rendered.contains("102.0"), "{rendered}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asof_inner_join_and_no_by_keys() {
+    let (_dir, db) = asof_setup().await;
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+
+    // INNER drops the unmatched B trade (its only quote is later).
+    let trades = session.read_table("trades", ReadAt::Latest).await.unwrap();
+    let quotes = session.read_table("quotes", ReadAt::Latest).await.unwrap();
+    let joined = asof_join(
+        trades,
+        quotes,
+        AsOfOptions {
+            by: vec![("symbol".into(), "symbol".into())],
+            inner: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let n: usize = joined
+        .collect()
+        .await
+        .unwrap()
+        .iter()
+        .map(|b| b.num_rows())
+        .sum();
+    assert_eq!(n, 3, "B@10 has no backward quote and must be dropped");
+
+    // No by-keys: global as-of against the latest quote regardless of symbol.
+    let trades = session.read_table("trades", ReadAt::Latest).await.unwrap();
+    let quotes = session.read_table("quotes", ReadAt::Latest).await.unwrap();
+    let joined = asof_join(trades, quotes, AsOfOptions::default()).unwrap();
+    let batches = joined.collect().await.unwrap();
+    let n: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(n, 4, "left join keeps all trades");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn time_bucket_calendar_months_in_sql() {
+    let (_dir, db) = setup().await;
+    db.create_table("t", trades_schema(), time_options(false))
+        .await
+        .unwrap();
+    // Jan 15 and Feb 2, 2026, as ns timestamps.
+    let jan = 1_768_435_200_000_000_000i64; // 2026-01-15T00:00:00Z
+    let feb = 1_769_990_400_000_000_000i64; // 2026-02-02T00:00:00Z
+    db.write(
+        "t",
+        vec![trades_batch(&[jan, feb], &["A", "A"], &[1.0, 2.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+    let batches = session
+        .sql("SELECT time_bucket('1mo', ts) b, count(*) n FROM t GROUP BY b ORDER BY b")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let rendered = arrow::util::pretty::pretty_format_batches(&batches)
+        .unwrap()
+        .to_string();
+    assert!(rendered.contains("2026-01-01"), "{rendered}");
+    assert!(rendered.contains("2026-02-01"), "{rendered}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn udtf_error_paths_are_actionable() {
+    let (_dir, db) = setup().await;
+    db.create_table("t", trades_schema(), time_options(false))
+        .await
+        .unwrap();
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+
+    // Unknown table through the UDTF.
+    let err = session
+        .sql("SELECT * FROM h5i('missing')")
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("missing"), "{err}");
+
+    // Nonexistent version.
+    let err = session
+        .sql("SELECT * FROM h5i('t', 99)")
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("99"), "{err}");
+
+    // Bad asof_join arity.
+    let err = session
+        .sql("SELECT * FROM asof_join('t')")
+        .await
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("asof_join"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn snapshot_bound_sessions_are_stable_under_writes() {
+    let (_dir, db) = setup().await;
+    db.create_table("t", trades_schema(), time_options(false))
+        .await
+        .unwrap();
+    db.write(
+        "t",
+        vec![trades_batch(&[1], &["A"], &[1.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let session = H5iSession::new(db.clone(), SessionOptions::default())
+        .await
+        .unwrap();
+    // A concurrent commit after session creation…
+    db.append(
+        "t",
+        vec![trades_batch(&[2], &["A"], &[2.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    // …is invisible to the session's registered table (statement stability)…
+    let batches = session
+        .sql("SELECT count(*) FROM t")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let n = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(n, 1, "session tables are snapshot-bound at creation");
+    // …while the h5i() UDTF resolves fresh.
+    let batches = session
+        .sql("SELECT count(*) FROM h5i('t')")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let n = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(n, 2, "h5i('t') resolves the current head");
+}

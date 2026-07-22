@@ -35,7 +35,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Workspace tests: core (storage kernel incl. crash-safety), query
       # (SQL/pruning/ASOF), CLI (agent contract), UI (review API).
-      - run: cargo test --workspace
+      # Per-package with capped test threads: several suites spin up
+      # DataFusion sessions + tokio runtimes, and running them all at once
+      # can OOM smaller machines.
+      - run: |
+          for pkg in h5i-db-core h5i-db-query h5i-db-cli h5i-db-ui; do
+            cargo test -p $pkg -- --test-threads=2
+          done
 
   python:
     name: python wheel

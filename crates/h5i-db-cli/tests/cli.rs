@@ -290,3 +290,196 @@ fn read_only_and_limits() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.starts_with("symbol\n"), "{text}");
 }
+
+#[test]
+fn policy_enforcement_through_cli() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    std::fs::write(cwd.join("trades.csv"), CSV).unwrap();
+    stdout_json(&run(&["init", "m.db", "--format", "json"], cwd));
+    stdout_json(&run(
+        &[
+            "create-table",
+            "m.db",
+            "trades",
+            "--like",
+            "trades.csv",
+            "--time-column",
+            "ts",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    stdout_json(&run(
+        &[
+            "ingest",
+            "m.db",
+            "trades",
+            "trades.csv",
+            "--mode",
+            "write",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+
+    // Default policy allows direct deletes.
+    let pol = stdout_json(&run(&["policy", "show", "m.db", "--format", "json"], cwd));
+    assert_eq!(pol["direct_delete"], true);
+
+    // Tighten it.
+    stdout_json(&run(
+        &[
+            "policy",
+            "set",
+            "m.db",
+            "direct_delete=false",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+
+    // Direct delete now refused: exit 2 + policy_violation + actionable hint.
+    let out = run(
+        &[
+            "delete-range",
+            "m.db",
+            "trades",
+            "--start",
+            "2026-07-01T09:30:00Z",
+            "--end",
+            "2026-07-01T09:30:01Z",
+            "--format",
+            "json",
+        ],
+        cwd,
+    );
+    assert_eq!(out.status.code(), Some(2));
+    let env = stderr_envelope(&out);
+    assert_eq!(env["code"], "policy_violation");
+    assert!(env["hint"].as_str().unwrap().contains("--plan"));
+
+    // The planned path still works end to end.
+    let plan = stdout_json(&run(
+        &[
+            "delete-range",
+            "m.db",
+            "trades",
+            "--start",
+            "2026-07-01T09:30:00Z",
+            "--end",
+            "2026-07-01T09:30:01Z",
+            "--plan",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    let plan_id = plan["plan_id"].as_str().unwrap().to_string();
+    let applied = stdout_json(&run(
+        &[
+            "plan", "apply", "m.db", "trades", &plan_id, "--format", "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(applied["op"], "delete_range");
+
+    // The audit trail records the reviewed path.
+    let versions = stdout_json(&run(
+        &["versions", "m.db", "trades", "--format", "json"],
+        cwd,
+    ));
+    let last = versions.as_array().unwrap().last().unwrap();
+    assert_eq!(last["op"], "delete_range");
+
+    // Bad policy key is a user error.
+    let out = run(&["policy", "set", "m.db", "nope=true"], cwd);
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn restore_verify_and_arrow_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    std::fs::write(cwd.join("trades.csv"), CSV).unwrap();
+    stdout_json(&run(&["init", "m.db", "--format", "json"], cwd));
+    stdout_json(&run(
+        &[
+            "create-table",
+            "m.db",
+            "trades",
+            "--like",
+            "trades.csv",
+            "--time-column",
+            "ts",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    stdout_json(&run(
+        &[
+            "ingest",
+            "m.db",
+            "trades",
+            "trades.csv",
+            "--mode",
+            "write",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+
+    // Arrow IPC output round-trips through ingest (stdin).
+    let out = run(
+        &["query", "m.db", "SELECT * FROM trades", "--format", "arrow"],
+        cwd,
+    );
+    assert!(out.status.success());
+    assert!(!out.stdout.is_empty());
+    std::fs::write(cwd.join("dump.arrow"), &out.stdout).unwrap();
+    stdout_json(&run(
+        &[
+            "ingest",
+            "m.db",
+            "trades",
+            "dump.arrow",
+            "--input-format",
+            "arrow",
+            "--mode",
+            "write",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+
+    // Restore v1, verify deep, timeout flag parses.
+    let restored = stdout_json(&run(
+        &["restore", "m.db", "trades", "1", "--format", "json"],
+        cwd,
+    ));
+    assert_eq!(restored["op"], "restore");
+    let verify = stdout_json(&run(
+        &["verify", "m.db", "trades", "--deep", "--format", "json"],
+        cwd,
+    ));
+    assert_eq!(verify["problems"].as_array().unwrap().len(), 0);
+    let out = run(
+        &[
+            "query",
+            "m.db",
+            "SELECT count(*) FROM trades",
+            "--timeout",
+            "30s",
+            "--format",
+            "json",
+        ],
+        cwd,
+    );
+    assert!(out.status.success());
+}
