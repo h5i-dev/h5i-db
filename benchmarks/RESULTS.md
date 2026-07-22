@@ -43,9 +43,29 @@ copied into the result artifact.
 The Rust harness also emits `aggregate states: cold OHLCV + VWAP` and
 `aggregate states: warm OHLCV + VWAP`. Their detail objects report state hits,
 builds, scanned segments/rows/bytes, corruption recovery, and eviction counts.
-The warm result is value-equivalent in-process and should report zero
-segments scanned; checked-in timing numbers will be added with the next full
-20 M-row benchmark run.
+The warm result is value-equivalent in-process and reports zero segments
+scanned. Full 20 M-row run (50 segments, 64 symbols, release profile,
+2026-07-22, WSL2):
+
+| case | wall | detail |
+|---|---|---|
+| aggregate states: cold OHLCV + VWAP | 2445 ms | 50 built, 20 M rows scanned |
+| aggregate states: warm OHLCV + VWAP | 30.9 ms | 50/50 reused, 0 rows scanned |
+
+Warm reuse requires serde_json's `float_roundtrip` feature (workspace-enabled):
+sidecar verification re-serializes parsed JSON, and the default lossy f64
+parse made every full-mantissa state fail its checksum and silently rebuild —
+warm equaled cold until that fix. The regression is pinned by a unit test in
+`aggregate_state.rs`.
+
+Two honest limits observed on this dataset: the checked-in P2 workload case
+(`symbol = … AND ts range`) gets **no** physical-scan reduction from the
+predicate cache because symbols interleave uniformly, so every surviving row
+group contains the symbol; and the predicate shape that *does* cluster
+(symbol + price band) is rejected because Float64 columns are outside the
+eligibility contract. The cache's byte-reduction exit gate currently only
+fires on correlated int/string/timestamp predicates like the one in
+`query_misc.rs`.
 
 On small machines run one engine per invocation (`--engines <one>`), ideally
 under a cgroup cap (`systemd-run --user --scope -p MemoryMax=...`): a 20 M-row
