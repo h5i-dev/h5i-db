@@ -9,7 +9,7 @@ DataFusion with native time-series operators (ASOF join, `time_bucket`,
 policy. Crash-safe by construction and proven by tests that kill the writer
 at every commit step.
 
-📖 **[Documentation & demo films](https://koukyosyumei.github.io/h5i-db/)** ·
+📖 **[Documentation & demo films](https://h5i-dev.github.io/h5i-db/)** ·
 [Design document](DESIGN.md) · [Benchmarks](benchmarks/RESULTS.md) ·
 [Agent guide](SKILL.md)
 
