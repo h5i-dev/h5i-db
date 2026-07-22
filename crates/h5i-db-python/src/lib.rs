@@ -132,11 +132,14 @@ impl NativeDatabase {
         time_column: Option<String>,
         sort_key: Vec<String>,
     ) -> PyResult<String> {
-        let batches = ipc_to_batches(schema_ipc)?;
-        let schema = batches
-            .first()
-            .map(|b| b.schema())
-            .ok_or_else(|| PyValueError::new_err("schema_ipc stream carries no schema"))?;
+        // The stream itself carries the schema; a zero-batch stream (the
+        // normal case for create_table) is valid.
+        let reader =
+            arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(schema_ipc), None)
+                .map_err(|e| {
+                    PyValueError::new_err(format!("invalid Arrow IPC schema stream: {e}"))
+                })?;
+        let schema = reader.schema();
         let result = self.block(self.db.create_table(
             name,
             schema,
