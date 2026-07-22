@@ -11,7 +11,7 @@ Reproduce:
 
 ```bash
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 20000000 --quotes 5000000
-python crates/h5i-db-bench/compare_baselines.py <dir>/bench.db \
+python benchmarks/compare_baselines.py <dir>/bench.db \
     [--engines polars,duckdb,pandas,pyarrow]   # needs those packages
 ```
 
