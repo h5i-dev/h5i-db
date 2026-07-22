@@ -29,3 +29,6 @@ rand = { workspace = true }
 
 [dependencies.datafusion-pruning]
 workspace = true
+
+[dependencies.datafusion-datasource-parquet]
+workspace = true

@@ -51,6 +51,7 @@ datafusion = { version = "54.1", default-features = false, features = [
     "nested_expressions",
 ] }
 datafusion-pruning = "54.1"
+datafusion-datasource-parquet = "54.1"
 
 tokio = { version = "1", features = [
     "rt-multi-thread",

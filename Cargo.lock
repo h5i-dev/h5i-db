@@ -1601,6 +1601,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "datafusion",
+ "datafusion-datasource-parquet",
  "datafusion-pruning",
  "futures",
  "h5i-db-core",
