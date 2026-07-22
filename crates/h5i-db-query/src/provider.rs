@@ -130,10 +130,13 @@ fn manifest_statistics(schema: &SchemaRef, segments: &[&SegmentMeta]) -> Statist
                     })
                     .collect();
                 if let Some(mins) = mins {
-                    if let Some(min) = mins
-                        .into_iter()
-                        .reduce(|a, b| if b.partial_cmp(&a) == Some(std::cmp::Ordering::Less) { b } else { a })
-                    {
+                    if let Some(min) = mins.into_iter().reduce(|a, b| {
+                        if b.partial_cmp(&a) == Some(std::cmp::Ordering::Less) {
+                            b
+                        } else {
+                            a
+                        }
+                    }) {
                         stats.min_value = Precision::Exact(min);
                     }
                 }
@@ -146,10 +149,13 @@ fn manifest_statistics(schema: &SchemaRef, segments: &[&SegmentMeta]) -> Statist
                     })
                     .collect();
                 if let Some(maxs) = maxs {
-                    if let Some(max) = maxs
-                        .into_iter()
-                        .reduce(|a, b| if b.partial_cmp(&a) == Some(std::cmp::Ordering::Greater) { b } else { a })
-                    {
+                    if let Some(max) = maxs.into_iter().reduce(|a, b| {
+                        if b.partial_cmp(&a) == Some(std::cmp::Ordering::Greater) {
+                            b
+                        } else {
+                            a
+                        }
+                    }) {
                         stats.max_value = Precision::Exact(max);
                     }
                 }

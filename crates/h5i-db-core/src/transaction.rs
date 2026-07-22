@@ -33,8 +33,7 @@ use uuid::Uuid;
 
 use crate::database::{CommitResult, Database, WriteOptions};
 use crate::error::{Error, Result};
-use crate::layout;
-use crate::manifest::{Head, OpKind, VersionManifest};
+use crate::manifest::Head;
 
 pub(crate) const TXN_PREFIX: &str = "txn";
 
@@ -160,7 +159,7 @@ impl<'a> Transaction<'a> {
         for (table, op) in self.ops {
             let s = match op {
                 StagedOp::Append(batches) => {
-                    db.stage_append(&table, batches, &self.opts).await?
+                    db.stage_append(&table, batches, &self.opts, false).await?
                 }
                 StagedOp::Write(batches) => db.stage_write(&table, batches, &self.opts).await?,
             };

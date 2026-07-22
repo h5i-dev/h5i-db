@@ -51,6 +51,10 @@ pub struct UiState {
     pub token: String,
     pub query_timeout: Duration,
     pub query_memory_limit: usize,
+    /// Deterministic fault-injection hook for timeout tests; zero in normal
+    /// construction and not exposed by the server CLI.
+    #[doc(hidden)]
+    pub query_start_delay: Duration,
 }
 
 impl UiState {
@@ -63,6 +67,7 @@ impl UiState {
             token: uuid::Uuid::new_v4().simple().to_string(),
             query_timeout: UI_QUERY_TIMEOUT,
             query_memory_limit: UI_QUERY_MEMORY_LIMIT,
+            query_start_delay: Duration::ZERO,
         }
     }
 }
@@ -553,6 +558,9 @@ async fn run_query(State(st): State<UiState>, Json(body): Json<QueryBody>) -> Ap
     .await
     .map_err(|e| ApiError::Db(Error::internal(e)))?;
     let execute = async {
+        if !st.query_start_delay.is_zero() {
+            tokio::time::sleep(st.query_start_delay).await;
+        }
         // Fetch one row past the cap so truncation is detectable.
         let df = session
             .sql(&body.sql)
@@ -571,7 +579,10 @@ async fn run_query(State(st): State<UiState>, Json(body): Json<QueryBody>) -> Ap
             return Err(ApiError::Custom {
                 status: StatusCode::REQUEST_TIMEOUT,
                 code: "query_timeout",
-                message: format!("query exceeded the {:?} scratchpad budget", st.query_timeout),
+                message: format!(
+                    "query exceeded the {:?} scratchpad budget",
+                    st.query_timeout
+                ),
                 hint: "narrow the query, or run it via the CLI which has no interactive timeout",
             })
         }
@@ -631,7 +642,11 @@ fn batches_to_json_with_schema(
         names.push(name);
     }
     let owned: Vec<arrow::array::RecordBatch>;
-    let (schema, batches) = if names.iter().zip(schema.fields()).any(|(n, f)| n != f.name()) {
+    let (schema, batches) = if names
+        .iter()
+        .zip(schema.fields())
+        .any(|(n, f)| n != f.name())
+    {
         let fields: Vec<_> = schema
             .fields()
             .iter()

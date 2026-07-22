@@ -8,6 +8,7 @@
 pub mod asof;
 pub mod finance;
 pub mod functions;
+pub mod gapfill;
 pub mod provider;
 pub mod pruning;
 pub mod session;

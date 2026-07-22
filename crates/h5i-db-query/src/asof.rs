@@ -25,7 +25,7 @@ use arrow::row::{RowConverter, SortField};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableFunctionArgs, TableFunctionImpl, TableProvider};
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{Column, DFSchema, DFSchemaRef};
+use datafusion::common::{Column, DFSchema, DFSchemaRef, Statistics};
 use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result as DfResult};
 use datafusion::execution::context::{QueryPlanner, SessionState};
@@ -453,8 +453,8 @@ impl ExecutionPlan for AsOfJoinExec {
         // The buffered right side is charged to the query memory pool so
         // `memory_limit` is honored: the query fails with ResourcesExhausted
         // instead of OOMing the process.
-        let reservation =
-            MemoryConsumer::new(format!("AsOfJoinExec[{partition}]")).register(context.memory_pool());
+        let reservation = MemoryConsumer::new(format!("AsOfJoinExec[{partition}]"))
+            .register(context.memory_pool());
         let options = self.options.clone();
         let schema = self.schema.clone();
         let right_kept = self.right_kept.clone();
@@ -664,8 +664,8 @@ impl RightRuns {
 /// bumps a refcount); other integer types fall back to a cast.
 pub(crate) fn time_column_i64(batch: &RecordBatch, idx: usize) -> DfResult<ScalarBuffer<i64>> {
     use arrow::array::{
-        Int64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
-        TimestampNanosecondArray, TimestampSecondArray,
+        Int64Array, TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray,
     };
     let col = batch.column(idx);
     if col.null_count() > 0 {
@@ -949,9 +949,7 @@ fn unqualify(expr: &Expr) -> Expr {
     expr.clone()
         .transform(|e| {
             Ok(match e {
-                Expr::Column(c) => {
-                    Transformed::yes(Expr::Column(Column::new_unqualified(c.name)))
-                }
+                Expr::Column(c) => Transformed::yes(Expr::Column(Column::new_unqualified(c.name))),
                 other => Transformed::no(other),
             })
         })
@@ -969,7 +967,12 @@ impl AsOfTableProvider {
         let lw = left.fields().len();
         expr.column_refs().iter().all(|c| {
             left.index_of(&c.name).is_ok()
-                && self.schema.fields().iter().skip(lw).all(|f| f.name() != &c.name)
+                && self
+                    .schema
+                    .fields()
+                    .iter()
+                    .skip(lw)
+                    .all(|f| f.name() != &c.name)
         })
     }
 
@@ -1071,6 +1074,15 @@ impl TableProvider for AsOfTableProvider {
         TableType::View
     }
 
+    fn statistics(&self) -> Option<Statistics> {
+        // A LEFT ASOF join emits exactly one row per left row. Exposing the
+        // exact manifest-backed count lets COUNT(*) remain metadata-only and
+        // avoids zero-column execution edge cases. Inner joins are not exact.
+        (!self.options.inner)
+            .then(|| self.left.statistics())
+            .flatten()
+    }
+
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
@@ -1163,12 +1175,8 @@ impl TableProvider for AsOfTableProvider {
         let (left_proj, right_proj) = (left_proj.unwrap(), right_proj.unwrap());
         // Positions of the kept right columns inside the projected join
         // output: projected right columns minus the by-columns, in order.
-        let by_right: std::collections::HashSet<&str> = self
-            .options
-            .by
-            .iter()
-            .map(|(_, r)| r.as_str())
-            .collect();
+        let by_right: std::collections::HashSet<&str> =
+            self.options.by.iter().map(|(_, r)| r.as_str()).collect();
         let right_out: Vec<usize> = right_proj
             .iter()
             .filter(|&&r| !by_right.contains(right_schema.field(r).name().as_str()))
@@ -1195,8 +1203,10 @@ impl TableProvider for AsOfTableProvider {
                             .expect("projected right column present")
                 };
                 (
-                    Arc::new(expressions::Column::new(joined_schema.field(pos).name(), pos))
-                        as Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+                    Arc::new(expressions::Column::new(
+                        joined_schema.field(pos).name(),
+                        pos,
+                    )) as Arc<dyn datafusion::physical_expr::PhysicalExpr>,
                     self.schema.field(i).name().clone(),
                 )
             })

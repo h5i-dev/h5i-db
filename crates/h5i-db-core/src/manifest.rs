@@ -20,6 +20,7 @@ pub enum OpKind {
     DeleteRange,
     Restore,
     Compact,
+    EvolveSchema,
 }
 
 impl std::fmt::Display for OpKind {
@@ -32,6 +33,7 @@ impl std::fmt::Display for OpKind {
             OpKind::DeleteRange => "delete_range",
             OpKind::Restore => "restore",
             OpKind::Compact => "compact",
+            OpKind::EvolveSchema => "evolve_schema",
         };
         f.write_str(s)
     }
@@ -50,6 +52,11 @@ pub struct ColumnStats {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max: Option<serde_json::Value>,
     pub null_count: u64,
+    /// Exact distinct values for low-cardinality string columns. Omitted as
+    /// soon as the bounded set overflows, keeping manifests compact while
+    /// enabling exact symbol/entity membership pruning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distinct_values: Option<Vec<serde_json::Value>>,
 }
 
 /// Immutable metadata for one Parquet segment.

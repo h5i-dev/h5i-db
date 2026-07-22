@@ -219,9 +219,10 @@ fn parse_read_at(
         (None, Some(ts), None) => {
             let dt = chrono::DateTime::parse_from_rfc3339(ts)
                 .map_err(|e| invalid(format!("bad as_of timestamp {ts:?}: {e}")))?;
-            Ok(ReadAt::AsOf(dt.timestamp_nanos_opt().ok_or_else(|| {
-                invalid("as_of timestamp out of range")
-            })?))
+            Ok(ReadAt::AsOf(
+                dt.timestamp_nanos_opt()
+                    .ok_or_else(|| invalid("as_of timestamp out of range"))?,
+            ))
         }
         (None, None, Some(s)) => Ok(ReadAt::Snapshot(s.to_string())),
         _ => Err(invalid("specify at most one of version, as_of, snapshot")),
@@ -400,7 +401,11 @@ impl NativeDatabase {
 
     fn drop_table(&self, py: Python<'_>, name: &str) -> PyResult<()> {
         let name = name.to_string();
-        self.block(py, None, move |db| async move { db.drop_table(&name).await })
+        self.block(
+            py,
+            None,
+            move |db| async move { db.drop_table(&name).await },
+        )
     }
 
     /// Arrow IPC schema-only stream for a table at a read point.
@@ -589,9 +594,11 @@ impl NativeDatabase {
 
     fn versions(&self, py: Python<'_>, name: &str) -> PyResult<String> {
         let name = name.to_string();
-        let versions = self.block(py, None, move |db| async move {
-            db.list_versions(&name).await
-        })?;
+        let versions = self.block(
+            py,
+            None,
+            move |db| async move { db.list_versions(&name).await },
+        )?;
         to_json(&versions)
     }
 
@@ -651,7 +658,8 @@ impl NativeDatabase {
     }
 
     fn apply_plan(&self, py: Python<'_>, name: &str, plan_id: &str) -> PyResult<String> {
-        let id = uuid::Uuid::parse_str(plan_id).map_err(|e| invalid(format!("bad plan id: {e}")))?;
+        let id =
+            uuid::Uuid::parse_str(plan_id).map_err(|e| invalid(format!("bad plan id: {e}")))?;
         let name = name.to_string();
         let result = self.block(py, None, move |db| async move {
             let plan = db.load_plan(&name, id).await?;
@@ -661,7 +669,8 @@ impl NativeDatabase {
     }
 
     fn discard_plan(&self, py: Python<'_>, name: &str, plan_id: &str) -> PyResult<()> {
-        let id = uuid::Uuid::parse_str(plan_id).map_err(|e| invalid(format!("bad plan id: {e}")))?;
+        let id =
+            uuid::Uuid::parse_str(plan_id).map_err(|e| invalid(format!("bad plan id: {e}")))?;
         let name = name.to_string();
         self.block(py, None, move |db| async move {
             db.discard_plan(&name, id).await
@@ -670,7 +679,11 @@ impl NativeDatabase {
 
     fn list_plans(&self, py: Python<'_>, name: &str) -> PyResult<String> {
         let name = name.to_string();
-        let plans = self.block(py, None, move |db| async move { db.list_plans(&name).await })?;
+        let plans = self.block(
+            py,
+            None,
+            move |db| async move { db.list_plans(&name).await },
+        )?;
         to_json(&plans)
     }
 
@@ -684,20 +697,23 @@ impl NativeDatabase {
     /// Unknown flags and non-boolean values are rejected. Returns the
     /// stored policy as JSON.
     fn update_policy(&self, py: Python<'_>, updates_json: &str) -> PyResult<String> {
-        let updates: serde_json::Map<String, serde_json::Value> = serde_json::from_str(updates_json)
-            .map_err(|e| invalid(format!("bad policy JSON: {e}")))?;
+        let updates: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(updates_json)
+                .map_err(|e| invalid(format!("bad policy JSON: {e}")))?;
         let policy = self.block(py, None, move |db| async move {
             db.update_policy(move |policy| {
                 let mut value = serde_json::to_value(&*policy).map_err(Error::from)?;
-                let obj = value.as_object_mut().ok_or_else(|| {
-                    Error::internal("policy did not serialize to an object")
-                })?;
+                let obj = value
+                    .as_object_mut()
+                    .ok_or_else(|| Error::internal("policy did not serialize to an object"))?;
                 for (k, v) in &updates {
                     if !obj.contains_key(k) {
                         return Err(Error::invalid(format!("unknown policy flag {k:?}")));
                     }
                     if !v.is_boolean() {
-                        return Err(Error::invalid(format!("policy flag {k:?} must be a boolean")));
+                        return Err(Error::invalid(format!(
+                            "policy flag {k:?} must be a boolean"
+                        )));
                     }
                     obj.insert(k.clone(), v.clone());
                 }
@@ -743,9 +759,11 @@ impl NativeDatabase {
     #[pyo3(signature = (name, deep = false))]
     fn verify(&self, py: Python<'_>, name: &str, deep: bool) -> PyResult<String> {
         let name = name.to_string();
-        let report = self.block(py, None, move |db| async move {
-            db.verify(&name, deep).await
-        })?;
+        let report = self.block(
+            py,
+            None,
+            move |db| async move { db.verify(&name, deep).await },
+        )?;
         to_json(&report)
     }
 }

@@ -451,7 +451,10 @@ fn empty_result_keeps_schema_in_arrow_and_csv() {
         cwd,
     );
     assert!(out.status.success());
-    assert!(!out.stdout.is_empty(), "empty result must still emit schema");
+    assert!(
+        !out.stdout.is_empty(),
+        "empty result must still emit schema"
+    );
     let reader =
         arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(&out.stdout[..]), None)
             .expect("valid IPC stream");

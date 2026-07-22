@@ -4,11 +4,13 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
+use arrow::array::{
+    Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::common::stats::Precision;
 use datafusion::physical_plan::displayable;
-use h5i_db_core::{Database, ReadAt, TableOptions, WriteOptions};
+use h5i_db_core::{Database, TableOptions, WriteOptions};
 use h5i_db_query::{H5iSession, SessionOptions};
 
 fn trades_schema() -> SchemaRef {
@@ -50,7 +52,7 @@ async fn setup_trades() -> (tempfile::TempDir, Arc<Database>) {
     db.create_table("trades", trades_schema(), time_options())
         .await
         .unwrap();
-    db.write(
+    db.append(
         "trades",
         vec![trades_batch(
             &[1_000, 2_000, 3_000, 4_000],
@@ -209,7 +211,6 @@ async fn rolling_vwap_window_matches_reference() {
 #[test]
 fn vwap_accumulator_retract_matches_fresh_state() {
     use datafusion::logical_expr::function::AccumulatorArgs;
-    use datafusion::logical_expr::Accumulator as _;
     // Drive the accumulator exactly like a sliding frame: bulk update, then
     // retract the rows that left, and compare with a from-scratch frame.
     let udaf = h5i_db_query::finance::vwap_udaf();
@@ -239,10 +240,7 @@ fn vwap_accumulator_retract_matches_fresh_state() {
     acc.retract_batch(&[rp, rw]).unwrap();
     let got = acc.evaluate().unwrap();
     let want = (20.0 * 2.0 + 12.0 * 3.0) / 5.0;
-    assert_eq!(
-        got,
-        datafusion::scalar::ScalarValue::Float64(Some(want))
-    );
+    assert_eq!(got, datafusion::scalar::ScalarValue::Float64(Some(want)));
     // Retract the rest → empty frame must evaluate to NULL, exactly.
     let rp: Arc<dyn Array> = Arc::new(Float64Array::from(vec![20.0, 12.0]));
     let rw: Arc<dyn Array> = Arc::new(Float64Array::from(vec![2.0, 3.0]));
@@ -279,7 +277,7 @@ async fn refresh_repoints_tables_at_latest_without_new_session() {
     let s = session(&db).await;
     assert_eq!(count_trades(&s).await, 4);
 
-    db.write(
+    db.append(
         "trades",
         vec![trades_batch(&[5_000], &["C"], &[30.0], &[5])],
         WriteOptions::default(),
@@ -311,4 +309,146 @@ async fn sessions_can_share_a_runtime_env() {
         .unwrap();
     assert!(Arc::ptr_eq(&s1.runtime_env(), &s2.runtime_env()));
     assert_eq!(count_trades(&s2).await, 4);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn gapfill_supports_locf_and_linear_interpolation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[0, 20], &["A", "A"], &[0.0, 20.0], &[1, 3])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+    let interpolated = s
+        .sql("SELECT price, size FROM gapfill('trades', 'ts', 10, 'interpolate') ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let price = interpolated[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    let size = interpolated[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(price.values(), &[0.0, 10.0, 20.0]);
+    assert_eq!(size.values(), &[1, 2, 3]);
+
+    let locf = s
+        .sql("SELECT price FROM gapfill('trades', 'ts', 10, 'locf') ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let price = locf[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    assert_eq!(price.values(), &[0.0, 0.0, 20.0]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sql_asof_keyword_and_cross_version_join_work() {
+    let (_dir, db) = setup_trades().await;
+    db.create_table("quotes", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.append(
+        "quotes",
+        vec![trades_batch(
+            &[500, 1500],
+            &["A", "A"],
+            &[9.0, 11.0],
+            &[1, 1],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[5000], &["C"], &[30.0], &[5])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+    let asof = s
+        .sql(
+            "SELECT * FROM trades ASOF JOIN quotes \
+             MATCH_CONDITION (trades.ts >= quotes.ts) ON trades.symbol = quotes.symbol",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(asof.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+
+    let versions = s
+        .sql(
+            "SELECT count(*) AS n FROM h5i('trades', 1) a \
+             JOIN h5i('trades', 2) b ON a.ts = b.ts",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        versions[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0),
+        4
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exact_symbol_sets_prune_unrelated_segments() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[0, 1], &["A", "A"], &[1.0, 2.0], &[1, 1])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[2, 3], &["B", "B"], &[3.0, 4.0], &[1, 1])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+    s.sql("SELECT * FROM trades WHERE symbol = 'A'")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let metrics = s.take_scan_metrics();
+    assert_eq!(metrics[0].segments_total, 2);
+    assert_eq!(metrics[0].segments_scanned, 1);
 }

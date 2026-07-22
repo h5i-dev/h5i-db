@@ -110,8 +110,7 @@ impl BatchWriter {
             ),
             Format::Csv => Sink::Csv(CsvWriterBuilder::new().with_header(true).build(out())),
             Format::Arrow => Sink::Arrow(
-                arrow::ipc::writer::StreamWriter::try_new(out(), &schema)
-                    .map_err(Error::Arrow)?,
+                arrow::ipc::writer::StreamWriter::try_new(out(), &schema).map_err(Error::Arrow)?,
             ),
         };
         Ok(Self {
@@ -169,8 +168,8 @@ impl BatchWriter {
         }
         match self.sink {
             Sink::Table(batches) => {
-                let display = arrow::util::pretty::pretty_format_batches(&batches)
-                    .map_err(Error::Arrow)?;
+                let display =
+                    arrow::util::pretty::pretty_format_batches(&batches).map_err(Error::Arrow)?;
                 let mut stdout = std::io::stdout().lock();
                 writeln!(stdout, "{display}").map_err(|e| Error::io("stdout", e))?;
             }

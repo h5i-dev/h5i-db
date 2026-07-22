@@ -36,8 +36,7 @@ pub fn validate_evolution(old: &SchemaRef, new: &SchemaRef) -> Result<Vec<String
     let mut changes = Vec::new();
     if new.fields().len() < old.fields().len() {
         return Err(Error::SchemaMismatch {
-            detail: "schema evolution cannot drop columns; use `write` to rewrite the table"
-                .into(),
+            detail: "schema evolution cannot drop columns; use `write` to rewrite the table".into(),
         });
     }
     // Existing columns: same order, same name, compatible type/nullability.
@@ -149,9 +148,7 @@ pub fn adapt_batch(target: &SchemaRef, batch: RecordBatch) -> Result<RecordBatch
                 if col.data_type() == field.data_type() {
                     cols.push(col.clone());
                 } else {
-                    cols.push(
-                        arrow::compute::cast(col, field.data_type()).map_err(Error::Arrow)?,
-                    );
+                    cols.push(arrow::compute::cast(col, field.data_type()).map_err(Error::Arrow)?);
                 }
             }
             Err(_) => cols.push(new_null_array(field.data_type(), n)),

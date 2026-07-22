@@ -1,0 +1,97 @@
+{
+  "plan_id": "905438df-9f98-4a82-9ba0-1d7718a0e8b6",
+  "created_at_ns": 1784738021758655009,
+  "expires_at_ns": 1785342821758655009,
+  "table": "trades",
+  "table_id": "701147a8-f7e7-4998-91f2-7cb94fdf2252",
+  "base_version": 3,
+  "base_manifest_checksum": "43e016bd1fb86589b7fbc9ef0b52833955158c34b293f93a8cac9fb16351fa9f",
+  "op": "delete_range",
+  "schema_revision": 1,
+  "segments": [
+    {
+      "id": "60e9ad30-70d4-4c08-805c-85c6ee8ad6df",
+      "path": "tables/701147a8-f7e7-4998-91f2-7cb94fdf2252/segments/60e9ad30-70d4-4c08-805c-85c6ee8ad6df.parquet",
+      "rows": 2,
+      "bytes": 1115,
+      "checksum": "e70cf98d6183d08bbf833403e2d1c9d71fea82e5a8e1642bba1e45293590819c",
+      "time_range": [
+        1767225600000000000,
+        1767225660000000000
+      ],
+      "sorted": true,
+      "schema_revision": 1,
+      "created_by_sequence": 3,
+      "columns": {
+        "price": {
+          "min": 10.0,
+          "max": 20.0,
+          "null_count": 0
+        },
+        "symbol": {
+          "min": "AAA",
+          "max": "BBB",
+          "null_count": 0,
+          "distinct_values": [
+            "AAA",
+            "BBB"
+          ]
+        },
+        "ts": {
+          "min": 1767225600000000000,
+          "max": 1767225660000000000,
+          "null_count": 0
+        }
+      }
+    },
+    {
+      "id": "dcaacaa5-5e82-4886-a8e1-a893694f09af",
+      "path": "tables/701147a8-f7e7-4998-91f2-7cb94fdf2252/segments/dcaacaa5-5e82-4886-a8e1-a893694f09af.parquet",
+      "rows": 2,
+      "bytes": 1115,
+      "checksum": "680bb6d456ac7495bb447155a0cb9799a00fe5827ea150b5e02382f8b158da3d",
+      "time_range": [
+        1767225840000000000,
+        1767225900000000000
+      ],
+      "sorted": true,
+      "schema_revision": 1,
+      "created_by_sequence": 4,
+      "columns": {
+        "price": {
+          "min": 11.0,
+          "max": 21.0,
+          "null_count": 0
+        },
+        "symbol": {
+          "min": "AAA",
+          "max": "BBB",
+          "null_count": 0,
+          "distinct_values": [
+            "AAA",
+            "BBB"
+          ]
+        },
+        "ts": {
+          "min": 1767225840000000000,
+          "max": 1767225900000000000,
+          "null_count": 0
+        }
+      }
+    }
+  ],
+  "summary": {
+    "rows_before": 6,
+    "rows_after": 4,
+    "rows_affected": 2,
+    "segments_reused": 1,
+    "segments_added": 1,
+    "added_bytes": 1115,
+    "affected_time_range": [
+      1767225960000000000,
+      1767226080000000000
+    ]
+  },
+  "before_sample_ipc_b64": "//////gAAAAQAAAAAAAKAAwACgAJAAQACgAAABAAAAAAAQQACAAIAAAABAAIAAAABAAAAAMAAACMAAAATAAAABQAAAAQABYAEAAAAA8ABAAAAAgAEAAAABgAAAAcAAAAAAAAAxgAAAAAAAYACAAGAAYAAAAAAAIAAAAAAAUAAABwcmljZQAAANT///8YAAAADAAAAAAAAAUQAAAAAAAAAAQABAAEAAAABgAAAHN5bWJvbAAAEAAUABAAAAAPAAQAAAAIABAAAAAcAAAADAAAAAAAAAokAAAAAAAAAAgADAAKAAQACAAAAAgAAAAAAAMAAwAAAFVUQwACAAAAdHMAAP/////4AAAAEAAAAAwAGgAYABcABAAIAAwAAAAgAAAAwAEAAAAAAAAAAAAAAAAAAwQACgAYAAwACAAEAAoAAABMAAAAEAAAAAIAAAAAAAAAAAAAAAMAAAACAAAAAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAABwAAAAAAAAAAAAAAAQAAAAAAAABAAAAAAAAAABAAAAAAAAAAgAAAAAAAAAABAAAAAAAAAMAAAAAAAAAADAAAAAAAAAAAAQAAAAAAAAYAAAAAAAAAQAEAAAAAAAABAAAAAAAAAIABAAAAAAAAEAAAAAAAAAD/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABCmv6VyhhgAaO23s3KGGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAwAAAAYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQUFBQkJCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAnQAAAAAAAgDVAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/////wAAAAA=",
+  "checksum": "783b51526be28a5f7c49f5f901b68c8206fb6939b7eb5379fd606f4f66e505a6"
+}

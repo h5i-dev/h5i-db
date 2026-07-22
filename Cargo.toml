@@ -20,7 +20,7 @@ version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/Koukyosyumei/h5i-db"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # version alongside path so `cargo publish` can rewrite these for crates.io.

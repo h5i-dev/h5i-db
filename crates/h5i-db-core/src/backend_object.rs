@@ -32,10 +32,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use object_store::{
-    path::Path as ObjPath, ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload,
-    UpdateVersion,
-};
+use object_store::{ObjectStore, ObjectStoreExt, PutMode, PutOptions, PutPayload, UpdateVersion};
 use url::Url;
 use uuid::Uuid;
 
@@ -147,9 +144,9 @@ impl HeadStore for ObjectStoreHeadStore {
             .await;
         match res {
             Ok(put) => {
-                let etag = put.e_tag.ok_or_else(|| {
-                    Error::internal("object store returned no ETag on HEAD put")
-                })?;
+                let etag = put
+                    .e_tag
+                    .ok_or_else(|| Error::internal("object store returned no ETag on HEAD put"))?;
                 Ok(HeadTag(encode_tag(&etag, put.version.as_deref())))
             }
             Err(object_store::Error::Precondition { .. })

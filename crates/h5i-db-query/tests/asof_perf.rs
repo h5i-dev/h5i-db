@@ -129,10 +129,7 @@ async fn udtfs_work_on_current_thread_runtime() {
         .collect()
         .await
         .unwrap();
-    assert_batches_eq!(
-        ["+---+", "| n |", "+---+", "| 3 |", "+---+",],
-        &batches
-    );
+    assert_batches_eq!(["+---+", "| n |", "+---+", "| 3 |", "+---+",], &batches);
 
     let batches = session
         .sql(
@@ -144,10 +141,7 @@ async fn udtfs_work_on_current_thread_runtime() {
         .collect()
         .await
         .unwrap();
-    assert_batches_eq!(
-        ["+---+", "| n |", "+---+", "| 3 |", "+---+",],
-        &batches
-    );
+    assert_batches_eq!(["+---+", "| n |", "+---+", "| 3 |", "+---+",], &batches);
 }
 
 /// 2.2: the buffered right side is charged to the session memory pool, so a
@@ -170,10 +164,12 @@ async fn right_buffer_respects_memory_limit() {
     .unwrap();
     // ~30k right rows (> 1 MB buffered) against a 128 KiB limit.
     for chunk in 0..3 {
-        let ts: Vec<i64> = (0..10_000).map(|i| chunk * 10_000_000 + i * 1_000).collect();
+        let ts: Vec<i64> = (0..10_000)
+            .map(|i| chunk * 10_000_000 + i * 1_000)
+            .collect();
         let symbols: Vec<&str> = ts.iter().map(|_| "A").collect();
         let bids: Vec<f64> = ts.iter().map(|_| 1.0).collect();
-        db.write(
+        db.append(
             "quotes",
             vec![quotes_batch(&ts, &symbols, &bids)],
             WriteOptions::default(),
@@ -215,10 +211,7 @@ async fn right_buffer_respects_memory_limit() {
         .collect()
         .await
         .unwrap();
-    assert_batches_eq!(
-        ["+---+", "| n |", "+---+", "| 1 |", "+---+",],
-        &batches
-    );
+    assert_batches_eq!(["+---+", "| n |", "+---+", "| 1 |", "+---+",], &batches);
 }
 
 /// 2.1: WHERE bounds on the left time column prune segments on *both* child
@@ -232,19 +225,19 @@ async fn time_filters_prune_both_child_scans() {
     db.create_table("quotes", quotes_schema(), time_options())
         .await
         .unwrap();
-    // Ten one-segment writes per table, each covering [i*10_000, i*10_000+9_000].
+    // Ten one-segment appends per table, each covering [i*10_000, i*10_000+9_000].
     for i in 0..10i64 {
         let ts: Vec<i64> = (0..10).map(|j| i * 10_000 + j * 1_000).collect();
         let symbols: Vec<&str> = ts.iter().map(|_| "A").collect();
         let vals: Vec<f64> = ts.iter().map(|_| 1.0).collect();
-        db.write(
+        db.append(
             "trades",
             vec![trades_batch(&ts, &symbols, &vals)],
             WriteOptions::default(),
         )
         .await
         .unwrap();
-        db.write(
+        db.append(
             "quotes",
             vec![quotes_batch(&ts, &symbols, &vals)],
             WriteOptions::default(),
@@ -307,8 +300,14 @@ async fn projection_pushdown_narrows_scans_and_keeps_names() {
     let display = datafusion::physical_plan::displayable(plan.as_ref())
         .indent(true)
         .to_string();
-    assert!(!display.contains("size"), "left scan not narrowed:\n{display}");
-    assert!(!display.contains("ask"), "right scan not narrowed:\n{display}");
+    assert!(
+        !display.contains("size"),
+        "left scan not narrowed:\n{display}"
+    );
+    assert!(
+        !display.contains("ask"),
+        "right scan not narrowed:\n{display}"
+    );
 
     let batches = df.collect().await.unwrap();
     assert_batches_eq!(

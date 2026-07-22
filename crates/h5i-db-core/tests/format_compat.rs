@@ -78,7 +78,11 @@ async fn golden_data_reads_at_head_version_and_snapshot() {
 
     // Snapshot pin resolves and reads.
     let (snap, _) = db
-        .scan("trades", ReadAt::Snapshot("golden".into()), ScanOptions::default())
+        .scan(
+            "trades",
+            ReadAt::Snapshot("golden".into()),
+            ScanOptions::default(),
+        )
         .await
         .expect("scan snapshot");
     assert_eq!(rows(&snap), 6);

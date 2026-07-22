@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use h5i_db_core::{
-    Database, Error, ReadAt, ScanOptions, TableOptions, WriteOptions,
-};
+use h5i_db_core::{Database, Error, ReadAt, ScanOptions, TableOptions, WriteOptions};
 use tempfile::TempDir;
 
 fn schema() -> Arc<Schema> {
@@ -136,7 +134,12 @@ async fn create_rename_drop_are_race_safe_and_precise() {
         .unwrap();
     let err = db.rename_table("u", "t").await.unwrap_err();
     assert!(matches!(err, Error::TableExists { .. }));
-    assert!(db.list_tables().await.unwrap().iter().any(|e| e.name == "u"));
+    assert!(db
+        .list_tables()
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.name == "u"));
 
     // Rename then drop.
     db.rename_table("u", "v").await.unwrap();
@@ -181,7 +184,9 @@ async fn staging_lease_released_after_commit() {
         .unwrap();
 
     let entry = &db.list_tables().await.unwrap()[0];
-    let staging_dir = dir.path().join(format!("tables/{}/staging", entry.table_id));
+    let staging_dir = dir
+        .path()
+        .join(format!("tables/{}/staging", entry.table_id));
     let leases: Vec<_> = match std::fs::read_dir(&staging_dir) {
         Ok(rd) => rd.collect(),
         Err(_) => vec![], // dir may not exist once empty — equally fine
@@ -189,8 +194,15 @@ async fn staging_lease_released_after_commit() {
     assert!(leases.is_empty(), "lease should be deleted after commit");
 
     let report = db.vacuum(None, 0, true).await.unwrap();
-    assert_eq!(report.deleted, 0, "nothing to collect: {:?}", report.candidates);
-    let (batches, _) = db.scan("t", ReadAt::Latest, ScanOptions::default()).await.unwrap();
+    assert_eq!(
+        report.deleted, 0,
+        "nothing to collect: {:?}",
+        report.candidates
+    );
+    let (batches, _) = db
+        .scan("t", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
     assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
 }
 
@@ -203,7 +215,9 @@ async fn orphan_table_dir_is_collected() {
 
     // Fabricate an orphan dir the way a crashed create_table would: objects
     // under tables/<uuid>/ with no catalog entry.
-    let orphan = dir.path().join("tables/00000000-dead-beef-0000-000000000000");
+    let orphan = dir
+        .path()
+        .join("tables/00000000-dead-beef-0000-000000000000");
     std::fs::create_dir_all(orphan.join("spec")).unwrap();
     std::fs::write(orphan.join("spec/00000001.json"), b"{}").unwrap();
 
@@ -242,9 +256,10 @@ async fn tampered_historical_manifest_is_detected() {
 
     // Tamper with manifest 1 (keep it valid JSON so only the checksum trips).
     let entry = &db.list_tables().await.unwrap()[0];
-    let m1 = dir
-        .path()
-        .join(format!("tables/{}/manifests/{:012}.json", entry.table_id, 1));
+    let m1 = dir.path().join(format!(
+        "tables/{}/manifests/{:012}.json",
+        entry.table_id, 1
+    ));
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&m1).unwrap()).unwrap();
     manifest["note"] = serde_json::json!("tampered");
@@ -271,8 +286,14 @@ async fn verified_scan_detects_corrupt_segment() {
 
     // Flip one byte in the (only) segment.
     let entry = &db.list_tables().await.unwrap()[0];
-    let seg_dir = dir.path().join(format!("tables/{}/segments", entry.table_id));
-    let seg = std::fs::read_dir(&seg_dir).unwrap().next().unwrap().unwrap();
+    let seg_dir = dir
+        .path()
+        .join(format!("tables/{}/segments", entry.table_id));
+    let seg = std::fs::read_dir(&seg_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap();
     let mut bytes = std::fs::read(seg.path()).unwrap();
     let mid = bytes.len() / 2;
     bytes[mid] ^= 0xff;
@@ -332,7 +353,9 @@ async fn full_table_append_fails_before_staging() {
     .unwrap();
 
     let entry = &db.list_tables().await.unwrap()[0];
-    let seg_dir = dir.path().join(format!("tables/{}/segments", entry.table_id));
+    let seg_dir = dir
+        .path()
+        .join(format!("tables/{}/segments", entry.table_id));
     let before = std::fs::read_dir(&seg_dir).unwrap().count();
 
     let err = db
@@ -395,7 +418,9 @@ async fn dedup_deletes_redundant_upload() {
     assert_eq!(res.segments_deduped, 1);
 
     let entry = &db.list_tables().await.unwrap()[0];
-    let seg_dir = dir.path().join(format!("tables/{}/segments", entry.table_id));
+    let seg_dir = dir
+        .path()
+        .join(format!("tables/{}/segments", entry.table_id));
     assert_eq!(
         std::fs::read_dir(&seg_dir).unwrap().count(),
         1,

@@ -112,9 +112,8 @@ pub fn open_input(
         }
         InputFormat::Arrow => {
             let file = File::open(path).map_err(|e| Error::io(path, e))?;
-            let reader =
-                arrow::ipc::reader::StreamReader::try_new(BufReader::new(file), None)
-                    .map_err(Error::Arrow)?;
+            let reader = arrow::ipc::reader::StreamReader::try_new(BufReader::new(file), None)
+                .map_err(Error::Arrow)?;
             Ok(InputReader {
                 schema: reader.schema(),
                 iter: Box::new(reader.map(|b| b.map_err(Error::Arrow))),

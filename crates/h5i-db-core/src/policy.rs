@@ -49,7 +49,7 @@ impl MutationPolicy {
     /// Check whether `op` may run directly; error tells the caller to plan.
     pub fn check_direct(&self, op: OpKind) -> Result<()> {
         let allowed = match op {
-            OpKind::Create => true,
+            OpKind::Create | OpKind::EvolveSchema => true,
             OpKind::Write => self.direct_write,
             OpKind::Append => self.direct_append,
             OpKind::ReplaceRange => self.direct_replace,

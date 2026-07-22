@@ -21,7 +21,9 @@ use h5i_db_core::{
 use h5i_db_query::{H5iSession, SessionOptions};
 
 use ingest::{align_batch, open_input, InputFormat};
-use output::{is_broken_pipe, write_batches, write_error, write_value, BatchWriter, Format, Progress};
+use output::{
+    is_broken_pipe, write_batches, write_error, write_value, BatchWriter, Format, Progress,
+};
 
 #[derive(Parser)]
 #[command(
@@ -769,9 +771,7 @@ async fn run(cli: Cli) -> Result<()> {
             let resolved = db.resolve(&table, ReadAt::Latest).await?;
             let (start, end) = parse_range(&resolved, &start, &end)?;
             let batches = match input {
-                Some(path) => {
-                    read_aligned(&path, input_format, &resolved.schema, "replace-range")?
-                }
+                Some(path) => read_aligned(&path, input_format, &resolved.schema, "replace-range")?,
                 None => vec![],
             };
             if plan {

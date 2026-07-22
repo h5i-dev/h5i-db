@@ -67,7 +67,10 @@ impl RetentionFloor {
 
     pub fn verify(&self, object: &str) -> Result<()> {
         if self.checksum != self.compute_checksum()? {
-            return Err(Error::corruption(object, "retention floor checksum mismatch"));
+            return Err(Error::corruption(
+                object,
+                "retention floor checksum mismatch",
+            ));
         }
         Ok(())
     }

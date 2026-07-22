@@ -48,7 +48,7 @@ impl Database {
         // records `op` per version precisely for this).
         for seq in (from + 1)..=to {
             let m = self.manifest_at(table_id, seq).await?;
-            if !matches!(m.op, OpKind::Append) {
+            if !matches!(m.op, OpKind::Append | OpKind::EvolveSchema) {
                 return Err(Error::Unsupported {
                     detail: format!(
                         "incremental diff requires a pure-append chain, but version {seq} \

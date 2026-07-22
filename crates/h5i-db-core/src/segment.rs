@@ -3,7 +3,7 @@
 //! Segments are immutable: written once under a fresh UUID path, referenced
 //! by manifests, and only ever deleted by vacuum when unreachable.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arrow::array::{Array, ArrayRef, RecordBatch};
 use arrow::compute::SortColumn;
@@ -26,6 +26,7 @@ use crate::Backend;
 /// still a valid upper bound only if we extend it, so we mark truncated
 /// values conservatively (drop the stat rather than store a wrong bound).
 const MAX_STRING_STAT_LEN: usize = 64;
+const MAX_DISTINCT_VALUES: usize = 128;
 
 // ---------------------------------------------------------------------------
 // statistics accumulation
@@ -71,6 +72,9 @@ struct ColumnAcc {
     /// Set when the column type is not stats-eligible or a string stat blew
     /// the length budget — min/max are then omitted from the manifest.
     stats_dropped: bool,
+    distinct: BTreeSet<String>,
+    distinct_eligible: bool,
+    distinct_dropped: bool,
 }
 
 impl ColumnAcc {
@@ -98,11 +102,77 @@ impl ColumnAcc {
         self.max = None;
     }
 
+    fn observe_distinct(&mut self, array: &ArrayRef) {
+        if self.distinct_dropped {
+            return;
+        }
+        match array.data_type() {
+            DataType::Utf8 => {
+                let a = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()
+                    .unwrap();
+                self.distinct_eligible = true;
+                for value in a.iter().flatten() {
+                    self.insert_distinct(value);
+                    if self.distinct_dropped {
+                        return;
+                    }
+                }
+            }
+            DataType::LargeUtf8 => {
+                let a = array
+                    .as_any()
+                    .downcast_ref::<arrow::array::LargeStringArray>()
+                    .unwrap();
+                self.distinct_eligible = true;
+                for value in a.iter().flatten() {
+                    self.insert_distinct(value);
+                    if self.distinct_dropped {
+                        return;
+                    }
+                }
+            }
+            DataType::Dictionary(_, value) if **value == DataType::Utf8 => {
+                let Ok(materialized) = arrow::compute::cast(array, &DataType::Utf8) else {
+                    self.distinct_dropped = true;
+                    return;
+                };
+                let a = materialized
+                    .as_any()
+                    .downcast_ref::<arrow::array::StringArray>()
+                    .unwrap();
+                self.distinct_eligible = true;
+                for value in a.iter().flatten() {
+                    self.insert_distinct(value);
+                    if self.distinct_dropped {
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn insert_distinct(&mut self, value: &str) {
+        self.distinct.insert(value.to_string());
+        if self.distinct.len() > MAX_DISTINCT_VALUES {
+            self.distinct.clear();
+            self.distinct_dropped = true;
+        }
+    }
+
     fn finish(self) -> ColumnStats {
         ColumnStats {
             min: self.min.map(|s| s.to_json()),
             max: self.max.map(|s| s.to_json()),
             null_count: self.null_count,
+            distinct_values: (self.distinct_eligible && !self.distinct_dropped).then(|| {
+                self.distinct
+                    .into_iter()
+                    .map(serde_json::Value::String)
+                    .collect()
+            }),
         }
     }
 }
@@ -354,7 +424,8 @@ pub fn sort_each_batch(batches: &[RecordBatch], sort_key: &[String]) -> Result<V
                     })
                 })
                 .collect::<Result<_>>()?;
-            let indices = arrow::compute::lexsort_to_indices(&columns, None).map_err(Error::Arrow)?;
+            let indices =
+                arrow::compute::lexsort_to_indices(&columns, None).map_err(Error::Arrow)?;
             let cols: Vec<ArrayRef> = b
                 .columns()
                 .iter()
@@ -383,15 +454,16 @@ impl SortedBatchMerger {
     /// `batches` must each be sorted by `sort_key` (see [`sort_each_batch`]).
     pub fn new(batches: Vec<RecordBatch>, sort_key: &[String], chunk_rows: usize) -> Result<Self> {
         use arrow::row::{RowConverter, SortField};
-        let batches: Vec<RecordBatch> =
-            batches.into_iter().filter(|b| b.num_rows() > 0).collect();
+        let batches: Vec<RecordBatch> = batches.into_iter().filter(|b| b.num_rows() > 0).collect();
         let fields: Vec<SortField> = match batches.first() {
             None => vec![],
             Some(first) => sort_key
                 .iter()
                 .map(|name| -> Result<SortField> {
                     let idx = first.schema().index_of(name).map_err(Error::Arrow)?;
-                    Ok(SortField::new(first.schema().field(idx).data_type().clone()))
+                    Ok(SortField::new(
+                        first.schema().field(idx).data_type().clone(),
+                    ))
                 })
                 .collect::<Result<_>>()?,
         };
@@ -459,11 +531,8 @@ impl SortedBatchMerger {
         }
         let cols: Vec<ArrayRef> = (0..schema.fields().len())
             .map(|c| {
-                let sources: Vec<&dyn Array> = self
-                    .batches
-                    .iter()
-                    .map(|b| b.column(c).as_ref())
-                    .collect();
+                let sources: Vec<&dyn Array> =
+                    self.batches.iter().map(|b| b.column(c).as_ref()).collect();
                 arrow::compute::interleave(&sources, &picks).map_err(Error::Arrow)
             })
             .collect::<Result<_>>()?;
@@ -676,6 +745,7 @@ impl<'a> SegmentWriter<'a> {
                     Some((min, max)) => acc.observe(min, max, arr.null_count() as u64),
                     None => acc.drop_stats(arr.null_count() as u64),
                 }
+                acc.observe_distinct(arr);
             }
         }
 

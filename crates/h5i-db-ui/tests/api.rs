@@ -405,13 +405,18 @@ async fn scratchpad_query_times_out_with_envelope() {
     let (_dir, _router, db) = setup(false).await;
     let mut state = UiState::new(db.clone(), "test.db".into(), false);
     state.token = TEST_TOKEN.into();
-    state.query_timeout = std::time::Duration::from_millis(100);
+    // Force the timeout path deterministically; wall-clock races against a
+    // small cross join are inherently runner-speed dependent.
+    state.query_timeout = std::time::Duration::from_millis(1);
+    state.query_start_delay = std::time::Duration::from_millis(10);
     let router = build_router(state);
     let (status, err) = post_json(
         &router,
         "/api/query",
         Some(serde_json::json!({
-            "sql": "SELECT count(*) FROM trades a, trades b, trades c, trades d"
+            // Force an asynchronous Parquet read; metadata-only COUNT(*) can
+            // complete in the timeout future's first poll.
+            "sql": "SELECT * FROM trades"
         })),
     )
     .await;

@@ -12,6 +12,9 @@ all-features = false
 version = 2
 # A yanked crate in the lockfile is always a mistake.
 yanked = "deny"
+# Transitive through Arrow/DataFusion's derive stack. `paste` is unmaintained,
+# not vulnerable; remove this exception when the upstream dependency does.
+ignore = ["RUSTSEC-2024-0436"]
 
 [licenses]
 version = 2

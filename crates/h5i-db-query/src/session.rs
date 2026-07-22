@@ -20,6 +20,7 @@ use h5i_db_core::{Database, ReadAt, ResolvedTable};
 use crate::asof::{AsOfJoinFunc, AsOfQueryPlanner};
 use crate::finance::{ewma_udwf, vwap_udaf, wavg_udaf};
 use crate::functions::time_bucket_udf;
+use crate::gapfill::GapFillFunc;
 use crate::provider::{H5iTableProvider, ScanMetrics, ScanMetricsCollector};
 use crate::udtf::TimeTravelFunc;
 
@@ -137,6 +138,7 @@ impl H5iSession {
             "asof_join",
             Arc::new(AsOfJoinFunc::new(db.clone(), url.clone(), metrics.clone())),
         );
+        ctx.register_udtf("gapfill", Arc::new(GapFillFunc::new(db.clone())));
         ctx.register_udf(time_bucket_udf());
         ctx.register_udaf(vwap_udaf());
         ctx.register_udaf(wavg_udaf());
@@ -165,6 +167,9 @@ impl H5iSession {
         }
         for r in resolved {
             let name = r.entry.name.clone();
+            if registered.contains(&name) {
+                self.ctx.deregister_table(&name)?;
+            }
             self.ctx.register_table(
                 &name,
                 Arc::new(H5iTableProvider::new(
@@ -202,7 +207,8 @@ impl H5iSession {
 
     /// Run SQL and return a lazy DataFrame.
     pub async fn sql(&self, query: &str) -> DfResult<DataFrame> {
-        self.ctx.sql(query).await
+        let rewritten = rewrite_asof_join(query)?;
+        self.ctx.sql(&rewritten).await
     }
 
     /// DataFrame over a table at a given read point (DataFrame-API entry).
@@ -224,6 +230,143 @@ impl H5iSession {
     pub fn take_scan_metrics(&self) -> Vec<ScanMetrics> {
         self.metrics.take()
     }
+}
+
+/// Translate sqlparser's ASOF keyword form into the native `asof_join` table
+/// provider. DataFusion 54 parses the syntax but does not plan it itself.
+///
+/// Supported form (additional WHERE/GROUP/ORDER/LIMIT clauses are preserved):
+/// `FROM l ASOF JOIN r MATCH_CONDITION (l.ts >= r.ts) ON l.key = r.key`.
+fn rewrite_asof_join(query: &str) -> DfResult<String> {
+    let upper = query.to_ascii_uppercase();
+    let Some(asof_at) = upper.find(" ASOF JOIN ") else {
+        return Ok(query.to_string());
+    };
+    let from_at = upper[..asof_at].rfind(" FROM ").ok_or_else(|| {
+        datafusion::error::DataFusionError::Plan("ASOF JOIN requires FROM".into())
+    })?;
+    let match_marker = " MATCH_CONDITION (";
+    let match_at = upper[asof_at..]
+        .find(match_marker)
+        .map(|i| asof_at + i)
+        .ok_or_else(|| {
+            datafusion::error::DataFusionError::Plan(
+                "ASOF JOIN requires MATCH_CONDITION (left.time >= right.time)".into(),
+            )
+        })?;
+    let condition_start = match_at + match_marker.len();
+    let condition_end = query[condition_start..]
+        .find(')')
+        .map(|i| condition_start + i)
+        .ok_or_else(|| {
+            datafusion::error::DataFusionError::Plan("unterminated ASOF MATCH_CONDITION".into())
+        })?;
+    let after_match = condition_end + 1;
+    let on_rel = upper[after_match..].find(" ON ").ok_or_else(|| {
+        datafusion::error::DataFusionError::Plan("ASOF JOIN requires an ON constraint".into())
+    })?;
+    let on_start = after_match + on_rel + 4;
+    let clause_markers = [" WHERE ", " GROUP BY ", " HAVING ", " ORDER BY ", " LIMIT "];
+    let on_end = clause_markers
+        .iter()
+        .filter_map(|m| upper[on_start..].find(m).map(|i| on_start + i))
+        .min()
+        .unwrap_or(query.len());
+
+    let left = query[from_at + 6..asof_at].trim();
+    let right_start = asof_at + " ASOF JOIN ".len();
+    let right = query[right_start..match_at].trim();
+    let valid_name = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+    };
+    if !valid_name(left) || !valid_name(right) {
+        return Err(datafusion::error::DataFusionError::Plan(
+            "ASOF JOIN currently requires bare table names (no aliases)".into(),
+        ));
+    }
+
+    fn qualified(expr: &str) -> Option<(&str, &str)> {
+        let (table, col) = expr.trim().split_once('.')?;
+        Some((table.trim(), col.trim()))
+    }
+    let condition = query[condition_start..condition_end].trim();
+    let parts: Vec<&str> = condition.split_whitespace().collect();
+    if parts.len() != 3 {
+        return Err(datafusion::error::DataFusionError::Plan(
+            "ASOF MATCH_CONDITION must be `left.time >= right.time` (or <= for forward)".into(),
+        ));
+    }
+    let (lq, lc) = qualified(parts[0]).ok_or_else(|| {
+        datafusion::error::DataFusionError::Plan("ASOF left time must be qualified".into())
+    })?;
+    let (rq, rc) = qualified(parts[2]).ok_or_else(|| {
+        datafusion::error::DataFusionError::Plan("ASOF right time must be qualified".into())
+    })?;
+    let direction = if lq == left && rq == right {
+        match parts[1] {
+            ">" | ">=" => "backward",
+            "<" | "<=" => "forward",
+            _ => {
+                return Err(datafusion::error::DataFusionError::Plan(
+                    "ASOF MATCH_CONDITION must use >=, >, <=, or <".into(),
+                ))
+            }
+        }
+    } else {
+        return Err(datafusion::error::DataFusionError::Plan(
+            "ASOF MATCH_CONDITION must compare the joined left and right tables".into(),
+        ));
+    };
+
+    let mut by = Vec::new();
+    for equality in query[on_start..on_end].split(" AND ") {
+        let Some((a, b)) = equality.split_once('=') else {
+            return Err(datafusion::error::DataFusionError::Plan(
+                "ASOF ON currently supports equality keys joined by AND".into(),
+            ));
+        };
+        let (aq, ac) = qualified(a).ok_or_else(|| {
+            datafusion::error::DataFusionError::Plan("ASOF ON keys must be qualified".into())
+        })?;
+        let (bq, bc) = qualified(b).ok_or_else(|| {
+            datafusion::error::DataFusionError::Plan("ASOF ON keys must be qualified".into())
+        })?;
+        if aq == left && bq == right {
+            by.push(if ac == bc {
+                ac.to_string()
+            } else {
+                format!("{ac}={bc}")
+            });
+        } else if aq == right && bq == left {
+            by.push(if ac == bc {
+                ac.to_string()
+            } else {
+                format!("{bc}={ac}")
+            });
+        } else {
+            return Err(datafusion::error::DataFusionError::Plan(
+                "ASOF ON must compare left and right table keys".into(),
+            ));
+        }
+    }
+    let escape = |s: &str| s.replace('\'', "''");
+    let relation = format!(
+        "asof_join('{}', '{}', '{}', '{}', '{}', '{}')",
+        escape(left),
+        escape(right),
+        escape(lc),
+        escape(rc),
+        escape(&by.join(",")),
+        direction
+    );
+    Ok(format!(
+        "{} FROM {}{}",
+        query[..from_at].trim_end(),
+        relation,
+        &query[on_end..]
+    ))
 }
 
 /// Resolve every catalog table at its latest version, concurrently.
