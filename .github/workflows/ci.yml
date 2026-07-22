@@ -93,29 +93,34 @@ jobs:
   # Short libFuzzer smoke over the untrusted-input surfaces (manifest/HEAD
   # JSON, CSV ingest, SQL text). Scheduled + main pushes only: the fuzz
   # build is expensive and a 60 s run is a regression canary, not a soak.
-  fuzz-smoke:
-    name: fuzz smoke (60s/target)
-    if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: fuzz
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-fuzz
-      - run: |
-          for target in manifest_json csv_ingest sql_parse; do
-            cargo +nightly fuzz run "$target" -- -max_total_time=60
-          done
-      - name: Upload crash artifacts (if any)
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzz-artifacts
-          path: fuzz/artifacts/
+  #
+  # Disabled for now (2026-07-22): not needed at this stage of the project.
+  # The ./fuzz workspace and targets remain in the repo; uncomment to
+  # re-enable.
+  #
+  # fuzz-smoke:
+  #   name: fuzz smoke (60s/target)
+  #   if: github.event_name == 'schedule' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: dtolnay/rust-toolchain@nightly
+  #     - uses: Swatinem/rust-cache@v2
+  #       with:
+  #         workspaces: fuzz
+  #     - uses: taiki-e/install-action@v2
+  #       with:
+  #         tool: cargo-fuzz
+  #     - run: |
+  #         for target in manifest_json csv_ingest sql_parse; do
+  #           cargo +nightly fuzz run "$target" -- -max_total_time=60
+  #         done
+  #     - name: Upload crash artifacts (if any)
+  #       if: failure()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: fuzz-artifacts
+  #         path: fuzz/artifacts/
 
   # Perf-trend tracking: run the real benchmark on a schedule (and on main)
   # and keep the JSON as a long-retention artifact so regressions can be
