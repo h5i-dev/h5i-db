@@ -1,8 +1,13 @@
 # h5i-db structural performance roadmap
 
-Status: proposal, 2026-07-22. This document is intentionally separate from
-`ROADMAP.md`: that file tracks production-readiness work, while this one
-describes performance features inspired by recent database research.
+Status: living roadmap, updated 2026-07-22 against source checkpoint `0e07680`.
+This document is intentionally separate from `ROADMAP.md`: that file tracks
+production-readiness work, while this one describes performance features
+inspired by recent database research.
+
+Status legend: **done** means implemented with focused tests; **partial** means
+useful infrastructure exists but the phase's exit gate is unmet; **planned**
+means no production implementation was found in the checkpoint audit.
 
 ## 1. Decision
 
@@ -13,22 +18,24 @@ is:
 > A workload- and version-aware analytical database that skips data and reuses
 > work across immutable versions.
 
-The first research-driven features should be:
+The structural program is:
 
-1. query and scan telemetry with reproducible benchmarks;
-2. complete metadata pruning and planner statistics;
-3. an immutable-segment predicate cache;
-4. version-aware, mergeable aggregate states;
-5. workload-aware, previewable partial reclustering.
+1. **partial:** query-local telemetry with reproducible benchmarks;
+2. **done:** planner statistics, metadata-only `COUNT(*)`, and exact-set pruning;
+3. **planned:** an immutable-segment predicate cache;
+4. **planned:** version-aware, mergeable aggregate states;
+5. **planned:** workload-aware, previewable partial reclustering.
 
 These fit the current architecture: versions are immutable manifests, segments
 have stable checksums, segment statistics already exist, scans already use
 DataFusion pruning, and destructive rewrites already have a plan/apply review
 flow. A cache miss can therefore cost time but must never affect correctness.
 
-FastLanes/LeCo-style storage, mixed hot/cold formats, and selective late
-materialization remain worthwhile experiments, but only after profiles show
-that bytes decoded or decoder CPU dominate after the first five items land.
+The next implementation slice is therefore P0 query-local metrics and workload
+telemetry, followed by a small P2 exact-match predicate-cache prototype. P1 no
+longer blocks either item. FastLanes/LeCo-style storage, mixed hot/cold formats,
+and selective late materialization remain experiments, but only after profiles
+show that bytes decoded or decoder CPU dominate after P2-P4 land.
 
 ## 2. Cost model and success criteria
 
@@ -69,31 +76,51 @@ Required benchmark shapes:
 
 ## 3. Current foundation and gaps
 
-As inspected on 2026-07-22, h5i-db already has:
+The 2026-07-22 checkpoint audit found these performance foundations delivered:
 
 - immutable Parquet segments referenced by immutable version manifests;
-- a stable segment checksum, row/byte counts, schema revision, time range, and
+- stable segment checksums, row/byte counts, schema revision, time range, and
   per-column min/max/null counts in `SegmentMeta`;
-- `sort_key`, target segment size, target row-group size, and codec options;
-- manifest-based DataFusion pruning that fails open;
-- append-only version diffs and scanning only added segments;
+- exact low-cardinality string distinct sets (up to 128 values) written into
+  manifest statistics and used by `PruningStatistics::contained`;
+- exact planner row/null/min/max statistics where representable, post-pruning
+  scan statistics, and a tested metadata-only `COUNT(*)` path;
+- `sort_key`, target segment/row-group size, codec options, pairwise O(n)
+  sortedness checks, bounded sorted-batch merging, and streaming core scans;
+- ASOF time/projection/limit pushdown, declared ordering, and memory-pool
+  accounting, with focused performance-path tests;
+- streaming CLI and Python query output plus retractable VWAP window state;
+- append-only version diffs, scans of only added segments, and a tail stream;
 - preview/apply mutation plans and copy-on-write compaction.
 
-The important gaps are:
+The remaining structural gaps are:
 
-- `PruningStatistics::contained` has no bloom/distinct-set implementation;
-- the provider does not yet expose the manifest's exact statistics to the
-  optimizer;
-- metrics do not cleanly attribute bytes and rows to one concurrent query;
+- `ScanMetrics` records segment counts and scheduled bytes in a session-shared
+  collector, not an execution-local report with actual I/O, decoded rows,
+  operator timing, spills, or cache attribution;
+- there is no bounded persistent workload telemetry log;
+- high-cardinality entity columns have no probabilistic membership summary;
 - there is no persistent predicate or aggregate-state cache;
-- layout is a static sort key rather than a measured physical-design decision;
-- no cost model selects a subset of segments for reclustering.
+- layout remains a static sort key; `core/src/layout.rs` describes object paths,
+  not a query-aware physical `LayoutSpec`;
+- no cost model selects a subset of segments for reclustering;
+- generic-scan overhead versus raw DataFusion remains about 20% in the current
+  design ledger, above its original 10% goal.
 
 The implementation may move while this roadmap is active. Each phase starts
 with a short source audit and updates this list instead of assuming these facts
 remain true.
 
+Verification for this update: the `h5i-db-query` `query_misc` and `asof_perf`
+test targets passed 19 tests, and the `h5i-db-core` `roadmap_features` target
+passed 6 tests at the stated checkpoint.
+
 ## 4. Phase P0: make saved work observable
+
+**Status: partial.** `ScanMetrics` currently reports table/version, total,
+pruned and scanned segments, and scheduled bytes. `H5iSession` exposes the
+shared collector. This is useful pruning evidence but is not safe attribution
+for concurrent queries and does not measure physical reads.
 
 Do this before an adaptive feature. Otherwise the database cannot decide what
 to optimize and benchmarks cannot explain a win.
@@ -146,46 +173,60 @@ metadata so runs are comparable.
 
 ## 5. Phase P1: finish cheap pruning before adding caches
 
-This phase is mostly conventional engineering, but it is a prerequisite for
-meaningful research-derived features.
+**Status: done for the exact-statistics path.** The functional work below is in
+the source and covered by query tests. Probabilistic blooms remain an optional
+extension rather than a blocker for P2.
 
 ### P1.1 Manifest statistics in planning
 
-Fold manifest row/byte/min/max values into DataFusion `Statistics`, and attach
-post-pruning statistics to the scan where the API permits it. This enables join
-ordering and metadata-only `COUNT(*)`, `MIN`, and `MAX` only where every segment
-has complete, untruncated statistics whose type semantics are exact. Row counts
-can be exact even when a column bound is unknown. Test null-only columns,
-truncated strings, NaN, schema revisions, and filtered scans.
+**Delivered.** `H5iTableProvider::statistics()` folds manifest values into
+DataFusion `Statistics`, and the scan builder receives statistics for surviving
+segments. Row counts and eligible column statistics use exact precision; total
+compressed bytes remain conservatively inexact. Tests cover provider statistics
+and metadata-only `COUNT(*)`.
+
+Future aggregate rewrites must still require complete, untruncated statistics
+whose type semantics are exact. Row counts can be exact when a column bound is
+unknown. Preserve tests for null-only columns, truncated strings, NaN, schema
+revisions, and filtered scans as coverage expands beyond `COUNT(*)`.
 
 ### P1.2 Equality pruning for entity columns
 
-Add a versioned membership summary to each segment for configured low-cardinal
-columns such as `symbol`, `exchange`, and `venue`:
+**Delivered for exact low-cardinality sets.** Segment writing records up to 128
+exact distinct string values and drops the set when the threshold is exceeded.
+`PruningStatistics::contained` uses those values, and a query test demonstrates
+that a symbol predicate skips an unrelated segment.
 
-- exact sorted distinct values below a cardinality/byte threshold;
-- otherwise a bloom filter with format version, hash seed, bit count, and hash
-  count;
+The remaining optional tier for configured columns such as `symbol`,
+`exchange`, and `venue` is:
+
+- a bloom filter with format version, hash seed, bit count, and hash count when
+  the exact-set threshold is exceeded;
 - no summary when construction is not beneficial.
 
-Wire this into `PruningStatistics::contained`. False positives are allowed;
-false negatives are correctness bugs. The normal DataFusion filter remains in
-the plan and rechecks every returned row. Benchmark manifest growth as well as
-bytes skipped. Parquet-native bloom/page indexes can be added independently
-when the Arrow/Parquet reader consumes them effectively.
+False positives are allowed; false negatives are correctness bugs. The normal
+DataFusion filter must remain in the plan and recheck every returned row.
+Benchmark manifest growth as well as bytes skipped before adding blooms.
+Parquet-native bloom/page indexes can be evaluated independently when the
+Arrow/Parquet reader consumes them effectively.
 
 ### P1.3 Remove known avoidable work
 
-Complete the existing `ROADMAP.md` items that otherwise obscure structural
-wins: ASOF projection/filter pushdown and bounded memory, streaming ingest and
-output, O(n) sortedness checks, retractable VWAP/window state, and correct
-ordering/statistics declarations. These are higher confidence than a new cache.
+**Delivered.** ASOF projection/time/limit pushdown and bounded memory, streaming
+scan/query output, bounded sorted writes, O(n) sortedness checks, retractable
+VWAP/window state, and ordering/statistics declarations are present with focused
+tests.
 
-Exit gate: the performance report accounts for at least 95% of planned segment
-bytes as read or pruned, and the entity/time benchmark demonstrates that
-membership summaries skip irrelevant segments without changing results.
+Functional exit gate: passed for planner statistics, metadata-only `COUNT(*)`,
+exact-set pruning, ASOF paths, sortedness, and VWAP retraction. The original
+observability gate—account for at least 95% of planned segment bytes as read or
+pruned—moves to P0 because actual physical-byte accounting is not yet present.
 
 ## 6. Phase P2: immutable predicate cache
+
+**Status: planned.** Exact distinct-set and range pruning are foundations, not a
+persistent predicate cache. No checksum-keyed row-group/range sidecar store was
+found in the checkpoint audit.
 
 [Predicate Caching](https://www.amazon.science/publications/predicate-caching-query-driven-secondary-indexing-for-cloud-data-warehouses)
 stores qualifying tuple ranges from repeated base scans. h5i-db has an unusually
@@ -257,6 +298,11 @@ cache corruption, schema revision, and segment rewrite all degrade to a miss
 without changing results.
 
 ## 7. Phase P3: version-aware mergeable aggregate states
+
+**Status: foundation only.** The core can validate an append-only version range,
+return added segments, scan only that delta, and tail future appends. There is
+no persistent `AggregateStateStore`, aggregate-plan fingerprint, or optimizer
+substitution yet.
 
 [OpenIVM](https://ir.cwi.nl/pub/34276) shows that incremental view maintenance
 can be expressed using an existing SQL engine. h5i-db should initially take a
@@ -332,6 +378,12 @@ scans only the new segment; compaction, overwrite, restore, schema evolution,
 and cache corruption produce the same result as a forced full recomputation.
 
 ## 8. Phase P4: workload-aware, previewable reclustering
+
+**Status: planned.** Existing compaction and mutation plan/apply provide the
+safe rewrite substrate, but there is no physical `LayoutSpec`, layout health,
+workload cost model, or boundary-segment selector. The existing Rust module
+named `layout` is the on-disk object-path layout and should not be mistaken for
+this feature.
 
 [Workload-Aware Incremental Reclustering (WAIR)](https://arxiv.org/abs/2602.23289)
 observes that partitions crossing frequently used query boundaries dominate
@@ -424,12 +476,18 @@ read-plus-rewrite cost and never harms snapshot results.
 
 ## 9. Phase P5: ingest tiers and adaptive encoding, only if justified
 
+**Status: partial at the single-format layer.** Streaming query output, core
+scan streams, bounded sorted-batch merging, target-sized Parquet segments, and
+automatic compaction foundations have landed. Mixed Arrow/Parquet segments and
+adaptive per-column encoding have not.
+
 ### P5.1 Write/read tiers
 
 [Vortex](https://research.google/pubs/vortex-a-stream-oriented-storage-engine-for-big-data-analytics/)
-motivates a layer serving both streaming and batch analytics. For this embedded
-project, first try the simpler solution: stream writes, create bounded Parquet
-micro-segments, and compact them by policy or group commit.
+motivates a layer serving both streaming and batch analytics. This embedded
+project has implemented the simpler first step: bounded Parquet segments,
+streaming scan/output paths, and compaction machinery. Measure that path under
+small appends before adding another physical format.
 
 Only if measured ingest latency remains unacceptable should manifests support
 mixed segment formats:
@@ -496,19 +554,32 @@ surface. Revisit full IVM after those cases demonstrate sustained demand.
 
 ## 11. Delivery order
 
-| Priority | Deliverable | Primary work removed | Dependency |
-|---|---|---|---|
-| P0 | Per-query metrics, workload log, benchmark matrix | uncertainty | none |
-| P1 | Planner stats, membership pruning, existing pushdowns | bytes and rows | P0 metrics |
-| P2 | Immutable predicate cache | repeated scan and decode | P1 pruning |
-| P3 | Segment aggregate-state store, OHLCV/VWAP | recomputation | P0; P2 lifecycle patterns |
-| P4 | `LayoutSpec`, health, partial optimize plan/apply | future scan and sort | P0 telemetry; P1 stats |
-| P5 | Parquet adaptation, then optional hot tier/custom encoding | ingest/decode residuals | evidence from P0-P4 |
+| Priority | Status | Deliverable | Primary work removed | Dependency |
+|---|---|---|---|---|
+| P0 | partial; **next** | Query-local metrics, workload log, benchmark matrix | uncertainty | existing scan metrics |
+| P1 | **done** | Planner stats, exact-set pruning, existing pushdowns | bytes and rows | maintenance only |
+| P2 | planned; **next prototype** | Immutable predicate cache | repeated scan and decode | P0 attribution; P1 pruning |
+| P3 | foundation only | Segment aggregate-state store, OHLCV/VWAP | recomputation | P0; reuse P2 sidecar lifecycle |
+| P4 | planned | `LayoutSpec`, health, partial optimize plan/apply | future scan and sort | P0 telemetry; existing plan/apply |
+| P5 | partial | Parquet adaptation, then optional hot tier/custom encoding | ingest/decode residuals | evidence from P0-P4 |
 
-P2 and the state-store internals of P3 can proceed independently once P0/P1
-interfaces stabilize. P4 should consume telemetry but must never mutate layout
-without an inspectable plan. P5 has no calendar commitment until its benchmark
-gate is met.
+Recommended near-term sequence:
+
+1. replace the session-global metrics drain with an execution/query ID and an
+   execution-local report; instrument actual object reads and decoded rows;
+2. add the bounded, privacy-aware workload log and checked-in repeated-query
+   benchmark;
+3. prototype exact-match predicate-cache entries at row-group granularity for
+   one deterministic symbol/time predicate shape;
+4. reuse the proven sidecar/checksum/eviction machinery for segment aggregate
+   states, starting with `count`, OHLCV, and VWAP;
+5. build layout health and read-only optimize recommendations before any new
+   rewrite policy.
+
+P2 and the state-store internals of P3 can proceed independently after the P0
+identity/metrics interface stabilizes. P4 should consume telemetry but must
+never mutate layout without an inspectable plan. P5 has no calendar commitment
+until its benchmark gate is met.
 
 ## 12. Correctness and operability invariants
 
