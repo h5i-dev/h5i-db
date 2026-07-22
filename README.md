@@ -11,12 +11,14 @@ at every commit step.
 
 📖 **[Documentation & demo films](https://h5i-dev.github.io/h5i-db/)** ·
 [Design document](DESIGN.md) · [Benchmarks](benchmarks/RESULTS.md) ·
-[Agent guide](SKILL.md)
+[Operations guide](docs/OPERATIONS.md) · [Agent guide](SKILL.md)
 
 ## Quickstart
 
 ```bash
-cargo install --path crates/h5i-db-cli      # or: pip install h5i-db
+cargo install --path crates/h5i-db-cli
+# Python: pip install h5i-db  (first PyPI release pending — until then:
+#   maturin build --release -m crates/h5i-db-python/Cargo.toml)
 
 h5i-db init market.db
 h5i-db create-table market.db trades --like ticks.parquet --time-column ts
@@ -32,7 +34,7 @@ h5i-db ui market.db                                                # review surf
 |---|---|---|---|---|---|---|
 | User-facing versioning / time travel | ✗¹ | ✗ | ✗ | ✗ | ✓ | ✓ (O(1) version reads) |
 | SQL joins/windows/CTEs | ✓ | partial | ✗ | ✗ | ✗ | ✓ (DataFusion) |
-| ASOF join | ✓ | ✓ | ✓ | ✗² | ✗ | ✓ (sort-free on sorted storage) |
+| ASOF join | ✓ | ✓ | ✓ | ✗² | ✗ | ✓⁴ (sort-free on sorted storage) |
 | Previewable mutations (plan/apply) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓, policy-enforceable |
 | Concurrent writers | MVCC | n/a | n/a | n/a | unsafe³ | CAS + explicit conflict |
 | 20M-row narrow time-range scan | 17.0 ms | 15.0 ms | 13.5 ms | 10.1 ms | — | **7.3 ms** |
@@ -41,6 +43,8 @@ h5i-db ui market.db                                                # review surf
 ¹ `AT (VERSION …)` syntax exists but native storage rejects it.
 ² Experimental `join_asof` exists but is ~1000× slower — impractical at this scale.
 ³ Documented single-writer-per-symbol assumption.
+⁴ Via the `asof_join(...)` table function in SQL (and Python) — not the
+  `ASOF JOIN` keyword syntax DuckDB uses.
 
 All engines disk-backed over identical Parquet segments, measured in one
 session; full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).

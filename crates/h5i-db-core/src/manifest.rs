@@ -142,7 +142,10 @@ impl VersionManifest {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        Ok(serde_json::to_vec_pretty(self)?)
+        // Compact (non-pretty) JSON: every commit rewrites the full segment
+        // list, so encoding density directly bounds the O(segments)-per-commit
+        // manifest cost (2.10). Pretty-print with `jq` when inspecting.
+        Ok(serde_json::to_vec(self)?)
     }
 
     pub fn from_bytes(bytes: &[u8], object: &str) -> Result<Self> {

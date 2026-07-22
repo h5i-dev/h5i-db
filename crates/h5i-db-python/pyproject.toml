@@ -15,3 +15,10 @@ dynamic = ["version"]
 module-name = "h5i_db._native"
 python-source = "python"
 features = ["pyo3/extension-module"]
+# The workspace release profile is panic = "abort", which would make any
+# panic kill the host interpreter. Wheels therefore build with the `wheel`
+# profile (release + panic = "unwind"; see the workspace Cargo.toml).
+# Canonical build command: maturin build --profile wheel
+# (plain `maturin build` picks this profile up from here; do NOT pass
+# --release, which would override it back to the abort profile).
+profile = "wheel"

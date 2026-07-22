@@ -20,7 +20,7 @@ pub mod snapshot;
 pub mod spec;
 pub mod util;
 
-pub use backend::{Backend, HeadState, HeadStore, HeadTag};
+pub use backend::{Backend, HeadState, HeadStore, HeadTag, MetaLockGuard};
 pub use database::{
     CommitResult, Database, ReadAt, ResolvedTable, ScanOptions, ScanReport, VacuumReport,
     VerifyReport, VersionSummary, WriteOptions,

@@ -707,11 +707,31 @@ e2e, 6 review-UI API), zero clippy warnings.
 |---|---|
 | Phase 0 walking skeleton (FORMAT/catalog/HEAD/manifests, Parquet segments + stats, CLI) | ✅ |
 | Phase 1 versioning (CAS commits, conflicts, time travel O(1)/O(log V), replace/delete range, snapshots, restore, compact, vacuum, verify, dedup, crash safety) | ✅ exit gates pass |
-| Phase 2 performance (manifest `PruningStatistics`, declared ordering, `time_bucket`, footer-metadata cache, benchmarks vs raw DF & Polars) | ✅ |
-| Phase 3 Python (`pip install h5i-db`, Arrow-IPC interop, plan/apply from Python) | ✅ wheel builds; CI smoke-tests it |
-| Phase 4 time-series ops (AsOfJoinExec w/ sort-elision, SQL `asof_join(...)` + DataFrame `asof_join`, `vwap`/`wavg`/`ewma`) | ✅ (gapfill: post-v1) |
+| Phase 2 performance (manifest `PruningStatistics`, declared ordering, `time_bucket`, footer-metadata cache, benchmarks vs raw DF & Polars) | ◐ see honesty ledger |
+| Phase 3 Python (`pip install h5i-db`, Arrow-IPC interop, plan/apply from Python) | ◐ wheel builds; CI smoke-tests it; not yet on PyPI |
+| Phase 4 time-series ops (AsOfJoinExec w/ sort-elision, SQL `asof_join(...)` + DataFrame `asof_join`, `vwap`/`wavg`/`ewma`) | ◐ see honesty ledger (gapfill: post-v1) |
 | Phase 5 (S3 backend, staged parallel ingest, manifest-log checkpoint, caggs) | ⏳ deferred as designed |
 | CI/CD (fmt+clippy+tests linux/macos, wheel build+smoke, bench canary; release binaries ×4 targets + wheels) | ✅ |
+
+**Honesty ledger — items promised inside "done" phases that are not yet
+delivered** (kept here so a ✅ never overstates; struck through when landed):
+
+- *Metadata-only aggregates* (§7 Tier-1, Phase 2): `COUNT(*)`/`MIN`/`MAX`
+  still scan; manifest stats are not yet folded into planner `Statistics`.
+- *Decoded-batch cache* (Phase 2): shipped as a Parquet **footer-metadata**
+  cache only; decoded record batches are not cached.
+- *≤10 % overhead gate* (Phase 2 exit gate): measured overhead vs. raw
+  DataFusion on generic scans is ~20 %.
+- *DuckDB differential test harness* (Phase 2): benchmark comparisons exist;
+  automated differential *correctness* testing does not.
+- *Quant-idiom rewrite rules* (Phase 4): "latest row per key" and friends
+  are not rewritten; they run as generic window plans.
+- *SQL `ASOF JOIN` keyword syntax* (Phase 4): only the `asof_join(...)`
+  table function exists.
+- *`resample`/`rolling` sugar* (Phase 4): not implemented; `time_bucket` +
+  window functions are the spelling.
+- *Bloom/distinct-set pruning for symbol predicates* (Phase 3 storage tier):
+  `contained()` is a stub; only min/max pruning is live.
 
 Additions beyond the original roadmap (user-driven, adopted into the design):
 

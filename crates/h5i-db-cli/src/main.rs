@@ -14,13 +14,14 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use clap::{Parser, Subcommand};
+use futures::StreamExt;
 use h5i_db_core::{
     Database, Error, ReadAt, Result, ScanOptions, StorageOptions, TableOptions, WriteOptions,
 };
 use h5i_db_query::{H5iSession, SessionOptions};
 
-use ingest::{align_to_schema, read_input, InputFormat};
-use output::{write_batches, write_error, write_value, Format};
+use ingest::{align_batch, open_input, InputFormat};
+use output::{is_broken_pipe, write_batches, write_error, write_value, BatchWriter, Format, Progress};
 
 #[derive(Parser)]
 #[command(
@@ -127,6 +128,10 @@ enum Command {
         /// Abort after this many rows have been produced.
         #[arg(long)]
         max_rows: Option<usize>,
+        /// Stop after this many output bytes (checked at batch boundaries);
+        /// truncation exits 4 with a limit_exceeded envelope.
+        #[arg(long)]
+        max_bytes: Option<u64>,
         /// Query timeout, e.g. "30s", "5m".
         #[arg(long)]
         timeout: Option<humantime::Duration>,
@@ -333,6 +338,14 @@ enum PlanCmd {
 // ---------------------------------------------------------------------------
 
 fn main() {
+    // Diagnostics go to stderr (stdout is machine output), volume via RUST_LOG.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .with_writer(std::io::stderr)
+        .try_init();
     let cli = Cli::parse();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -340,12 +353,93 @@ fn main() {
         .expect("tokio runtime");
     let code = match runtime.block_on(run(cli)) {
         Ok(()) => 0,
+        // Downstream closed stdout (`… | head`): quiet success, no envelope.
+        Err(err) if is_broken_pipe(&err) => 0,
         Err(err) => {
             write_error(&err);
             err.exit_category() as i32
         }
     };
     std::process::exit(code);
+}
+
+/// Classify a DataFusion error for the CLI contract: bad SQL and runtime
+/// compute failures (casts, arithmetic) are user errors, resource exhaustion
+/// is a limit, and only genuine engine faults stay internal. Errors raised by
+/// the h5i table providers are unwrapped back into their core form so exit
+/// codes survive the trip through DataFusion.
+fn classify_df_error(e: datafusion::error::DataFusionError) -> Error {
+    use arrow::error::ArrowError;
+    use datafusion::error::DataFusionError as DfE;
+    match e {
+        DfE::Context(_, inner) => classify_df_error(*inner),
+        DfE::Diagnostic(_, inner) => classify_df_error(*inner),
+        DfE::Shared(inner) => match Arc::try_unwrap(inner) {
+            Ok(inner) => classify_df_error(inner),
+            Err(inner) => Error::invalid(inner.to_string()),
+        },
+        DfE::Collection(errors) => errors
+            .into_iter()
+            .next()
+            .map(classify_df_error)
+            .unwrap_or_else(|| Error::internal("empty DataFusion error collection")),
+        DfE::External(err) => match err.downcast::<Error>() {
+            Ok(core) => *core,
+            Err(err) => Error::internal(err),
+        },
+        DfE::ResourcesExhausted(msg) => Error::LimitExceeded { detail: msg },
+        DfE::Internal(msg) => Error::internal(msg),
+        DfE::IoError(source) => Error::io("query execution", source),
+        DfE::ObjectStore(err) => Error::ObjectStore(*err),
+        DfE::ParquetError(err) => Error::Parquet(*err),
+        DfE::ArrowError(err, ctx) => match *err {
+            ArrowError::CastError(_)
+            | ArrowError::ParseError(_)
+            | ArrowError::ComputeError(_)
+            | ArrowError::DivideByZero
+            | ArrowError::ArithmeticOverflow(_)
+            | ArrowError::InvalidArgumentError(_)
+            | ArrowError::SchemaError(_) => match ctx {
+                Some(ctx) => Error::invalid(format!("{err} ({ctx})")),
+                None => Error::invalid(err.to_string()),
+            },
+            ArrowError::MemoryError(msg) => Error::LimitExceeded { detail: msg },
+            other => Error::Arrow(other),
+        },
+        // SQL / Plan / SchemaError / Execution / NotImplemented / … : the
+        // query (or the data it touched) is at fault, not the engine.
+        other => Error::invalid(other.to_string()),
+    }
+}
+
+/// `--…-mb` flags → bytes, rejecting 0 and overflow.
+fn mb_to_bytes(mb: u64) -> Result<u64> {
+    if mb == 0 {
+        return Err(Error::invalid("segment size must be at least 1 MiB"));
+    }
+    mb.checked_mul(1024 * 1024)
+        .ok_or_else(|| Error::invalid(format!("segment size {mb} MiB overflows a byte count")))
+}
+
+/// Stream an input source into aligned batches, with TTY progress.
+fn read_aligned(
+    input: &str,
+    format: InputFormat,
+    schema: &SchemaRef,
+    label: &'static str,
+) -> Result<Vec<arrow::array::RecordBatch>> {
+    let reader = open_input(input, format, Some(schema.clone()))?;
+    let mut progress = Progress::start(label);
+    let mut batches = Vec::new();
+    let mut rows: u64 = 0;
+    for batch in reader {
+        let batch = align_batch(batch?, schema)?;
+        rows += batch.num_rows() as u64;
+        batches.push(batch);
+        progress.update(rows);
+    }
+    progress.finish();
+    Ok(batches)
 }
 
 async fn run(cli: Cli) -> Result<()> {
@@ -371,11 +465,12 @@ async fn run(cli: Cli) -> Result<()> {
             let schema: SchemaRef = match (schema, like) {
                 (Some(json), None) => parse_schema_json(&json)?,
                 (None, Some(path)) => {
-                    let batches = read_input(&path, InputFormat::Auto, None)?;
-                    batches
-                        .first()
-                        .map(|b| b.schema())
-                        .ok_or_else(|| Error::invalid("--like file contains no data"))?
+                    // The reader knows its schema up front; no data is read.
+                    let reader = open_input(&path, InputFormat::Auto, None)?;
+                    if reader.schema.fields().is_empty() {
+                        return Err(Error::invalid("--like file contains no data"));
+                    }
+                    reader.schema.clone()
                 }
                 _ => return Err(Error::invalid("provide exactly one of --schema or --like")),
             };
@@ -407,7 +502,7 @@ async fn run(cli: Cli) -> Result<()> {
                         time_column,
                         sort_key,
                         storage: StorageOptions {
-                            target_segment_bytes: target_segment_mb * 1024 * 1024,
+                            target_segment_bytes: mb_to_bytes(target_segment_mb)?,
                             ..Default::default()
                         },
                         max_segments_per_manifest: None,
@@ -491,23 +586,24 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let db = Database::open_read_only(&db).await?;
             let at = version.map(ReadAt::Version).unwrap_or(ReadAt::Latest);
+            let resolved = db.resolve(&table, at).await?;
             let (batches, _) = db
-                .scan(
-                    &table,
-                    at,
+                .scan_resolved(
+                    &resolved,
                     ScanOptions {
                         limit: Some(rows),
                         ..Default::default()
                     },
                 )
                 .await?;
-            write_batches(&batches, format)
+            write_batches(&batches, &resolved.schema, format)
         }
 
         Command::Query {
             db,
             sql,
             max_rows,
+            max_bytes,
             timeout,
             memory_limit_mb,
             spill_dir,
@@ -538,21 +634,36 @@ async fn run(cli: Cli) -> Result<()> {
             .map_err(Error::internal)?;
 
             let work = async {
-                let df = session
-                    .sql(&sql)
-                    .await
-                    .map_err(|e| Error::invalid(e.to_string()))?;
+                let df = session.sql(&sql).await.map_err(classify_df_error)?;
                 let df = match max_rows {
-                    Some(n) => df
-                        .limit(0, Some(n))
-                        .map_err(|e| Error::invalid(e.to_string()))?,
+                    Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
                     None => df,
                 };
-                df.collect()
-                    .await
-                    .map_err(|e| Error::internal(e.to_string()))
+                // Stream result batches straight to stdout instead of
+                // collecting the full result first.
+                let schema: SchemaRef = Arc::new(df.schema().as_arrow().clone());
+                let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
+                let mut writer = BatchWriter::new(format, schema, max_bytes)?;
+                let mut truncated = false;
+                while let Some(batch) = stream.next().await {
+                    let batch = batch.map_err(classify_df_error)?;
+                    if !writer.write(&batch)? {
+                        truncated = true;
+                        break;
+                    }
+                }
+                writer.finish()?;
+                if truncated {
+                    return Err(Error::LimitExceeded {
+                        detail: format!(
+                            "result exceeded --max-bytes={}; output truncated at a batch boundary",
+                            max_bytes.unwrap_or_default()
+                        ),
+                    });
+                }
+                Ok(())
             };
-            let batches = match timeout {
+            match timeout {
                 Some(t) => tokio::time::timeout(*t, work)
                     .await
                     .map_err(|_| Error::Timeout {
@@ -560,7 +671,6 @@ async fn run(cli: Cli) -> Result<()> {
                     })??,
                 None => work.await?,
             };
-            write_batches(&batches, format)?;
             if stats {
                 for m in session.take_scan_metrics() {
                     eprintln!("{}", serde_json::to_string(&m)?);
@@ -580,8 +690,7 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let db = Database::open(&db).await?;
             let resolved = db.resolve(&table, ReadAt::Latest).await?;
-            let batches = read_input(&input, input_format, Some(resolved.schema.clone()))?;
-            let batches = align_to_schema(batches, &resolved.schema)?;
+            let batches = read_aligned(&input, input_format, &resolved.schema, "ingest")?;
             let opts = write_flags.to_options();
             let result = match mode {
                 IngestMode::Write => db.write(&table, batches, opts).await?,
@@ -660,10 +769,9 @@ async fn run(cli: Cli) -> Result<()> {
             let resolved = db.resolve(&table, ReadAt::Latest).await?;
             let (start, end) = parse_range(&resolved, &start, &end)?;
             let batches = match input {
-                Some(path) => align_to_schema(
-                    read_input(&path, input_format, Some(resolved.schema.clone()))?,
-                    &resolved.schema,
-                )?,
+                Some(path) => {
+                    read_aligned(&path, input_format, &resolved.schema, "replace-range")?
+                }
                 None => vec![],
             };
             if plan {
@@ -748,17 +856,26 @@ async fn run(cli: Cli) -> Result<()> {
             }
             PolicyCmd::Set { db, entries } => {
                 let db = Database::open(&db).await?;
-                let mut policy = db.policy().await?;
-                for entry in &entries {
-                    let (key, value) = entry.split_once('=').ok_or_else(|| {
-                        Error::invalid(format!("policy entries are key=true|false, got {entry:?}"))
-                    })?;
-                    let value: bool = value.parse().map_err(|_| {
-                        Error::invalid(format!("policy value must be true or false, got {value:?}"))
-                    })?;
-                    policy.set(key.trim(), value)?;
-                }
-                db.set_policy(&policy).await?;
+                // Atomic read-modify-write; concurrent editors can't clobber
+                // each other's keys.
+                let policy = db
+                    .update_policy(|policy| {
+                        for entry in &entries {
+                            let (key, value) = entry.split_once('=').ok_or_else(|| {
+                                Error::invalid(format!(
+                                    "policy entries are key=true|false, got {entry:?}"
+                                ))
+                            })?;
+                            let value: bool = value.parse().map_err(|_| {
+                                Error::invalid(format!(
+                                    "policy value must be true or false, got {value:?}"
+                                ))
+                            })?;
+                            policy.set(key.trim(), value)?;
+                        }
+                        Ok(())
+                    })
+                    .await?;
                 write_value(&policy, format)
             }
         },
@@ -773,7 +890,7 @@ async fn run(cli: Cli) -> Result<()> {
             let result = db
                 .compact_with(
                     &table,
-                    target_mb.map(|m| m * 1024 * 1024),
+                    target_mb.map(mb_to_bytes).transpose()?,
                     write_flags.to_options(),
                 )
                 .await?;

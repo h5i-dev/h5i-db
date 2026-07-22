@@ -1,0 +1,314 @@
+//! Tests for roadmap fixes: `time_bucket` interval validation (1.2),
+//! manifest-backed planner statistics (2.3), retractable rolling
+//! `vwap`/`wavg` (2.7), and session refresh / shared runtime (2.9).
+
+use std::sync::Arc;
+
+use arrow::array::{Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use datafusion::common::stats::Precision;
+use datafusion::physical_plan::displayable;
+use h5i_db_core::{Database, ReadAt, TableOptions, WriteOptions};
+use h5i_db_query::{H5iSession, SessionOptions};
+
+fn trades_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("price", DataType::Float64, false),
+        Field::new("size", DataType::Int64, false),
+    ]))
+}
+
+fn trades_batch(ts: &[i64], symbols: &[&str], prices: &[f64], sizes: &[i64]) -> RecordBatch {
+    RecordBatch::try_new(
+        trades_schema(),
+        vec![
+            Arc::new(TimestampNanosecondArray::from(ts.to_vec()).with_timezone("UTC".to_string())),
+            Arc::new(StringArray::from(symbols.to_vec())),
+            Arc::new(Float64Array::from(prices.to_vec())),
+            Arc::new(Int64Array::from(sizes.to_vec())),
+        ],
+    )
+    .unwrap()
+}
+
+fn time_options() -> TableOptions {
+    TableOptions {
+        time_column: Some("ts".into()),
+        ..Default::default()
+    }
+}
+
+async fn setup_trades() -> (tempfile::TempDir, Arc<Database>) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.write(
+        "trades",
+        vec![trades_batch(
+            &[1_000, 2_000, 3_000, 4_000],
+            &["A", "B", "A", "B"],
+            &[10.0, 20.0, 12.0, 22.0],
+            &[1, 2, 3, 4],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    (dir, db)
+}
+
+async fn session(db: &Arc<Database>) -> H5iSession {
+    H5iSession::new(db.clone(), SessionOptions::default())
+        .await
+        .unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// 1.2 time_bucket interval validation
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn time_bucket_rejects_degenerate_intervals() {
+    let (_dir, db) = setup_trades().await;
+    let s = session(&db).await;
+    // Each of these used to panic (divide-by-zero / i32 wrap) at execution —
+    // fatal under the workspace panic=abort profile. They must now surface as
+    // plain query errors.
+    for sql in [
+        "SELECT time_bucket('0mo', ts) FROM trades",
+        "SELECT time_bucket('0s', ts) FROM trades",
+        "SELECT time_bucket(INTERVAL '0' MONTH, ts) FROM trades",
+        "SELECT time_bucket(INTERVAL '-2' MONTH, ts) FROM trades",
+        "SELECT time_bucket('1.5mo', ts) FROM trades",
+        "SELECT time_bucket('999999999999y', ts) FROM trades",
+    ] {
+        let res = match s.sql(sql).await {
+            Ok(df) => df.collect().await.map(|_| ()),
+            Err(e) => Err(e),
+        };
+        let err = res.expect_err(sql).to_string();
+        assert!(
+            err.contains("time_bucket"),
+            "unexpected error for {sql}: {err}"
+        );
+    }
+    // Sane widths still work.
+    s.sql("SELECT time_bucket('1mo', ts) FROM trades")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    s.sql("SELECT time_bucket(INTERVAL '1' MONTH, ts) FROM trades")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// 2.3 manifest statistics
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn provider_statistics_are_exact_from_manifest() {
+    let (_dir, db) = setup_trades().await;
+    let s = session(&db).await;
+    let provider = s.context().table_provider("trades").await.unwrap();
+    let stats = provider.statistics().expect("manifest statistics");
+    assert_eq!(stats.num_rows, Precision::Exact(4));
+    assert!(matches!(stats.total_byte_size, Precision::Inexact(b) if b > 0));
+    let schema = trades_schema();
+    let price_idx = schema.index_of("price").unwrap();
+    let price = &stats.column_statistics[price_idx];
+    assert_eq!(price.null_count, Precision::Exact(0));
+    assert_eq!(
+        price.min_value,
+        Precision::Exact(datafusion::scalar::ScalarValue::Float64(Some(10.0)))
+    );
+    assert_eq!(
+        price.max_value,
+        Precision::Exact(datafusion::scalar::ScalarValue::Float64(Some(22.0)))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn count_star_is_answered_from_metadata() {
+    let (_dir, db) = setup_trades().await;
+    let s = session(&db).await;
+    let df = s.sql("SELECT count(*) FROM trades").await.unwrap();
+    let plan = df.create_physical_plan().await.unwrap();
+    let display = displayable(plan.as_ref()).indent(true).to_string();
+    // Exact scan statistics let the aggregate fold to a literal: no scan node
+    // may survive in the plan.
+    assert!(
+        !display.contains("DataSourceExec"),
+        "count(*) still scans:\n{display}"
+    );
+    let batches = datafusion::physical_plan::collect(plan, s.context().task_ctx())
+        .await
+        .unwrap();
+    let n = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(n, 4);
+}
+
+// ---------------------------------------------------------------------------
+// 2.7 rolling vwap via retract_batch
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rolling_vwap_window_matches_reference() {
+    let (_dir, db) = setup_trades().await;
+    let s = session(&db).await;
+    let batches = s
+        .sql(
+            "SELECT vwap(price, size) OVER (\
+               ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW\
+             ) AS v FROM trades ORDER BY ts",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let all: Vec<f64> = batches
+        .iter()
+        .flat_map(|b| {
+            let a = b.column(0).as_any().downcast_ref::<Float64Array>().unwrap();
+            (0..a.len()).map(|i| a.value(i)).collect::<Vec<_>>()
+        })
+        .collect();
+    // Reference: 2-row sliding weighted mean over (price, size) pairs
+    // (10,1) (20,2) (12,3) (22,4), computed from scratch per frame.
+    let expect = [
+        10.0,
+        (10.0 + 40.0) / 3.0,
+        (40.0 + 36.0) / 5.0,
+        (36.0 + 88.0) / 7.0,
+    ];
+    assert_eq!(all.len(), expect.len());
+    for (got, want) in all.iter().zip(expect) {
+        assert!((got - want).abs() < 1e-9, "got {got}, want {want}");
+    }
+}
+
+#[test]
+fn vwap_accumulator_retract_matches_fresh_state() {
+    use datafusion::logical_expr::function::AccumulatorArgs;
+    use datafusion::logical_expr::Accumulator as _;
+    // Drive the accumulator exactly like a sliding frame: bulk update, then
+    // retract the rows that left, and compare with a from-scratch frame.
+    let udaf = h5i_db_query::finance::vwap_udaf();
+    let schema = Schema::new(vec![
+        Field::new("p", DataType::Float64, true),
+        Field::new("w", DataType::Float64, true),
+    ]);
+    let args = AccumulatorArgs {
+        return_field: Arc::new(Field::new("vwap", DataType::Float64, true)),
+        schema: &schema,
+        ignore_nulls: false,
+        order_bys: &[],
+        is_reversed: false,
+        name: "vwap",
+        is_distinct: false,
+        exprs: &[],
+        expr_fields: &[],
+    };
+    let mut acc = udaf.accumulator(args).unwrap();
+    let p: Arc<dyn Array> = Arc::new(Float64Array::from(vec![10.0, 20.0, 12.0]));
+    let w: Arc<dyn Array> = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+    acc.update_batch(&[p, w]).unwrap();
+    assert!(acc.supports_retract_batch());
+    // Retract the first row → frame is rows 2..3.
+    let rp: Arc<dyn Array> = Arc::new(Float64Array::from(vec![10.0]));
+    let rw: Arc<dyn Array> = Arc::new(Float64Array::from(vec![1.0]));
+    acc.retract_batch(&[rp, rw]).unwrap();
+    let got = acc.evaluate().unwrap();
+    let want = (20.0 * 2.0 + 12.0 * 3.0) / 5.0;
+    assert_eq!(
+        got,
+        datafusion::scalar::ScalarValue::Float64(Some(want))
+    );
+    // Retract the rest → empty frame must evaluate to NULL, exactly.
+    let rp: Arc<dyn Array> = Arc::new(Float64Array::from(vec![20.0, 12.0]));
+    let rw: Arc<dyn Array> = Arc::new(Float64Array::from(vec![2.0, 3.0]));
+    acc.retract_batch(&[rp, rw]).unwrap();
+    assert_eq!(
+        acc.evaluate().unwrap(),
+        datafusion::scalar::ScalarValue::Float64(None)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2.9 session refresh + shared runtime
+// ---------------------------------------------------------------------------
+
+async fn count_trades(s: &H5iSession) -> i64 {
+    let batches = s
+        .sql("SELECT count(*) AS n FROM trades")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refresh_repoints_tables_at_latest_without_new_session() {
+    let (_dir, db) = setup_trades().await;
+    let s = session(&db).await;
+    assert_eq!(count_trades(&s).await, 4);
+
+    db.write(
+        "trades",
+        vec![trades_batch(&[5_000], &["C"], &[30.0], &[5])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    // Registered names are snapshot-bound: still the old version.
+    assert_eq!(count_trades(&s).await, 4);
+
+    s.refresh().await.unwrap();
+    assert_eq!(count_trades(&s).await, 5);
+
+    // New tables appear after refresh.
+    db.create_table("quotes", trades_schema(), time_options())
+        .await
+        .unwrap();
+    s.refresh().await.unwrap();
+    s.sql("SELECT * FROM quotes").await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sessions_can_share_a_runtime_env() {
+    let (_dir, db) = setup_trades().await;
+    let s1 = session(&db).await;
+    assert_eq!(count_trades(&s1).await, 4);
+
+    let s2 = H5iSession::new_with_runtime(db.clone(), SessionOptions::default(), s1.runtime_env())
+        .await
+        .unwrap();
+    assert!(Arc::ptr_eq(&s1.runtime_env(), &s2.runtime_env()));
+    assert_eq!(count_trades(&s2).await, 4);
+}

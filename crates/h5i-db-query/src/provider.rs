@@ -7,10 +7,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::common::DFSchema;
+use datafusion::common::stats::Precision;
+use datafusion::common::{ColumnStatistics, DFSchema, ScalarValue, Statistics};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::DataSourceExec;
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
@@ -53,6 +54,114 @@ impl ScanMetricsCollector {
     /// Drain all recorded scans (typically called once per query).
     pub fn take(&self) -> Vec<ScanMetrics> {
         std::mem::take(&mut self.inner.lock().unwrap())
+    }
+}
+
+/// Typed Arrow scalar from a manifest JSON stat (mirrors the conversion in
+/// `pruning.rs`, restricted to the types manifest stats are recorded for).
+fn json_stat_to_scalar(v: &serde_json::Value, data_type: &DataType) -> Option<ScalarValue> {
+    use arrow::datatypes::TimeUnit;
+    match data_type {
+        DataType::Int8 => v.as_i64().map(|x| ScalarValue::Int8(Some(x as i8))),
+        DataType::Int16 => v.as_i64().map(|x| ScalarValue::Int16(Some(x as i16))),
+        DataType::Int32 => v.as_i64().map(|x| ScalarValue::Int32(Some(x as i32))),
+        DataType::Int64 => v.as_i64().map(|x| ScalarValue::Int64(Some(x))),
+        DataType::UInt8 => v.as_u64().map(|x| ScalarValue::UInt8(Some(x as u8))),
+        DataType::UInt16 => v.as_u64().map(|x| ScalarValue::UInt16(Some(x as u16))),
+        DataType::UInt32 => v.as_u64().map(|x| ScalarValue::UInt32(Some(x as u32))),
+        DataType::UInt64 => v.as_u64().map(|x| ScalarValue::UInt64(Some(x))),
+        DataType::Float32 => v.as_f64().map(|x| ScalarValue::Float32(Some(x as f32))),
+        DataType::Float64 => v.as_f64().map(|x| ScalarValue::Float64(Some(x))),
+        DataType::Boolean => v.as_bool().map(|x| ScalarValue::Boolean(Some(x))),
+        DataType::Utf8 => v.as_str().map(|s| ScalarValue::Utf8(Some(s.to_string()))),
+        DataType::LargeUtf8 => v
+            .as_str()
+            .map(|s| ScalarValue::LargeUtf8(Some(s.to_string()))),
+        DataType::Date32 => v.as_i64().map(|x| ScalarValue::Date32(Some(x as i32))),
+        DataType::Date64 => v.as_i64().map(|x| ScalarValue::Date64(Some(x))),
+        DataType::Timestamp(unit, tz) => {
+            let x = v.as_i64()?;
+            Some(match unit {
+                TimeUnit::Second => ScalarValue::TimestampSecond(Some(x), tz.clone()),
+                TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(x), tz.clone()),
+                TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(x), tz.clone()),
+                TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(x), tz.clone()),
+            })
+        }
+        // Dictionary-encoded strings: stats were computed over values.
+        DataType::Dictionary(_, value) if **value == DataType::Utf8 => {
+            v.as_str().map(|s| ScalarValue::Utf8(Some(s.to_string())))
+        }
+        _ => None,
+    }
+}
+
+/// Fold manifest segment stats into planner `Statistics` (DESIGN §7 Tier 1):
+/// exact row counts always; per-column min/max/null-count exact when every
+/// segment recorded the stat, absent otherwise (never guessed).
+fn manifest_statistics(schema: &SchemaRef, segments: &[&SegmentMeta]) -> Statistics {
+    let num_rows = segments.iter().map(|s| s.rows as usize).sum::<usize>();
+    // Encoded Parquet bytes understate in-memory Arrow size — keep Inexact.
+    let total_bytes = segments.iter().map(|s| s.bytes as usize).sum::<usize>();
+
+    let column_statistics = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let stat_type = match field.data_type() {
+                DataType::Dictionary(_, value) if **value == DataType::Utf8 => DataType::Utf8,
+                other => other.clone(),
+            };
+            let per_seg: Vec<Option<&h5i_db_core::ColumnStats>> = segments
+                .iter()
+                .map(|seg| seg.columns.get(field.name()))
+                .collect();
+            let mut stats = ColumnStatistics::new_unknown();
+            if per_seg.iter().all(|s| s.is_some()) && !per_seg.is_empty() {
+                let cols: Vec<_> = per_seg.into_iter().flatten().collect();
+                stats.null_count =
+                    Precision::Exact(cols.iter().map(|c| c.null_count as usize).sum());
+                let mins: Option<Vec<ScalarValue>> = cols
+                    .iter()
+                    .map(|c| {
+                        c.min
+                            .as_ref()
+                            .and_then(|v| json_stat_to_scalar(v, &stat_type))
+                    })
+                    .collect();
+                if let Some(mins) = mins {
+                    if let Some(min) = mins
+                        .into_iter()
+                        .reduce(|a, b| if b.partial_cmp(&a) == Some(std::cmp::Ordering::Less) { b } else { a })
+                    {
+                        stats.min_value = Precision::Exact(min);
+                    }
+                }
+                let maxs: Option<Vec<ScalarValue>> = cols
+                    .iter()
+                    .map(|c| {
+                        c.max
+                            .as_ref()
+                            .and_then(|v| json_stat_to_scalar(v, &stat_type))
+                    })
+                    .collect();
+                if let Some(maxs) = maxs {
+                    if let Some(max) = maxs
+                        .into_iter()
+                        .reduce(|a, b| if b.partial_cmp(&a) == Some(std::cmp::Ordering::Greater) { b } else { a })
+                    {
+                        stats.max_value = Precision::Exact(max);
+                    }
+                }
+            }
+            stats
+        })
+        .collect();
+
+    Statistics {
+        num_rows: Precision::Exact(num_rows),
+        total_byte_size: Precision::Inexact(total_bytes),
+        column_statistics,
     }
 }
 
@@ -149,6 +258,14 @@ impl TableProvider for H5iTableProvider {
         TableType::Base
     }
 
+    /// Exact table-level statistics straight from the manifest — lets the
+    /// planner answer metadata-only aggregates and pick join sides with zero
+    /// object I/O.
+    fn statistics(&self) -> Option<Statistics> {
+        let segments: Vec<&SegmentMeta> = self.resolved.manifest.segments.iter().collect();
+        Some(manifest_statistics(&self.schema(), &segments))
+    }
+
     fn supports_filters_pushdown(
         &self,
         filters: &[&Expr],
@@ -203,10 +320,20 @@ impl TableProvider for H5iTableProvider {
             }
         }
 
+        // Post-pruning statistics for the physical plan: exact over the
+        // surviving segments when the scan emits them verbatim; degraded to
+        // inexact when a predicate (row-group/page pruning) or limit can
+        // shrink the output.
+        let mut scan_stats = manifest_statistics(&self.schema(), &survivors);
+        if !filters.is_empty() || limit.is_some() {
+            scan_stats = scan_stats.to_inexact();
+        }
+
         let mut builder =
             FileScanConfigBuilder::new(self.object_store_url.clone(), Arc::new(source))
                 .with_projection_indices(projection.cloned())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?
+                .with_statistics(scan_stats)
                 .with_limit(limit);
         if let Some(ordering) = self.output_ordering() {
             builder = builder.with_output_ordering(vec![ordering]);

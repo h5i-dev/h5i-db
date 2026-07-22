@@ -12,14 +12,18 @@
 //! silent re-plan).
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use axum::extract::{Path as AxPath, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path as AxPath, Query, Request, State};
+use axum::http::{header, Method, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
+use tower::limit::ConcurrencyLimitLayer;
+use tower_http::trace::TraceLayer;
 
 use h5i_db_core::{Database, Error, MutationPlan, ReadAt};
 use h5i_db_query::{H5iSession, SessionOptions};
@@ -28,12 +32,39 @@ const INDEX_HTML: &str = include_str!("../assets/index.html");
 /// Rows returned to the browser per query/sample (the UI is a review
 /// surface; exports belong to the CLI).
 const UI_ROW_LIMIT: usize = 1_000;
+/// Wall-clock budget for a scratchpad query; long exports belong to the CLI.
+const UI_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+/// Memory cap per scratchpad session; DataFusion spills past this.
+const UI_QUERY_MEMORY_LIMIT: usize = 512 << 20;
+/// Scratchpad queries running at once; extra requests queue at the route.
+const UI_QUERY_CONCURRENCY: usize = 2;
+/// Header required on every mutating request. Cross-origin pages cannot set
+/// custom headers without a CORS preflight, and we never answer preflights.
+const CSRF_HEADER: &str = "x-h5i-csrf";
 
 #[derive(Clone)]
 pub struct UiState {
     pub db: Arc<Database>,
     pub allow_mutations: bool,
     pub db_label: String,
+    /// Per-process bearer token; the startup URL carries it once.
+    pub token: String,
+    pub query_timeout: Duration,
+    pub query_memory_limit: usize,
+}
+
+impl UiState {
+    /// State with a fresh random token and default query limits.
+    pub fn new(db: Arc<Database>, db_label: String, allow_mutations: bool) -> Self {
+        Self {
+            db,
+            allow_mutations,
+            db_label,
+            token: uuid::Uuid::new_v4().simple().to_string(),
+            query_timeout: UI_QUERY_TIMEOUT,
+            query_memory_limit: UI_QUERY_MEMORY_LIMIT,
+        }
+    }
 }
 
 /// Serve the UI on 127.0.0.1:`port`. Never binds a non-loopback address.
@@ -43,11 +74,8 @@ pub async fn serve(
     port: u16,
     allow_mutations: bool,
 ) -> Result<(), Error> {
-    let state = UiState {
-        db,
-        allow_mutations,
-        db_label,
-    };
+    let state = UiState::new(db, db_label, allow_mutations);
+    let token = state.token.clone();
     let app = build_router(state);
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
@@ -60,7 +88,8 @@ pub async fn serve(
         }
     })?;
     eprintln!("h5i-db review UI");
-    eprintln!("  open   http://127.0.0.1:{port}");
+    eprintln!("  open   http://127.0.0.1:{port}/?token={token}");
+    eprintln!("         (the URL carries this session's access token — the API refuses requests without it)");
     eprintln!(
         "  mode   {}",
         if allow_mutations {
@@ -86,7 +115,12 @@ pub fn build_router(state: UiState) -> Router {
         .route("/api/plan/{table}/{id}", get(plan_detail))
         .route("/api/plan/{table}/{id}/apply", post(plan_apply))
         .route("/api/plan/{table}/{id}/discard", post(plan_discard))
-        .route("/api/query", post(run_query))
+        .route(
+            "/api/query",
+            post(run_query).layer(ConcurrencyLimitLayer::new(UI_QUERY_CONCURRENCY)),
+        )
+        .layer(middleware::from_fn_with_state(state.clone(), guard))
+        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
@@ -95,33 +129,139 @@ async fn index() -> Html<&'static str> {
 }
 
 // ---------------------------------------------------------------------------
+// request guard: Host allowlist + bearer token + CSRF header
+// ---------------------------------------------------------------------------
+
+/// Reject anything a hostile web page could make a browser send here: DNS
+/// rebinding arrives with a foreign `Host`; cross-site requests cannot carry
+/// the bearer token (never issued cross-origin) or a custom header.
+async fn guard(State(st): State<UiState>, req: Request, next: Next) -> Response {
+    let host_ok = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(host_is_loopback);
+    if !host_ok {
+        return guard_reject(
+            StatusCode::FORBIDDEN,
+            "forbidden_host",
+            "request Host is not a loopback name",
+            "the review UI only answers to localhost / 127.0.0.1 / [::1]",
+        );
+    }
+    if req.uri().path().starts_with("/api/") {
+        let authed = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .is_some_and(|t| token_eq(t, &st.token));
+        if !authed {
+            return guard_reject(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "missing or wrong access token",
+                "open the UI through the exact URL printed at startup — it carries the token",
+            );
+        }
+        if req.method() == Method::POST && !req.headers().contains_key(CSRF_HEADER) {
+            return guard_reject(
+                StatusCode::FORBIDDEN,
+                "csrf_required",
+                "mutating request without the CSRF header",
+                "send `x-h5i-csrf: 1` on POST requests",
+            );
+        }
+    }
+    next.run(req).await
+}
+
+fn guard_reject(status: StatusCode, code: &str, message: &str, hint: &str) -> Response {
+    let body = json!({"code": code, "message": message, "retryable": false, "hint": hint});
+    (status, Json(body)).into_response()
+}
+
+/// `Host` allowlist (port ignored): loopback names only.
+fn host_is_loopback(host: &str) -> bool {
+    let h = host.trim();
+    let bare = if let Some(rest) = h.strip_prefix('[') {
+        match rest.split_once(']') {
+            Some((ip, _)) => ip,
+            None => return false,
+        }
+    } else {
+        match h.rsplit_once(':') {
+            Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+                name
+            }
+            _ => h,
+        }
+    };
+    matches!(
+        bare.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    )
+}
+
+/// Constant-time-ish comparison; enough to blunt timing probes on loopback.
+fn token_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len()
+        && a.bytes()
+            .zip(b.bytes())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
+}
+
+// ---------------------------------------------------------------------------
 // error envelope (same contract as the CLI)
 // ---------------------------------------------------------------------------
 
-struct ApiError(Error);
+enum ApiError {
+    Db(Error),
+    /// Envelope not backed by a core error (e.g. scratchpad timeout).
+    Custom {
+        status: StatusCode,
+        code: &'static str,
+        message: String,
+        hint: &'static str,
+    },
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let e = &self.0;
-        let status = match e.exit_category() {
-            h5i_db_core::ExitCategory::UserError => StatusCode::BAD_REQUEST,
-            h5i_db_core::ExitCategory::Conflict => StatusCode::CONFLICT,
-            h5i_db_core::ExitCategory::Limit => StatusCode::TOO_MANY_REQUESTS,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-        let body = json!({
-            "code": e.code(),
-            "message": e.to_string(),
-            "retryable": e.retryable(),
-            "hint": e.hint(),
-        });
-        (status, Json(body)).into_response()
+        match self {
+            ApiError::Db(e) => {
+                let status = match e.exit_category() {
+                    h5i_db_core::ExitCategory::UserError => StatusCode::BAD_REQUEST,
+                    h5i_db_core::ExitCategory::Conflict => StatusCode::CONFLICT,
+                    h5i_db_core::ExitCategory::Limit => StatusCode::TOO_MANY_REQUESTS,
+                    _ => StatusCode::INTERNAL_SERVER_ERROR,
+                };
+                let body = json!({
+                    "code": e.code(),
+                    "message": e.to_string(),
+                    "retryable": e.retryable(),
+                    "hint": e.hint(),
+                });
+                (status, Json(body)).into_response()
+            }
+            ApiError::Custom {
+                status,
+                code,
+                message,
+                hint,
+            } => {
+                let body =
+                    json!({"code": code, "message": message, "retryable": false, "hint": hint});
+                (status, Json(body)).into_response()
+            }
+        }
     }
 }
 
 impl From<Error> for ApiError {
     fn from(e: Error) -> Self {
-        Self(e)
+        Self::Db(e)
     }
 }
 
@@ -354,7 +494,7 @@ fn require_mutations(st: &UiState) -> Result<(), ApiError> {
     if st.allow_mutations {
         Ok(())
     } else {
-        Err(ApiError(Error::ReadOnly {
+        Err(ApiError::Db(Error::ReadOnly {
             op: "plan apply/discard from the UI (restart with --allow-mutations)".into(),
         }))
     }
@@ -366,8 +506,22 @@ async fn plan_apply(
 ) -> ApiResult {
     require_mutations(&st)?;
     let plan = st.db.load_plan(&table, id).await?;
-    let result = st.db.apply_plan(&plan).await?;
-    Ok(Json(serde_json::to_value(&result).map_err(Error::from)?))
+    tracing::info!(table = %table, plan_id = %id, op = %plan.op, "ui: plan apply requested");
+    let result = match st.db.apply_plan(&plan).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(table = %table, plan_id = %id, code = e.code(), "ui: plan apply failed");
+            return Err(e.into());
+        }
+    };
+    let value = serde_json::to_value(&result).map_err(Error::from)?;
+    tracing::info!(
+        table = %table,
+        plan_id = %id,
+        version = ?value.get("sequence").and_then(|v| v.as_u64()),
+        "ui: plan applied"
+    );
+    Ok(Json(value))
 }
 
 async fn plan_discard(
@@ -376,6 +530,7 @@ async fn plan_discard(
 ) -> ApiResult {
     require_mutations(&st)?;
     st.db.discard_plan(&table, id).await?;
+    tracing::info!(table = %table, plan_id = %id, "ui: plan discarded");
     Ok(Json(json!({"discarded": id})))
 }
 
@@ -384,39 +539,128 @@ struct QueryBody {
     sql: String,
 }
 
-/// SQL scratchpad: read-only session per request, row-capped, with scan
-/// metrics so pruning is visible in the UI.
+/// SQL scratchpad: read-only session per request, memory-capped, row-capped,
+/// wall-clock-bounded, with scan metrics so pruning is visible in the UI.
 async fn run_query(State(st): State<UiState>, Json(body): Json<QueryBody>) -> ApiResult {
     let started = std::time::Instant::now();
-    let session = H5iSession::new(st.db.clone(), SessionOptions::default())
-        .await
-        .map_err(|e| ApiError(Error::internal(e)))?;
-    let df = session
-        .sql(&body.sql)
-        .await
-        .and_then(|df| df.limit(0, Some(UI_ROW_LIMIT)))
-        .map_err(|e| ApiError(Error::invalid(e.to_string())))?;
-    let batches = df
-        .collect()
-        .await
-        .map_err(|e| ApiError(Error::invalid(e.to_string())))?;
-    let mut out = batches_to_json(&batches)?;
+    let session = H5iSession::new(
+        st.db.clone(),
+        SessionOptions {
+            memory_limit: Some(st.query_memory_limit),
+            ..Default::default()
+        },
+    )
+    .await
+    .map_err(|e| ApiError::Db(Error::internal(e)))?;
+    let execute = async {
+        // Fetch one row past the cap so truncation is detectable.
+        let df = session
+            .sql(&body.sql)
+            .await
+            .and_then(|df| df.limit(0, Some(UI_ROW_LIMIT + 1)))
+            .map_err(|e| ApiError::Db(Error::invalid(e.to_string())))?;
+        let schema = df.schema().inner().clone();
+        let batches = df
+            .collect()
+            .await
+            .map_err(|e| ApiError::Db(Error::invalid(e.to_string())))?;
+        Ok::<_, ApiError>((schema, batches))
+    };
+    let (schema, mut batches) = match tokio::time::timeout(st.query_timeout, execute).await {
+        Err(_) => {
+            return Err(ApiError::Custom {
+                status: StatusCode::REQUEST_TIMEOUT,
+                code: "query_timeout",
+                message: format!("query exceeded the {:?} scratchpad budget", st.query_timeout),
+                hint: "narrow the query, or run it via the CLI which has no interactive timeout",
+            })
+        }
+        Ok(r) => r?,
+    };
+    let truncated = truncate_batches(&mut batches, UI_ROW_LIMIT);
+    let mut out = batches_to_json_with_schema(&batches, Some(schema))?;
+    out["truncated"] = json!(truncated);
     out["scan_metrics"] = serde_json::to_value(session.take_scan_metrics()).map_err(Error::from)?;
     out["wall_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
     Ok(Json(out))
 }
 
+/// Cap total rows across `batches`; returns whether anything was dropped.
+fn truncate_batches(batches: &mut Vec<arrow::array::RecordBatch>, cap: usize) -> bool {
+    let mut seen = 0usize;
+    for i in 0..batches.len() {
+        let n = batches[i].num_rows();
+        if seen + n > cap {
+            batches[i] = batches[i].slice(0, cap - seen);
+            batches.truncate(i + 1);
+            return true;
+        }
+        seen += n;
+    }
+    false
+}
+
 /// Render batches as `{schema: [...], rows: [[...]]}` for the browser.
 fn batches_to_json(batches: &[arrow::array::RecordBatch]) -> Result<serde_json::Value, Error> {
-    if batches.is_empty() {
-        return Ok(json!({"schema": [], "rows": []}));
+    batches_to_json_with_schema(batches, None)
+}
+
+/// Like [`batches_to_json`], but keeps the schema when there are no batches.
+fn batches_to_json_with_schema(
+    batches: &[arrow::array::RecordBatch],
+    empty_schema: Option<arrow::datatypes::SchemaRef>,
+) -> Result<serde_json::Value, Error> {
+    let schema = match batches.first() {
+        Some(b) => b.schema(),
+        None => match empty_schema {
+            Some(s) => s,
+            None => return Ok(json!({"schema": [], "rows": []})),
+        },
+    };
+    // arrow-json emits row *objects*, so duplicate output names (e.g.
+    // `SELECT a.x, b.x`) would collapse; disambiguate with `_N` suffixes.
+    let mut used = std::collections::HashSet::new();
+    let mut names = Vec::with_capacity(schema.fields().len());
+    for f in schema.fields() {
+        let mut name = f.name().clone();
+        let mut n = 1usize;
+        while !used.insert(name.clone()) {
+            name = format!("{}_{n}", f.name());
+            n += 1;
+        }
+        names.push(name);
     }
-    let schema = batches[0].schema();
+    let owned: Vec<arrow::array::RecordBatch>;
+    let (schema, batches) = if names.iter().zip(schema.fields()).any(|(n, f)| n != f.name()) {
+        let fields: Vec<_> = schema
+            .fields()
+            .iter()
+            .zip(&names)
+            .map(|(f, n)| f.as_ref().clone().with_name(n))
+            .collect();
+        let renamed = Arc::new(arrow::datatypes::Schema::new_with_metadata(
+            fields,
+            schema.metadata().clone(),
+        ));
+        owned = batches
+            .iter()
+            .map(|b| {
+                arrow::array::RecordBatch::try_new(renamed.clone(), b.columns().to_vec())
+                    .map_err(Error::Arrow)
+            })
+            .collect::<Result<_, _>>()?;
+        (renamed, owned.as_slice())
+    } else {
+        (schema, batches)
+    };
     let fields: Vec<_> = schema
         .fields()
         .iter()
         .map(|f| json!({"name": f.name(), "type": f.data_type().to_string()}))
         .collect();
+    if batches.iter().all(|b| b.num_rows() == 0) {
+        return Ok(json!({"schema": fields, "rows": []}));
+    }
     // arrow-json produces row objects; convert to arrays to preserve column
     // order and keep payloads small.
     let mut buf = Vec::new();

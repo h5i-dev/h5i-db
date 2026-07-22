@@ -13,24 +13,27 @@
 //! - The physical operator itself (`AsOfJoinExec`) for plan composition.
 
 use std::cmp::Ordering as CmpOrdering;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
 use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch};
+use arrow::buffer::ScalarBuffer;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-use arrow::row::{OwnedRow, RowConverter, SortField};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::row::{RowConverter, SortField};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableFunctionArgs, TableFunctionImpl, TableProvider};
-use datafusion::common::{DFSchema, DFSchemaRef};
+use datafusion::common::tree_node::{Transformed, TreeNode};
+use datafusion::common::{Column, DFSchema, DFSchemaRef};
 use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result as DfResult};
 use datafusion::execution::context::{QueryPlanner, SessionState};
+use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::{
-    Expr, Extension, LogicalPlan, TableProviderFilterPushDown, TableType, UserDefinedLogicalNode,
-    UserDefinedLogicalNodeCore,
+    lit, BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown,
+    TableType, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 use datafusion::physical_expr::{
     expressions, EquivalenceProperties, LexOrdering, PhysicalSortExpr,
@@ -38,12 +41,14 @@ use datafusion::physical_expr::{
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::sorts::sort::SortExec;
+use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties,
 };
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
+use datafusion::scalar::ScalarValue;
 use futures::{StreamExt, TryStreamExt};
 
 use crate::provider::{H5iTableProvider, ScanMetricsCollector};
@@ -297,16 +302,30 @@ fn sort_by_time(input: Arc<dyn ExecutionPlan>, time_col: &str) -> DfResult<Arc<d
     let idx = input.schema().index_of(time_col).map_err(|e| {
         DataFusionError::Plan(format!("asof: time column {time_col:?} missing: {e}"))
     })?;
-    let single: Arc<dyn ExecutionPlan> = if input.output_partitioning().partition_count() > 1 {
-        Arc::new(CoalescePartitionsExec::new(input))
-    } else {
-        input
-    };
     let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
         Arc::new(expressions::Column::new(time_col, idx)),
         SortOptions::default(),
     )])
     .expect("non-empty ordering");
+    // TODO(perf): hash-repartition both sides on the `by` keys and run a
+    // partitioned join instead of collapsing to a single partition.
+    let single: Arc<dyn ExecutionPlan> = if input.output_partitioning().partition_count() > 1 {
+        // When every partition is already time-sorted (our providers declare
+        // this on sorted segments), merge instead of concatenating so the
+        // sort below becomes a no-op and gets removed by EnforceSorting.
+        let sorted = input
+            .properties()
+            .equivalence_properties()
+            .ordering_satisfy(ordering.clone())
+            .unwrap_or(false);
+        if sorted {
+            Arc::new(SortPreservingMergeExec::new(ordering.clone(), input))
+        } else {
+            Arc::new(CoalescePartitionsExec::new(input))
+        }
+    } else {
+        input
+    };
     // EnforceSorting removes this if the input is already sorted (our
     // providers declare time ordering on sorted segments).
     Ok(Arc::new(SortExec::new(ordering, single)))
@@ -341,8 +360,17 @@ impl AsOfJoinExec {
         options: AsOfOptions,
     ) -> DfResult<Self> {
         let (schema, right_kept) = asof_output_schema(&left.schema(), &right.schema(), &options)?;
-        // Output preserves the left side's time order.
-        let eq = EquivalenceProperties::new(schema.clone());
+        // Output preserves the left side's time order — declare it so
+        // downstream sorts on the join key (e.g. ORDER BY left_on) are
+        // elided. The left column keeps its name and position in the output;
+        // `index_of` finds it (a colliding right column is `_right`-renamed).
+        let mut eq = EquivalenceProperties::new(schema.clone());
+        if let Ok(idx) = schema.index_of(&options.left_on) {
+            eq.add_ordering(vec![PhysicalSortExpr::new(
+                Arc::new(expressions::Column::new(&options.left_on, idx)),
+                SortOptions::default(),
+            )]);
+        }
         let properties = Arc::new(PlanProperties::new(
             eq,
             Partitioning::UnknownPartitioning(1),
@@ -421,7 +449,12 @@ impl ExecutionPlan for AsOfJoinExec {
             ));
         }
         let left_stream = self.left.execute(0, context.clone())?;
-        let right_stream = self.right.execute(0, context)?;
+        let right_stream = self.right.execute(0, context.clone())?;
+        // The buffered right side is charged to the query memory pool so
+        // `memory_limit` is honored: the query fails with ResourcesExhausted
+        // instead of OOMing the process.
+        let reservation =
+            MemoryConsumer::new(format!("AsOfJoinExec[{partition}]")).register(context.memory_pool());
         let options = self.options.clone();
         let schema = self.schema.clone();
         let right_kept = self.right_kept.clone();
@@ -429,19 +462,36 @@ impl ExecutionPlan for AsOfJoinExec {
         let right_schema = self.right.schema();
 
         let out = futures::stream::once(async move {
-            // Phase 1: buffer the right side into per-key sorted runs.
-            let right_batches: Vec<RecordBatch> = right_stream.try_collect().await?;
+            // Phase 1: buffer the right side into per-key sorted runs,
+            // growing the reservation batch by batch.
+            let reservation = reservation;
+            let mut right_stream = right_stream;
+            let mut right_batches: Vec<RecordBatch> = Vec::new();
+            while let Some(batch) = right_stream.next().await {
+                let batch = batch?;
+                reservation.try_grow(batch.get_array_memory_size())?;
+                right_batches.push(batch);
+            }
             let runs = RightRuns::build(&right_batches, &right_schema, &options)?;
+            reservation.try_grow(runs.mem_bytes)?;
 
             // Phase 2: stream the left side, probing per row.
+            let left_time_idx = left_schema.index_of(&options.left_on)?;
+            let left_by_idx: Vec<usize> = options
+                .by
+                .iter()
+                .map(|(l, _)| left_schema.index_of(l))
+                .collect::<Result<_, _>>()?;
             let joiner = Joiner {
                 runs,
                 right_batches,
                 options: options.clone(),
                 schema,
                 right_kept,
-                left_schema,
                 right_schema,
+                left_time_idx,
+                left_by_idx,
+                _reservation: reservation,
             };
             let joined = left_stream
                 .map(move |batch| -> DfResult<RecordBatch> { joiner.join_batch(&batch?) });
@@ -463,11 +513,20 @@ struct Run {
     locs: Vec<(usize, usize)>,
 }
 
+/// Right-side index: one global run when there are no by-keys (no row
+/// encoding at all), otherwise per-key runs keyed on the memcmp-able row
+/// encoding of the by columns.
+enum RunIndex {
+    Single(Run),
+    Keyed(HashMap<Box<[u8]>, Run>),
+}
+
 struct RightRuns {
-    /// Encoded by-key → run. With no by-keys, the single run lives under
-    /// an empty key.
-    map: HashMap<OwnedRow, Run>,
+    index: RunIndex,
     converter: Option<RowConverter>,
+    /// Estimated bytes held by the index itself (runs + keys), on top of the
+    /// buffered batches — reported to the memory reservation.
+    mem_bytes: usize,
 }
 
 impl RightRuns {
@@ -482,65 +541,92 @@ impl RightRuns {
             .iter()
             .map(|(_, r)| right_schema.index_of(r).map_err(DataFusionError::from))
             .collect::<DfResult<_>>()?;
-        let converter = if by_idx.is_empty() {
-            None
-        } else {
-            Some(RowConverter::new(
-                by_idx
-                    .iter()
-                    .map(|&i| SortField::new(right_schema.field(i).data_type().clone()))
-                    .collect(),
-            )?)
-        };
+        // Per (times, locs) entry: one i64 plus one (usize, usize).
+        const RUN_ROW_BYTES: usize = 8 + 16;
 
-        let mut map: HashMap<OwnedRow, Run> = HashMap::new();
-        // The empty-key row for the no-by case.
-        let empty_converter = RowConverter::new(vec![SortField::new(DataType::Int8)])?;
-        let empty_key = {
-            let arr: ArrayRef = Arc::new(arrow::array::Int8Array::from(vec![0i8]));
-            empty_converter.convert_columns(&[arr])?.row(0).owned()
-        };
-
-        #[allow(clippy::needless_range_loop)]
-        for (bi, batch) in batches.iter().enumerate() {
-            let time = crate::asof::time_column_i64(batch, time_idx)?;
-            let rows = match (&converter, by_idx.is_empty()) {
-                (Some(conv), false) => {
-                    let cols: Vec<ArrayRef> =
-                        by_idx.iter().map(|&i| batch.column(i).clone()).collect();
-                    Some(conv.convert_columns(&cols)?)
-                }
-                _ => None,
+        if by_idx.is_empty() {
+            let mut run = Run {
+                times: Vec::new(),
+                locs: Vec::new(),
             };
+            for (bi, batch) in batches.iter().enumerate() {
+                let time = time_column_i64(batch, time_idx)?;
+                for ri in 0..batch.num_rows() {
+                    run.times.push(time[ri]);
+                    run.locs.push((bi, ri));
+                }
+            }
+            Self::ensure_sorted(&mut run);
+            let mem_bytes = run.times.len() * RUN_ROW_BYTES;
+            return Ok(Self {
+                index: RunIndex::Single(run),
+                converter: None,
+                mem_bytes,
+            });
+        }
+
+        let converter = RowConverter::new(
+            by_idx
+                .iter()
+                .map(|&i| SortField::new(right_schema.field(i).data_type().clone()))
+                .collect(),
+        )?;
+        let mut map: HashMap<Box<[u8]>, Run> = HashMap::new();
+        let mut key_bytes = 0usize;
+        let mut total_rows = 0usize;
+        for (bi, batch) in batches.iter().enumerate() {
+            let time = time_column_i64(batch, time_idx)?;
+            let cols: Vec<ArrayRef> = by_idx.iter().map(|&i| batch.column(i).clone()).collect();
+            let rows = converter.convert_columns(&cols)?;
             for ri in 0..batch.num_rows() {
-                let key = match &rows {
-                    Some(rows) => rows.row(ri).owned(),
-                    None => empty_key.clone(),
-                };
-                let run = map.entry(key).or_insert_with(|| Run {
-                    times: Vec::new(),
-                    locs: Vec::new(),
-                });
+                let key = rows.row(ri).data();
+                // Owned key allocation only on first sight of a key.
+                if !map.contains_key(key) {
+                    key_bytes += key.len();
+                    map.insert(
+                        key.to_vec().into_boxed_slice(),
+                        Run {
+                            times: Vec::new(),
+                            locs: Vec::new(),
+                        },
+                    );
+                }
+                let run = map.get_mut(key).expect("key just inserted");
                 run.times.push(time[ri]);
                 run.locs.push((bi, ri));
+                total_rows += 1;
             }
         }
-        // Inputs arrive time-sorted globally, so each per-key run is sorted.
-        // Defensive check (cheap): verify and stable-sort if violated.
         for run in map.values_mut() {
-            if run.times.windows(2).any(|w| w[0] > w[1]) {
-                let mut idx: Vec<usize> = (0..run.times.len()).collect();
-                idx.sort_by_key(|&i| run.times[i]);
-                run.times = idx.iter().map(|&i| run.times[i]).collect();
-                run.locs = idx.iter().map(|&i| run.locs[i]).collect();
-            }
+            Self::ensure_sorted(run);
         }
-        Ok(Self { map, converter })
+        let mem_bytes = total_rows * RUN_ROW_BYTES + key_bytes;
+        Ok(Self {
+            index: RunIndex::Keyed(map),
+            converter: Some(converter),
+            mem_bytes,
+        })
     }
 
-    /// Find the matching right location for a left time value.
-    fn probe(&self, key: &OwnedRow, t: i64, options: &AsOfOptions) -> Option<(usize, usize)> {
-        let run = self.map.get(key)?;
+    /// Inputs arrive time-sorted globally, so each per-key run is sorted.
+    /// Defensive check (cheap): verify and stable-sort if violated.
+    fn ensure_sorted(run: &mut Run) {
+        if run.times.windows(2).any(|w| w[0] > w[1]) {
+            let mut idx: Vec<usize> = (0..run.times.len()).collect();
+            idx.sort_by_key(|&i| run.times[i]);
+            run.times = idx.iter().map(|&i| run.times[i]).collect();
+            run.locs = idx.iter().map(|&i| run.locs[i]).collect();
+        }
+    }
+
+    /// Find the matching right location for a left time value. `key` is the
+    /// encoded by-key of the left row (`None` when the join has no by-keys).
+    fn probe(&self, key: Option<&[u8]>, t: i64, options: &AsOfOptions) -> Option<(usize, usize)> {
+        let run = match (&self.index, key) {
+            (RunIndex::Single(run), _) => run,
+            (RunIndex::Keyed(map), Some(key)) => map.get(key)?,
+            (RunIndex::Keyed(_), None) => return None,
+        };
         match options.direction {
             AsOfDirection::Backward => {
                 // Last index with times[i] <= t.
@@ -573,19 +659,44 @@ impl RightRuns {
     }
 }
 
-/// Read a time column as raw i64 (any timestamp unit / integer type).
-pub(crate) fn time_column_i64(batch: &RecordBatch, idx: usize) -> DfResult<Vec<i64>> {
-    let casted = arrow::compute::cast(batch.column(idx), &DataType::Int64)?;
-    let arr = casted
-        .as_any()
-        .downcast_ref::<arrow::array::Int64Array>()
-        .ok_or_else(|| DataFusionError::Internal("time column cast failed".into()))?;
-    if arr.null_count() > 0 {
+/// View a time column as raw i64 (any timestamp unit / integer type).
+/// Zero-copy for timestamp and Int64 columns (a `ScalarBuffer` clone only
+/// bumps a refcount); other integer types fall back to a cast.
+pub(crate) fn time_column_i64(batch: &RecordBatch, idx: usize) -> DfResult<ScalarBuffer<i64>> {
+    use arrow::array::{
+        Int64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray,
+    };
+    let col = batch.column(idx);
+    if col.null_count() > 0 {
         return Err(DataFusionError::Execution(
             "asof: time column contains nulls".into(),
         ));
     }
-    Ok(arr.values().to_vec())
+    macro_rules! values {
+        ($ty:ty) => {
+            col.as_any()
+                .downcast_ref::<$ty>()
+                .expect("checked data type")
+                .values()
+                .clone()
+        };
+    }
+    Ok(match col.data_type() {
+        DataType::Int64 => values!(Int64Array),
+        DataType::Timestamp(TimeUnit::Second, _) => values!(TimestampSecondArray),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => values!(TimestampMillisecondArray),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => values!(TimestampMicrosecondArray),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => values!(TimestampNanosecondArray),
+        _ => {
+            let casted = arrow::compute::cast(col, &DataType::Int64)?;
+            let arr = casted
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .ok_or_else(|| DataFusionError::Internal("time column cast failed".into()))?;
+            arr.values().clone()
+        }
+    })
 }
 
 struct Joiner {
@@ -594,45 +705,37 @@ struct Joiner {
     options: AsOfOptions,
     schema: SchemaRef,
     right_kept: Vec<usize>,
-    left_schema: SchemaRef,
     right_schema: SchemaRef,
+    left_time_idx: usize,
+    left_by_idx: Vec<usize>,
+    /// Keeps the right-side buffer charged to the memory pool for the
+    /// operator's lifetime; freed on drop when the stream completes.
+    _reservation: MemoryReservation,
 }
 
 impl Joiner {
     fn join_batch(&self, left: &RecordBatch) -> DfResult<RecordBatch> {
-        let time_idx = self.left_schema.index_of(&self.options.left_on)?;
-        let times = time_column_i64(left, time_idx)?;
+        let times = time_column_i64(left, self.left_time_idx)?;
 
         // Encode left by-keys with the right side's converter (types match).
         let left_rows = match &self.runs.converter {
             Some(conv) => {
                 let cols: Vec<ArrayRef> = self
-                    .options
-                    .by
+                    .left_by_idx
                     .iter()
-                    .map(|(l, _)| -> DfResult<ArrayRef> {
-                        Ok(left.column(self.left_schema.index_of(l)?).clone())
-                    })
-                    .collect::<DfResult<_>>()?;
+                    .map(|&i| left.column(i).clone())
+                    .collect();
                 Some(conv.convert_columns(&cols)?)
             }
             None => None,
         };
-        let empty_converter = RowConverter::new(vec![SortField::new(DataType::Int8)])?;
-        let empty_key = {
-            let arr: ArrayRef = Arc::new(arrow::array::Int8Array::from(vec![0i8]));
-            empty_converter.convert_columns(&[arr])?.row(0).owned()
-        };
 
-        // Match every left row.
+        // Match every left row (no per-row allocations: keys are borrowed
+        // row-encoding bytes).
         let mut matches: Vec<Option<(usize, usize)>> = Vec::with_capacity(left.num_rows());
-        #[allow(clippy::needless_range_loop)]
         for ri in 0..left.num_rows() {
-            let key = match &left_rows {
-                Some(rows) => rows.row(ri).owned(),
-                None => empty_key.clone(),
-            };
-            matches.push(self.runs.probe(&key, times[ri], &self.options));
+            let key = left_rows.as_ref().map(|rows| rows.row(ri).data());
+            matches.push(self.runs.probe(key, times[ri], &self.options));
         }
 
         // INNER: filter unmatched left rows.
@@ -776,7 +879,7 @@ impl TableFunctionImpl for AsOfJoinFunc {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let right = block_on(self.db.resolve(&right_table, h5i_db_core::ReadAt::Latest))
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let (schema, _) = asof_output_schema(&left.schema, &right.schema, &options)?;
+        let (schema, right_kept) = asof_output_schema(&left.schema, &right.schema, &options)?;
         Ok(Arc::new(AsOfTableProvider {
             left: Arc::new(H5iTableProvider::new(
                 left,
@@ -790,18 +893,172 @@ impl TableFunctionImpl for AsOfJoinFunc {
             )),
             options,
             schema,
+            right_kept,
         }))
     }
 }
 
 /// Provider produced by the `asof_join` table function: scanning it plans
-/// both sides and wraps them in the ASOF operator.
+/// both sides and wraps them in the ASOF operator, forwarding left-side
+/// filters, widened right-side time bounds, projections, and (for LEFT
+/// joins) limits to the child scans so segment pruning applies.
 #[derive(Debug)]
 struct AsOfTableProvider {
     left: Arc<H5iTableProvider>,
     right: Arc<H5iTableProvider>,
     options: AsOfOptions,
     schema: SchemaRef,
+    /// Right-table column indices kept in the output (parallel to the output
+    /// fields after the left ones).
+    right_kept: Vec<usize>,
+}
+
+/// Raw i64 time value inside a comparison literal, if it is a type we can
+/// widen (timestamps of any unit, or Int64).
+fn scalar_time_i64(s: &ScalarValue) -> Option<i64> {
+    match s {
+        ScalarValue::TimestampSecond(v, _)
+        | ScalarValue::TimestampMillisecond(v, _)
+        | ScalarValue::TimestampMicrosecond(v, _)
+        | ScalarValue::TimestampNanosecond(v, _)
+        | ScalarValue::Int64(v) => *v,
+        _ => None,
+    }
+}
+
+/// The same scalar variant carrying an adjusted time value.
+fn scalar_with_time(proto: &ScalarValue, v: i64) -> ScalarValue {
+    match proto {
+        ScalarValue::TimestampSecond(_, tz) => ScalarValue::TimestampSecond(Some(v), tz.clone()),
+        ScalarValue::TimestampMillisecond(_, tz) => {
+            ScalarValue::TimestampMillisecond(Some(v), tz.clone())
+        }
+        ScalarValue::TimestampMicrosecond(_, tz) => {
+            ScalarValue::TimestampMicrosecond(Some(v), tz.clone())
+        }
+        ScalarValue::TimestampNanosecond(_, tz) => {
+            ScalarValue::TimestampNanosecond(Some(v), tz.clone())
+        }
+        _ => ScalarValue::Int64(Some(v)),
+    }
+}
+
+/// Strip table qualifiers so an output-schema filter resolves against the
+/// bare left table schema.
+fn unqualify(expr: &Expr) -> Expr {
+    expr.clone()
+        .transform(|e| {
+            Ok(match e {
+                Expr::Column(c) => {
+                    Transformed::yes(Expr::Column(Column::new_unqualified(c.name)))
+                }
+                other => Transformed::no(other),
+            })
+        })
+        .map(|t| t.data)
+        .unwrap_or_else(|_| expr.clone())
+}
+
+impl AsOfTableProvider {
+    /// A filter can run below the join iff every column it references is a
+    /// left-side output column (left columns keep their names in the join
+    /// output). Right-side rows can never be filtered below the join —
+    /// that would change which row is the asof match.
+    fn is_left_filter(&self, expr: &Expr) -> bool {
+        let left = self.left.schema();
+        let lw = left.fields().len();
+        expr.column_refs().iter().all(|c| {
+            left.index_of(&c.name).is_ok()
+                && self.schema.fields().iter().skip(lw).all(|f| f.name() != &c.name)
+        })
+    }
+
+    /// `left_on` compared to a literal, normalized to `col <op> lit`.
+    fn time_cmp(&self, f: &Expr) -> Option<(Operator, ScalarValue)> {
+        let Expr::BinaryExpr(BinaryExpr { left, op, right }) = f else {
+            return None;
+        };
+        let (op, lit) = match (left.as_ref(), right.as_ref()) {
+            (Expr::Column(c), Expr::Literal(v, _)) if c.name == self.options.left_on => {
+                (*op, v.clone())
+            }
+            (Expr::Literal(v, _), Expr::Column(c)) if c.name == self.options.left_on => {
+                (op.swap()?, v.clone())
+            }
+            _ => return None,
+        };
+        scalar_time_i64(&lit)?;
+        Some((op, lit))
+    }
+
+    /// Derive right-side time-bound filters from the forwarded left filters,
+    /// widened so no potentially-matching right row is dropped. This is sound
+    /// because the same left filters are re-applied above the join (Inexact):
+    /// any left row whose match could depend on a pruned right row is itself
+    /// outside the bounds and gets filtered out.
+    fn right_time_bounds(&self, left_filters: &[Expr]) -> Vec<Expr> {
+        let mut lo: Option<i64> = None;
+        let mut hi: Option<i64> = None;
+        let mut proto: Option<ScalarValue> = None;
+        for f in left_filters {
+            let Some((op, lit)) = self.time_cmp(f) else {
+                continue;
+            };
+            let Some(v) = scalar_time_i64(&lit) else {
+                continue;
+            };
+            // Strict bounds treated as inclusive: conservative and sound.
+            match op {
+                Operator::Gt | Operator::GtEq => lo = Some(lo.map_or(v, |x| x.max(v))),
+                Operator::Lt | Operator::LtEq => hi = Some(hi.map_or(v, |x| x.min(v))),
+                Operator::Eq => {
+                    lo = Some(lo.map_or(v, |x| x.max(v)));
+                    hi = Some(hi.map_or(v, |x| x.min(v)));
+                }
+                _ => continue,
+            }
+            proto = Some(lit);
+        }
+        let Some(proto) = proto else {
+            return vec![];
+        };
+        let right_col = Expr::Column(Column::new_unqualified(&self.options.right_on));
+        // A negative tolerance never restricts matches, so it must not be
+        // used to derive bounds.
+        let tol = self.options.tolerance.filter(|t| *t >= 0);
+        let mut filters = Vec::new();
+        match self.options.direction {
+            AsOfDirection::Backward => {
+                // Matches satisfy r.ts <= l.ts, and with a tolerance also
+                // l.ts - r.ts <= tol.
+                if let Some(hi) = hi {
+                    filters.push(right_col.clone().lt_eq(lit(scalar_with_time(&proto, hi))));
+                }
+                if let (Some(lo), Some(tol)) = (lo, tol) {
+                    filters.push(
+                        right_col
+                            .clone()
+                            .gt_eq(lit(scalar_with_time(&proto, lo.saturating_sub(tol)))),
+                    );
+                }
+            }
+            AsOfDirection::Forward => {
+                // Matches satisfy r.ts >= l.ts, and with a tolerance also
+                // r.ts - l.ts <= tol.
+                if let Some(lo) = lo {
+                    filters.push(right_col.clone().gt_eq(lit(scalar_with_time(&proto, lo))));
+                }
+                if let (Some(hi), Some(tol)) = (hi, tol) {
+                    filters.push(
+                        right_col
+                            .clone()
+                            .lt_eq(lit(scalar_with_time(&proto, hi.saturating_add(tol)))),
+                    );
+                }
+            }
+        }
+        filters
+    }
 }
 
 #[async_trait]
@@ -818,42 +1075,134 @@ impl TableProvider for AsOfTableProvider {
         &self,
         filters: &[&Expr],
     ) -> DfResult<Vec<TableProviderFilterPushDown>> {
-        // Filters are applied above the join by DataFusion.
-        Ok(vec![
-            TableProviderFilterPushDown::Unsupported;
-            filters.len()
-        ])
+        // Left-only filters are forwarded to the left scan for segment
+        // pruning; Inexact, so DataFusion re-applies them above the join.
+        Ok(filters
+            .iter()
+            .map(|f| {
+                if self.is_left_filter(f) {
+                    TableProviderFilterPushDown::Inexact
+                } else {
+                    TableProviderFilterPushDown::Unsupported
+                }
+            })
+            .collect())
     }
 
     async fn scan(
         &self,
         state: &dyn Session,
         projection: Option<&Vec<usize>>,
-        _filters: &[Expr],
-        _limit: Option<usize>,
+        filters: &[Expr],
+        limit: Option<usize>,
     ) -> DfResult<Arc<dyn ExecutionPlan>> {
-        let left = self.left.scan(state, None, &[], None).await?;
-        let right = self.right.scan(state, None, &[], None).await?;
-        let joined = AsOfJoinExec::try_new_with_sort(left, right, self.options.clone())?;
-        match projection {
-            None => Ok(joined),
+        let left_schema = self.left.schema();
+        let right_schema = self.right.schema();
+        let lw = left_schema.fields().len();
+
+        // Left filters run below the join for pruning; the right scan gets
+        // widened time bounds derived from them.
+        let left_filters: Vec<Expr> = filters
+            .iter()
+            .filter(|f| self.is_left_filter(f))
+            .map(unqualify)
+            .collect();
+        let right_filters = self.right_time_bounds(&left_filters);
+        // Output rows are 1:1 with left rows for LEFT asof joins, so a bare
+        // limit bounds the left scan. DataFusion only passes a limit when no
+        // filter sits above the scan, but guard anyway: a limit under a
+        // filter would truncate before filtering.
+        let left_limit = if filters.is_empty() && !self.options.inner {
+            limit
+        } else {
+            None
+        };
+
+        // Column pushdown: children read only what the join and the
+        // requested projection need (join keys always included).
+        let (left_proj, right_proj) = match projection {
+            None => (None, None),
             Some(indices) => {
-                let exprs: Vec<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)> =
-                    indices
-                        .iter()
-                        .map(|&i| {
-                            let field = self.schema.field(i);
-                            (
-                                Arc::new(expressions::Column::new(field.name(), i))
-                                    as Arc<dyn datafusion::physical_expr::PhysicalExpr>,
-                                field.name().clone(),
-                            )
-                        })
-                        .collect();
-                Ok(Arc::new(
-                    datafusion::physical_plan::projection::ProjectionExec::try_new(exprs, joined)?,
-                ))
+                let mut left_needed: BTreeSet<usize> =
+                    indices.iter().filter(|&&i| i < lw).copied().collect();
+                left_needed.insert(left_schema.index_of(&self.options.left_on)?);
+                for (l, _) in &self.options.by {
+                    left_needed.insert(left_schema.index_of(l)?);
+                }
+                let mut right_needed: BTreeSet<usize> = indices
+                    .iter()
+                    .filter(|&&i| i >= lw)
+                    .map(|&i| self.right_kept[i - lw])
+                    .collect();
+                right_needed.insert(right_schema.index_of(&self.options.right_on)?);
+                for (_, r) in &self.options.by {
+                    right_needed.insert(right_schema.index_of(r)?);
+                }
+                (
+                    Some(left_needed.into_iter().collect::<Vec<_>>()),
+                    Some(right_needed.into_iter().collect::<Vec<_>>()),
+                )
             }
-        }
+        };
+
+        let left = self
+            .left
+            .scan(state, left_proj.as_ref(), &left_filters, left_limit)
+            .await?;
+        let right = self
+            .right
+            .scan(state, right_proj.as_ref(), &right_filters, None)
+            .await?;
+        // Join options refer to columns by name, so they remap onto the
+        // projected child schemas unchanged.
+        let joined = AsOfJoinExec::try_new_with_sort(left, right, self.options.clone())?;
+
+        let Some(indices) = projection else {
+            return Ok(joined);
+        };
+        let (left_proj, right_proj) = (left_proj.unwrap(), right_proj.unwrap());
+        // Positions of the kept right columns inside the projected join
+        // output: projected right columns minus the by-columns, in order.
+        let by_right: std::collections::HashSet<&str> = self
+            .options
+            .by
+            .iter()
+            .map(|(_, r)| r.as_str())
+            .collect();
+        let right_out: Vec<usize> = right_proj
+            .iter()
+            .filter(|&&r| !by_right.contains(right_schema.field(r).name().as_str()))
+            .copied()
+            .collect();
+        let joined_schema = joined.schema();
+        // Restore the requested columns under their full-output names — the
+        // collision renaming inside the join depends on which left columns
+        // survived projection, so alias explicitly.
+        let exprs: Vec<(Arc<dyn datafusion::physical_expr::PhysicalExpr>, String)> = indices
+            .iter()
+            .map(|&i| {
+                let pos = if i < lw {
+                    left_proj
+                        .iter()
+                        .position(|&l| l == i)
+                        .expect("projected left column present")
+                } else {
+                    let rj = self.right_kept[i - lw];
+                    left_proj.len()
+                        + right_out
+                            .iter()
+                            .position(|&r| r == rj)
+                            .expect("projected right column present")
+                };
+                (
+                    Arc::new(expressions::Column::new(joined_schema.field(pos).name(), pos))
+                        as Arc<dyn datafusion::physical_expr::PhysicalExpr>,
+                    self.schema.field(i).name().clone(),
+                )
+            })
+            .collect();
+        Ok(Arc::new(
+            datafusion::physical_plan::projection::ProjectionExec::try_new(exprs, joined)?,
+        ))
     }
 }

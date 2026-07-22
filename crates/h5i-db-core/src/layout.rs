@@ -77,6 +77,16 @@ pub fn segment_prefix(table_id: Uuid) -> ObjPath {
     ObjPath::from(format!("tables/{table_id}/segments"))
 }
 
+/// Staging leases: uploaded-but-uncommitted segment sets, written before the
+/// segments themselves so vacuum can always tell staging from debris.
+pub fn staging_prefix(table_id: Uuid) -> ObjPath {
+    ObjPath::from(format!("tables/{table_id}/staging"))
+}
+
+pub fn staging_lease_path(table_id: Uuid, writer_id: Uuid) -> ObjPath {
+    ObjPath::from(format!("tables/{table_id}/staging/{writer_id}.json"))
+}
+
 pub fn segment_path(table_id: Uuid, segment_id: Uuid) -> ObjPath {
     ObjPath::from(format!("tables/{table_id}/segments/{segment_id}.parquet"))
 }

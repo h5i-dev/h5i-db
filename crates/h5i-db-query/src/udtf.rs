@@ -24,14 +24,33 @@ use h5i_db_core::{Database, ReadAt};
 use crate::provider::{H5iTableProvider, ScanMetricsCollector};
 
 /// Run an async resolution from DataFusion's synchronous planning context.
-pub(crate) fn block_on<F: std::future::Future>(fut: F) -> F::Output {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(fut)),
-        Err(_) => tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("build fallback runtime")
-            .block_on(fut),
+///
+/// `block_in_place` is only legal on multi-thread runtimes — on a
+/// `current_thread` runtime it panics, and `Handle::block_on` from a helper
+/// thread would deadlock (the runtime's own thread is blocked here and cannot
+/// drive the I/O driver). So everywhere except a multi-thread runtime the
+/// future runs on a scoped helper thread with its own mini runtime.
+pub(crate) fn block_on<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+    F::Output: Send,
+{
+    use tokio::runtime::{Handle, RuntimeFlavor};
+    match Handle::try_current() {
+        Ok(handle) if handle.runtime_flavor() == RuntimeFlavor::MultiThread => {
+            tokio::task::block_in_place(|| handle.block_on(fut))
+        }
+        _ => std::thread::scope(|s| {
+            s.spawn(|| {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("build fallback runtime")
+                    .block_on(fut)
+            })
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        }),
     }
 }
 

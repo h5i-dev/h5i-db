@@ -3,18 +3,19 @@
 //! limits wired to the runtime, time-travel UDTF and time-series UDFs
 //! installed, and scan metrics collected per query.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result as DfResult};
 use datafusion::execution::disk_manager::DiskManagerBuilder;
 use datafusion::execution::memory_pool::FairSpillPool;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use h5i_db_core::{Database, ReadAt};
+use h5i_db_core::{Database, ReadAt, ResolvedTable};
 
 use crate::asof::{AsOfJoinFunc, AsOfQueryPlanner};
 use crate::finance::{ewma_udwf, vwap_udaf, wavg_udaf};
@@ -39,6 +40,8 @@ pub struct H5iSession {
     db: Arc<Database>,
     url: ObjectStoreUrl,
     metrics: ScanMetricsCollector,
+    /// Catalog table names currently registered (kept for [`Self::refresh`]).
+    registered: Mutex<HashSet<String>>,
 }
 
 impl H5iSession {
@@ -59,7 +62,21 @@ impl H5iSession {
             runtime = runtime.with_disk_manager_builder(disk);
         }
         let runtime = Arc::new(runtime.build()?);
+        Self::new_with_runtime(db, options, runtime).await
+    }
 
+    /// Like [`Self::new`], but reusing a caller-supplied [`RuntimeEnv`].
+    ///
+    /// The runtime owns the Parquet footer-metadata cache (~40% of warm scan
+    /// latency) and the memory pool, so passing the previous session's
+    /// [`Self::runtime_env`] here makes "new session over fresh data" cheap
+    /// instead of cache-cold. `options.memory_limit` / `options.spill_dir`
+    /// are ignored — they describe a runtime, and this one already exists.
+    pub async fn new_with_runtime(
+        db: Arc<Database>,
+        options: SessionOptions,
+        runtime: Arc<RuntimeEnv>,
+    ) -> DfResult<Self> {
         let mut config = SessionConfig::new().with_information_schema(true);
         if let Some(tp) = options.target_partitions {
             config = config.with_target_partitions(tp.max(1));
@@ -90,24 +107,21 @@ impl H5iSession {
 
         let metrics = ScanMetricsCollector::default();
 
-        // Snapshot-bound registration of every table at its current head.
-        let tables = db
-            .list_tables()
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        for entry in tables {
-            let resolved = db
-                .resolve(&entry.name, ReadAt::Latest)
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        // Snapshot-bound registration of every table at its current head,
+        // resolved concurrently (serial resolution dominated multi-table
+        // session startup).
+        let mut registered = HashSet::new();
+        for resolved in resolve_all_latest(&db).await? {
+            let name = resolved.entry.name.clone();
             ctx.register_table(
-                &entry.name,
+                &name,
                 Arc::new(H5iTableProvider::new(
                     resolved,
                     url.clone(),
                     metrics.clone(),
                 )),
             )?;
+            registered.insert(name);
         }
 
         // Time travel + time-series functions.
@@ -133,7 +147,41 @@ impl H5iSession {
             db,
             url,
             metrics,
+            registered: Mutex::new(registered),
         })
+    }
+
+    /// Re-point every catalog table at its latest version without rebuilding
+    /// the session: caches, UDFs, and the runtime survive. New tables appear,
+    /// dropped tables disappear. `h5i('t')` never needs this — it re-resolves
+    /// at planning time — this is for the plain `SELECT … FROM t` names that
+    /// are otherwise snapshot-bound to session creation.
+    pub async fn refresh(&self) -> DfResult<()> {
+        let resolved = resolve_all_latest(&self.db).await?;
+        let fresh: HashSet<String> = resolved.iter().map(|r| r.entry.name.clone()).collect();
+        let mut registered = self.registered.lock().unwrap();
+        for stale in registered.difference(&fresh) {
+            self.ctx.deregister_table(stale)?;
+        }
+        for r in resolved {
+            let name = r.entry.name.clone();
+            self.ctx.register_table(
+                &name,
+                Arc::new(H5iTableProvider::new(
+                    r,
+                    self.url.clone(),
+                    self.metrics.clone(),
+                )),
+            )?;
+        }
+        *registered = fresh;
+        Ok(())
+    }
+
+    /// The session's runtime environment — pass to [`Self::new_with_runtime`]
+    /// to share the footer-metadata cache and memory pool across sessions.
+    pub fn runtime_env(&self) -> Arc<RuntimeEnv> {
+        self.ctx.runtime_env()
     }
 
     pub fn context(&self) -> &SessionContext {
@@ -176,4 +224,19 @@ impl H5iSession {
     pub fn take_scan_metrics(&self) -> Vec<ScanMetrics> {
         self.metrics.take()
     }
+}
+
+/// Resolve every catalog table at its latest version, concurrently.
+async fn resolve_all_latest(db: &Arc<Database>) -> DfResult<Vec<ResolvedTable>> {
+    let tables = db
+        .list_tables()
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    futures::future::try_join_all(
+        tables
+            .iter()
+            .map(|entry| db.resolve(&entry.name, ReadAt::Latest)),
+    )
+    .await
+    .map_err(|e| DataFusionError::External(Box::new(e)))
 }

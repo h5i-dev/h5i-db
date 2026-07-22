@@ -17,6 +17,8 @@ h5i-db-core = { workspace = true }
 h5i-db-query = { workspace = true }
 arrow = { workspace = true }
 tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }

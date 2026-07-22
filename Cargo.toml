@@ -23,8 +23,9 @@ repository = "https://github.com/Koukyosyumei/h5i-db"
 rust-version = "1.85"
 
 [workspace.dependencies]
-h5i-db-core = { path = "crates/h5i-db-core" }
-h5i-db-query = { path = "crates/h5i-db-query" }
+# version alongside path so `cargo publish` can rewrite these for crates.io.
+h5i-db-core = { path = "crates/h5i-db-core", version = "0.1.0" }
+h5i-db-query = { path = "crates/h5i-db-query", version = "0.1.0" }
 
 # arrow/parquet must match the versions datafusion 54.1 links against (58.x).
 arrow = { version = "58.3", default-features = false, features = [
@@ -41,6 +42,10 @@ parquet = { version = "58.3", default-features = false, features = [
     "zstd",
     "lz4",
     "snap",
+    # Verify page-level CRCs on read when present. parquet-rs 58 cannot WRITE
+    # page CRCs (the writer always emits crc: None), so our own segments rely
+    # on manifest blake3 checksums (see read_segment_verified) instead.
+    "crc",
 ] }
 # Must match the object_store version parquet/datafusion link against.
 object_store = "0.13"
@@ -72,6 +77,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 
 blake3 = "1"
+fs4 = { version = "0.13", features = ["sync"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = [
     "clock",
@@ -97,4 +103,13 @@ panic = "abort"
 inherits = "release"
 lto = false
 codegen-units = 16
+panic = "unwind"
+
+# Python wheels must be able to unwind so pyo3 can translate panics into
+# Python exceptions instead of aborting the host interpreter (the release
+# profile above is panic = "abort"). Selected by default via
+# crates/h5i-db-python/pyproject.toml; build wheels with:
+#   maturin build --profile wheel
+[profile.wheel]
+inherits = "release"
 panic = "unwind"

@@ -23,7 +23,19 @@ from typing import Any, Iterable, Optional, Sequence, Union
 import pyarrow as pa
 import pyarrow.ipc
 
-from h5i_db._native import NativeDatabase, __version__  # noqa: F401
+from h5i_db._native import (  # noqa: F401
+    ConflictError,
+    CorruptionError,
+    H5iError,
+    InvalidInputError,
+    LimitError,
+    NativeDatabase,
+    NotFoundError,
+    PolicyError,
+    StorageError,
+    TimeoutError,  # noqa: A001 -- deliberate: h5i_db.TimeoutError subclasses H5iError
+    __version__,
+)
 
 TableLike = Union[pa.Table, pa.RecordBatch, Sequence[pa.RecordBatch]]
 
@@ -120,6 +132,26 @@ class Database:
         self._native = NativeDatabase(path, create=create, read_only=read_only)
         self.path = path
 
+    # -- lifecycle --------------------------------------------------------
+
+    def close(self) -> None:
+        """Release the native handle (idempotent).
+
+        Later operations on this object raise ``H5iError`` with
+        ``code == "closed"``.
+        """
+        self._native.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._native.closed
+
+    def __enter__(self) -> "Database":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
     # -- schema & tables --------------------------------------------------
 
     def create_table(
@@ -139,6 +171,21 @@ class Database:
                 name, _schema_ipc(schema), time_column, list(sort_key or [])
             )
         )
+
+    def drop_table(self, name: str) -> None:
+        self._native.drop_table(name)
+
+    def schema(
+        self,
+        name: str,
+        version: Optional[int] = None,
+        as_of: Optional[str] = None,
+        snapshot: Optional[str] = None,
+    ) -> pa.Schema:
+        """Schema of a table at a read point (latest by default)."""
+        data = self._native.schema(name, version, as_of, snapshot)
+        with pa.ipc.open_stream(data) as reader:
+            return reader.schema
 
     def tables(self) -> list[str]:
         return json.loads(self._native.tables())
@@ -185,10 +232,39 @@ class Database:
     ) -> MutationPlan:
         return self.plan_replace_range(name, start, end, None, note)
 
+    def list_plans(self, name: str) -> list[MutationPlan]:
+        """Pending (not yet applied/discarded) mutation plans for a table."""
+        raws = json.loads(self._native.list_plans(name))
+        return [
+            MutationPlan(
+                _db=self,
+                table=name,
+                plan_id=r["plan_id"],
+                summary=r.get("summary", {}),
+                raw=r,
+            )
+            for r in raws
+        ]
+
     # -- reads --------------------------------------------------------------
 
-    def sql(self, query: str, memory_limit: Optional[int] = None) -> QueryResult:
-        return QueryResult(_from_ipc(self._native.sql(query, memory_limit)))
+    def sql(
+        self,
+        query: str,
+        memory_limit: Optional[int] = None,
+        timeout: Optional[float] = None,
+        max_rows: Optional[int] = None,
+    ) -> QueryResult:
+        """Run SQL.
+
+        ``timeout`` is a deadline in seconds (raises :class:`TimeoutError`
+        and cancels execution). ``max_rows`` raises :class:`LimitError` as
+        soon as the result exceeds it — execution stops early rather than
+        silently truncating.
+        """
+        return QueryResult(
+            _from_ipc(self._native.sql(query, memory_limit, timeout, max_rows))
+        )
 
     def read(
         self,
@@ -200,6 +276,7 @@ class Database:
         time_start: Optional[int] = None,
         time_end: Optional[int] = None,
         limit: Optional[int] = None,
+        timeout: Optional[float] = None,
     ) -> pa.Table:
         return _from_ipc(
             self._native.read(
@@ -211,6 +288,7 @@ class Database:
                 time_start,
                 time_end,
                 limit,
+                timeout,
             )
         )
 
@@ -225,5 +303,39 @@ class Database:
     def verify(self, name: str, deep: bool = False) -> dict:
         return json.loads(self._native.verify(name, deep))
 
+    def compact(self, name: str, note: Optional[str] = None) -> dict:
+        return json.loads(self._native.compact(name, note))
 
-__all__ = ["Database", "QueryResult", "MutationPlan", "__version__"]
+    # -- mutation policy -----------------------------------------------------
+
+    def policy(self) -> dict:
+        """The database mutation policy as a dict of boolean flags."""
+        return json.loads(self._native.get_policy())
+
+    def set_policy(self, policy: Optional[dict] = None, **flags: bool) -> dict:
+        """Update the mutation policy; unspecified flags keep their value.
+
+        The merge is atomic (read-modify-write under the database metadata
+        lock). Unknown flags raise :class:`InvalidInputError`. Returns the
+        merged policy that was stored.
+        """
+        updates = dict(policy or {})
+        updates.update(flags)
+        return json.loads(self._native.update_policy(json.dumps(updates)))
+
+
+__all__ = [
+    "Database",
+    "QueryResult",
+    "MutationPlan",
+    "H5iError",
+    "NotFoundError",
+    "ConflictError",
+    "InvalidInputError",
+    "PolicyError",
+    "CorruptionError",
+    "LimitError",
+    "TimeoutError",
+    "StorageError",
+    "__version__",
+]
