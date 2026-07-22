@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main, poc]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Workspace tests: core (storage kernel incl. crash-safety), query
+      # (SQL/pruning/ASOF), CLI (agent contract), UI (review API).
+      - run: cargo test --workspace
+
+  python:
+    name: python wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: crates/h5i-db-python
+          command: build
+          args: --release -o dist
+      - name: Smoke test wheel
+        run: |
+          pip install crates/h5i-db-python/dist/*.whl pyarrow
+          python - <<'EOF'
+          import pyarrow as pa
+          import h5i_db
+
+          db = h5i_db.Database("smoke.db", create=True)
+          schema = pa.schema([
+              pa.field("ts", pa.timestamp("ns", tz="UTC"), nullable=False),
+              pa.field("symbol", pa.string(), nullable=False),
+              pa.field("price", pa.float64(), nullable=False),
+          ])
+          db.create_table("trades", schema, time_column="ts")
+          t = pa.table({
+              "ts": pa.array([1, 2, 3], pa.timestamp("ns", tz="UTC")),
+              "symbol": ["A", "B", "A"],
+              "price": [1.0, 2.0, 3.0],
+          }).cast(schema)
+          db.append("trades", t)
+          out = db.sql("SELECT symbol, count(*) n FROM trades GROUP BY symbol ORDER BY symbol")
+          assert out.to_arrow().num_rows == 2, out.to_arrow()
+          old = db.read("trades", version=0)
+          assert old.num_rows == 0
+          plan = db.plan_delete_range("trades", 0, 2)
+          assert plan.summary["rows_affected"] == 1
+          plan.apply()
+          assert len(db.sql("SELECT * FROM trades")) == 2
+          print("python smoke OK")
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-linux
+          path: crates/h5i-db-python/dist/*.whl
+
+  bench-smoke:
+    name: benchmark smoke (small)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tiny benchmark (regression canary)
+        run: |
+          cargo run -p h5i-db-bench --profile bench-fast -- \
+            --trades 500000 --quotes 100000 --commits 10 > bench.json
+          python3 - <<'EOF'
+          import json
+          results = {r["name"]: r for r in json.load(open("bench.json"))}
+          # Pruning must actually prune on narrow scans.
+          narrow = results["time-range scan 0.01%"]["detail"]
+          assert narrow["segments_pruned"] > 0, narrow
+          # Version resolution must stay metadata-speed.
+          assert results["cold read of version 3 (metadata only)"]["wall_ms"] < 250
+          print("bench smoke OK")
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: bench.json
