@@ -12,7 +12,8 @@ use datafusion::common::stats::Precision;
 use datafusion::physical_plan::displayable;
 use h5i_db_core::{Database, StorageOptions, TableOptions, WriteOptions};
 use h5i_db_query::{
-    H5iSession, PredicateCacheMode, QueryStatus, SessionOptions, WorkloadTelemetryEnvelope,
+    AggregateStateMode, AggregateStateStore, FinanceAggregateSpec, H5iSession, PredicateCacheMode,
+    QueryStatus, SessionOptions, WorkloadTelemetryEnvelope,
 };
 use object_store::{path::Path as ObjectPath, ObjectStoreExt};
 
@@ -809,4 +810,129 @@ async fn predicate_cache_reuses_row_group_selection_and_recovers_from_corruption
     assert_eq!(compacted_count, appended_count);
     assert_eq!(compacted.predicate_cache_hits, 0);
     assert_eq!(compacted.predicate_cache_builds, 1);
+}
+
+// ---------------------------------------------------------------------------
+// P3 version-aware aggregate state store.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn aggregate_states_reuse_unchanged_segments_and_match_full_recomputation() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), TableOptions::default())
+        .await
+        .unwrap();
+    for (offset, prices, sizes) in [
+        (0_i64, vec![10.0, 20.0, 12.0, 18.0], vec![1, 2, 3, 4]),
+        (4_i64, vec![11.0, 21.0, 13.0, 19.0], vec![5, 6, 7, 8]),
+    ] {
+        db.append(
+            "trades",
+            vec![trades_batch(
+                &[offset + 1, offset + 2, offset + 3, offset + 4],
+                &["A", "B", "A", "B"],
+                &prices,
+                &sizes,
+            )],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    let spec = FinanceAggregateSpec::ohlcv("ts", "price", "size").grouped_by("symbol");
+    let store = AggregateStateStore::new(db.clone(), AggregateStateMode::ReadWrite);
+
+    let cold = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(cold.metrics.states_built, 2);
+    assert_eq!(cold.metrics.states_reused, 0);
+    assert_eq!(cold.metrics.segments_scanned, 2);
+    let a = cold
+        .groups
+        .iter()
+        .find(|group| group.group.as_deref() == Some("A"))
+        .unwrap();
+    assert_eq!(a.rows, 4);
+    assert_eq!((a.open, a.high, a.low, a.close), (10.0, 13.0, 10.0, 13.0));
+    assert_eq!(a.volume, 16.0);
+    assert!((a.vwap.unwrap() - 12.0).abs() < 1e-12);
+
+    let warm = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(warm.groups, cold.groups);
+    assert_eq!(warm.metrics.states_reused, 2);
+    assert_eq!(warm.metrics.states_built, 0);
+    assert_eq!(warm.metrics.segments_scanned, 0);
+
+    db.append(
+        "trades",
+        vec![trades_batch(
+            &[9, 10, 11, 12],
+            &["A", "B", "A", "B"],
+            &[14.0, 22.0, 15.0, 23.0],
+            &[9, 10, 11, 12],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let appended = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(appended.metrics.states_reused, 2);
+    assert_eq!(appended.metrics.states_built, 1);
+    assert_eq!(appended.metrics.segments_scanned, 1);
+
+    let historical = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Version(2), &spec)
+        .await
+        .unwrap();
+    assert_eq!(historical.groups, cold.groups);
+    assert_eq!(historical.metrics.states_reused, 2);
+    assert_eq!(historical.metrics.segments_scanned, 0);
+
+    let forced = AggregateStateStore::new(db.clone(), AggregateStateMode::Disabled)
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(appended.groups, forced.groups);
+    assert_eq!(forced.metrics.segments_scanned, 3);
+
+    let objects = db
+        .backend()
+        .list(&ObjectPath::from("cache/aggregates/v1"))
+        .await
+        .unwrap();
+    assert_eq!(objects.len(), 3);
+    db.backend()
+        .put(&objects[0].location, bytes::Bytes::from_static(b"corrupt"))
+        .await
+        .unwrap();
+    let recovered = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(recovered.groups, forced.groups);
+    assert_eq!(recovered.metrics.corrupt_entries, 1);
+    assert_eq!(recovered.metrics.states_reused, 2);
+    assert_eq!(recovered.metrics.states_built, 1);
+
+    db.compact("trades", WriteOptions::default()).await.unwrap();
+    let compacted = store
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    let compacted_forced = AggregateStateStore::new(db.clone(), AggregateStateMode::Disabled)
+        .finance_rollup("trades", h5i_db_core::ReadAt::Latest, &spec)
+        .await
+        .unwrap();
+    assert_eq!(compacted.groups, compacted_forced.groups);
+    assert_eq!(compacted.metrics.states_reused, 0);
+    assert_eq!(compacted.metrics.states_built, 1);
 }

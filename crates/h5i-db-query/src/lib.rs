@@ -5,6 +5,7 @@
 //! and the ASOF join operator. All DataFusion types stay inside this crate —
 //! `h5i-db-core` is engine-free.
 
+mod aggregate_state;
 pub mod asof;
 pub mod finance;
 pub mod functions;
@@ -14,9 +15,14 @@ mod predicate_cache;
 pub mod provider;
 pub mod pruning;
 pub mod session;
+mod sidecar;
 pub mod tail;
 pub mod udtf;
 
+pub use aggregate_state::{
+    AggregateStateMetrics, AggregateStateMode, AggregateStateStore, FinanceAggregate,
+    FinanceAggregateResult, FinanceAggregateSpec,
+};
 pub use asof::{asof_join, AsOfDirection, AsOfJoinExec, AsOfJoinNode, AsOfOptions};
 pub use metrics::{
     OperatorPerformanceMetrics, QueryPerformanceReport, QueryStatus, ReportedDataFrame,

@@ -349,10 +349,10 @@ evolution case remains before declaring the full P2 phase production-complete.
 
 ## 7. Phase P3: version-aware mergeable aggregate states
 
-**Status: foundation only.** The core can validate an append-only version range,
-return added segments, scan only that delta, and tail future appends. There is
-no persistent `AggregateStateStore`, aggregate-plan fingerprint, or optimizer
-substitution yet.
+**Status: explicit finance-state prototype delivered.** A persistent
+`AggregateStateStore` now reuses per-segment OHLCV/VWAP states across arbitrary
+manifests. SQL optimizer substitution and general aggregate-plan recognition
+remain intentionally unimplemented.
 
 [OpenIVM](https://ir.cwi.nl/pub/34276) shows that incremental view maintenance
 can be expressed using an existing SQL engine. h5i-db should initially take a
@@ -377,6 +377,14 @@ null behavior, timezone/calendar rules, and UDF/function versions. Encode state
 in a versioned Arrow IPC or similarly self-describing envelope with a checksum.
 Use the same disposable sidecar rules as the predicate cache.
 
+**Delivered for the first registered specification.**
+`FinanceAggregateSpec` registers timestamp, float64 price, float64/int64 volume,
+and an optional non-null string grouping column. Its typed plan fingerprint,
+segment checksum, schema revision, and semantics version address a checksummed
+JSON state under `cache/aggregates/v1/`. The sidecar shares P2's bounded
+oldest-first eviction helper and create-if-absent publication. The API is
+explicitly opt-in because grouped state contains result values such as symbols.
+
 Eligible initial states:
 
 - `count`, `sum`, `min`, and `max`;
@@ -390,6 +398,12 @@ First/last requires a deterministic total tie-breaker, not timestamp alone.
 Integer overflow, decimal precision, floating-point merge order, NaN, and nulls
 must match the uncached DataFusion result contract. If exact equivalence cannot
 be guaranteed, the aggregate is ineligible rather than approximately reused.
+
+The delivered finance contract is narrower than SQL equivalence: required
+columns must be non-null, price/volume and their products/sums must remain
+finite, and int64 volumes must be exactly representable as float64. Open/close
+use `(timestamp, segment checksum, row offset)` as a deterministic total key.
+Unsupported types and unsafe numeric states fail instead of being cached.
 
 ### P3.2 Reuse across any manifest, optimize append specially
 
@@ -407,6 +421,12 @@ create new checksums and require recomputation for rewritten segments, while
 unchanged segments still hit. The existing append-only `diff` API is a useful
 fast path but must not be the correctness foundation.
 
+**Delivered.** `finance_rollup` resolves the requested manifest on every call,
+looks up every referenced segment independently, scans only misses, merges in
+manifest order, and returns requested/reused/built/scan/byte/corruption/eviction
+metrics. Historical versions therefore reuse the same immutable states without
+depending on a version-delta chain.
+
 Optionally persist a small composition index from `(table id, sequence,
 aggregate plan hash)` to the ordered state keys. It is an acceleration index,
 not a materialized result that bypasses manifest validation.
@@ -423,9 +443,20 @@ not a materialized result that bypasses manifest validation.
 Do not support holistic aggregates such as exact median/quantile or arbitrary
 window functions in the initial mergeable-state path.
 
+Integration steps 1 and 2 are delivered for the fixed finance specification;
+step 3 is delivered as an unbucketed optional-symbol OHLCV/VWAP rollup. Fixed
+time buckets, optimizer rewrites, and arbitrary SQL aggregates remain later
+work. The existing `h5i-db-bench` binary now records cold and warm state-store
+runs, avoiding another DataFusion-linked benchmark target.
+
 Exit gate: after appending 1 of N equal segments, a repeated eligible aggregate
 scans only the new segment; compaction, overwrite, restore, schema evolution,
 and cache corruption produce the same result as a forced full recomputation.
+
+Prototype exit gate: passed for warm zero-scan reuse, a 1-of-3 append scan,
+historical-version reuse, forced sidecar corruption, and a compaction rewrite,
+each compared with the explicit forced-recompute mode. Restore, overwrite, and
+schema-evolution cases remain required before a future SQL optimizer rewrite.
 
 ## 8. Phase P4: workload-aware, previewable reclustering
 
@@ -609,7 +640,7 @@ surface. Revisit full IVM after those cases demonstrate sustained demand.
 | P0 | **done** | Query-local metrics, workload log, benchmark matrix | uncertainty | existing scan metrics |
 | P1 | **done** | Planner stats, exact-set pruning, existing pushdowns | bytes and rows | maintenance only |
 | P2 | **row-group prototype done** | Immutable predicate cache | repeated scan and decode | P0 attribution; P1 pruning |
-| P3 | foundation only; **next** | Segment aggregate-state store, OHLCV/VWAP | recomputation | P0; reuse P2 sidecar lifecycle |
+| P3 | **finance prototype done** | Segment aggregate-state store, OHLCV/VWAP | recomputation | P0; reuse P2 sidecar lifecycle |
 | P4 | planned | `LayoutSpec`, health, partial optimize plan/apply | future scan and sort | P0 telemetry; existing plan/apply |
 | P5 | partial | Parquet adaptation, then optional hot tier/custom encoding | ingest/decode residuals | evidence from P0-P4 |
 

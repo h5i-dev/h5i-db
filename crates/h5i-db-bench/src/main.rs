@@ -22,7 +22,9 @@ use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray, Timestamp
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use clap::Parser;
 use h5i_db_core::{Database, ReadAt, StorageOptions, TableOptions, WriteOptions};
-use h5i_db_query::{H5iSession, SessionOptions};
+use h5i_db_query::{
+    AggregateStateMode, AggregateStateStore, FinanceAggregateSpec, H5iSession, SessionOptions,
+};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::Serialize;
@@ -443,6 +445,33 @@ async fn main() {
     r.rows = Some(n);
     results.push(r);
     session.take_scan_metrics();
+
+    // P3 explicit state-store path. It intentionally reuses this existing
+    // benchmark binary rather than creating another DataFusion-linked target.
+    let aggregate_store = AggregateStateStore::new(db.clone(), AggregateStateMode::ReadWrite);
+    let aggregate_spec = FinanceAggregateSpec::ohlcv("ts", "price", "size").grouped_by("symbol");
+    let (mut r, cold_states) = timed("aggregate states: cold OHLCV + VWAP", None, async {
+        aggregate_store
+            .finance_rollup("trades", ReadAt::Latest, &aggregate_spec)
+            .await
+            .unwrap()
+    })
+    .await;
+    r.rows = Some(cold_states.groups.len() as u64);
+    r.detail = Some(serde_json::to_value(&cold_states.metrics).unwrap());
+    results.push(r);
+
+    let (mut r, warm_states) = timed("aggregate states: warm OHLCV + VWAP", None, async {
+        aggregate_store
+            .finance_rollup("trades", ReadAt::Latest, &aggregate_spec)
+            .await
+            .unwrap()
+    })
+    .await;
+    assert_eq!(warm_states.groups, cold_states.groups);
+    r.rows = Some(warm_states.groups.len() as u64);
+    r.detail = Some(serde_json::to_value(&warm_states.metrics).unwrap());
+    results.push(r);
 
     for (label, frac) in [("0.01%", 0.0001f64), ("1%", 0.01), ("100%", 1.0)] {
         let lo = t_min + (span as f64 * 0.4) as i64;

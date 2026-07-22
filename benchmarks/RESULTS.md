@@ -40,6 +40,13 @@ Each result records physical scan metrics, a result checksum, the binary and
 workload hashes, and machine/compiler metadata. Raw SQL and result rows are not
 copied into the result artifact.
 
+The Rust harness also emits `aggregate states: cold OHLCV + VWAP` and
+`aggregate states: warm OHLCV + VWAP`. Their detail objects report state hits,
+builds, scanned segments/rows/bytes, corruption recovery, and eviction counts.
+The warm result is value-equivalent in-process and should report zero
+segments scanned; checked-in timing numbers will be added with the next full
+20 M-row benchmark run.
+
 On small machines run one engine per invocation (`--engines <one>`), ideally
 under a cgroup cap (`systemd-run --user --scope -p MemoryMax=...`): a 20 M-row
 eager sort/join can otherwise OOM the whole machine. `ulimit -v` is *not* a

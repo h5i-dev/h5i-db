@@ -173,7 +173,13 @@ impl PredicateCache {
                                 .put_if_absent(&path, bytes::Bytes::from(bytes))
                                 .await
                             {
-                                Ok(true) => match self.enforce_budget().await {
+                                Ok(true) => match crate::sidecar::enforce_budget(
+                                    &self.backend,
+                                    PREFIX,
+                                    MAX_CACHE_BYTES,
+                                )
+                                .await
+                                {
                                     Ok(evictions) => stats.evictions = evictions,
                                     Err(error) => {
                                         tracing::debug!(%error, "predicate cache eviction failed")
@@ -302,26 +308,6 @@ impl PredicateCache {
             checksum: String::new(),
         })
     }
-
-    async fn enforce_budget(&self) -> h5i_db_core::Result<usize> {
-        let prefix = ObjectPath::from(PREFIX);
-        let mut objects = self.backend.list(&prefix).await?;
-        let mut total = objects.iter().map(|object| object.size).sum::<u64>();
-        if total <= MAX_CACHE_BYTES {
-            return Ok(0);
-        }
-        objects.sort_by_key(|object| object.last_modified);
-        let mut evictions = 0;
-        for object in objects {
-            if total <= MAX_CACHE_BYTES {
-                break;
-            }
-            self.backend.delete(&object.location).await?;
-            total = total.saturating_sub(object.size);
-            evictions += 1;
-        }
-        Ok(evictions)
-    }
 }
 
 pub(crate) fn eligible_predicate(
@@ -330,7 +316,7 @@ pub(crate) fn eligible_predicate(
 ) -> Option<EligiblePredicate> {
     let expression = datafusion::logical_expr::utils::conjunction(filters.to_vec())?;
     let mut columns = BTreeSet::new();
-    let mut terms = Vec::new();
+    let mut terms = Vec::<(String, String, String, String)>::new();
     let mut has_equality = false;
     collect_terms(
         schema,
@@ -343,6 +329,7 @@ pub(crate) fn eligible_predicate(
         return None;
     }
     terms.sort();
+    let canonical = serde_json::to_vec(&terms).ok()?;
     // ProjectionMask emits columns in file-schema order, regardless of the
     // order requested. Keep the physical expression schema in that same
     // order so column indices and Arrow types remain aligned.
@@ -353,9 +340,7 @@ pub(crate) fn eligible_predicate(
         .map(|field| field.name().clone())
         .collect();
     Some(EligiblePredicate {
-        hash: blake3::hash(terms.join("&").as_bytes())
-            .to_hex()
-            .to_string(),
+        hash: blake3::hash(&canonical).to_hex().to_string(),
         columns,
         // Provider filters can retain a table qualifier. The projected
         // predicate-only batch is intentionally unqualified.
@@ -380,7 +365,7 @@ fn collect_terms(
     schema: &arrow::datatypes::SchemaRef,
     expression: &Expr,
     columns: &mut BTreeSet<String>,
-    terms: &mut Vec<String>,
+    terms: &mut Vec<(String, String, String, String)>,
     has_equality: &mut bool,
 ) -> Option<()> {
     let Expr::BinaryExpr(binary) = expression else {
@@ -428,9 +413,11 @@ fn collect_terms(
     }
     *has_equality |= operator == Operator::Eq;
     columns.insert(column.to_string());
-    terms.push(format!(
-        "{column}:{:?}:{operator:?}:{scalar:?}",
-        field.data_type()
+    terms.push((
+        column.to_string(),
+        format!("{:?}", field.data_type()),
+        format!("{operator:?}"),
+        format!("{scalar:?}"),
     ));
     Some(())
 }
