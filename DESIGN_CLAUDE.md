@@ -213,41 +213,60 @@ Database (a directory / S3 prefix)
 
 ```
 mydb/
-  CATALOG                          # table registry (name → table dir, schema, options)
-  tables/trades/
-    HEAD                           # tiny file: current version number + manifest hash  ← the ONLY mutable object
+  FORMAT                           # database format version + minimum reader version
+  catalog/
+    tables/<hash-of-name>.json     # name → table UUID; names are data, never filesystem paths
+  tables/<table-uuid>/             # tables identified by stable UUID; rename = catalog edit only
+    HEAD                           # tiny file: current version number + manifest checksum  ← the ONLY mutable object
     manifests/
-      000000000000.mf             # one manifest per version, addressed by version number → O(1) time travel
+      000000000000.mf              # one manifest per version, addressed by version number → O(1) time travel
       000000000001.mf
     segments/
-      <uuid>.parquet              # immutable; referenced by ≥1 manifests
-    snapshots/
-      eod-2026-07-18              # named pin → version number (extra GC root)
+      <uuid>.parquet               # immutable; referenced by ≥1 manifests
+  snapshots/
+    <hash-of-name>.json            # named pin → {table UUID: version}  (extra GC root, DB-level)
 ```
 
 **Manifest** (one per version; the unit of commit):
 
-- version number, parent version, created-at, committer note, user metadata
+- version number, parent version, committer note, user metadata
+- `committed_at = max(wall_clock, parent.committed_at + 1ns)` — the committed
+  chain stays monotonic even with skewed client clocks, so `as_of(ts)` is
+  well-defined
 - schema (+ schema-evolution lineage)
 - operation kind (write / append / update / delete_range / compact — for audit)
 - segment list; per segment: path, row count, byte size, **per-column min/max,
   null count**, time range, sort order flag, content hash, optional bloom
   filter offsets
+- checksums for the manifest itself and every referenced object (torn/corrupt
+  metadata is detected, never silently read)
 - table-level rollups: total rows, global time range
 
 Design deltas vs ArcticDB, stated once: manifests are **directly addressed by
 version number** (flat log, not a linked list) so `read(version=k)` is one
-GET; the manifest embeds the slice map (their separate `TABLE_INDEX` layer
-collapses into it); deletes need no tombstone machinery — a version's manifest
-simply doesn't reference removed data, and `vacuum` deletes segments referenced
-by no live manifest and no snapshot. Content-hash dedup (skip writing a
-segment whose hash already exists) is kept.
+GET and `as_of(ts)` is an O(log V) binary search over addressable manifests
+(HEAD gives the max sequence; monotonic `committed_at` makes the search
+valid) — no ancestor-pointer machinery needed; the manifest embeds the slice
+map (their separate `TABLE_INDEX` layer collapses into it); deletes need no
+tombstone machinery — a version's manifest simply doesn't reference removed
+data, and `vacuum` deletes segments referenced by no live manifest and no
+snapshot. Content-hash dedup (skip writing a segment whose hash already
+exists) is kept.
 
-Format notes: manifests are a compact self-describing binary (postcard or
-flatbuffers — decide at implementation; JSON sidecar dump for debuggability).
-When version count grows large, a periodic `MANIFEST_LOG` summary file (Delta
-checkpoint-style) keeps `list_versions()` from listing thousands of objects —
-Phase 5 concern, the format reserves room for it now.
+Format notes: control metadata (catalog, manifests, HEAD, snapshots) is
+**canonical JSON + checksum** in v1 — inspectable with any tool, easy to
+migrate, and torn writes are detected by the checksum; a compact binary
+encoding is a later optimization gated on metadata profiles showing it
+matters. `FORMAT` carries the database and minimum-reader versions, and
+format readers are versioned from the first commit. Segment sizing targets
+(tuning defaults, not format constants): ~128 MiB of input per Parquet
+object, 16–64 MiB row groups, zstd default codec. The inline segment list
+warns at 1,024 segments and hard-guards at a configurable 4,096, pushing
+users toward compaction; the manifest schema reserves a slot for a
+persistent segment-tree root if real workloads outgrow inline lists. When
+version count grows large, a periodic `MANIFEST_LOG` summary file (Delta
+checkpoint-style) keeps `list_versions()` from listing thousands of objects
+— Phase 5 concern, the format reserves room for it now.
 
 **Types.** Arrow types throughout. First-class for finance: `Timestamp(ns, tz)`
 as the time index, `Decimal128`, dictionary-encoded strings. Schema evolution
@@ -277,10 +296,25 @@ db.list_versions("trades")?; db.restore("trades", Version(42))?;   // restore = 
 db.compact("trades")?; db.vacuum("trades", keep)?;
 ```
 
+**Operation semantics** (strictness adopted deliberately):
+
+- `append` is strict: input schema must match exactly, and if a sort key is
+  declared, the input must be sorted with its minimum key ≥ the table's
+  current maximum. Unsorted or out-of-order ingestion goes through `write`
+  or the staged sort-and-finalize path (Phase 5) — never through a silently
+  reordering append.
+- `update` and `delete_range` are two faces of one primitive
+  (*replace-range*: rewrite overlapping boundary segments, share the rest);
+  keeping both verbs is API sugar, not two mechanisms.
+- Writers may pass an explicit `expected_version`; a stale value returns
+  `VersionConflict`, never an implicit retry.
+
 **Commit protocol — multiple readers, single successful writer per table:**
 
-1. Writer reads `HEAD` (version *n*), writes new segments (invisible until
-   published), writes manifest *n+1*.
+1. Writer reads `HEAD` (version *n*), writes new segments under a per-writer
+   temp directory, fsyncs, and renames them into place (invisible until
+   published), then writes manifest *n+1*. `HEAD` must never point at an
+   object that is not durable and checksum-valid.
 2. Writer atomically swaps `HEAD` from *n* to *n+1*:
    local FS → write-temp + `rename` with an O_EXCL lock file;
    S3 → conditional `If-Match`/`If-None-Match` PUT (the primitive ArcticDB's
@@ -303,6 +337,14 @@ normal commit (op kind `compact`, data-identical). Triggerable manually from
 day one, policy-driven (small-segment-count threshold) later. **Retention** =
 `delete_range` + `vacuum`; because segments are time-partitioned, expiring old
 data drops whole segments (TimescaleDB's `drop_chunks` insight).
+
+**Vacuum and repair** are conservative by construction: vacuum is
+mark-and-sweep from table heads, retained version ancestry, and named
+snapshots, with a grace period so in-flight writers' objects survive, and it
+**dry-runs by default**. A `verify` command checks head/manifest/segment
+existence, sizes, and checksums; repair reports candidates and requires an
+explicit user choice — it never guesses a new head. Read-only operations
+never perform opportunistic compaction or metadata repair.
 
 ---
 
@@ -328,8 +370,11 @@ the DataFrame API are exposed (they share plans, so feature parity is free).
    memcmp-able sort keys), plus the optimization DuckDB structurally can't
    have: when scan order is already (partition, time) — which our storage
    guarantees via segment_by/order_by — skip the sort and stream the merge.
-   Exposed in SQL (`ASOF JOIN … ON trades.sym = quotes.sym AND
-   trades.ts >= quotes.ts`) and DataFrame (`join_asof`).
+   Shipped **operator-first**: DataFrame `join_asof` (with `by` keys,
+   direction, tolerance, inner/left) and a CLI verb come first, validated
+   against DuckDB as the semantic oracle (ties, NULLs, strict/non-strict,
+   tolerance); SQL `ASOF JOIN` syntax via `RelationPlanner` follows once
+   the semantics are locked — ASOF is not disguised as a UDF.
 5. **Time-series functions**: `date_bin`/`date_trunc` are already in
    DataFusion; add `time_bucket` (DuckDB/Timescale semantics incl. calendar
    months + origin/offset), `first`/`last` bookend aggregates (mergeable,
@@ -339,6 +384,10 @@ the DataFrame API are exposed (they share plans, so feature parity is free).
 6. Rolling/window: DataFusion window functions already cover
    `avg OVER (PARTITION BY sym ORDER BY ts RANGE INTERVAL …)`; we add sugar
    (`rolling(mean, '30m')`) in the DataFrame/Python API, not a new engine.
+7. **Observability**: `EXPLAIN` / `EXPLAIN ANALYZE` extended with h5i-db scan
+   metrics — manifests/segments/row-groups considered vs pruned, bytes read,
+   spill bytes, peak memory. This is how we verify pruning actually fires,
+   and it doubles as the feedback an agent needs to rewrite a slow query.
 
 Sorted-by-time storage + `InputOrderMode::Sorted` gives streaming GROUP BY
 time-bucket without hashing; the `TableProvider` declares output ordering so
@@ -433,7 +482,9 @@ Contract, enforced from the first release:
 
 - **Output**: `--format table|json|jsonl|csv|arrow` (json = `{schema, rows,
   stats}` envelope; arrow = IPC stream on stdout for lossless piping).
-- **Errors**: machine-readable on stderr — `{code, message, hint}`; stable
+- **Errors**: machine-readable on stderr — `{code, message, retryable, hint}`
+  (`retryable` tells a supervising agent whether re-running can help, e.g.
+  conflict yes, schema mismatch no); stable
   exit codes (0 ok / 2 user error / 3 conflict / 4 limit exceeded / 5 internal).
   Error messages state the fix ("version 42 not found; latest is 57;
   run `h5i-db versions …`") because the consumer replans from the text.
@@ -457,19 +508,26 @@ Phases are cumulative; each ends with something demonstrable. Rough sizing
 assumes one focused developer + AI agents; phases 0–2 are the proof of value.
 
 **Phase 0 — Walking skeleton.**
-Workspace scaffolding; local-FS `object_store`; CATALOG + HEAD + manifest v0
-(write/read); Parquet segment writer with per-column min/max collected into
-the manifest; `create_table`/`write`/`append`/`read`; naive `TableProvider`
-(no pruning); CLI `query/tables/schema/ingest` with `--format json`.
+Workspace scaffolding; local-FS `object_store`; FORMAT + catalog + HEAD +
+manifest v0 (write/read) with golden compatibility fixtures; Parquet segment
+writer with per-column min/max collected into the manifest;
+`create_table`/`write`/`append`/`read`; naive `TableProvider` (no pruning);
+CLI `query/tables/schema/ingest` with `--format json`; fault-injection
+harness skeleton (kill/fail hooks at each commit step) built now so Phase 1
+gates on it, not on retrofitted tests.
 *Exit: `ingest` a CSV, `query` it via SQL, from a fresh clone in one command.*
 
 **Phase 1 — Versioning correct end-to-end.**
 Atomic CAS commit + `VersionConflict` + append rebase-retry; `read_at`/
 `read_as_of`; `update`/`delete_range` with boundary-segment copy-on-write;
-snapshots; `restore`; `list_versions`; `compact`; `vacuum` (snapshot-aware);
-content-hash dedup; crash-safety property tests (kill mid-commit → old head
-intact, orphans vacuumable). Concurrency stress test: N writers × M readers.
-*Exit: the versioning semantics ArcticDB has, without its footguns.*
+snapshots; `restore`; `list_versions`; `compact`; `vacuum` (snapshot-aware,
+grace period, dry-run default); `verify`; content-hash dedup.
+*Exit: the versioning semantics ArcticDB has, without its footguns —
+measured as: killing the writer at **every** commit step yields the old or
+the new head, never a corrupt visible table; two racing writers produce one
+commit and one `VersionConflict`; after 10,000 versions, version reads stay
+O(1) and `as_of` stays O(log V) in storage requests; corruption reports name
+the exact object.*
 
 **Phase 2 — Query performance.**
 `PruningStatistics` over manifests + `Exact` pushdown (benchmark: narrow
@@ -477,10 +535,15 @@ time-range query over years of data touches only overlapping segments);
 declared output ordering → order-preservation rules + streaming ordered
 aggregation (§7 Tier 2); metadata-only `COUNT`/`MIN`/`MAX` via exact
 provider statistics; decoded-batch cache keyed by segment hash (§7 Tier 1);
-`time_bucket` + `first`/`last` UDFs; DataFusion feature-flag trim; first public benchmark
-vs DuckDB-over-Parquet and ArcticDB (ingest rate, time-range scan, bucketed
-aggregation, cold version read).
-*Exit: pruning + ordered aggregation demonstrably working; honest numbers.*
+`time_bucket` + `first`/`last` UDFs; `EXPLAIN ANALYZE` with scan metrics;
+DataFusion feature-flag trim; SQL differential tests against DuckDB for the
+supported subset; first public benchmark vs DuckDB-over-Parquet, raw
+DataFusion over the identical Parquet files (isolates our metadata
+overhead), and ArcticDB (ingest rate, time-range scan, bucketed aggregation,
+cold version read).
+*Exit: pruning + ordered aggregation demonstrably working (a time-range scan
+reads no segment whose bounds are disjoint); h5i-db SQL scan overhead ≤10%
+over raw DataFusion on the same files; honest numbers.*
 
 **Phase 3 — Python.**
 pyo3 bindings, zero-copy Arrow FFI; pandas/polars/pyarrow in-out;
@@ -489,8 +552,9 @@ for high-cardinality equality predicates (`contained()` hook).
 *Exit: `pip install h5i-db; db.sql("…").to_pandas()` in a notebook.*
 
 **Phase 4 — Time-series operators (the differentiator).**
-`AsOfJoinExec` (sorted-merge fast path + fallback sort path; SQL `ASOF JOIN`
-via RelationPlanner + DataFrame `join_asof`); quant-idiom rewrite rules
+`AsOfJoinExec` (sorted-merge fast path + fallback sort path), shipped
+operator-first: DataFrame `join_asof` + CLI verb validated against DuckDB
+golden cases, then SQL `ASOF JOIN` via RelationPlanner; quant-idiom rewrite rules
 (latest-row-per-key → manifest-guided reverse scan, §7 Tier 2); `resample`
 sugar; gapfill + locf/interpolate operator; OHLC helper; benchmark as-of
 join vs DuckDB and pandas `merge_asof`.
@@ -535,13 +599,20 @@ listed extensions, ArcticDB API compatibility, custom columnar file format
   optimizing.
 - **Scope creep toward "agent platform".** *Mitigation:* §9 non-goals list;
   anything agent-flavored must land in CLI/docs/skill, never in the engine.
+- **Licensing contamination.** ArcticDB (BSL) and TimescaleDB's `tsl/` tree
+  (Timescale License) are source-available, not Apache-2.0. They are
+  architectural references only: implementation here must be original,
+  based on public behavior and formats — never translated code. (DuckDB is
+  MIT and DataFusion Apache-2.0; those are safe to read closely.)
 
 ---
 
 ## 11. Open questions (fine to defer, recorded so they aren't lost)
 
-1. Manifest encoding: postcard vs flatbuffers (decide in Phase 0 with a
-   micro-benchmark; both keep the JSON debug dump).
+1. ~~Manifest encoding: postcard vs flatbuffers~~ — **resolved** (cross-review
+   with DESIGN_CODEX.md, §12): canonical JSON + checksum in v1 for
+   inspectability and easy migration; binary encoding only if metadata
+   profiles show it matters.
 2. Multi-table atomic snapshots are in (cheap: one snapshot file pinning many
    table versions); multi-table atomic *commits* are not — is that ever needed
    for the finance use case? Revisit after Phase 1 usage.
@@ -551,3 +622,60 @@ listed extensions, ArcticDB API compatibility, custom columnar file format
    git is exactly the "worktree in a DB" idea we decided smells wrong, so the
    bar is high.
 4. Name of the CLI binary: `h5i-db` (current) vs something shorter.
+
+---
+
+## 12. Cross-review against DESIGN_CODEX.md
+
+DESIGN_CODEX.md (an independent design by another agent over the same
+reference sources) and this document converged without coordination on every
+major decision: DataFusion behind a hard crate boundary, immutable Parquet
+segments + per-version manifests, atomic CAS head swap with an explicit
+conflict error (never last-writer-wins), Parquet-first with a benchmark-gated
+custom format, operator-first ASOF with DuckDB as the oracle, and no
+MCP/agent/worktree concepts in the engine. Independent convergence is the
+strongest validation either document has.
+
+**Adopted from DESIGN_CODEX.md** (it was more rigorous on engineering
+contracts): table UUIDs + hashed-name catalog indirection (user strings never
+become paths; rename is a catalog edit); monotonic `committed_at`; checksums
+on all metadata with torn-write detection; JSON-first control metadata
+(resolving open question 1 — inspectability beats compactness in v1);
+byte-based segment sizing (~128 MiB objects, 16–64 MiB row groups, zstd);
+strict `append` (exact schema, nondecreasing sort key); explicit
+`expected_version` on writes; inline segment-list warn/hard guards with a
+reserved segment-tree slot; vacuum grace period + dry-run default and a
+non-guessing `verify`/repair; fault-injection harness from Phase 0 and
+kill-at-every-commit-step exit gates; DuckDB differential testing; the ≤10%
+scan-overhead target vs raw DataFusion; `retryable` in the error envelope;
+`EXPLAIN ANALYZE` scan metrics; the licensing-contamination risk (BSL/TSL
+sources are architectural references only).
+
+**Considered and not adopted, with reasons:**
+
+- **Binary-lifting ancestor pointers** (their O(log V) version navigation).
+  Unnecessary under this layout: manifests are directly addressed by
+  sequence number, so version reads are O(1) and `as_of` is an O(log V)
+  binary search needing no pointer machinery in the format. Their design
+  assumed manifests reachable only by traversal; ours are addressable.
+- **Seven-crate split** (`types`/`storage`/`core`/… separated up front). The
+  boundary that matters — core free of DataFusion, adapters isolating
+  churn — is kept with four crates; further splitting can happen when a
+  concrete consumer needs it, and premature crate boundaries are themselves
+  a maintenance cost.
+- **`replace_range` as the only correction verb.** Same primitive here, but
+  `update`/`delete_range` are kept as API sugar because both names match
+  user intent; the doc now states explicitly that they are one mechanism.
+- **Dropping `time_bucket`-style origin defaults to a later phase**, and a
+  few sequencing differences (their SQL lands in Phase 2, Python in
+  Phase 3): retained this document's phasing — Python early (Phase 3 here)
+  because notebook usability is how a DataFrame store earns adoption, and
+  §7's optimization tiers (decoded-batch cache, metadata-only aggregates,
+  order-preservation rules, quant-idiom rewrites) — absent from
+  DESIGN_CODEX.md — remain this document's main unique contribution.
+
+Where the two documents still disagree after this pass, this document is the
+authoritative one for implementation; DESIGN_CODEX.md remains a valuable
+second opinion, especially its benchmark workload matrix (§"Benchmark and
+acceptance plan"), which Phase 2 should mine when writing the benchmark
+suite.
