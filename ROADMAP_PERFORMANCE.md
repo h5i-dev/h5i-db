@@ -92,13 +92,17 @@ The 2026-07-22 checkpoint audit found these performance foundations delivered:
 - streaming CLI and Python query output plus retractable VWAP window state;
 - append-only version diffs, scans of only added segments, and a tail stream;
 - preview/apply mutation plans and copy-on-write compaction.
+- query-local execution IDs and performance reports with DataFusion physical
+  scan bytes, rows, pruning, operator timing, sort, and spill attribution;
+- bounded opt-in telemetry containing query fingerprints rather than SQL, plus
+  an explicit disposable sidecar flush;
+- a no-link repeated-query runner with result checksums, environment metadata,
+  and baseline regression gates.
 
 The remaining structural gaps are:
 
-- `ScanMetrics` records segment counts and scheduled bytes in a session-shared
-  collector, not an execution-local report with actual I/O, decoded rows,
-  operator timing, spills, or cache attribution;
-- there is no bounded persistent workload telemetry log;
+- physical-byte reporting uses DataFusion's scan-range metric; it does not yet
+  split metadata, requested, compressed, and decompressed bytes;
 - high-cardinality entity columns have no probabilistic membership summary;
 - there is no persistent predicate or aggregate-state cache;
 - layout remains a static sort key; `core/src/layout.rs` describes object paths,
@@ -111,16 +115,19 @@ The implementation may move while this roadmap is active. Each phase starts
 with a short source audit and updates this list instead of assuming these facts
 remain true.
 
-Verification for this update: the `h5i-db-query` `query_misc` and `asof_perf`
-test targets passed 19 tests, and the `h5i-db-core` `roadmap_features` target
-passed 6 tests at the stated checkpoint.
+Verification for this update: the existing `h5i-db-query` `query_misc` target
+passed the concurrent query-local reporting test, the lightweight observability
+crate passed 3 tests, the no-link workload gate passed 3 Python tests, and the
+public CLI report checker observed a 274-byte physical scan against the golden
+database fixture. Earlier `query_misc`/`asof_perf` and `roadmap_features`
+checkpoints passed 19 and 6 tests respectively.
 
 ## 4. Phase P0: make saved work observable
 
-**Status: partial.** `ScanMetrics` currently reports table/version, total,
-pruned and scanned segments, and scheduled bytes. `H5iSession` exposes the
-shared collector. This is useful pruning evidence but is not safe attribution
-for concurrent queries and does not measure physical reads.
+**Status: done for the P2/P3 foundation.** Reports and telemetry are
+query-local, bounded, privacy-aware, and exercised through the public CLI. The
+remaining byte-category and Python-surface refinements are additive and do not
+block cache attribution.
 
 Do this before an adaptive feature. Otherwise the database cannot decide what
 to optimize and benchmarks cannot explain a win.
@@ -147,6 +154,15 @@ metrics can supply operator rows and spill data, but an instrumented object
 store/read adapter is needed for physical bytes. Concurrent queries must never
 share counters.
 
+**Delivered.** `H5iSession::sql_reported` assigns a query ID during physical
+planning and returns a stream whose final report is isolated to that execution.
+It combines manifest scan attribution with DataFusion physical-plan metrics for
+scan ranges, scan output rows, row-group/page pruning, operator timing, sorts,
+and spills. Rust, CLI `query --stats`, and the UI backend expose the stable
+serializable report. A concurrent query test verifies that scan attribution
+does not cross execution boundaries. Separating metadata reads and
+decompressed bytes remains a later refinement.
+
 ### P0.2 Workload telemetry
 
 Store a bounded, opt-in workload log containing:
@@ -163,6 +179,12 @@ range boundaries or cleartext values require an explicit telemetry setting.
 Apply a size cap and retention period. Telemetry is advisory and disposable,
 not versioned table state.
 
+**Delivered.** `SessionOptions::telemetry_capacity` enables an in-memory
+bounded ring; zero disables it. Entries contain the query fingerprint and
+performance report, never SQL text or literals. Explicit flush writes a
+versioned, disposable workload envelope outside table manifests, so queries do
+not introduce hidden writes.
+
 ### P0.3 Benchmark gates
 
 Add a checked-in data generator and result schema. A performance change passes
@@ -170,6 +192,13 @@ only if it preserves result checksums and does not regress the cross-sectional
 or ingest control workload beyond an agreed threshold. Keep benchmark results
 out of correctness tests, but retain machine, compiler, dataset, and command
 metadata so runs are comparable.
+
+**Delivered.** `benchmarks/run_performance_workload.py` drives an already-built
+CLI and therefore adds no Rust/DataFusion link target. The checked-in workload
+runs warm and repeated cross-sectional and symbol/time cases, rejects changing
+result checksums, records binary/workload hashes and machine/compiler metadata,
+and can fail a baseline comparison above a configurable median-query threshold.
+The existing Rust benchmark remains the ingest control and dataset generator.
 
 ## 5. Phase P1: finish cheap pruning before adding caches
 
@@ -556,9 +585,9 @@ surface. Revisit full IVM after those cases demonstrate sustained demand.
 
 | Priority | Status | Deliverable | Primary work removed | Dependency |
 |---|---|---|---|---|
-| P0 | partial; **next** | Query-local metrics, workload log, benchmark matrix | uncertainty | existing scan metrics |
+| P0 | **done** | Query-local metrics, workload log, benchmark matrix | uncertainty | existing scan metrics |
 | P1 | **done** | Planner stats, exact-set pruning, existing pushdowns | bytes and rows | maintenance only |
-| P2 | planned; **next prototype** | Immutable predicate cache | repeated scan and decode | P0 attribution; P1 pruning |
+| P2 | **next prototype** | Immutable predicate cache | repeated scan and decode | P0 attribution; P1 pruning |
 | P3 | foundation only | Segment aggregate-state store, OHLCV/VWAP | recomputation | P0; reuse P2 sidecar lifecycle |
 | P4 | planned | `LayoutSpec`, health, partial optimize plan/apply | future scan and sort | P0 telemetry; existing plan/apply |
 | P5 | partial | Parquet adaptation, then optional hot tier/custom encoding | ingest/decode residuals | evidence from P0-P4 |

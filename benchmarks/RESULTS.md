@@ -15,6 +15,31 @@ python benchmarks/compare_baselines.py <dir>/bench.db \
     [--engines polars,duckdb,pandas,pyarrow]   # needs those packages
 ```
 
+The query-local P0 regression workload reuses the generated `bench.db` and an
+already-built CLI binary, so it does not compile or link another DataFusion
+test target:
+
+```bash
+python benchmarks/run_performance_workload.py \
+    --binary target/bench-fast/h5i-db \
+    --db <dir>/bench.db \
+    --output current-performance.json
+
+# On the same machine and dataset, require identical results and no gated
+# median query-time regression greater than 10%.
+python benchmarks/run_performance_workload.py \
+    --binary target/bench-fast/h5i-db \
+    --db <dir>/bench.db \
+    --baseline baseline-performance.json \
+    --output current-performance.json
+```
+
+The checked-in workload runs one warm-up and five measured repetitions of a
+cross-sectional control and the symbol/time predicate shape targeted by P2.
+Each result records physical scan metrics, a result checksum, the binary and
+workload hashes, and machine/compiler metadata. Raw SQL and result rows are not
+copied into the result artifact.
+
 On small machines run one engine per invocation (`--engines <one>`), ideally
 under a cgroup cap (`systemd-run --user --scope -p MemoryMax=...`): a 20 M-row
 eager sort/join can otherwise OOM the whole machine. `ulimit -v` is *not* a
