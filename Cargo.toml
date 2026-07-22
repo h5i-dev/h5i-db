@@ -20,7 +20,7 @@ default-members = [
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/Koukyosyumei/h5i-db"
+repository = "https://github.com/h5i-dev/h5i-db"
 rust-version = "1.88"
 
 [workspace.dependencies]
