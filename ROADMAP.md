@@ -1,137 +1,248 @@
-# h5i-db Roadmap — Production-Readiness Review
+# h5i-db Roadmap
 
-Findings from a full-codebase review (2026-07-22, branch `improve-poc`, ~8,200 lines
-across `h5i-db-core`, `h5i-db-query`, `h5i-db-cli`, `h5i-db-ui`, `h5i-db-python`),
-plus a design-vs-delivery and operational-readiness audit against `DESIGN.md`.
+Living roadmap. Last full update 2026-07-22 (branch `improve-performance`).
 
-**Verdict.** The consistency core is unusually strong for a PoC: CAS HEAD swap with
-fault-injection tests on the shipped code path, blake3 manifest checksum chains, a
-coherent `{code, message, retryable, hint}` error contract across CLI/UI/Python, and
-honest benchmarks. What separates it from production-grade falls into the four
-buckets below, ordered by priority.
+This document merges the former `ROADMAP_PERFORMANCE.md` into the
+production-readiness roadmap; the separate file is gone. Part I tracks
+production readiness, Part II the structural performance program. Statuses in
+this update were re-verified against the source (grep/tests/benchmarks), not
+carried forward from earlier revisions.
 
 ---
 
-## 1. Correctness & durability blockers
+# Part I — Production readiness
 
-| # | Sev | Item | Where |
-|---|-----|------|-------|
-| 1.1 | Critical | **Segments are never fsynced before the HEAD swap.** `SegmentWriter::flush` uses a plain put; the only `sync_objects` in the commit path covers the manifest. After power loss, a *committed* version can reference torn/empty Parquet files — violating the invariant stated at `backend.rs:16`. Fix: sync segment paths together with the manifest before the head swap. | `core/src/segment.rs:438`, `core/src/database.rs:631` |
-| 1.2 | Critical | **`time_bucket` division-by-zero panic on user SQL.** Month widths are never validated: `time_bucket('0mo', ts)` or `INTERVAL '0' MONTH` panics at execution — fatal under the workspace `panic = "abort"`. Also: negative months accepted, `'999999y'` wraps. Fix: validate `months > 0` in both parse paths + `checked_mul`. | `query/src/functions.rs:96-100,144-152` |
-| 1.3 | High | **Stale-lock breaking admits two live writers.** A lock older than 60s is unlinked, but head revalidation happens before `publish`, not before the final HEAD rename — a slow-but-alive writer plus a lock-breaker can both commit; last rename wins and HEAD's `manifest_checksum` can mismatch → readers see `Corruption`. Also unlink races between two breakers, and `FsLock::drop` unlinks by path unconditionally. Fix: OS-level `flock` on an open fd (re-verifying ownership before the rename only narrows the race window — it cannot close it). | `core/src/backend.rs:130-140,223-240` |
-| 1.4 | High | **`block_in_place` panics on current-thread Tokio runtimes.** Any embedder on `flavor = "current_thread"` panics on the first `SELECT * FROM h5i('t')`. Fix: check `runtime_flavor()`, fall back to a scoped thread with a mini runtime. | `query/src/udtf.rs:27-36` |
-| 1.5 | High | **Python wheels can abort the host interpreter.** Release builds inherit `panic = "abort"`, so pyo3 cannot convert panics to exceptions; combined with ~10 `serde_json::to_string(...).unwrap()` calls, any panic kills the user's process/kernel. Fix: unwind profile for the wheel + replace unwraps with `PyErr`. | workspace `Cargo.toml`, `python/src/lib.rs:153` et al. |
-| 1.6 | High | **Review UI open to DNS rebinding / CSRF.** Loopback bind but no auth token, no Host-header validation, no CSRF header — a malicious web page can run arbitrary SQL and, with `--allow-mutations`, apply/discard plans. Fix: startup token + Host check + custom header on POSTs. | `ui/src/lib.rs:40-91,363-380` |
+Originates from the full-codebase review of 2026-07-22 (branch `improve-poc`).
+Since then the codebase has delivered nearly all of that review. Item numbers
+from the original review are kept for traceability.
 
-## 2. Performance
+## Delivered since the review (verified in source)
 
-| # | Item | Where |
+**Correctness & durability (all §1 blockers closed):**
+segment fsync before HEAD swap (1.1, `database.rs` sync-paths batch) ·
+`time_bucket` validation with `checked_mul` (1.2) · OS-level `flock` writer
+lock (1.3, `backend.rs`) · runtime-flavor guard before `block_in_place`
+(1.4, `udtf.rs`) · unwind wheel profile (1.5, `[profile.wheel]`) · UI
+bearer token + limits (1.6).
+
+**Performance (§2, most closed):**
+ASOF filter/projection/limit pushdown with declared ordering and memory-pool
+accounting (2.1/2.2/2.5/2.6) · `TableProvider::statistics()` with exact
+manifest stats and metadata-only `COUNT(*)` (2.3) · streaming scan/CLI/Python
+output and bounded sorted writes (2.4) · retractable VWAP/`wavg` (2.7) ·
+exact ≤128-value distinct-set pruning for entity columns (2.8, first tier) ·
+`H5iSession::refresh()` + shared runtime (2.9) · pairwise O(n) sortedness
+check (2.11).
+
+**Operational (§3, most closed):**
+PyPI trusted publishing in release.yml (3.1) · tracing init in CLI and UI
+(3.2) · retention/GC (`retention.rs`, retention floor in version resolution)
+(3.3) · staging leases protecting in-flight commits from vacuum (3.4) ·
+catalog CAS via create-if-absent (3.5) · UI query timeout/limits (3.7) ·
+Python GIL release via `py.detach` (3.8) · schema-only empty results (3.9) ·
+`docs/OPERATIONS.md` (3.10) · CI: Windows job, MSRV (1.88), supply-chain
+audit, perf-trend, bench-smoke (3.11) · broken-pipe quiet exit, `--max-bytes`
+(3.12).
+
+**Features (§4):**
+schema evolution (`evolution.rs`) · gapfill/LOCF (`gapfill.rs`) · incremental
+version diffs (`incremental.rs`) · tailing (`tail.rs`) · S3/GCS/Azure/MinIO
+object-store backend on conditional writes (`backend_object.rs`) ·
+multi-table atomic commits (`transaction.rs`).
+
+## Still open
+
+| # | Item | Notes |
 |---|------|-------|
-| 2.1 | **`asof_join` UDTF bypasses all pruning/projection/limit pushdown** — full scans of both tables, full-width right side buffered; the flagship query shape pays worst-case cost. Forward `Inexact` left-side filters, widened right-side time bounds, and projections to the child scans. Single biggest user-visible perf win. | `query/src/asof.rs:817-837` |
-| 2.2 | **ASOF right side buffered outside the memory pool** — invisible to `FairSpillPool`/`memory_limit`; the one operator that can OOM despite limits. Register a `MemoryConsumer` reservation; streaming merge/spill later. | `query/src/asof.rs:431-444` |
-| 2.3 | **No `TableProvider::statistics()`** despite exact rows/bytes/min/max in the manifest — no metadata-only `COUNT(*)`/`MIN`/`MAX` (DESIGN §7 Tier-1 "mandatory"), no join-side selection. Free planner win: fold manifest stats into `Statistics` with `Precision::Exact`, ideally post-pruning via `FileScanConfigBuilder::with_statistics`. | `query/src/provider.rs` |
-| 2.4 | **Write path materializes everything**: `write` concats the full input into one batch and one unbounded segment (`target_segment_bytes` ineffective); the core `Database::scan` API collects all matching batches (the DataFusion provider path *does* stream — see Strengths — the gap is the core API and everything built on it); CLI ingest reads whole files into memory; CLI query collects before printing. Theme: stream end-to-end (chunked sort + k-way merge on write; `impl Stream` scan API; per-batch readers on ingest; `execute_stream` on output). | `core/src/database.rs:757,1112`, `core/src/segment.rs:245,372-399`, `cli/src/ingest.rs:27-36`, `cli/src/main.rs:551` |
-| 2.5 | **Asof hot-loop allocations**: per-row `OwnedRow` on build *and* probe; per-batch `RowConverter` rebuild; whole time column copied per batch. Special-case empty `by`; raw-entry map keyed on `Row::data()`. | `query/src/asof.rs:515-519,621-635,577-589` |
-| 2.6 | **`AsOfJoinExec` hides its output ordering and parallelism** — declares no ordering (forcing re-sorts after joins) and is hard single-partition. Declare `left_on ASC` in `EquivalenceProperties`; build `SortPreservingMergeExec` directly; roadmap: hash-repartition by `by` keys. | `query/src/asof.rs:296-313,344-351` |
-| 2.7 | **`vwap`/`wavg` lack `retract_batch`** — rolling-window frames re-accumulate from scratch, O(n·w). The (Σvw, Σw) state is trivially retractable. | `query/src/finance.rs:125-171` |
-| 2.8 | **Symbol/entity predicates never prune** — min/max on interleaved tick data is useless for `symbol = 'X'`; `contained()` is a stub (DESIGN Phase 3 promised blooms). Add per-segment distinct sets or bloom filters to `ColumnStats` + Parquet column blooms at write. | `query/src/pruning.rs:131-138` |
-| 2.9 | **Session/cache tension** — session-registered table names are snapshot-bound, so fresh data under those names needs a new `H5iSession` (`h5i('t')` is exempt: it re-resolves latest at planning time), and a new session drops the footer-metadata cache (~40% of warm latency) and re-resolves tables serially. Add shared `Arc<RuntimeEnv>` option, `refresh()`, concurrent resolves. | `query/src/session.rs:47-137` |
-| 2.10 | **O(n²) manifest growth** — every commit rewrites the full pretty-printed segment list; small frequent appends pay O(segments) each. Manifest deltas or compact encoding; longer term a WAL/group-commit layer. | `core/src/manifest.rs:144-146` |
-| 2.11 | **`batch_is_sorted` does a full lexsort** (O(n log n)) per batch on the append hot path; `time_values_i64` copies the time column up to 3× per batch. Pairwise O(n) check instead. | `core/src/segment.rs:196-236` |
-
-## 3. Production-grade operational gaps
-
-| # | Item | Where / fix |
-|---|------|-------------|
-| 3.1 | **Wheel not published** — README promises `pip install h5i-db` but no PyPI project exists; release.yml only attaches to GitHub Releases. (The cargo path is fine: README says `cargo install --path`, which works from source.) Publish via maturin, or drop the pip mention. | `.github/workflows/release.yml`, `README.md:19` |
-| 3.2 | **`tracing` never initialized** — subscriber never installed in the CLI, no `TraceLayer` on the UI; all diagnostics silently dropped and mutation apply/discard (an audit surface) is unlogged. One-line init honoring `RUST_LOG`, log to stderr. | `cli/src/main.rs`, `ui/src/lib.rs` |
-| 3.3 | **No version GC/retention** — every historical version pins its segments forever; unbounded storage, compliance deletion impossible, vacuum cost O(V). Note: naive deletion is not an option — `as_of` binary-searches directly-addressed sequences `0..head` and the parent-checksum chain assumes ancestors exist, so expiring versions needs a retained-chain anchor (checkpoint manifest) or version index, plus snapshot-pin awareness. | `core/src/database.rs:501-524,1345-1351` |
-| 3.4 | **Vacuum edges**: orphaned table dirs not in the catalog are unreachable forever; vacuum can destroy an in-flight commit — and no grace floor fixes this, because segments are staged *before* the writer lock is acquired (and at plan time for plan/apply), so staged-but-uncommitted segments can be arbitrarily old; needs staging markers/leases or vacuum–writer coordination. `plan_protected_paths` fails *open* on storage errors. | `core/src/database.rs:1330-1341,1361-1370`, `core/src/plan.rs:503-509` |
-| 3.5 | **Catalog TOCTOU**: `create_table`/`rename_table`/snapshot-create/policy writes are check-then-put with no CAS; `drop_table` takes no writer lock. Route through create-new/conditional-put semantics like HEAD. | `core/src/database.rs:286-374`, `core/src/snapshot.rs:72-78`, `core/src/policy.rs:97-103` |
-| 3.6 | **Checksums not verified on normal reads**; `ReadAt::Version`/`AsOf` skip manifest verification entirely despite the parent-checksum chain existing to prove it; Parquet page CRCs not enabled at write (cheap). | `core/src/segment.rs:504-573`, `core/src/database.rs:437-459` |
-| 3.7 | **UI scratchpad runs unbounded SQL** — no timeout/memory-limit/concurrency cap (row cap limits output, not execution). Wrap in `tokio::time::timeout` + session memory limit + `ConcurrencyLimitLayer`. | `ui/src/lib.rs:389-402` |
-| 3.8 | **Python API**: GIL held for entire queries (no `allow_threads` anywhere — a 60 s query freezes all Python threads); no `close()`/context manager; one multi-thread runtime per handle; all SQL errors collapse to `ValueError`; missing `drop_table`/`schema`/`policy`/`compact`/`list_plans`; no timeout/max-rows knobs. | `python/src/lib.rs:92-98,186-207` |
-| 3.9 | **Empty results lose their schema** in both CLI `--format arrow` (zero bytes) and the Python IPC path (`pa.table({})`). Always emit a schema-only IPC stream. | `cli/src/output.rs:57-60`, `python/src/lib.rs:239` |
-| 3.10 | **Ops story missing**: no backup/restore doc (immutable segments make it nearly trivial — document the vacuum/CAS race), no operator guide (vacuum cadence, compaction, plan-TTL hygiene, disk math, NFS/WSL caveats), no torn-HEAD recovery runbook. | docs/ |
-| 3.11 | **CI gaps**: no format-compatibility gate (golden old-format fixtures), no Windows tests despite shipping Windows binaries (rename-based CAS is exactly what differs there), no MSRV job (`rust-version = 1.85` can rot), no cargo-deny/audit, no fuzzing (manifest JSON, CSV/Arrow ingest, SQL), no perf-trend tracking. | `.github/workflows/ci.yml` |
-| 3.12 | **CLI polish**: broken-pipe exits 5 instead of quiet; execution-time DataFusion errors misclassified as internal (exit 5); `--target-segment-mb` unchecked multiply; stdin auto-format defaults to parquet with a cryptic error; no progress reporting for long ops; `--max-bytes` promised in DESIGN §8 but absent. | `cli/src/main.rs:410,551-553`, `cli/src/output.rs:30-67` |
-| 3.13 | **Segment-count limit is a hard write failure** after segments were already uploaded (orphans), with no auto-compaction. Check in `write_prologue`; trigger opportunistic compaction. | `core/src/database.rs:578-586` |
-| 3.14 | **Misc correctness debt**: `filter_batches_by_time` panics on null time value from a corrupt segment (`segment.rs:615`); `append_with_retry` doesn't retry `LockTimeout` though it's classified retryable; `dedup_segments` doc claims deletion it never does; blocking fs I/O (incl. fsyncs) inline on the async executor in the commit path (`backend.rs:206-241`); UI result JSON collapses duplicate column names and reports no `truncated` flag; scan-metrics collector is session-global (concurrent queries interleave). | various |
-
-## 4. Usefulness roadmap (features, not bugs)
-
-Ranked by impact for the target quant/agent audience:
-
-1. **Schema evolution** (add-column/null-backfill, widen) — the deliberate gap that
-   hurts most; any evolving feed forces full rewrites. ArcticDB ships this today, so
-   it is currently a differentiator *against* h5i-db.
-2. **Gapfill / LOCF / interpolate** — table stakes for the finance positioning.
-3. **Incremental queries between versions** — manifests already store
-   `created_by_sequence`, so "rows added between v1 and v2" is a segment
-   set-difference away *on append-only chains*. Compaction, `overwrite_range`,
-   and `restore` rewrite or re-reference segments, so the set-difference is not
-   "added rows" in general — gate the fast path on chain ops (the manifest
-   records `op` per version) and fall back or error otherwise; real change
-   tracking is the long-term answer. Still a genuine differentiator; makes
-   incremental OHLCV maintenance nearly free.
-4. **SQL `ASOF JOIN` syntax** via `RelationPlanner` (DESIGN §6.4 promised it; only
-   the UDTF exists), plus `resample`/`rolling` sugar and a timezone argument for
-   `time_bucket` (UTC-only today — DST-crossing daily bars misalign).
-5. **Streaming/tailing** — a `TailProvider` polling manifest sequence + unbounded
-   streams; today everything is snapshot-bound and batch.
-6. **S3 / object-store backend** — only the local backend is constructible; the
-   existence-based lock file is unsafe on NFS. Needs conditional-PUT HEAD CAS.
-7. **Multi-table atomic commits** — per-table commits mean no consistent
-   cross-table ingest (acknowledged in DESIGN §11.2).
-8. **Cross-version joins** (`h5i('t',1) JOIN h5i('t',2)`) work today — add a test
-   and a doc example; it's a differentiator hiding in plain sight.
-
-## Credibility items (do early, they're cheap)
-
-- **Amend DESIGN.md §13** — the Phase 2/4 ✅ marks overstate delivery: metadata-only
-  aggregates, decoded-batch cache (shipped as footer cache only), quant-idiom
-  rewrite rules, SQL ASOF syntax, resample sugar, bloom pruning, DuckDB
-  differential tests, and the ≤10 % overhead gate (measured ~20 %) are all unmet
-  within "✅" phases. The doc's honesty is its strongest asset — keep it that way.
-- **Benchmarks**: DuckDB, pandas, and PyArrow baselines landed
-  (`benchmarks/compare_baselines.py`). Still open: re-run on non-WSL bare-metal
-  x86_64 with symmetric methodology (h5i-db is single-run, baselines best-of-3 —
-  indefensible either way; use median of N≥5 both sides), the promised ArcticDB
-  baseline, a Polars `set_sorted` variant to preempt the obvious objection, and
-  a scaling curve (segments → thousands, versions → 10⁴).
-- **README**: fix the broken `DESIGN_CLAUDE.md` link (renamed to `DESIGN.md` in
-  52d9dbf); note the ASOF row implies SQL parity that doesn't exist yet.
-
-## Suggested attack order
-
-1. **Days**: 1.1 segment fsync · 1.2 `time_bucket` validation · 1.4 runtime-flavor
-   check · 1.5 Python unwind + unwraps · 3.2 tracing init · 1.6 UI token/Host check ·
-   README link · DESIGN §13 honesty pass.
-2. **~1–2 weeks**: 2.1/2.2 asof pushdown + memory reservation · 2.3 `statistics()` ·
-   2.4 streaming ingest/output · 3.7 UI query limits · 1.3 flock-based writer lock ·
-   3.5 catalog CAS · 3.9 empty-result schema · 3.11 MSRV/Windows/format-compat CI ·
-   3.1 publish to PyPI/crates.io · 3.8 GIL release.
-3. **Roadmap**: schema evolution · gapfill/LOCF · 3.3 retention/GC · incremental
-   queries · SQL ASOF syntax · 2.8 symbol pruning · 2.9 session refresh ·
-   streaming ingest · S3 backend · 2.10 manifest deltas/WAL.
+| 2.8b | Bloom filters for high-cardinality entity columns | Only exact ≤128 distinct sets ship; no probabilistic tier. Also relevant to P2 below — a bloom answers point predicates more cheaply than a predicate-cache build. |
+| 2.10 | Manifest deltas / compact encoding / WAL | Every commit still rewrites the full segment list; small frequent appends pay O(segments). |
+| — | Generic-scan overhead vs raw DataFusion ~20% | Design ledger goal was ≤10%. Re-measure before optimizing; the gap may have moved. |
+| — | SQL-native `ASOF JOIN` syntax | Custom planner + `asof_join` UDTF exist; bare SQL `ASOF JOIN` parity with DESIGN §6.4 unverified this pass. |
+| 3.11b | Fuzz smoke in CI | Delivered, then **deliberately disabled 2026-07-22** (job commented out in ci.yml; `./fuzz` targets remain). Re-enable by uncommenting when the project wants the canary back. |
+| — | Benchmark methodology debt | Non-WSL bare-metal rerun, ArcticDB baseline, Polars `set_sorted` variant, segment/version scaling curves (from the original credibility list). |
 
 ## Strengths worth preserving
 
-- HEAD swap is textbook (temp + fsync + rename + dir fsync, CAS revalidated inside
-  the critical section); fault-injection `CommitHook` exercises every commit step on
-  the *shipped* code path.
-- Integrity design: blake3 parent-checksum chain, self-checksummed specs/catalog/
-  snapshots/plans, precise `Corruption {object, detail}` errors, hashed path names
-  with tamper detection.
-- Scan path is genuinely streaming with projection/limit pushdown and per-segment
-  parallelism; declared output ordering is *sound* (time column enforced as first
-  sort key) — that's what wins OHLCV 11× without a sort.
-- Pruning fails open everywhere; correctness never depends on stats.
-- Plan/apply review flow: checksummed, TTL'd, vacuum-protected, fail-closed on
-  tamper/expiry; stale plans 409, never silent re-plan — tested end-to-end from
-  CLI and UI.
-- Coherent error contract (stable exit codes + machine-readable envelope) verified
-  by tests that run the real binary; least-privilege read-only opens layered under
-  the UI's HTTP guard; XSS-proof frontend by construction.
-- Honest benchmark write-up (interleaved cache controls, disclosed bias) and an
-  OOM-safe CI matrix with a real wheel install smoke test.
+- HEAD swap is textbook (temp + fsync + rename + dir fsync, CAS revalidated in
+  the critical section); fault-injection `CommitHook` exercises every commit
+  step on the shipped code path; the object-store backend gets the same
+  guarantees from conditional PUTs.
+- Integrity design: blake3 parent-checksum chains, self-checksummed
+  specs/catalog/snapshots/plans, precise `Corruption {object, detail}` errors.
+- Genuinely streaming scan path with sound declared ordering.
+- Pruning fails open everywhere; correctness never depends on stats — the
+  same rule now governs the performance sidecars (Part II §invariants).
+- Plan/apply review flow: checksummed, TTL'd, vacuum-protected, fail-closed.
+- Coherent error contract verified by tests that run the real binary.
+- Honest benchmark write-ups; OOM-safe CI matrix.
+
+---
+
+# Part II — Structural performance program
+
+Formerly `ROADMAP_PERFORMANCE.md`. The performance identity:
+
+> A workload- and version-aware analytical database that skips data and
+> reuses work across immutable versions.
+
+This fits the architecture: versions are immutable manifests, segments have
+stable checksums, statistics exist, scans use DataFusion pruning, and
+destructive rewrites go through plan/apply. A cache miss may cost time but
+must never affect correctness.
+
+## Cost model
+
+Attribute every optimization to a term of:
+
+```text
+query latency = planning + metadata I/O + data bytes read + rows decoded
+              + sort/shuffle + join/aggregation + result materialization
+```
+
+Report cold and warm runs (a warm filesystem cache is not a predicate-cache
+hit), median and p95 over ≥5 measured runs, with input rows/segments/bytes and
+peak memory. Physical bytes — not warm-local wall time — is the honest metric
+for skip-work features; wall-time payoff arrives with cold/remote storage.
+
+## Phase status
+
+| Phase | Status | Deliverable |
+|---|---|---|
+| P0 | **done** | Query-local reports, bounded telemetry, no-link benchmark gate |
+| P1 | **done** | Planner stats, exact-set pruning, pushdowns (blooms optional ext.) |
+| P2 | **prototype done** | Immutable predicate cache (row-group granularity) |
+| P3 | **prototype done** | Version-aware finance aggregate states (OHLCV/VWAP) |
+| P4 | planned | `LayoutSpec`, layout health, previewable partial reclustering |
+| P5 | partial | Parquet adaptation; optional hot tier / custom encodings later |
+
+### P0 — observability (done)
+
+`H5iSession::sql_reported` gives each execution a query-local report:
+scan-range bytes, scan output rows, row-group/page pruning, operator timing,
+sorts, spills, predicate/aggregate cache counters. Exposed through Rust, CLI
+`query --stats`, and the UI. Concurrent executions cannot mix scan records
+(query-ID scoped, tested). Report construction is **gated on `--stats`** in
+the CLI — the default path builds no report. Telemetry is a bounded opt-in
+ring (`telemetry_capacity`, 0 = off) holding fingerprints, never SQL text;
+flush is an explicit disposable sidecar write.
+`benchmarks/run_performance_workload.py` drives a pre-built CLI (no extra
+DataFusion link target), pins result checksums, and gates on median query-time
+regressions. Baselines are machine-specific — pin a reference machine before
+trusting the 10% gate across environments.
+
+Open refinements: split metadata/requested/compressed/decompressed bytes;
+expose reports through Python.
+
+### P1 — cheap pruning (done)
+
+Manifest statistics folded into planner `Statistics` (exact where
+representable), metadata-only `COUNT(*)`, exact ≤128 distinct-set entity
+pruning, ASOF pushdown, O(n) sortedness, retractable VWAP. The probabilistic
+bloom tier remains the natural next step when entity cardinality exceeds the
+exact-set threshold (see Part I open items).
+
+### P2 — immutable predicate cache (prototype done; graduation pending)
+
+Checksum-keyed row-group selections for deterministic conjunctions
+(equality-required, typed column/literal terms; casts/functions/nulls
+rejected). Sidecars under `cache/predicates/v1/` — checksummed,
+create-if-absent, 256 MiB bound with oldest-first eviction, corruption
+degrades to a miss and rebuild; DataFusion still re-evaluates the original
+predicate above the scan. Opt-in via `--predicate-cache`.
+
+**Measured reality (2026-07-22, 20 M-row benchmarks):**
+
+- On uniformly interleaved symbols (the checked-in workload) a warm hit
+  eliminates **nothing** — every row group contains every symbol.
+- The predicate shape that clusters on real tick data (symbol + price band)
+  is **ineligible**: Float64 is outside the contract.
+- The case the cache exists for is demonstrated by
+  `benchmarks/predicate_cache_scenario.py` — an episodic symbol inside
+  per-row-group min/max ranges: warm hits scan **75% fewer physical bytes**
+  with identical results. Wall time barely moves against a warm page cache;
+  the payoff multiplies on the object-store backend (fewer range GETs).
+
+**Graduation criteria (kill-or-graduate):** demonstrate wall-clock or cost
+wins on the object-store backend; extend eligibility to Float64 or move to
+row-level selections; a dedicated schema-evolution key case. If no real
+workload exercises it by then, delete the prototype rather than maintain it.
+
+### P3 — version-aware aggregate states (prototype done)
+
+`AggregateStateStore::finance_rollup` persists one mergeable OHLCV/VWAP state
+per (segment checksum, schema revision, plan hash, semantics version) under
+`cache/aggregates/v1/`, resolves the exact manifest per call, scans only
+misses, merges in manifest order. Append-only versions reuse all old states;
+compaction misses cleanly; historical versions hit their old states. The
+contract is deliberately narrower than SQL equivalence (non-null columns,
+finite values, int64-volume exactness, deterministic open/close tie-breaker).
+
+**Measured (20 M rows, 50 segments):** cold 2445 ms → warm **30.9 ms (79×)**,
+50/50 states reused, zero corruption.
+
+**Incident worth remembering:** the sealed-entry checksum verifies by
+re-serializing parsed JSON, which requires parse∘serialize to be the f64
+identity. serde_json's default lossy float parse (~1 ulp) made every
+full-mantissa state fail verification and silently rebuild — warm equaled
+cold, unit tests (short-decimal floats) passed, and only the benchmark's
+`corrupt_entries` counter exposed it. Fixed via the `float_roundtrip`
+workspace feature + a 512-group full-mantissa regression test. Design lesson:
+prefer checksums over stored bytes rather than re-serialization identity —
+apply if either sidecar format is revised.
+
+Remaining before any SQL optimizer rewrite: restore/overwrite/schema-evolution
+cases, fixed time buckets, then rewrites only on proved exact matches.
+
+### P4 — workload-aware previewable reclustering (planned)
+
+Unchanged in scope: format-versioned `LayoutSpec` (partitioning, ordering,
+segment targets, per-segment layout revision — distinct from the object-path
+`layout.rs`), layout health from manifests + telemetry, `optimize --plan`
+before `--apply` on the existing plan/apply machinery, WAIR-style
+boundary-segment selection with rewrite budgets. Never infer table-wide
+ordering from a rewritten subset. Exit gate: predicted vs observed bytes
+saved calibrated on held-out queries; partial reclustering beats full rewrite
+in read-plus-rewrite cost.
+
+### P5 — ingest tiers and adaptive encoding (partial; evidence-gated)
+
+Bounded Parquet segments, streaming paths, and compaction are in. Mixed
+hot/cold formats (Arrow IPC ingest tier), per-column encoding policies, and
+FastLanes/LeCo-style formats stay benchmark-gated: prototype only when
+profiles show decoder CPU or post-pruning bytes as a top-two cost.
+
+## Deliberately deferred
+
+Selective late materialization (crosses DataFusion internals; take projection
+pushdown and row selection first) · active-storage services (conflicts with
+embedded scope; keep format tags extensible) · full predicate-derived layouts
+(do explicit finance keys + boundary reclustering first) · arbitrary
+incremental SQL / full IVM (fixed mergeable states cover the high-value
+finance cases with a far smaller correctness surface).
+
+## Correctness and operability invariants
+
+1. A version manifest remains the sole authority for a snapshot's rows.
+2. Cache absence, eviction, corruption, or version mismatch causes a miss,
+   never a query error or a different result.
+3. Every persistent cache key includes segment identity and
+   expression/engine semantics; schema revision alone is insufficient.
+4. Optimizer rewrites are exact and testable against a forced uncached plan.
+5. Layout optimization uses plan/apply, exact input checksums, rewrite
+   budgets, and temporary-space estimates.
+6. Old snapshots remain readable after optimization until retention/vacuum
+   explicitly removes them.
+7. Performance claims include end-to-end latency and controls; theoretical
+   scan reductions are labeled as such — and warm-page-cache wall time is
+   never presented as evidence for byte-skipping features.
+
+## Research basis
+
+Mechanisms adopted, not promised outcomes: Predicate Caching (SIGMOD 2024) →
+P2 · WAIR (SIGMOD 2026) + MDDL (SIGMOD 2024) + Pando (VLDB 2023) → P4 ·
+OpenIVM (SIGMOD 2024) → P3's fixed mergeable states · Selective Late
+Materialization (VLDB 2025), FastLanes (VLDB 2025), LeCo (SIGMOD 2024),
+Vortex (SIGMOD 2024), Active Data Lakes (VLDB 2026) → deferred /
+benchmark-gated (§P5, §deferred). Re-check venues and measurements before
+citing externally; no implementation decision here depends on a paper's
+headline speedup.
