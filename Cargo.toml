@@ -5,6 +5,7 @@ members = [
     "crates/h5i-db-query",
     "crates/h5i-db-cli",
     "crates/h5i-db-bench",
+    "crates/h5i-db-python",
 ]
 default-members = [
     "crates/h5i-db-core",

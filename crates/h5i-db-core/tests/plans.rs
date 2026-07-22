@@ -242,3 +242,55 @@ async fn plan_write_previews_full_replacement() {
     let res = db.apply_plan(&plan).await.unwrap();
     assert_eq!(res.rows_total, 3);
 }
+
+#[tokio::test]
+async fn policy_forbids_direct_mutations_but_planned_path_works() {
+    let (_dir, db) = setup().await;
+
+    // Tighten the policy: deletes must go through review.
+    let mut policy = db.policy().await.unwrap();
+    assert!(policy.direct_delete, "default is permissive");
+    policy.set("direct_delete", false).unwrap();
+    policy.set("direct_replace", false).unwrap();
+    db.set_policy(&policy).await.unwrap();
+
+    // Direct delete_range is now refused with an actionable error…
+    let err = db
+        .delete_range("t", 0, 100, WriteOptions::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::PolicyViolation { .. }), "{err}");
+    assert!(err.hint().unwrap().contains("--plan"));
+
+    // …but planning + applying still works (single write path, reviewed).
+    let plan = db
+        .plan_replace_range("t", 0, 100, vec![], WriteOptions::default())
+        .await
+        .unwrap();
+    let res = db.apply_plan(&plan).await.unwrap();
+    assert_eq!(res.sequence, plan.base_version + 1);
+
+    // Appends remain direct (per-op defaults).
+    db.append("t", vec![batch(&[9000], 1.0)], WriteOptions::default())
+        .await
+        .unwrap();
+
+    // The audit trail distinguishes the two paths.
+    let resolved_planned = db
+        .resolve("t", ReadAt::Version(plan.base_version + 1))
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved_planned.manifest.execution_mode.as_deref(),
+        Some("planned")
+    );
+    assert_eq!(
+        resolved_planned.manifest.plan_hash.as_deref(),
+        Some(plan.checksum.as_str())
+    );
+    let resolved_direct = db.resolve("t", ReadAt::Latest).await.unwrap();
+    assert_eq!(
+        resolved_direct.manifest.execution_mode.as_deref(),
+        Some("direct")
+    );
+}

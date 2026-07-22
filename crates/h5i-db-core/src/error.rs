@@ -71,6 +71,11 @@ pub enum Error {
     #[error("database is open read-only; {op} is a write operation")]
     ReadOnly { op: String },
 
+    #[error(
+        "mutation policy forbids direct {op}; create a reviewed plan and apply it          (CLI: --plan, then `plan apply`)"
+    )]
+    PolicyViolation { op: String },
+
     #[error("corruption detected in object {object}: {detail}")]
     Corruption { object: String, detail: String },
 
@@ -125,6 +130,7 @@ impl Error {
             Error::InvalidInput { .. } => "invalid_input",
             Error::Unsupported { .. } => "unsupported",
             Error::ReadOnly { .. } => "read_only",
+            Error::PolicyViolation { .. } => "policy_violation",
             Error::Corruption { .. } => "corruption",
             Error::FormatTooNew { .. } => "format_too_new",
             Error::LimitExceeded { .. } => "limit_exceeded",
@@ -175,6 +181,10 @@ impl Error {
             ),
             Error::FormatTooNew { .. } => Some("upgrade h5i-db to read this database".into()),
             Error::ReadOnly { .. } => Some("re-open without --read-only".into()),
+            Error::PolicyViolation { op } => Some(format!(
+                "run the {op} with --plan to preview it, review, then `h5i-db plan apply`; \
+                 or relax the policy with `h5i-db policy set`"
+            )),
             _ => None,
         }
     }

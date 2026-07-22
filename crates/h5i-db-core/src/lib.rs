@@ -14,6 +14,7 @@ pub mod error;
 pub mod layout;
 pub mod manifest;
 pub mod plan;
+pub mod policy;
 pub mod segment;
 pub mod snapshot;
 pub mod spec;
@@ -27,5 +28,6 @@ pub use database::{
 pub use error::{Error, ExitCategory, Result};
 pub use manifest::{ColumnStats, Head, OpKind, SegmentMeta, VersionManifest};
 pub use plan::{MutationPlan, PlanSummary};
+pub use policy::MutationPolicy;
 pub use snapshot::{Snapshot, SnapshotEntry};
 pub use spec::{Codec, StorageOptions, TableOptions, TableSpec};

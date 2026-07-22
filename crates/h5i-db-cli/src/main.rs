@@ -219,6 +219,10 @@ enum Command {
     #[command(subcommand)]
     Plan(PlanCmd),
 
+    /// Mutation policy: which operations may commit without a reviewed plan.
+    #[command(subcommand)]
+    Policy(PolicyCmd),
+
     /// Rewrite small segments into target-sized ones.
     Compact {
         db: PathBuf,
@@ -275,6 +279,20 @@ enum SnapshotCmd {
     Delete {
         db: PathBuf,
         name: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PolicyCmd {
+    /// Show the current mutation policy.
+    Show { db: PathBuf },
+    /// Set policy keys, e.g. `policy set m.db direct_delete=false`.
+    Set {
+        db: PathBuf,
+        /// key=true|false pairs (keys: direct_append, direct_write,
+        /// direct_replace, direct_delete, direct_restore, direct_compact).
+        #[arg(required = true)]
+        entries: Vec<String>,
     },
 }
 
@@ -710,6 +728,28 @@ async fn run(cli: Cli) -> Result<()> {
                 let db = Database::open(&db).await?;
                 db.discard_plan(&table, plan_id).await?;
                 write_value(&serde_json::json!({"discarded": plan_id}), format)
+            }
+        },
+
+        Command::Policy(cmd) => match cmd {
+            PolicyCmd::Show { db } => {
+                let db = Database::open_read_only(&db).await?;
+                write_value(&db.policy().await?, format)
+            }
+            PolicyCmd::Set { db, entries } => {
+                let db = Database::open(&db).await?;
+                let mut policy = db.policy().await?;
+                for entry in &entries {
+                    let (key, value) = entry.split_once('=').ok_or_else(|| {
+                        Error::invalid(format!("policy entries are key=true|false, got {entry:?}"))
+                    })?;
+                    let value: bool = value.parse().map_err(|_| {
+                        Error::invalid(format!("policy value must be true or false, got {value:?}"))
+                    })?;
+                    policy.set(key.trim(), value)?;
+                }
+                db.set_policy(&policy).await?;
+                write_value(&policy, format)
             }
         },
 

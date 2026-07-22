@@ -237,6 +237,17 @@ impl Database {
         &self.backend
     }
 
+    /// Current mutation policy (defaults when never configured).
+    pub async fn policy(&self) -> Result<crate::policy::MutationPolicy> {
+        crate::policy::load(&self.backend).await
+    }
+
+    /// Persist a new mutation policy.
+    pub async fn set_policy(&self, policy: &crate::policy::MutationPolicy) -> Result<()> {
+        self.ensure_writable("set_policy")?;
+        crate::policy::store(&self.backend, policy).await
+    }
+
     pub fn is_read_only(&self) -> bool {
         self.read_only
     }
@@ -295,6 +306,8 @@ impl Database {
             parent_checksum: None,
             committed_at_ns: crate::util::monotonic_commit_ts(None),
             op: OpKind::Create,
+            execution_mode: Some("direct".to_string()),
+            plan_hash: None,
             note: None,
             user_meta: serde_json::Map::new(),
             schema_revision: spec.schema_revision,
@@ -671,6 +684,8 @@ impl Database {
             parent_checksum: None, // filled by commit_manifest
             committed_at_ns: 0,    // filled by commit_manifest
             op: plan.op,
+            execution_mode: Some("planned".to_string()),
+            plan_hash: Some(plan.checksum.clone()),
             note: plan.note.clone(),
             user_meta: plan.user_meta.clone(),
             schema_revision: plan.schema_revision,
@@ -697,10 +712,13 @@ impl Database {
     async fn write_prologue(
         &self,
         name: &str,
-        op: &str,
+        op: OpKind,
         opts: &WriteOptions,
     ) -> Result<(CatalogEntry, TableSpec, HeadState, VersionManifest)> {
-        self.ensure_writable(op)?;
+        self.ensure_writable(&op.to_string())?;
+        // Policy gate: direct mutations may be forbidden per operation; the
+        // reviewed plan/apply path (commit_planned) is always allowed.
+        crate::policy::load(&self.backend).await?.check_direct(op)?;
         let entry = self.entry(name).await?;
         let head = self.head(name, entry.table_id).await?;
         if let Some(expected) = opts.expected_version {
@@ -730,7 +748,7 @@ impl Database {
         opts: WriteOptions,
     ) -> Result<CommitResult> {
         let (entry, spec, head, parent_manifest) =
-            self.write_prologue(name, "write", &opts).await?;
+            self.write_prologue(name, OpKind::Write, &opts).await?;
         let schema = spec.schema()?;
         validate_batches_schema(&schema, &batches)?;
         validate_time_column(&spec, &batches)?;
@@ -770,7 +788,7 @@ impl Database {
         opts: WriteOptions,
     ) -> Result<CommitResult> {
         let (entry, spec, head, parent_manifest) =
-            self.write_prologue(name, "append", &opts).await?;
+            self.write_prologue(name, OpKind::Append, &opts).await?;
         let schema = spec.schema()?;
         validate_batches_schema(&schema, &batches)?;
         validate_time_column(&spec, &batches)?;
@@ -907,8 +925,7 @@ impl Database {
                 "empty range: start {start} must be < end {end}"
             )));
         }
-        let (entry, spec, head, parent_manifest) =
-            self.write_prologue(name, &op.to_string(), &opts).await?;
+        let (entry, spec, head, parent_manifest) = self.write_prologue(name, op, &opts).await?;
         let tc = spec.time_column.clone().ok_or_else(|| Error::Unsupported {
             detail: format!("{op} requires a table with a time column"),
         })?;
@@ -982,7 +999,7 @@ impl Database {
         opts: WriteOptions,
     ) -> Result<CommitResult> {
         let (entry, spec, head, parent_manifest) =
-            self.write_prologue(name, "restore", &opts).await?;
+            self.write_prologue(name, OpKind::Restore, &opts).await?;
         if version > head.head.sequence {
             return Err(Error::VersionNotFound {
                 table: name.into(),
@@ -1202,7 +1219,7 @@ impl Database {
         opts: WriteOptions,
     ) -> Result<CommitResult> {
         let (entry, spec, head, parent_manifest) =
-            self.write_prologue(name, "compact", &opts).await?;
+            self.write_prologue(name, OpKind::Compact, &opts).await?;
         let schema = spec.schema()?;
         let target = target_bytes.unwrap_or(spec.storage.target_segment_bytes);
         // Thresholds work on *encoded* bytes; encoded Parquet is typically
@@ -1525,6 +1542,8 @@ fn child_manifest(
         parent_checksum: None, // filled by commit_manifest
         committed_at_ns: 0,    // filled by commit_manifest
         op,
+        execution_mode: Some("direct".to_string()),
+        plan_hash: None,
         note: opts.note.clone(),
         user_meta: opts.user_meta.clone(),
         schema_revision: spec.schema_revision,

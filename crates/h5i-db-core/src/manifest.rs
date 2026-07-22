@@ -107,6 +107,14 @@ pub struct VersionManifest {
     /// Strictly monotonic across the chain (see `monotonic_commit_ts`).
     pub committed_at_ns: i64,
     pub op: OpKind,
+    /// How the mutation was executed: "direct" (immediate commit) or
+    /// "planned" (reviewed plan/apply flow). Audit trail — a bypassed preview
+    /// is itself recorded (DESIGN_CLAUDE.md §5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<String>,
+    /// Checksum of the applied `MutationPlan` (planned commits only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
@@ -227,6 +235,8 @@ mod tests {
             parent_checksum: Some("x".into()),
             committed_at_ns: 1,
             op: OpKind::Append,
+            execution_mode: None,
+            plan_hash: None,
             note: None,
             user_meta: serde_json::Map::new(),
             schema_revision: 1,
