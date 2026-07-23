@@ -14,6 +14,8 @@ writer at every commit step.
 [Design document](DESIGN.md) · [Benchmarks](benchmarks/RESULTS.md) ·
 [Operations guide](docs/OPERATIONS.md) · [SKILL](SKILL.md)
 
+---
+
 ## Quickstart
 
 ```bash
@@ -28,6 +30,8 @@ h5i-db query market.db "SELECT symbol, vwap(price,size) FROM trades GROUP BY sym
 h5i-db query market.db "SELECT count(*) FROM h5i('trades', 1)"     # time travel
 h5i-db ui market.db                                                # review surface
 ```
+
+---
 
 ## Why
 
@@ -52,6 +56,8 @@ h5i-db ui market.db                                                # review surf
 
 Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
+---
+
 ## Why it's fast
 
 - **Manifest pruning.** Every version's manifest carries per-segment time
@@ -69,6 +75,8 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
   DataFusion and tie the best engines; h5i-db only adds structure where
   time-series shape makes it structurally faster.
 
+---
+
 ## Why for agents
 
 - **Every write is an atomic, immutable commit**: a bad ingest or mutation
@@ -82,6 +90,8 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 - **An auditable trail.** Version history records what changed and when;
   the review UI gives humans a diff-and-approve surface over it.
 
+---
+
 ## Development
 
 ```bash
@@ -92,6 +102,8 @@ cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
 Workspace crates under `crates/`: `core` (versioned storage kernel), `query`
 (DataFusion layer), `cli` (the agent-facing binary), `ui` (review surface),
 `python` (`pip install h5i-db`), `bench`.
+
+---
 
 ## License
 
