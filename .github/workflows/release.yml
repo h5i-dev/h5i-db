@@ -127,10 +127,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish (dependency order)
         if: env.CARGO_REGISTRY_TOKEN != ''
-        run: |
-          for pkg in h5i-db-core h5i-db-query h5i-db-ui h5i-db-cli; do
-            cargo publish -p "$pkg" --locked
-            # crates.io indexing is eventually consistent; give the next
-            # crate's dependency resolution a moment to see the new version.
-            sleep 30
-          done
+        # --workspace (cargo >= 1.90) publishes all publishable members in
+        # dependency order (observability -> core -> query -> cli/ui), skips
+        # the publish = false crates, and waits for index propagation itself.
+        run: cargo publish --workspace --locked
