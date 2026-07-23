@@ -170,9 +170,10 @@ previewable mutations, crash-safe atomic commits.
 ## 2026-07-23 cloud-VM run: ArcticDB added (x86_64, 20 M rows)
 
 First run including the ArcticDB baseline (no Linux aarch64 wheels, so it
-cannot run on the WSL2 dev machine). Environment: shared x86_64 cloud CPU VM —
-absolute times are roughly 5–10× slower than the bare-metal numbers above and
-are **not comparable across sections**; within-session ratios are the signal.
+cannot run on the WSL2 dev machine). Environment: shared cloud CPU VM —
+Intel(R) Xeon(R) CPU @ 2.20 GHz, 31 GB RAM, Ubuntu 22.04.5 LTS. Absolute
+times are roughly 5–10× slower than the bare-metal numbers above and are
+**not comparable across sections**; within-session ratios are the signal.
 All six engines measured back-to-back in one session, `--repeat 5`.
 ArcticDB 6.19 reads from its own LMDB store (populated once from the same
 data — one-time ingest 9.7 s); its OHLCV/ASOF compute is pandas over store

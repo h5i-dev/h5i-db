@@ -53,11 +53,11 @@ h5i-db ui market.db                                                # review surf
 ⁶ Version-aware aggregate states: immutable per-segment OHLCV/VWAP states are
   reused when the manifest hasn't changed — the others re-run the full rollup.
 
-All engines measured back-to-back in one session (x86_64 cloud VM,
-2026-07-23) — Parquet-reading engines over the identical h5i-db segment
-files, ArcticDB over its own LMDB store loaded with the same data. Absolute
-times scale with hardware; the ratios are the story. Full methodology in
-[benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+All engines measured back-to-back in one session (Intel Xeon @ 2.20 GHz,
+31 GB RAM, Ubuntu 22.04.5, 2026-07-23) — Parquet-reading engines over the
+identical h5i-db segment files, ArcticDB over its own LMDB store loaded with
+the same data. Absolute times scale with hardware; the ratios are the story.
+Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Why it's fast
 
