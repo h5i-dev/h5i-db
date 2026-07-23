@@ -129,8 +129,10 @@ def _style_heading(inner: str, style: str) -> str:
     text = m.group(1)
     if style == "dotted" and "." in text:
         qual, name = text.rsplit(".", 1)
-        # keep the dot with the method so ".apply" reads as one unit
-        new = f'<span class="api-qual">{qual}</span><span class="api-name">.{name}</span>'
+        # class and method share one colour; the dot is the only accent
+        new = (f'<span class="api-name">{qual}</span>'
+               f'<span class="api-dot">.</span>'
+               f'<span class="api-name">{name}</span>')
     elif style == "cli" and text.startswith("h5i-db "):
         binary, rest = text.split(" ", 1)
         new = f'<span class="api-qual">{binary} </span><span class="api-name">{rest}</span>'
