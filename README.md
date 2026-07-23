@@ -4,7 +4,7 @@
 
 - **Rich Time-Series SQL**: Full SQL via DataFusion with native operators (SQL ASOF join, timezone-aware `time_bucket`, gapfill/resample, rolling windows, `vwap`, `ewma`).
 - **Blazing Fast Performance**: Over 4.5x faster than DuckDB and Polars for OHLCV+VWAP rollups on 20M rows.
-- **Immutable & Versioned**: Every write is an atomic commit producing an immutable version, allowing O(1) version reads.
+- **Immutable & Versioned**: Every write is an atomic commit with an immutable version, allowing O(1) version reads.
 - **Agent-Friendly Mutations**: Mutations can be previewed before they commit and gated by policy.
 - **Crash-Safe by Construction**: Proven by tests that kill the writer at every commit step. An agent killed mid-write cannot corrupt the store.  
 
