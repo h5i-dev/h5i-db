@@ -94,4 +94,6 @@ Workspace crates under `crates/`: `core` (versioned storage kernel), `query`
 (DataFusion layer), `cli` (the agent-facing binary), `ui` (review surface),
 `python` (`pip install h5i-db`), `bench`.
 
-License: Apache-2.0
+## License
+
+Apache-2.0. See [LICENSE](./LICENSE)
