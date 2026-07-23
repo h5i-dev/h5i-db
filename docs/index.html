@@ -338,21 +338,11 @@
     }
     table.bench tr:last-child td { border-bottom: none; }
     table.bench td:first-child { color: var(--text); font-family: var(--sans); font-size: 0.9rem; }
-    /* highlight the whole h5i-db column (2nd cell of every row, header included) */
+    /* highlight the h5i-db column values (2nd cell of every row, header
+       included) — red text only, no background band */
     table.bench th:nth-child(2),
     table.bench td:nth-child(2) {
-      background: rgba(224,36,27,0.09);
       color: var(--red-text); font-weight: 700;
-      padding-left: 0.9rem;
-      border-left: 1px solid var(--border-red);
-      border-right: 1px solid var(--border-red);
-    }
-    table.bench th:nth-child(2) {
-      color: var(--red-bright);
-      border-top: 1px solid var(--border-red);
-    }
-    table.bench tr:last-child td:nth-child(2) {
-      border-bottom: 1px solid var(--border-red);
     }
     .bench-note {
       margin-top: 1.4rem; font-size: 0.86rem; color: var(--text-faint);
