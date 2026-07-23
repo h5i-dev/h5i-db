@@ -115,7 +115,10 @@ impl H5iSession {
         // h5i('t', 1))` filtered by version 2's max). Route scalar subqueries
         // through the ScalarSubqueryToJoin rewrite instead, which keeps each
         // subquery's own plan (and provider) intact.
-        config.options_mut().optimizer.enable_physical_uncorrelated_scalar_subquery = false;
+        config
+            .options_mut()
+            .optimizer
+            .enable_physical_uncorrelated_scalar_subquery = false;
 
         let state = SessionStateBuilder::new()
             .with_config(config)

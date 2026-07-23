@@ -39,12 +39,12 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::{
     expressions, EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
-use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties,

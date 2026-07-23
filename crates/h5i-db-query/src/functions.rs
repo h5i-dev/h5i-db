@@ -514,17 +514,41 @@ mod tests {
     /// 's' entirely.
     #[test]
     fn interval_units_ending_in_s() {
-        assert_eq!(parse_interval_str("5s").unwrap(), Width::Nanos(5_000_000_000));
-        assert_eq!(parse_interval_str("30s").unwrap(), Width::Nanos(30_000_000_000));
-        assert_eq!(parse_interval_str("250ms").unwrap(), Width::Nanos(250_000_000));
+        assert_eq!(
+            parse_interval_str("5s").unwrap(),
+            Width::Nanos(5_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("30s").unwrap(),
+            Width::Nanos(30_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("250ms").unwrap(),
+            Width::Nanos(250_000_000)
+        );
         assert_eq!(parse_interval_str("10us").unwrap(), Width::Nanos(10_000));
         assert_eq!(parse_interval_str("100ns").unwrap(), Width::Nanos(100));
         // Plural spellings still work.
-        assert_eq!(parse_interval_str("5 secs").unwrap(), Width::Nanos(5_000_000_000));
-        assert_eq!(parse_interval_str("30 seconds").unwrap(), Width::Nanos(30_000_000_000));
-        assert_eq!(parse_interval_str("2 mins").unwrap(), Width::Nanos(120_000_000_000));
-        assert_eq!(parse_interval_str("3 hrs").unwrap(), Width::Nanos(3 * 3_600_000_000_000));
-        assert_eq!(parse_interval_str("2 days").unwrap(), Width::Nanos(2 * 86_400_000_000_000));
+        assert_eq!(
+            parse_interval_str("5 secs").unwrap(),
+            Width::Nanos(5_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("30 seconds").unwrap(),
+            Width::Nanos(30_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("2 mins").unwrap(),
+            Width::Nanos(120_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("3 hrs").unwrap(),
+            Width::Nanos(3 * 3_600_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("2 days").unwrap(),
+            Width::Nanos(2 * 86_400_000_000_000)
+        );
         assert_eq!(
             parse_interval_str("250 milliseconds").unwrap(),
             Width::Nanos(250_000_000)
@@ -532,7 +556,10 @@ mod tests {
         assert_eq!(parse_interval_str("6 months").unwrap(), Width::Months(6));
         assert_eq!(parse_interval_str("2 years").unwrap(), Width::Months(24));
         // 'm' stays minutes; unknown units still error by their given name.
-        assert_eq!(parse_interval_str("1m").unwrap(), Width::Nanos(60_000_000_000));
+        assert_eq!(
+            parse_interval_str("1m").unwrap(),
+            Width::Nanos(60_000_000_000)
+        );
         assert!(parse_interval_str("5 parsecs").is_err());
     }
 

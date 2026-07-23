@@ -374,8 +374,13 @@ async fn joins_completely_beyond_one_batch_per_side() {
     const TRADES: i64 = 20_000;
     const QUOTES: i64 = 30_000;
     for chunk in 0..4i64 {
-        let ts: Vec<i64> = (0..TRADES / 4).map(|i| (chunk * TRADES / 4 + i) * 2 + 1).collect();
-        let symbols: Vec<&str> = ts.iter().map(|t| if t % 4 == 1 { "A" } else { "B" }).collect();
+        let ts: Vec<i64> = (0..TRADES / 4)
+            .map(|i| (chunk * TRADES / 4 + i) * 2 + 1)
+            .collect();
+        let symbols: Vec<&str> = ts
+            .iter()
+            .map(|t| if t % 4 == 1 { "A" } else { "B" })
+            .collect();
         let prices: Vec<f64> = ts.iter().map(|t| *t as f64).collect();
         db.append(
             "trades",
@@ -386,8 +391,13 @@ async fn joins_completely_beyond_one_batch_per_side() {
         .unwrap();
     }
     for chunk in 0..4i64 {
-        let ts: Vec<i64> = (0..QUOTES / 4).map(|i| (chunk * QUOTES / 4 + i) * 2).collect();
-        let symbols: Vec<&str> = ts.iter().map(|t| if t % 4 == 0 { "A" } else { "B" }).collect();
+        let ts: Vec<i64> = (0..QUOTES / 4)
+            .map(|i| (chunk * QUOTES / 4 + i) * 2)
+            .collect();
+        let symbols: Vec<&str> = ts
+            .iter()
+            .map(|t| if t % 4 == 0 { "A" } else { "B" })
+            .collect();
         let bids: Vec<f64> = ts.iter().map(|t| *t as f64).collect();
         db.append(
             "quotes",
