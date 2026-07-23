@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SQL reference · h5i-db docs</title>
+  <meta name="description" content="h5i-db&#x27;s SQL surface beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill/resample, tail, time_bucket, vwap, ewma, and rolling window sugar.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../_static/logo.png">
+  <link rel="apple-touch-icon" href="../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="SQL reference · h5i-db docs">
+  <meta property="og:description" content="h5i-db&#x27;s SQL surface beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill/resample, tail, time_bucket, vwap, ewma, and rolling window sugar.">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="SQL reference · h5i-db docs">
+  <meta name="twitter:description" content="h5i-db&#x27;s SQL surface beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill/resample, tail, time_bucket, vwap, ewma, and rolling window sugar.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../">
+    <img src="../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../manual/" class="active">Manual</a></li>
+    <li><a href="../api/" >Python API</a></li>
+    <li><a href="../cookbook/" >Cookbook</a></li>
+    <li><a href="../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html" class="active">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../manual/">Manual</a>
+<span class="sep">/</span>
+<span>SQL reference</span></div>
+<h1 id="sql-reference">SQL reference<a class="headerlink" href="#sql-reference" title="Permanent link">#</a></h1>
+<p>h5i-db speaks full DataFusion SQL — joins, CTEs, window functions,
+<code>date_trunc</code>, <code>stddev</code>, <code>corr</code>, <code>approx_percentile_cont</code>, <code>INTERVAL</code>
+arithmetic — plus the time-series extensions documented here. String literals
+are single-quoted; identifiers are case-insensitive.</p>
+<p>The idiomatic OHLCV query exercises most of the library at once:</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">time_bucket</span><span class="p">(</span><span class="s1">&#39;5m&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">bar</span><span class="p">,</span><span class="w"> </span><span class="n">symbol</span><span class="p">,</span>
+<span class="w">       </span><span class="n">first_value</span><span class="p">(</span><span class="n">price</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="k">open</span><span class="p">,</span>
+<span class="w">       </span><span class="k">max</span><span class="p">(</span><span class="n">price</span><span class="p">)</span><span class="w">                     </span><span class="k">AS</span><span class="w"> </span><span class="n">high</span><span class="p">,</span>
+<span class="w">       </span><span class="k">min</span><span class="p">(</span><span class="n">price</span><span class="p">)</span><span class="w">                     </span><span class="k">AS</span><span class="w"> </span><span class="n">low</span><span class="p">,</span>
+<span class="w">       </span><span class="n">last_value</span><span class="p">(</span><span class="n">price</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span><span class="w">  </span><span class="k">AS</span><span class="w"> </span><span class="k">close</span><span class="p">,</span>
+<span class="w">       </span><span class="k">sum</span><span class="p">(</span><span class="k">size</span><span class="p">)</span><span class="w">                      </span><span class="k">AS</span><span class="w"> </span><span class="n">volume</span><span class="p">,</span>
+<span class="w">       </span><span class="n">vwap</span><span class="p">(</span><span class="n">price</span><span class="p">,</span><span class="w"> </span><span class="k">size</span><span class="p">)</span><span class="w">              </span><span class="k">AS</span><span class="w"> </span><span class="n">vwap</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">trades</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">bar</span><span class="p">,</span><span class="w"> </span><span class="n">symbol</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">bar</span><span class="p">;</span>
+</code></pre></div>
+
+<div class="admonition note">
+<p class="admonition-title">Raw time units</p>
+<p>Numeric time arguments — <code>gapfill</code> step, ASOF tolerance — are <strong>raw
+integers in the time column's unit</strong>. For the common <code>timestamp[us]</code>
+column: <code>5000000</code> is 5 seconds, <code>60000000</code> is one minute.</p>
+</div>
+<h2 id="reading-tables-time-travel">Reading tables &amp; time travel<a class="headerlink" href="#reading-tables-time-travel" title="Permanent link">#</a></h2>
+<h3 id="plain-names-vs-h5i">Plain names vs <code>h5i()</code><a class="headerlink" href="#plain-names-vs-h5i" title="Permanent link">#</a></h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Form</th>
+<th>Resolves</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FROM trades</code></td>
+<td>Snapshot-bound when the session opens — every query in a session sees one consistent set of versions</td>
+</tr>
+<tr>
+<td><code>FROM h5i('trades')</code></td>
+<td>Latest version, re-resolved at each query</td>
+</tr>
+<tr>
+<td><code>FROM h5i('trades', 42)</code></td>
+<td>Exact version number</td>
+</tr>
+<tr>
+<td><code>FROM h5i('trades', '2026-07-01T00:00:00Z')</code></td>
+<td>As-of: latest version whose <strong>commit time</strong> ≤ the RFC3339 timestamp</td>
+</tr>
+<tr>
+<td><code>FROM h5i('trades', 'eod-2026-07-18')</code></td>
+<td>Version pinned by a named snapshot</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>h5i()</code> is a standard table function — no special grammar — so it composes
+with everything:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- diff two versions</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="n">b</span>
+<span class="k">JOIN</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="k">ON</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="n">ts</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">b</span><span class="p">.</span><span class="n">ts</span><span class="p">;</span>
+</code></pre></div>
+
+<p>Any string second argument that does not parse as RFC3339 is treated as a
+snapshot name — so avoid naming snapshots like timestamps.</p>
+<h2 id="table-functions">Table functions<a class="headerlink" href="#table-functions" title="Permanent link">#</a></h2>
+<h3 id="asof_join"><code>asof_join</code><a class="headerlink" href="#asof_join" title="Permanent link">#</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">asof_join</span><span class="p">(</span><span class="s1">&#39;left&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;right&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;left_on&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;right_on&#39;</span>
+<span class="w">          </span><span class="p">[,</span><span class="w"> </span><span class="s1">&#39;by_cols&#39;</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="s1">&#39;backward&#39;</span><span class="o">|</span><span class="s1">&#39;forward&#39;</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">tolerance</span><span class="p">]]])</span>
+</code></pre></div>
+
+<p>For each left row, find the most recent right row at or before it
+(<code>'backward'</code>, the default) or the first at or after it (<code>'forward'</code>),
+optionally matching equality keys — the canonical trades-vs-quotes join:</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">asof_join</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;quotes&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ts&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ts&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">);</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">asof_join</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;quotes&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ts&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ts&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;backward&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">5000000</span><span class="p">);</span>
+</code></pre></div>
+
+<ul>
+<li><code>by_cols</code> is comma-separated; each entry is <code>'col'</code> (same name both sides)
+  or <code>'lcol=rcol'</code>.</li>
+<li><code>tolerance</code> is an integer in raw time units: the maximum allowed
+  <code>|left.ts − right.ts|</code>.</li>
+<li>The join is always <strong>LEFT and 1:1 with the left side</strong> — unmatched left rows
+  keep NULLs. A useful invariant to assert: <code>len(output) == len(left)</code>.</li>
+<li>Right-side columns that collide with left names get a <code>_right</code> suffix.</li>
+<li>The right side is buffered in memory (charged to the query memory budget);
+  the left side streams. Left-only filters and <code>LIMIT</code> push down into the
+  left scan.</li>
+<li>Both tables are read at <strong>latest</strong>; to ASOF-join historical versions, use
+  the keyword form over session-bound names, or materialize first.</li>
+</ul>
+<p>The keyword syntax is also supported (bare table names only, no aliases):</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">trades</span><span class="w"> </span><span class="n">ASOF</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="n">quotes</span>
+<span class="w">  </span><span class="n">MATCH_CONDITION</span><span class="w"> </span><span class="p">(</span><span class="n">trades</span><span class="p">.</span><span class="n">ts</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="n">quotes</span><span class="p">.</span><span class="n">ts</span><span class="p">)</span><span class="w">     </span><span class="c1">-- &gt;= backward, &lt;= forward</span>
+<span class="w">  </span><span class="k">ON</span><span class="w"> </span><span class="n">trades</span><span class="p">.</span><span class="n">symbol</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">quotes</span><span class="p">.</span><span class="n">symbol</span><span class="p">;</span>
+</code></pre></div>
+
+<h3 id="gapfill-resample"><code>gapfill</code> / <code>resample</code><a class="headerlink" href="#gapfill-resample" title="Permanent link">#</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">gapfill</span><span class="p">(</span><span class="s1">&#39;table&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;time_column&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">step</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="s1">&#39;null&#39;</span><span class="o">|</span><span class="s1">&#39;locf&#39;</span><span class="o">|</span><span class="s1">&#39;interpolate&#39;</span><span class="p">])</span>
+</code></pre></div>
+
+<p>Turn an irregular series into a regular grid from the first to the last
+observed timestamp, stepping by <code>step</code> raw time units. <code>resample(...)</code> is an
+exact alias.</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">price</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">gapfill</span><span class="p">(</span><span class="s1">&#39;bars_1m&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ts&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">60000000</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;locf&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">;</span>
+</code></pre></div>
+
+<p>Fill modes for synthesized instants:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>'null'</code> (default)</td>
+<td>Non-time columns are NULL</td>
+</tr>
+<tr>
+<td><code>'locf'</code></td>
+<td>Last observation carried forward (NULL before the first)</td>
+</tr>
+<tr>
+<td><code>'interpolate'</code></td>
+<td>Linear interpolation for numeric columns (ints rounded); non-numeric falls back to previous value</td>
+</tr>
+</tbody>
+</table></div>
+<div class="admonition warning">
+<p class="admonition-title">gapfill is per-table, not per-key</p>
+<p>There is <strong>no per-key grouping</strong>: on a multi-symbol table, <code>locf</code> carries
+whichever symbol last ticked. Gapfill single-instrument tables, or filter
+to one key first. Also note: observations that don't land exactly on the
+grid are dropped from the output; duplicate timestamps collapse to the
+last row; at most 1,000,000 rows are generated (<code>limit_exceeded</code> beyond).</p>
+</div>
+<h3 id="tail"><code>tail</code><a class="headerlink" href="#tail" title="Permanent link">#</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">tail</span><span class="p">(</span><span class="s1">&#39;table&#39;</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">after_version</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">poll_ms</span><span class="p">]])</span>
+</code></pre></div>
+
+<p>Stream rows appended after a version — a message-log view of an append-only
+table. With no version it starts after the current head (future appends
+only). <code>poll_ms</code> defaults to 250 (minimum 10).</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">price</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">tail</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">812</span><span class="p">)</span><span class="w"> </span><span class="k">LIMIT</span><span class="w"> </span><span class="mi">500</span><span class="p">;</span>
+</code></pre></div>
+
+<ul>
+<li>The result is <strong>unbounded</strong> — always apply <code>LIMIT</code> (or cancel the query).
+  <code>tail</code> blocks until <code>LIMIT</code> rows arrive; pass a query timeout as a backstop.</li>
+<li>Requires a <strong>pure-append version chain</strong> after <code>after_version</code>; any
+  delete/replace/restore/write in the range errors with a hint.</li>
+<li>Size <code>LIMIT</code> from <code>versions</code> row deltas to fetch "exactly what's new since
+  version N" — no timestamp-cursor guesswork.</li>
+</ul>
+<h2 id="scalar-aggregate-window-functions">Scalar, aggregate &amp; window functions<a class="headerlink" href="#scalar-aggregate-window-functions" title="Permanent link">#</a></h2>
+<h3 id="time_bucket"><code>time_bucket</code><a class="headerlink" href="#time_bucket" title="Permanent link">#</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span>
+<span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">origin_or_timezone</span><span class="p">)</span>
+<span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">origin</span><span class="p">,</span><span class="w"> </span><span class="n">timezone</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Floor timestamps into fixed buckets — DuckDB/TimescaleDB semantics. The
+interval is a literal: an SQL <code>INTERVAL</code> or a string like <code>'30s'</code>, <code>'5m'</code>,
+<code>'1.5h'</code>, <code>'1d'</code>, <code>'1w'</code>, <code>'1mo'</code>, <code>'1y'</code>. Fixed widths align to the origin
+<code>2000-01-03T00:00:00Z</code> (a Monday, so weeks start Monday); month/year widths
+use calendar bucketing.</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">time_bucket</span><span class="p">(</span><span class="s1">&#39;5m&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">bar</span><span class="p">,</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">bar</span><span class="p">;</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="n">time_bucket</span><span class="p">(</span><span class="s1">&#39;1d&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;America/New_York&#39;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">session_day</span><span class="p">,</span><span class="w"> </span><span class="err">…</span><span class="w">   </span><span class="c1">-- local-time days</span>
+</code></pre></div>
+
+<p>The third argument is a timezone when it parses as an IANA name (or contains
+<code>/</code>), otherwise an origin timestamp; use the 4-argument form to pass both.
+With a timezone, bucketing happens in local wall time and handles DST
+(ambiguous → earliest, gap → first valid instant). Out-of-range inputs yield
+NULL buckets rather than errors.</p>
+<h3 id="vwap-wavg"><code>vwap</code> / <code>wavg</code><a class="headerlink" href="#vwap-wavg" title="Permanent link">#</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">vwap</span><span class="p">(</span><span class="n">price</span><span class="p">,</span><span class="w"> </span><span class="k">size</span><span class="p">)</span><span class="w">     </span><span class="c1">-- value first, weight second</span>
+<span class="n">wavg</span><span class="p">(</span><span class="k">size</span><span class="p">,</span><span class="w"> </span><span class="n">price</span><span class="p">)</span><span class="w">     </span><span class="c1">-- kdb argument order: weight first</span>
+</code></pre></div>
+
+<p>Weighted mean as a streaming, mergeable aggregate — the same computation with
+two argument conventions. Returns <code>Float64</code>; NULL when the group is empty or
+the weight sum is zero; rows with a NULL in either argument are skipped.
+Supports retraction, so sliding-window use is O(n):</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">vwap</span><span class="p">(</span><span class="n">price</span><span class="p">,</span><span class="w"> </span><span class="k">size</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="w"> </span><span class="k">ROWS</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="mi">99</span><span class="w"> </span><span class="n">PRECEDING</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">CURRENT</span><span class="w"> </span><span class="k">ROW</span><span class="p">)</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">trades</span><span class="p">;</span>
+</code></pre></div>
+
+<h3 id="ewma"><code>ewma</code><a class="headerlink" href="#ewma" title="Permanent link">#</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">ewma</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">alpha</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Exponentially weighted moving average, one ordered pass per partition:
+<code>y₀ = x₀; yᵢ = α·xᵢ + (1−α)·yᵢ₋₁</code>. <code>alpha</code> must be a constant in <code>[0, 1]</code>.
+NULL inputs carry the previous smoothed value forward. Matches
+<code>pandas.ewm(alpha=…, adjust=False)</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">ewma</span><span class="p">(</span><span class="n">price</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">06</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">symbol</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">px_smooth</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">trades</span><span class="p">;</span>
+</code></pre></div>
+
+<h3 id="rolling_avg-rolling_sum-rolling_min-rolling_max"><code>rolling_avg</code> / <code>rolling_sum</code> / <code>rolling_min</code> / <code>rolling_max</code><a class="headerlink" href="#rolling_avg-rolling_sum-rolling_min-rolling_max" title="Permanent link">#</a></h3>
+<div class="highlight"><pre><span></span><code><span class="n">rolling_avg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">order_by</span><span class="p">,</span><span class="w"> </span><span class="k">rows</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Convenience sugar, expanded before parsing into the standard window frame
+<code>AVG(value) OVER (ORDER BY order_by ROWS BETWEEN rows−1 PRECEDING AND
+CURRENT ROW)</code>. <code>rows</code> must be an integer literal in 1…1,000,000.</p>
+<div class="admonition warning">
+<p class="admonition-title">Not partitioned</p>
+<p>The sugar has <strong>no <code>PARTITION BY</code></strong> — it is a trailing n-row window in
+global order and will mix symbols on a multi-symbol table. Use it on
+single-key subsets, or write the explicit window:
+<code>AVG(x) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN n−1 PRECEDING
+AND CURRENT ROW)</code>. It also cannot take its own <code>OVER</code> clause.</p>
+</div>
+<h3 id="first_value-last_value"><code>first_value</code> / <code>last_value</code><a class="headerlink" href="#first_value-last_value" title="Permanent link">#</a></h3>
+<p>Stock DataFusion, but worth knowing the idiom: <code>last_value(x ORDER BY ts)</code>
+inside a <code>GROUP BY</code> is how you take "closing" values without a self-join —
+see the OHLCV query at the top of this page.</p>
+<h2 id="sessions-pruning-performance">Sessions, pruning &amp; performance<a class="headerlink" href="#sessions-pruning-performance" title="Permanent link">#</a></h2>
+<ul>
+<li>Narrow time-range predicates prune segments via manifest statistics before
+  any I/O — verify with <code>h5i-db query … --stats</code> or the UI's SQL scratchpad.</li>
+<li>Select only the columns you need; Parquet projection pushdown is
+  column-granular.</li>
+<li>Memory budgets (<code>--memory-limit-mb</code> / <code>sql(memory_limit=…)</code>) enable disk
+  spilling instead of OOM; <code>--max-rows</code> and timeouts turn runaway queries
+  into clean, typed errors.</li>
+<li><code>information_schema</code> is available for introspection
+  (<code>SELECT * FROM information_schema.tables</code>).</li>
+</ul>
+<p>For a guided tour with real data, see the cookbook:
+<a href="../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a>
+and <a href="../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning</a>.</p>
+    <nav class="page-nav"><a class="prev" href="../manual/cli.html"><span class="dir">← Previous</span><span class="pn-title">CLI reference</span></a><a class="next" href="../manual/agents.html"><span class="dir">Next →</span><span class="pn-title">Agents &amp; automation</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#reading-tables-time-travel">Reading tables &amp; time travel</a><ul><li><a href="#plain-names-vs-h5i">Plain names vs h5i()</a></li></ul></li><li><a href="#table-functions">Table functions</a><ul><li><a href="#asof_join">asof_join</a></li><li><a href="#gapfill-resample">gapfill / resample</a></li><li><a href="#tail">tail</a></li></ul></li><li><a href="#scalar-aggregate-window-functions">Scalar, aggregate &amp; window functions</a><ul><li><a href="#time_bucket">time_bucket</a></li><li><a href="#vwap-wavg">vwap / wavg</a></li><li><a href="#ewma">ewma</a></li><li><a href="#rolling_avg-rolling_sum-rolling_min-rolling_max">rolling_avg / rolling_sum / rolling_min / rolling_max</a></li><li><a href="#first_value-last_value">first_value / last_value</a></li></ul></li><li><a href="#sessions-pruning-performance">Sessions, pruning &amp; performance</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../">Home</a>
+      <a href="../manual/">Manual</a>
+      <a href="../api/">Python API</a>
+      <a href="../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../";</script>
+<script src="../_static/docs.js" defer></script>
+</body>
+</html>

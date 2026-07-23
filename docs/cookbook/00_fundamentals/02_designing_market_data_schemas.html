@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Designing market data schemas · h5i-db docs</title>
+  <meta name="description" content="In h5i-db a table is an Arrow schema plus a time column, persisted as immutable, time-sorted Parquet segments under versioned manifests. That makes schema design the one decision you cannot cheaply revisit: the types …">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../../_static/logo.png">
+  <link rel="apple-touch-icon" href="../../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Designing market data schemas · h5i-db docs">
+  <meta property="og:description" content="In h5i-db a table is an Arrow schema plus a time column, persisted as immutable, time-sorted Parquet segments under versioned manifests. That makes schema design the one decision you cannot cheaply revisit: the types …">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Designing market data schemas · h5i-db docs">
+  <meta name="twitter:description" content="In h5i-db a table is an Arrow schema plus a time column, persisted as immutable, time-sorted Parquet segments under versioned manifests. That makes schema design the one decision you cannot cheaply revisit: the types …">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../../">
+    <img src="../../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../../manual/" >Manual</a></li>
+    <li><a href="../../api/" >Python API</a></li>
+    <li><a href="../../cookbook/" class="active">Cookbook</a></li>
+    <li><a href="../../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html" class="active">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html">Maintenance: verify, compact, vacuum - keeping a versioned store healthy</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../../cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Fundamentals</span>
+<span class="sep">/</span>
+<span>Designing market data schemas</span></div>
+<h1>Designing market data schemas</h1>
+<p>In h5i-db a table is an Arrow schema plus a time column, persisted as
+immutable, time-sorted Parquet segments under versioned manifests. That
+makes schema design the one decision you cannot cheaply revisit: the types
+you pick determine storage size, which SQL operators apply cleanly, and -
+through <code>time_column</code> and <code>sort_key</code> - how well scans prune and how fast
+ASOF joins and bar rollups run. This recipe designs the three tables every
+equity desk starts with (ticks, quotes, daily bars), explains each type
+choice, and then probes the <em>strict append contract</em>: what h5i-db rejects
+at the door, and why that strictness is a feature for a shared research
+database.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_schemas&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-type-choices-for-tick-level-trades">1. Type choices for tick-level trades<a class="headerlink" href="#1-type-choices-for-tick-level-trades" title="Permanent link">#</a></h2>
+<p>The decisions that matter, column by column:</p>
+<ul>
+<li><strong><code>ts</code> - <code>timestamp[us, tz=UTC]</code>, non-nullable.</strong> Microseconds cover
+  consolidated-feed granularity; tz-aware UTC removes a whole class of
+  DST bugs (convert to exchange time at query time with <code>time_bucket</code>'s
+  timezone argument, not at storage time). Make it non-nullable: a print
+  without a timestamp is not data. Every raw-unit argument elsewhere in
+  the API (plan ranges, gapfill steps, ASOF tolerances) is then in
+  microseconds, consistently.</li>
+<li><strong><code>price</code> - <code>float64</code>.</strong> The classic tradeoff: <code>decimal128</code> is exact and
+  the right call in a settlement ledger, but float64 round-trips cent-grid
+  equity prices exactly up to ~$10^13$, is what every analytics function
+  (<code>vwap</code>, <code>ewma</code>, <code>stddev</code>, <code>corr</code>) expects, and is twice as compact.
+  At the research layer, float64 is the convention; keep decimals for
+  books and records systems.</li>
+<li><strong><code>size</code> - <code>int64</code>.</strong> Never float: share counts are integers, and int64
+  headroom means one type for everything from odd lots to index rebalance
+  crosses.</li>
+<li><strong><code>symbol</code>, <code>exchange</code>, <code>side</code> - <code>utf8</code>.</strong> Low-cardinality strings are
+  dictionary-encoded inside the Parquet segments automatically, so plain
+  <code>utf8</code> at the schema layer costs almost nothing on disk and keeps the
+  schema simple.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">trades_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;exchange&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+
+<span class="n">quotes_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;bid_size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ask_size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+
+<span class="n">bars_1d_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;high&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;low&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;volume&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="2-time_column-and-sort_key">2. <code>time_column</code> and <code>sort_key</code><a class="headerlink" href="#2-time_column-and-sort_key" title="Permanent link">#</a></h2>
+<p>Declaring <code>time_column="ts"</code> is not metadata decoration - it is the
+contract h5i-db builds everything on:</p>
+<ul>
+<li>segments are stored <strong>sorted by <code>ts</code></strong>, and each segment's time range is
+  recorded in the manifest, so a <code>WHERE ts BETWEEN ...</code> predicate skips
+  whole segments without opening them (manifest pruning);</li>
+<li><strong>ASOF joins</strong> and <strong><code>time_bucket</code> rollups</strong> stream over that sort order
+  instead of re-sorting your ticks on every query;</li>
+<li><code>append</code> can enforce feed semantics (more on that below) because "later
+  than everything stored" is well defined.</li>
+</ul>
+<p><code>sort_key=["ts", "symbol"]</code> adds a secondary order <em>within</em> each timestamp
+tie - and, more importantly, groups rows so per-symbol scans touch
+contiguous runs of data. The rule: the sort key must start with the time
+column; put the column you filter by most (almost always <code>symbol</code>) next.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">,</span> <span class="n">quotes_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;bars_1d&quot;</span><span class="p">,</span> <span class="n">bars_1d_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">tables</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[&#x27;bars_1d&#x27;, &#x27;quotes&#x27;, &#x27;trades&#x27;]</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">5_000</span><span class="p">)</span>
+<span class="n">quotes</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_quotes</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">quotes_per_day</span><span class="o">=</span><span class="mi">8_000</span><span class="p">)</span>
+<span class="n">daily</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_daily_prices</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">250</span><span class="p">)</span>
+
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="p">[(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">,</span> <span class="n">quotes</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;bars_1d&quot;</span><span class="p">,</span> <span class="n">daily</span><span class="p">)]:</span>
+    <span class="n">commit</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;initial load&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">:</span><span class="s2">8s</span><span class="si">}</span><span class="s2"> v</span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;rows_total&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&gt;7,</span><span class="si">}</span><span class="s2"> rows, &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;segments_total&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> segment(s)&quot;</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">trades   v1:  30,693 rows, 1 segment(s)
+quotes   v1:  48,047 rows, 1 segment(s)
+bars_1d  v1:     750 rows, 1 segment(s)</pre><pre>ts: timestamp[us, tz=UTC] not null
+symbol: string
+price: double
+size: int64
+exchange: string
+side: string</pre></div></div>
+<p>A quick query to confirm the schemas earn their keep - per-symbol quoted
+spread in basis points straight off the quotes table. Plain <code>utf8</code> symbol
+columns group and filter exactly as you'd hope; no special "category" type
+needed at this layer.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT symbol,</span>
+<span class="sd">           count(*)                                    AS quotes,</span>
+<span class="sd">           round(avg((ask - bid) / ((ask + bid) / 2)) * 1e4, 2) AS avg_spread_bps,</span>
+<span class="sd">           round(min(bid), 2)                          AS min_bid,</span>
+<span class="sd">           round(max(ask), 2)                          AS max_ask</span>
+<span class="sd">    FROM quotes</span>
+<span class="sd">    GROUP BY symbol</span>
+<span class="sd">    ORDER BY symbol</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>symbol</th>
+      <th>quotes</th>
+      <th>avg_spread_bps</th>
+      <th>min_bid</th>
+      <th>max_ask</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>AAPL</td>
+      <td>16564</td>
+      <td>1.76</td>
+      <td>86.04</td>
+      <td>87.76</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>MSFT</td>
+      <td>14687</td>
+      <td>1.76</td>
+      <td>216.74</td>
+      <td>224.45</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>NVDA</td>
+      <td>16796</td>
+      <td>1.75</td>
+      <td>251.23</td>
+      <td>262.48</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="3-what-strict-append-rejects">3. What strict append rejects<a class="headerlink" href="#3-what-strict-append-rejects" title="Permanent link">#</a></h2>
+<p><code>append</code> has feed semantics: the batch must match the declared schema, be
+sorted by the time column, and start at or after the table's current
+maximum timestamp. Everything else is rejected <em>before</em> anything is
+written - the table head never moves on a failed append. In a database
+shared by a team (or written by an agent), this strictness is the point:
+malformed vendor files and out-of-order backfills fail loudly at ingest
+instead of silently corrupting downstream research.</p>
+<p>Every h5i-db exception carries a machine-readable <code>.code</code>, a <code>.retryable</code>
+flag, and often a <code>.hint</code> with the recommended fix.</p>
+<p><strong>Rejection 1 - schema mismatch.</strong> A vendor "helpfully" ships prices as
+float32 and forgets the <code>side</code> column:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">bad_schema_batch</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">(</span>
+    <span class="p">{</span>
+        <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">],</span>
+        <span class="s2">&quot;symbol&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">],</span>
+        <span class="s2">&quot;price&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">]</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">float32</span><span class="p">()),</span>   <span class="c1"># wrong width</span>
+        <span class="s2">&quot;size&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">],</span>
+        <span class="s2">&quot;exchange&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;exchange&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">],</span>
+        <span class="c1"># &#39;side&#39; column missing entirely</span>
+    <span class="p">}</span>
+<span class="p">)</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">bad_schema_batch</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rejected  code=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;message   </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hint      </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">&#39;(none - the message says it all)&#39;</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rejected  code=schema_mismatch
+message   [schema_mismatch] schema mismatch: expected 6 columns, got 5
+hint      (none - the message says it all)</pre></div></div>
+<p><strong>Rejection 2 - unsorted data.</strong> Same rows, shuffled - a classic outcome
+of concatenating per-exchange files without a final sort:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+
+<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">shuffled</span> <span class="o">=</span> <span class="n">trades</span><span class="o">.</span><span class="n">take</span><span class="p">(</span><span class="n">rng</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">trades</span><span class="p">)))</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">shuffled</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rejected  code=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hint      </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rejected  code=sort_order_violation
+hint      append requires input sorted by the time column with min &gt;= current table max; use `write` or sort the input</pre></div></div>
+<p><strong>Rejection 3 - overlapping time range.</strong> Re-delivering data the table
+already has (the batch's min <code>ts</code> is before the stored max) is refused for
+the same reason: <code>append</code> means <em>extend the feed</em>, never <em>interleave into
+history</em>. Deliberate restatements go through <code>write</code> or the previewable
+<code>plan_replace_range</code> flow (recipes 05 and 06).</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="p">)</span>  <span class="c1"># the exact batch already ingested</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rejected  code=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hint      </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rejected  code=sort_order_violation
+hint      append requires input sorted by the time column with min &gt;= current table max; use `write` or sort the input</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="c1"># The head never moved: still one data commit per table.</span>
+<span class="p">[{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;sequence&quot;</span><span class="p">,</span> <span class="s2">&quot;op&quot;</span><span class="p">,</span> <span class="s2">&quot;rows&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">v</span><span class="p">}</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[{&#x27;sequence&#x27;: 0, &#x27;op&#x27;: &#x27;create&#x27;, &#x27;rows&#x27;: 0},
+ {&#x27;sequence&#x27;: 1, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 30693}]</pre></div></div>
+<h2 id="4-schema-evolution-know-the-limits-up-front">4. Schema evolution: know the limits up front<a class="headerlink" href="#4-schema-evolution-know-the-limits-up-front" title="Permanent link">#</a></h2>
+<p>Because segments are immutable, schemas are deliberately hard to change.
+Plan for the evolutions that are cheap and avoid the ones that are not:</p>
+<ul>
+<li><strong>Cheap:</strong> appending <em>trailing nullable</em> columns (old segments read as
+  NULL) and <em>widening</em> numerics (int32 → int64, float32 → float64).</li>
+<li><strong>Expensive:</strong> renames, type narrowing, reordering, or dropping columns -
+  these mean writing a new table and backfilling.</li>
+</ul>
+<p>Practical consequence: start wide enough (<code>int64</code>, <code>float64</code>,
+<code>timestamp[us]</code>), and if a column <em>might</em> exist one day (e.g. a
+<code>condition</code> code on trades), it costs little to include it as nullable
+from day one.</p>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>A table = Arrow schema + <code>time_column</code>; segments are stored time-sorted
+  Parquet, so declaring the time column buys pruning, streaming
+  <code>time_bucket</code> rollups and sort-free ASOF joins.</li>
+<li>Defaults that serve quant work well: <code>timestamp[us, tz=UTC]</code>
+  non-nullable for time, <code>float64</code> for prices at the research layer,
+  <code>int64</code> for sizes, plain <code>utf8</code> for symbols (Parquet
+  dictionary-encodes them anyway).</li>
+<li><code>sort_key=["ts", "symbol"]</code> must start with the time column; the
+  secondary key makes per-symbol scans touch contiguous data.</li>
+<li>Strict append rejects schema mismatches, unsorted batches and
+  overlapping time ranges <em>before</em> writing - errors carry <code>.code</code> and
+  <code>.hint</code>, and the table head never moves on failure.</li>
+<li>Evolve schemas by trailing nullable adds and numeric widening; anything
+  else is a rebuild, so start wide.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="../../cookbook/00_fundamentals/01_quickstart.html"><span class="dir">← Previous</span><span class="pn-title">Quickstart: your first h5i-db market database</span></a><a class="next" href="../../cookbook/00_fundamentals/03_ingestion_patterns.html"><span class="dir">Next →</span><span class="pn-title">Ingestion patterns: five sources, one table</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-type-choices-for-tick-level-trades">1. Type choices for tick-level trades</a></li><li><a href="#2-time_column-and-sort_key">2. time_column and sort_key</a></li><li><a href="#3-what-strict-append-rejects">3. What strict append rejects</a></li><li><a href="#4-schema-evolution-know-the-limits-up-front">4. Schema evolution: know the limits up front</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../../">Home</a>
+      <a href="../../manual/">Manual</a>
+      <a href="../../api/">Python API</a>
+      <a href="../../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../../";</script>
+<script src="../../_static/docs.js" defer></script>
+</body>
+</html>

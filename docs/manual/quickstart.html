@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quickstart · h5i-db docs</title>
+  <meta name="description" content="From nothing to a queried, versioned market database in five commands — CLI and Python.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../_static/logo.png">
+  <link rel="apple-touch-icon" href="../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Quickstart · h5i-db docs">
+  <meta property="og:description" content="From nothing to a queried, versioned market database in five commands — CLI and Python.">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Quickstart · h5i-db docs">
+  <meta name="twitter:description" content="From nothing to a queried, versioned market database in five commands — CLI and Python.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../">
+    <img src="../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../manual/" class="active">Manual</a></li>
+    <li><a href="../api/" >Python API</a></li>
+    <li><a href="../cookbook/" >Cookbook</a></li>
+    <li><a href="../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html" class="active">Quickstart</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../manual/">Manual</a>
+<span class="sep">/</span>
+<span>Quickstart</span></div>
+<h1 id="quickstart">Quickstart<a class="headerlink" href="#quickstart" title="Permanent link">#</a></h1>
+<p>Five minutes from an empty directory to time-series SQL with time travel. The
+CLI and the Python library drive the same engine and the same on-disk format —
+pick either, or mix freely.</p>
+<h2 id="cli">CLI<a class="headerlink" href="#cli" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>cargo<span class="w"> </span>install<span class="w"> </span>h5i-db-cli
+<span class="gp">$ </span>h5i-db<span class="w"> </span>init<span class="w"> </span>market.db
+<span class="gp">$ </span>h5i-db<span class="w"> </span>create-table<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--like<span class="w"> </span>ticks.parquet<span class="w"> </span>--time-column<span class="w"> </span>ts
+<span class="gp">$ </span>h5i-db<span class="w"> </span>ingest<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>ticks.parquet
+<span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol&quot;</span>
+</code></pre></div>
+
+<p><code>init</code> creates the database — a plain directory, no server. <code>create-table</code>
+infers the schema from an existing Parquet/CSV/Arrow file (or takes explicit
+JSON via <code>--schema</code>); <code>--time-column</code> declares the time axis, which is what
+makes pruning and the time-series operators work. <code>ingest</code> appends the file's
+rows as one atomic, durable commit.</p>
+<p>Query output goes to stdout in your chosen <code>--format</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT time_bucket(&#39;1m&#39;, ts) AS bar, vwap(price, size) AS vwap</span>
+<span class="go">                          FROM trades GROUP BY bar ORDER BY bar&quot; --format csv | head -3</span>
+<span class="go">bar,vwap</span>
+<span class="go">2026-07-01T09:30:00,101.24</span>
+<span class="go">2026-07-01T09:31:00,101.31</span>
+</code></pre></div>
+
+<p>Every write created a version. Look at the history, read an old version, pin a
+reproducible snapshot:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>versions<span class="w"> </span>market.db<span class="w"> </span>trades
+<span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT count(*) FROM h5i(&#39;trades&#39;, 1)&quot;</span><span class="w">   </span><span class="c1"># time travel</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>snapshot<span class="w"> </span>create<span class="w"> </span>market.db<span class="w"> </span>eod-2026-07-01
+</code></pre></div>
+
+<p>And when something needs fixing, preview before you commit:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>delete-range<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--start<span class="w"> </span><span class="m">2026</span>-07-01T09:30:00Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--end<span class="w"> </span><span class="m">2026</span>-07-01T09:31:00Z<span class="w"> </span>--plan
+<span class="go">{&quot;plan_id&quot;: &quot;5c41…&quot;, &quot;summary&quot;: {&quot;rows_affected&quot;: 12481, &quot;segments_reused&quot;: 127}}</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>plan<span class="w"> </span>show<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>5c41…<span class="w">     </span><span class="c1"># before/after samples</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>plan<span class="w"> </span>apply<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>5c41…<span class="w">    </span><span class="c1"># metadata-only swap</span>
+</code></pre></div>
+
+<p>Finally, <code>h5i-db ui market.db</code> serves a loopback-only review surface: pending
+plans with previews, the version timeline, and an SQL scratchpad.</p>
+<h2 id="python">Python<a class="headerlink" href="#python" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>pip<span class="w"> </span>install<span class="w"> </span>h5i-db
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+
+<span class="n">schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">([</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+<span class="p">])</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="s2">&quot;market.db&quot;</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">ticks</span><span class="p">)</span>                 <span class="c1"># pyarrow.Table / RecordBatch(es)</span>
+
+<span class="n">bars</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">    SELECT time_bucket(&#39;1m&#39;, ts) AS bar, symbol,</span>
+<span class="s2">           vwap(price, size) AS vwap, sum(size) AS volume</span>
+<span class="s2">    FROM trades GROUP BY bar, symbol ORDER BY bar</span>
+<span class="s2">&quot;&quot;&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</code></pre></div>
+
+<p>Time travel and reproducibility:</p>
+<div class="highlight"><pre><span></span><code><span class="n">old</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>                         <span class="c1"># exact version</span>
+<span class="n">asof</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM h5i(&#39;trades&#39;, &#39;2026-07-01T00:00:00Z&#39;)&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;eod-2026-07-01&quot;</span><span class="p">)</span>                              <span class="c1"># pin all tables</span>
+</code></pre></div>
+
+<p>Previewable mutation, the same plan/apply flow as the CLI:</p>
+<div class="highlight"><pre><span></span><code><span class="n">plan</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">start_us</span><span class="p">,</span> <span class="n">end_us</span><span class="p">)</span>    <span class="c1"># raw µs bounds</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">summary</span>                 <span class="c1"># {&quot;rows_affected&quot;: …, &quot;segments_reused&quot;: …}</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">before_sample</span>           <span class="c1"># pyarrow.Table of rows to be removed</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>                 <span class="c1"># or plan.discard()</span>
+</code></pre></div>
+
+<div class="admonition note">
+<p class="admonition-title">Raw time units in Python</p>
+<p>SQL takes RFC3339 strings, but the Python range APIs
+(<code>plan_delete_range</code>, <code>read(time_start=…)</code>) take <strong>raw integers in the
+time column's unit</strong> — microseconds for <code>timestamp[us]</code>. See
+<a href="concepts.html#the-time-axis">Core concepts</a>.</p>
+</div>
+<p>Errors are typed and machine-actionable:</p>
+<div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">batch</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">ConflictError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>     <span class="c1"># another writer won the race</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">retryable</span><span class="p">)</span>        <span class="c1"># &quot;version_conflict&quot;, True</span>
+</code></pre></div>
+
+<h2 id="where-next">Where next<a class="headerlink" href="#where-next" title="Permanent link">#</a></h2>
+<ul>
+<li><a href="concepts.html">Core concepts</a> — what a version, segment, snapshot, and plan
+  actually are.</li>
+<li><a href="sql.html">SQL reference</a> — <code>h5i()</code>, <code>asof_join</code>, <code>time_bucket</code>, <code>gapfill</code>,
+  and the rest of the function library.</li>
+<li>The <a href="../cookbook/00_fundamentals/01_quickstart.html">Cookbook quickstart notebook</a>
+  — this page as an executed notebook on real data.</li>
+</ul>
+    <nav class="page-nav"><a class="prev" href="../manual/installation.html"><span class="dir">← Previous</span><span class="pn-title">Installation</span></a><a class="next" href="../manual/concepts.html"><span class="dir">Next →</span><span class="pn-title">Core concepts</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#cli">CLI</a></li><li><a href="#python">Python</a></li><li><a href="#where-next">Where next</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../">Home</a>
+      <a href="../manual/">Manual</a>
+      <a href="../api/">Python API</a>
+      <a href="../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../";</script>
+<script src="../_static/docs.js" defer></script>
+</body>
+</html>

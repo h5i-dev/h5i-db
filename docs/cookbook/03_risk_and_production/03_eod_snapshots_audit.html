@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EOD snapshots and the audit trail regulators actually ask for · h5i-db docs</title>
+  <meta name="description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot; - it is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../../_static/logo.png">
+  <link rel="apple-touch-icon" href="../../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="EOD snapshots and the audit trail regulators actually ask for · h5i-db docs">
+  <meta property="og:description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot; - it is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="EOD snapshots and the audit trail regulators actually ask for · h5i-db docs">
+  <meta name="twitter:description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot; - it is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../../">
+    <img src="../../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../../manual/" >Manual</a></li>
+    <li><a href="../../api/" >Python API</a></li>
+    <li><a href="../../cookbook/" class="active">Cookbook</a></li>
+    <li><a href="../../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html" class="active">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../../cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Risk &amp; production</span>
+<span class="sep">/</span>
+<span>EOD snapshots and the audit trail regulators actually ask for</span></div>
+<h1>EOD snapshots and the audit trail regulators actually ask for</h1>
+<p>The question that arrives eighteen months later is never "what is the price
+now" - it is <em>"what did your systems know at the close of business on
+2026-06-02?"</em>. If your answer involves restoring backup tapes, you have
+already lost the meeting. In h5i-db an end-of-day cut is a named snapshot:
+a checksummed pin of the table manifest, O(1) to create, addressable
+forever from SQL as <code>h5i('trades', 'eod-2026-06-02')</code>.</p>
+<p>This recipe builds a small EOD pipeline - append the day's feed, run
+data-quality checks, snapshot, log - then answers the regulator's question
+three ways, diffs two EOD cuts in SQL, and closes with integrity
+attestation (<code>verify(deep=True)</code>) and retention (<code>vacuum</code>).</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_eod&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-tables-the-feed-and-our-own-snapshot-log">1. Tables: the feed, and our own snapshot log<a class="headerlink" href="#1-tables-the-feed-and-our-own-snapshot-log" title="Permanent link">#</a></h2>
+<p>One honest API note up front: the Python API currently has snapshot
+<em>creation</em> only (<code>db.snapshot(name, tables=[...], note=...)</code>); listing
+snapshots is a CLI feature (<code>h5i-db snapshot list</code>). Production pipelines
+want the catalog queryable next to the data, so we keep our own
+<code>snapshot_log</code> table - each EOD run appends one row with the name, pinned
+sequence and manifest checksum returned by <code>snapshot()</code>. The log is itself
+versioned and append-only, which is exactly what an auditor wants a log
+to be.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trade_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;exchange&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trade_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+
+<span class="n">log_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;snapshot_name&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;table_name&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;pinned_sequence&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;manifest_checksum&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;note&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;snapshot_log&quot;</span><span class="p">,</span> <span class="n">log_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">tables</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[&#x27;snapshot_log&#x27;, &#x27;trades&#x27;]</pre></div></div>
+<h2 id="2-the-eod-pipeline-append-check-snapshot-log">2. The EOD pipeline: append, check, snapshot, log<a class="headerlink" href="#2-the-eod-pipeline-append-check-snapshot-log" title="Permanent link">#</a></h2>
+<p>Three simulated production days. Each day: one atomic <code>append</code> of the
+day's feed (with a note), a minimal data-quality gate (row count, price
+positivity, universe completeness), and - only if the gate passes - a named
+snapshot plus a log row. The snapshot dict returns, per table, the pinned
+version and a manifest checksum: cryptographic evidence of exactly what the
+name refers to.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">all_trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">20_000</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">all_trades</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">all_trades</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">date</span>
+
+<span class="k">def</span> <span class="nf">eod_checks</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+    <span class="n">row</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">        SELECT count(*) AS rows, count(DISTINCT symbol) AS symbols,</span>
+<span class="s2">               min(price) AS px_min, max(price) AS px_max</span>
+<span class="s2">        FROM trades</span>
+<span class="s2">        WHERE ts &gt;= &#39;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T00:00:00Z&#39; AND ts &lt; &#39;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T23:59:59Z&#39;</span>
+<span class="s2">        &quot;&quot;&quot;</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;rows&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;rows&quot;</span><span class="p">]),</span>
+        <span class="s2">&quot;symbols_ok&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;symbols&quot;</span><span class="p">])</span> <span class="o">==</span> <span class="mi">3</span><span class="p">,</span>
+        <span class="s2">&quot;prices_ok&quot;</span><span class="p">:</span> <span class="nb">bool</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;px_min&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">),</span>
+        <span class="s2">&quot;nonempty&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="s2">&quot;rows&quot;</span><span class="p">])</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="p">}</span>
+
+<span class="n">last_snap</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="k">for</span> <span class="n">day</span><span class="p">,</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="n">all_trades</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;day&quot;</span><span class="p">,</span> <span class="n">sort</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span>
+        <span class="n">chunk</span><span class="o">.</span><span class="n">drop</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="s2">&quot;day&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">]),</span> <span class="n">schema</span><span class="o">=</span><span class="n">trade_schema</span><span class="p">,</span>
+        <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">commit</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2"> feed&quot;</span><span class="p">)</span>
+    <span class="n">checks</span> <span class="o">=</span> <span class="n">eod_checks</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">day</span><span class="p">))</span>
+    <span class="k">assert</span> <span class="nb">all</span><span class="p">(</span><span class="n">v</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">checks</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">k</span> <span class="o">!=</span> <span class="s2">&quot;rows&quot;</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;EOD gate failed: </span><span class="si">{</span><span class="n">checks</span><span class="si">}</span><span class="s2">&quot;</span>
+
+    <span class="n">last_snap</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;eod-</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;trades&quot;</span><span class="p">],</span> <span class="n">note</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;EOD risk cut </span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">entry</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">last_snap</span><span class="p">[</span><span class="s2">&quot;entries&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;snapshot_log&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span>
+        <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">last_snap</span><span class="p">[</span><span class="s2">&quot;created_at_ns&quot;</span><span class="p">],</span> <span class="n">unit</span><span class="o">=</span><span class="s2">&quot;ns&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)],</span>
+                       <span class="nb">type</span><span class="o">=</span><span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)),</span>
+        <span class="s2">&quot;snapshot_name&quot;</span><span class="p">:</span> <span class="p">[</span><span class="n">last_snap</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]],</span>
+        <span class="s2">&quot;table_name&quot;</span><span class="p">:</span> <span class="p">[</span><span class="n">entry</span><span class="p">[</span><span class="s2">&quot;table_name&quot;</span><span class="p">]],</span>
+        <span class="s2">&quot;pinned_sequence&quot;</span><span class="p">:</span> <span class="p">[</span><span class="n">entry</span><span class="p">[</span><span class="s2">&quot;sequence&quot;</span><span class="p">]],</span>
+        <span class="s2">&quot;manifest_checksum&quot;</span><span class="p">:</span> <span class="p">[</span><span class="n">entry</span><span class="p">[</span><span class="s2">&quot;manifest_checksum&quot;</span><span class="p">]],</span>
+        <span class="s2">&quot;note&quot;</span><span class="p">:</span> <span class="p">[</span><span class="n">last_snap</span><span class="p">[</span><span class="s2">&quot;note&quot;</span><span class="p">]],</span>
+    <span class="p">}))</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">: appended </span><span class="si">{</span><span class="n">data</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows as v</span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">, &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;checks </span><span class="si">{</span><span class="n">checks</span><span class="si">}</span><span class="s2">, snapshot &#39;eod-</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">2026-06-01: appended 62,504 rows as v1, checks {&#x27;rows&#x27;: 62504, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-01&#x27;
+2026-06-02: appended 64,059 rows as v2, checks {&#x27;rows&#x27;: 64059, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-02&#x27;
+2026-06-03: appended 68,714 rows as v3, checks {&#x27;rows&#x27;: 68714, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-03&#x27;</pre></div></div>
+<p>The snapshot dict itself - name, creation time, and per-table pins with
+checksums. This is what lands in the log:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">last_snap</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;name&#x27;: &#x27;eod-2026-06-03&#x27;,
+ &#x27;created_at_ns&#x27;: 1784779025255158825,
+ &#x27;note&#x27;: &#x27;EOD risk cut 2026-06-03&#x27;,
+ &#x27;entries&#x27;: {&#x27;fe649b54-6ec9-4634-9625-e871dcb8d4ef&#x27;: {&#x27;table_name&#x27;: &#x27;trades&#x27;,
+   &#x27;sequence&#x27;: 3,
+   &#x27;manifest_checksum&#x27;: &#x27;2fe5037568a024c4cac57e573849af5f2870ae1f6bf5355f9a904116071e4e18&#x27;}},
+ &#x27;checksum&#x27;: &#x27;61e9afd5f551758b634dd402d265e464542ec5e498764187c375ac6a4f0e63f9&#x27;}</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT ts, snapshot_name, pinned_sequence, substr(manifest_checksum, 1, 12) AS checksum</span>
+<span class="sd">    FROM snapshot_log ORDER BY ts</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>snapshot_name</th>
+      <th>pinned_sequence</th>
+      <th>checksum</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-07-23 03:57:05.065548+00:00</td>
+      <td>eod-2026-06-01</td>
+      <td>1</td>
+      <td>f3f3772dd1a5</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-07-23 03:57:05.182127+00:00</td>
+      <td>eod-2026-06-02</td>
+      <td>2</td>
+      <td>1f30181b0af3</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-07-23 03:57:05.255158+00:00</td>
+      <td>eod-2026-06-03</td>
+      <td>3</td>
+      <td>2fe5037568a0</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="3-what-did-you-know-on-2026-06-02-three-ways-to-answer">3. "What did you know on 2026-06-02?" - three ways to answer<a class="headerlink" href="#3-what-did-you-know-on-2026-06-02-three-ways-to-answer" title="Permanent link">#</a></h2>
+<p>The same read point is addressable by <strong>snapshot name</strong> (business meaning:
+the EOD cut), by <strong>version number</strong> (from the log's <code>pinned_sequence</code>), and
+by <strong>as-of commit time</strong> (wall-clock: "whatever was committed before T").
+All three are O(1) manifest lookups, not replays.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">by_name</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT count(*) AS rows, max(ts) AS last_trade,</span>
+<span class="sd">           round(sum(price * size) / sum(size), 2) AS vwap_all</span>
+<span class="sd">    FROM h5i(&#39;trades&#39;, &#39;eod-2026-06-02&#39;)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">by_name</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>rows</th>
+      <th>last_trade</th>
+      <th>vwap_all</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>126563</td>
+      <td>2026-06-02 19:59:59.768652+00:00</td>
+      <td>318.56</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="c1"># By version number: the log row tells us which sequence the name pins.</span>
+<span class="n">pinned</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+    <span class="s2">&quot;SELECT pinned_sequence FROM snapshot_log WHERE snapshot_name = &#39;eod-2026-06-02&#39;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;pinned_sequence&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">by_version</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">pinned</span><span class="p">))</span>
+
+<span class="c1"># By commit wall-clock time: the append&#39;s committed_at_ns from versions().</span>
+<span class="n">v2</span> <span class="o">=</span> <span class="p">[</span><span class="n">v</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">v</span><span class="p">[</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">pinned</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">as_of</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">v2</span><span class="p">[</span><span class="s2">&quot;committed_at_ns&quot;</span><span class="p">],</span> <span class="n">unit</span><span class="o">=</span><span class="s2">&quot;ns&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span>
+<span class="n">by_time</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="n">as_of</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;by snapshot name: </span><span class="si">{</span><span class="nb">int</span><span class="p">(</span><span class="n">by_name</span><span class="p">[</span><span class="s1">&#39;rows&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;by version </span><span class="si">{</span><span class="n">pinned</span><span class="si">}</span><span class="s2">:     </span><span class="si">{</span><span class="n">by_version</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;by as_of </span><span class="si">{</span><span class="n">as_of</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">by_time</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">by_version</span><span class="o">.</span><span class="n">num_rows</span> <span class="o">==</span> <span class="n">by_time</span><span class="o">.</span><span class="n">num_rows</span> <span class="o">==</span> <span class="nb">int</span><span class="p">(</span><span class="n">by_name</span><span class="p">[</span><span class="s2">&quot;rows&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">by snapshot name: 126,563 rows
+by version 2:     126,563 rows
+by as_of 2026-07-23T03:57:05.160769803+00:00: 126,563 rows</pre></div></div>
+<h2 id="4-diff-two-eod-cuts-in-one-sql-statement">4. Diff two EOD cuts in one SQL statement<a class="headerlink" href="#4-diff-two-eod-cuts-in-one-sql-statement" title="Permanent link">#</a></h2>
+<p>Because snapshots are relations, "what changed between the 2nd and the 3rd"
+is a join, not an ETL job - per symbol: rows added and where the last print
+moved.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT d3.symbol,</span>
+<span class="sd">           d3.n - d2.n                      AS trades_added,</span>
+<span class="sd">           d2.last_px                       AS close_jun02,</span>
+<span class="sd">           d3.last_px                       AS close_jun03,</span>
+<span class="sd">           round(d3.last_px / d2.last_px - 1, 4) AS px_chg</span>
+<span class="sd">    FROM (SELECT symbol, count(*) AS n, last_value(price ORDER BY ts) AS last_px</span>
+<span class="sd">          FROM h5i(&#39;trades&#39;, &#39;eod-2026-06-03&#39;) GROUP BY symbol) d3</span>
+<span class="sd">    JOIN (SELECT symbol, count(*) AS n, last_value(price ORDER BY ts) AS last_px</span>
+<span class="sd">          FROM h5i(&#39;trades&#39;, &#39;eod-2026-06-02&#39;) GROUP BY symbol) d2</span>
+<span class="sd">    USING (symbol)</span>
+<span class="sd">    ORDER BY symbol</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>symbol</th>
+      <th>trades_added</th>
+      <th>close_jun02</th>
+      <th>close_jun03</th>
+      <th>px_chg</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>AAPL</td>
+      <td>21076</td>
+      <td>266.79</td>
+      <td>271.01</td>
+      <td>0.0158</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>MSFT</td>
+      <td>22006</td>
+      <td>366.30</td>
+      <td>365.45</td>
+      <td>-0.0023</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>NVDA</td>
+      <td>25632</td>
+      <td>327.10</td>
+      <td>334.07</td>
+      <td>0.0213</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="5-integrity-attestation">5. Integrity attestation<a class="headerlink" href="#5-integrity-attestation" title="Permanent link">#</a></h2>
+<p><code>verify(deep=True)</code> re-reads every manifest and segment and checks the
+checksum chain - head to genesis. Combined with the manifest checksums
+recorded in <code>snapshot_log</code>, this is an attestation you can hand over:
+the EOD cut named in the log resolves to a manifest whose checksum matches,
+and every byte under it verifies.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">report</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">deep</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">report</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;table&#x27;: &#x27;trades&#x27;,
+ &#x27;head_sequence&#x27;: 3,
+ &#x27;manifests_checked&#x27;: 4,
+ &#x27;segments_checked&#x27;: 6,
+ &#x27;bytes_checked&#x27;: 2850204,
+ &#x27;problems&#x27;: []}</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">assert</span> <span class="ow">not</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;problems&quot;</span><span class="p">],</span> <span class="sa">f</span><span class="s2">&quot;integrity check failed: </span><span class="si">{</span><span class="n">report</span><span class="p">[</span><span class="s1">&#39;problems&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;checked </span><span class="si">{</span><span class="n">report</span><span class="p">[</span><span class="s1">&#39;manifests_checked&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> manifests, &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">report</span><span class="p">[</span><span class="s1">&#39;segments_checked&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> segments, &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">report</span><span class="p">[</span><span class="s1">&#39;bytes_checked&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> bytes - no problems&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">checked 4 manifests, 6 segments, 2,850,204 bytes - no problems</pre></div></div>
+<h2 id="6-retention-vacuum-respects-history-and-snapshots">6. Retention: vacuum respects history and snapshots<a class="headerlink" href="#6-retention-vacuum-respects-history-and-snapshots" title="Permanent link">#</a></h2>
+<p><code>vacuum</code> reclaims storage that nothing references. Here every segment is
+still reachable - through the version chain and through the three EOD
+snapshots - so even an aggressive <code>grace_seconds=0</code> run deletes nothing,
+and the oldest EOD cut remains readable afterwards. Snapshots are the
+retention policy: pin what you must keep, vacuum the rest.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;dry run:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;applied:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="n">grace_seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;oldest EOD cut still readable:&quot;</span><span class="p">,</span>
+      <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">snapshot</span><span class="o">=</span><span class="s1">&#39;eod-2026-06-01&#39;</span><span class="p">))</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">dry run: {&#x27;scanned_objects&#x27;: 20, &#x27;candidates&#x27;: [], &#x27;candidate_bytes&#x27;: 0, &#x27;deleted&#x27;: 0, &#x27;dry_run&#x27;: True}
+applied: {&#x27;scanned_objects&#x27;: 20, &#x27;candidates&#x27;: [], &#x27;candidate_bytes&#x27;: 0, &#x27;deleted&#x27;: 0, &#x27;dry_run&#x27;: False}
+oldest EOD cut still readable: 62,504 rows</pre></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>An EOD cut is <code>db.snapshot(name, tables=[...], note=...)</code>: O(1), no data
+  copied, addressable from SQL forever as <code>h5i('table', 'name')</code>.</li>
+<li>"As known on date X" has three equivalent spellings - snapshot name,
+  version number, <code>as_of</code> commit time - and all resolve without replay.</li>
+<li>The Python API doesn't list snapshots yet (the CLI does); an append-only
+  <code>snapshot_log</code> table closes the gap and gives you a <em>queryable, versioned</em>
+  catalog with the pinned sequence and manifest checksum per cut.</li>
+<li><code>verify(deep=True)</code> plus logged checksums turns "trust us" into an
+  attestation; <code>vacuum</code> cannot touch anything a snapshot still pins.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html"><span class="dir">← Previous</span><span class="pn-title">Reproducible backtests: pin the data, not just the code</span></a><a class="next" href="../../cookbook/03_risk_and_production/04_data_quality_gates.html"><span class="dir">Next →</span><span class="pn-title">Data-quality gates: staging, policy, and previewable remediation</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-tables-the-feed-and-our-own-snapshot-log">1. Tables: the feed, and our own snapshot log</a></li><li><a href="#2-the-eod-pipeline-append-check-snapshot-log">2. The EOD pipeline: append, check, snapshot, log</a></li><li><a href="#3-what-did-you-know-on-2026-06-02-three-ways-to-answer">3. "What did you know on 2026-06-02?" - three ways to answer</a></li><li><a href="#4-diff-two-eod-cuts-in-one-sql-statement">4. Diff two EOD cuts in one SQL statement</a></li><li><a href="#5-integrity-attestation">5. Integrity attestation</a></li><li><a href="#6-retention-vacuum-respects-history-and-snapshots">6. Retention: vacuum respects history and snapshots</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../../">Home</a>
+      <a href="../../manual/">Manual</a>
+      <a href="../../api/">Python API</a>
+      <a href="../../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../../";</script>
+<script src="../../_static/docs.js" defer></script>
+</body>
+</html>

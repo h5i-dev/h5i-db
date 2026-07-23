@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Core concepts · h5i-db docs</title>
+  <meta name="description" content="Versions, segments, manifests, snapshots, previewable mutation plans, and the mutation policy — the mental model behind h5i-db.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../_static/logo.png">
+  <link rel="apple-touch-icon" href="../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Core concepts · h5i-db docs">
+  <meta property="og:description" content="Versions, segments, manifests, snapshots, previewable mutation plans, and the mutation policy — the mental model behind h5i-db.">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Core concepts · h5i-db docs">
+  <meta name="twitter:description" content="Versions, segments, manifests, snapshots, previewable mutation plans, and the mutation policy — the mental model behind h5i-db.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../">
+    <img src="../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../manual/" class="active">Manual</a></li>
+    <li><a href="../api/" >Python API</a></li>
+    <li><a href="../cookbook/" >Cookbook</a></li>
+    <li><a href="../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/concepts.html" class="active">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../manual/">Manual</a>
+<span class="sep">/</span>
+<span>Core concepts</span></div>
+<h1 id="core-concepts">Core concepts<a class="headerlink" href="#core-concepts" title="Permanent link">#</a></h1>
+<p>h5i-db has a small set of load-bearing ideas. Once they click, every command
+and API method is predictable.</p>
+<h2 id="the-database-is-a-directory">The database is a directory<a class="headerlink" href="#the-database-is-a-directory" title="Permanent link">#</a></h2>
+<p>A database is one directory on disk; there is no server. Inside it, each table
+owns immutable Parquet <strong>segments</strong> (the data), immutable JSON <strong>manifests</strong>
+(one per version), and a single small mutable file, <code>HEAD</code>, that names the
+current version:</p>
+<div class="highlight"><pre><span></span><code>market.db/
+  FORMAT
+  catalog/  snapshots/
+  tables/&lt;table-uuid&gt;/
+    HEAD                       # the only mutable file per table
+    manifests/&lt;seq&gt;.json       # one immutable manifest per version
+    segments/&lt;uuid&gt;.parquet    # immutable, time-sorted data
+</code></pre></div>
+
+<p>Everything except <code>HEAD</code> is write-once. That single fact is what makes
+backups a file copy, crash recovery trivial, and old versions permanently
+readable — see the <a href="operations.html">Operations guide</a>.</p>
+<h2 id="versions-every-write-is-a-commit">Versions: every write is a commit<a class="headerlink" href="#versions-every-write-is-a-commit" title="Permanent link">#</a></h2>
+<p>Every write — append, full write, range replace/delete, restore, compact —
+produces a new <strong>version</strong>: a manifest listing exactly which segments make up
+the table at that point, plus statistics, a commit timestamp, and your
+optional <code>--note</code>. Publishing a version is an atomic compare-and-swap on
+<code>HEAD</code>:</p>
+<ul>
+<li><strong>Readers never block</strong> and never see partial writes; a reader holds a
+  manifest, and everything a manifest references is immutable.</li>
+<li><strong>Racing writers never interleave.</strong> The loser of the swap gets an explicit
+  <code>version_conflict</code> error (retryable). Pass <code>--expected-version</code> /
+  <code>expected_version=</code> to demand the head hasn't moved — optimistic locking.</li>
+<li><strong>History is a hash chain.</strong> Each manifest records its parent's blake3
+  checksum; <code>verify</code> walks the chain.</li>
+</ul>
+<p>Reading old versions is O(1) — a version <em>is</em> a manifest read:</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">42</span><span class="p">);</span><span class="w">                        </span><span class="c1">-- exact version</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;2026-07-01T00:00:00Z&#39;</span><span class="p">);</span><span class="w">    </span><span class="c1">-- as of commit time</span>
+</code></pre></div>
+
+<p><code>restore</code> makes an old version current by committing a <em>new</em> version with the
+old contents — history only moves forward, nothing is erased.</p>
+<h2 id="the-time-axis">The time axis<a class="headerlink" href="#the-time-axis" title="Permanent link">#</a></h2>
+<p>Declaring <code>--time-column</code> at table creation is the single highest-leverage
+schema decision:</p>
+<ul>
+<li>Storage is <strong>sorted by the time column</strong> (plus any additional <code>--sort-key</code>
+  columns). Appends must respect that order — out-of-order appends are
+  rejected, which is what keeps bucketed aggregations streaming instead of
+  sorting.</li>
+<li>Each segment's manifest entry records its <strong>time range and column min/max</strong>.
+  A query for a narrow time window prunes non-overlapping segments <em>before any
+  I/O</em> — run <code>query --stats</code> to watch it happen.</li>
+<li>The time-series operators (<code>asof_join</code>, <code>gapfill</code>, <code>tail</code>, time-range plans)
+  are keyed off the declared time column.</li>
+</ul>
+<div class="admonition warning">
+<p class="admonition-title">Raw units</p>
+<p>APIs that take numeric time arguments — plan ranges, <code>gapfill</code> step, ASOF
+tolerance, <code>read(time_start=…)</code> — use <strong>raw integers in the time column's
+unit</strong>. For the common <code>timestamp[us]</code> column, that is microseconds:
+<code>60_000_000</code> is one minute. The CLI's <code>--start</code>/<code>--end</code> accept RFC3339
+strings and convert for you.</p>
+</div>
+<h2 id="snapshots">Snapshots<a class="headerlink" href="#snapshots" title="Permanent link">#</a></h2>
+<p>A <strong>snapshot</strong> pins the current version of one or more tables under a name:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>snapshot<span class="w"> </span>create<span class="w"> </span>market.db<span class="w"> </span>eod-2026-07-18
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;eod-2026-07-18&#39;</span><span class="p">);</span>
+</code></pre></div>
+
+<p>A snapshot is a tiny checksummed JSON map <code>{table → version}</code> — O(1) to
+create, free to keep. Snapshots make backtests reproducible ("run against
+<code>eod-2026-07-18</code>, forever") and answer audit questions ("what did we know at
+close on date X?"). A table pinned by a snapshot cannot be dropped.</p>
+<h2 id="previewable-mutations-plan-apply">Previewable mutations: plan / apply<a class="headerlink" href="#previewable-mutations-plan-apply" title="Permanent link">#</a></h2>
+<p>Destructive operations (<code>delete-range</code>, <code>replace-range</code>) can run in two modes:</p>
+<ul>
+<li><strong>Direct</strong>: commit immediately, like any write.</li>
+<li><strong>Planned</strong> (<code>--plan</code> / <code>plan_delete_range()</code>): run the <em>full</em> write path —
+  affected rows computed, new segments staged on disk — but stop before
+  publishing. You get a plan id, a machine-readable summary (rows affected,
+  segments rewritten vs. reused), and before/after row samples.</li>
+</ul>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>delete-range<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--start<span class="w"> </span>…<span class="w"> </span>--end<span class="w"> </span>…<span class="w"> </span>--plan
+<span class="gp">$ </span>h5i-db<span class="w"> </span>plan<span class="w"> </span>show<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>&lt;plan-id&gt;
+<span class="gp">$ </span>h5i-db<span class="w"> </span>plan<span class="w"> </span>apply<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>&lt;plan-id&gt;<span class="w">     </span><span class="c1"># metadata-only swap</span>
+</code></pre></div>
+
+<p><code>apply</code> is cheap and atomic; it fails with a conflict if the table head moved
+after the plan was made (re-plan, don't retry). <code>discard</code> drops the staged
+segments; abandoned plans expire after 7 days. Every manifest records whether
+it was committed directly or via a reviewed plan (<code>execution_mode</code> and the
+plan hash) — an audit trail, not just a safety net.</p>
+<h2 id="the-mutation-policy">The mutation policy<a class="headerlink" href="#the-mutation-policy" title="Permanent link">#</a></h2>
+<p>The <strong>policy</strong> is a per-database set of boolean gates deciding which
+operations may commit <em>without</em> a reviewed plan:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>policy<span class="w"> </span><span class="nb">set</span><span class="w"> </span>market.db<span class="w"> </span><span class="nv">direct_delete</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="nv">direct_write</span><span class="o">=</span><span class="nb">false</span>
+</code></pre></div>
+
+<p>Flags: <code>direct_append</code>, <code>direct_write</code>, <code>direct_replace</code>, <code>direct_delete</code>,
+<code>direct_restore</code>, <code>direct_compact</code>. With a flag off, the direct form of that
+operation fails with a <code>policy_violation</code>; the plan/apply flow still works.
+This is the recommended guardrail when <a href="agents.html">agents</a> or shared
+pipelines write to the database: the write path is identical, only the
+review requirement changes.</p>
+<h2 id="queries-and-sessions">Queries and sessions<a class="headerlink" href="#queries-and-sessions" title="Permanent link">#</a></h2>
+<p>SQL runs on DataFusion with h5i-db's storage underneath:</p>
+<ul>
+<li><strong>Plain table names</strong> (<code>FROM trades</code>) are snapshot-bound when the session
+  opens — every query in a session sees a consistent set of versions.</li>
+<li><strong><code>h5i('trades')</code></strong> re-resolves to the latest version at each query.</li>
+<li>Segment pruning, projection pushdown, and (for unchanged versions) cached
+  per-segment aggregate states make repeat analytics fast.</li>
+</ul>
+<p>Resource guards are first-class: row caps, timeouts, and memory budgets with
+disk spilling are available as CLI flags and <code>sql()</code> keyword arguments — they
+raise clean, typed errors instead of truncating silently.</p>
+<h2 id="maintenance-in-one-paragraph">Maintenance in one paragraph<a class="headerlink" href="#maintenance-in-one-paragraph" title="Permanent link">#</a></h2>
+<p><code>verify</code> re-checks structural integrity (checksums, object existence;
+<code>--deep</code> re-reads every segment). <code>compact</code> rewrites accumulations of small
+segments into target-sized ones — a query-speed tool, not a space reclaimer.
+<code>vacuum</code> deletes <em>unreachable</em> objects (crashed-writer debris, discarded
+plans) — dry run by default. Committed history is never deleted. Cadence and
+disk-usage math: <a href="operations.html">Operations guide</a>.</p>
+<h2 id="read-more">Read more<a class="headerlink" href="#read-more" title="Permanent link">#</a></h2>
+<ul>
+<li><a href="sql.html">SQL reference</a> — the full function library with signatures.</li>
+<li><a href="cli.html">CLI reference</a> — every command and flag.</li>
+<li>Cookbook deep dives:
+  <a href="../cookbook/00_fundamentals/05_time_travel_and_versioning.html">time travel</a>,
+  <a href="../cookbook/00_fundamentals/06_previewable_mutations.html">previewable mutations</a>,
+  <a href="../cookbook/00_fundamentals/08_maintenance.html">maintenance</a>.</li>
+</ul>
+    <nav class="page-nav"><a class="prev" href="../manual/quickstart.html"><span class="dir">← Previous</span><span class="pn-title">Quickstart</span></a><a class="next" href="../manual/cli.html"><span class="dir">Next →</span><span class="pn-title">CLI reference</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-database-is-a-directory">The database is a directory</a></li><li><a href="#versions-every-write-is-a-commit">Versions: every write is a commit</a></li><li><a href="#the-time-axis">The time axis</a></li><li><a href="#snapshots">Snapshots</a></li><li><a href="#previewable-mutations-plan-apply">Previewable mutations: plan / apply</a></li><li><a href="#the-mutation-policy">The mutation policy</a></li><li><a href="#queries-and-sessions">Queries and sessions</a></li><li><a href="#maintenance-in-one-paragraph">Maintenance in one paragraph</a></li><li><a href="#read-more">Read more</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../">Home</a>
+      <a href="../manual/">Manual</a>
+      <a href="../api/">Python API</a>
+      <a href="../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../";</script>
+<script src="../_static/docs.js" defer></script>
+</body>
+</html>
