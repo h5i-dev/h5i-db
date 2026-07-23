@@ -105,6 +105,20 @@ impl H5iSession {
         if let Some(bs) = options.batch_size {
             config = config.with_batch_size(bs.max(64));
         }
+        // DataFusion 54's physical uncorrelated-scalar-subquery path dedups
+        // subqueries by logical-plan equality — but every invocation of a
+        // table function plans under one bare name (`h5i()`, `asof_join()`,
+        // …) and `TableScan` equality never consults the provider instance,
+        // so two subqueries over *different* versions of one table compare
+        // equal and collapse into a single shared result, silently returning
+        // one side's value for both (e.g. `WHERE ts = (SELECT max(ts) FROM
+        // h5i('t', 1))` filtered by version 2's max). Route scalar subqueries
+        // through the ScalarSubqueryToJoin rewrite instead, which keeps each
+        // subquery's own plan (and provider) intact.
+        config
+            .options_mut()
+            .optimizer
+            .enable_physical_uncorrelated_scalar_subquery = false;
 
         let state = SessionStateBuilder::new()
             .with_config(config)

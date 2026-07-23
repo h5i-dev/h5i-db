@@ -24,8 +24,9 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::row::{RowConverter, SortField};
 use async_trait::async_trait;
 use datafusion::catalog::{Session, TableFunctionArgs, TableFunctionImpl, TableProvider};
+use datafusion::common::stats::Precision;
 use datafusion::common::tree_node::{Transformed, TreeNode};
-use datafusion::common::{Column, DFSchema, DFSchemaRef, Statistics};
+use datafusion::common::{Column, ColumnStatistics, DFSchema, DFSchemaRef, Statistics};
 use datafusion::dataframe::DataFrame;
 use datafusion::error::{DataFusionError, Result as DfResult};
 use datafusion::execution::context::{QueryPlanner, SessionState};
@@ -36,13 +37,14 @@ use datafusion::logical_expr::{
     TableType, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
 };
 use datafusion::physical_expr::{
-    expressions, EquivalenceProperties, LexOrdering, PhysicalSortExpr,
+    expressions, EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalSortExpr,
 };
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties,
@@ -93,6 +95,74 @@ impl Default for AsOfOptions {
     }
 }
 
+/// The common type both sides of a by-key pair are row-encoded as. Equal
+/// types encode as themselves; string-family mixes (Utf8 / LargeUtf8 /
+/// Utf8View, plain or dictionary-encoded) canonicalize to Utf8 — the same
+/// stored key data can legitimately arrive under any of these encodings
+/// (e.g. pandas emits large_string), and there is no way to cast inside the
+/// SQL table-function surface. Anything else is a type mismatch.
+fn canonical_key_type(l: &DataType, r: &DataType) -> Option<DataType> {
+    fn value_type(t: &DataType) -> &DataType {
+        match t {
+            DataType::Dictionary(_, value) => value,
+            other => other,
+        }
+    }
+    fn is_string(t: &DataType) -> bool {
+        matches!(t, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View)
+    }
+    if l == r {
+        return Some(l.clone());
+    }
+    let (lv, rv) = (value_type(l), value_type(r));
+    if lv == rv {
+        // Same value type under different dictionary encodings.
+        return Some(lv.clone());
+    }
+    (is_string(lv) && is_string(rv)).then_some(DataType::Utf8)
+}
+
+/// Canonical row-encoding types for every by-key pair (validated by
+/// `asof_output_schema` at plan time; recomputed at execution).
+fn by_key_types(left: &Schema, right: &Schema, options: &AsOfOptions) -> DfResult<Vec<DataType>> {
+    options
+        .by
+        .iter()
+        .map(|(l, r)| {
+            let lf = left.field_with_name(l).map_err(DataFusionError::from)?;
+            let rf = right.field_with_name(r).map_err(DataFusionError::from)?;
+            canonical_key_type(lf.data_type(), rf.data_type()).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "asof: by-column types differ for ({l}, {r}): {} vs {}",
+                    lf.data_type(),
+                    rf.data_type()
+                ))
+            })
+        })
+        .collect()
+}
+
+/// The by-key columns of a batch, cast to the canonical key types where the
+/// stored type differs (cheap for the string-family widenings this supports).
+fn key_columns(
+    batch: &RecordBatch,
+    by_idx: &[usize],
+    key_types: &[DataType],
+) -> DfResult<Vec<ArrayRef>> {
+    by_idx
+        .iter()
+        .zip(key_types)
+        .map(|(&i, ty)| {
+            let col = batch.column(i);
+            if col.data_type() == ty {
+                Ok(col.clone())
+            } else {
+                arrow::compute::cast(col, ty).map_err(DataFusionError::from)
+            }
+        })
+        .collect()
+}
+
 /// Output schema: all left fields, then right fields minus the `by` columns
 /// (they equal the left ones), with `_right` suffixed onto name collisions.
 /// Returns the schema and the kept right column indices.
@@ -121,21 +191,7 @@ fn asof_output_schema(
             rt.data_type()
         )));
     }
-    for (l, r) in &options.by {
-        let lf = left
-            .field_with_name(l)
-            .map_err(|_| DataFusionError::Plan(format!("asof: left by-column {l:?} not found")))?;
-        let rf = right
-            .field_with_name(r)
-            .map_err(|_| DataFusionError::Plan(format!("asof: right by-column {r:?} not found")))?;
-        if lf.data_type() != rf.data_type() {
-            return Err(DataFusionError::Plan(format!(
-                "asof: by-column types differ for ({l}, {r}): {} vs {}",
-                lf.data_type(),
-                rf.data_type()
-            )));
-        }
-    }
+    by_key_types(left, right, options)?;
 
     let right_by: std::collections::HashSet<&str> =
         options.by.iter().map(|(_, r)| r.as_str()).collect();
@@ -431,11 +487,32 @@ impl ExecutionPlan for AsOfJoinExec {
         )?))
     }
 
-    fn required_input_ordering(
-        &self,
-    ) -> Vec<Option<datafusion::physical_expr::OrderingRequirements>> {
-        // Sorting is inserted explicitly in try_new_with_sort.
-        vec![None, None]
+    /// Both children must collapse to a single partition: `execute` consumes
+    /// exactly one partition per side, so any repartitioning the optimizer
+    /// introduces below (e.g. to parallelize scans) has to be merged back
+    /// above it — otherwise the join would silently read a fraction of its
+    /// inputs.
+    fn required_input_distribution(&self) -> Vec<Distribution> {
+        vec![Distribution::SinglePartition, Distribution::SinglePartition]
+    }
+
+    fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
+        // Each side must arrive time-sorted. try_new_with_sort inserts the
+        // sorts explicitly; declaring the requirement keeps them (or their
+        // sort-preserving-merge replacements) intact across optimizer
+        // rewrites of the children.
+        let req = |plan: &Arc<dyn ExecutionPlan>, col: &str| -> Option<OrderingRequirements> {
+            let idx = plan.schema().index_of(col).ok()?;
+            let ordering = LexOrdering::new(vec![PhysicalSortExpr::new(
+                Arc::new(expressions::Column::new(col, idx)),
+                SortOptions::default(),
+            )])?;
+            Some(OrderingRequirements::from(ordering))
+        };
+        vec![
+            req(&self.left, &self.options.left_on),
+            req(&self.right, &self.options.right_on),
+        ]
     }
 
     fn execute(
@@ -447,6 +524,18 @@ impl ExecutionPlan for AsOfJoinExec {
             return Err(DataFusionError::Internal(
                 "AsOfJoinExec produces a single partition".into(),
             ));
+        }
+        // Refuse to run on partitioned inputs rather than silently joining
+        // partition 0 only (the required input distribution above makes the
+        // optimizer coalesce; this guards plans built without it).
+        for (side, child) in [("left", &self.left), ("right", &self.right)] {
+            let parts = child.output_partitioning().partition_count();
+            if parts != 1 {
+                return Err(DataFusionError::Internal(format!(
+                    "AsOfJoinExec requires single-partition inputs, but the \
+                     {side} child has {parts} partitions"
+                )));
+            }
         }
         let left_stream = self.left.execute(0, context.clone())?;
         let right_stream = self.right.execute(0, context.clone())?;
@@ -460,6 +549,10 @@ impl ExecutionPlan for AsOfJoinExec {
         let right_kept = self.right_kept.clone();
         let left_schema = self.left.schema();
         let right_schema = self.right.schema();
+        // Canonical row-encoding types for the by-keys (validated at plan
+        // time); both sides cast onto these before encoding, so e.g. a Utf8
+        // table joins a LargeUtf8 one.
+        let key_types = by_key_types(&left_schema, &right_schema, &options)?;
 
         let out = futures::stream::once(async move {
             // Phase 1: buffer the right side into per-key sorted runs,
@@ -472,7 +565,7 @@ impl ExecutionPlan for AsOfJoinExec {
                 reservation.try_grow(batch.get_array_memory_size())?;
                 right_batches.push(batch);
             }
-            let runs = RightRuns::build(&right_batches, &right_schema, &options)?;
+            let runs = RightRuns::build(&right_batches, &right_schema, &options, &key_types)?;
             reservation.try_grow(runs.mem_bytes)?;
 
             // Phase 2: stream the left side, probing per row.
@@ -491,6 +584,7 @@ impl ExecutionPlan for AsOfJoinExec {
                 right_schema,
                 left_time_idx,
                 left_by_idx,
+                key_types,
                 _reservation: reservation,
             };
             let joined = left_stream
@@ -534,6 +628,7 @@ impl RightRuns {
         batches: &[RecordBatch],
         right_schema: &SchemaRef,
         options: &AsOfOptions,
+        key_types: &[DataType],
     ) -> DfResult<Self> {
         let time_idx = right_schema.index_of(&options.right_on)?;
         let by_idx: Vec<usize> = options
@@ -566,9 +661,9 @@ impl RightRuns {
         }
 
         let converter = RowConverter::new(
-            by_idx
+            key_types
                 .iter()
-                .map(|&i| SortField::new(right_schema.field(i).data_type().clone()))
+                .map(|ty| SortField::new(ty.clone()))
                 .collect(),
         )?;
         let mut map: HashMap<Box<[u8]>, Run> = HashMap::new();
@@ -576,7 +671,7 @@ impl RightRuns {
         let mut total_rows = 0usize;
         for (bi, batch) in batches.iter().enumerate() {
             let time = time_column_i64(batch, time_idx)?;
-            let cols: Vec<ArrayRef> = by_idx.iter().map(|&i| batch.column(i).clone()).collect();
+            let cols = key_columns(batch, &by_idx, key_types)?;
             let rows = converter.convert_columns(&cols)?;
             for ri in 0..batch.num_rows() {
                 let key = rows.row(ri).data();
@@ -708,6 +803,8 @@ struct Joiner {
     right_schema: SchemaRef,
     left_time_idx: usize,
     left_by_idx: Vec<usize>,
+    /// Canonical by-key encoding types shared by both sides.
+    key_types: Vec<DataType>,
     /// Keeps the right-side buffer charged to the memory pool for the
     /// operator's lifetime; freed on drop when the stream completes.
     _reservation: MemoryReservation,
@@ -717,14 +814,11 @@ impl Joiner {
     fn join_batch(&self, left: &RecordBatch) -> DfResult<RecordBatch> {
         let times = time_column_i64(left, self.left_time_idx)?;
 
-        // Encode left by-keys with the right side's converter (types match).
+        // Encode left by-keys with the shared converter, cast onto the
+        // canonical key types the right side was encoded with.
         let left_rows = match &self.runs.converter {
             Some(conv) => {
-                let cols: Vec<ArrayRef> = self
-                    .left_by_idx
-                    .iter()
-                    .map(|&i| left.column(i).clone())
-                    .collect();
+                let cols = key_columns(left, &self.left_by_idx, &self.key_types)?;
                 Some(conv.convert_columns(&cols)?)
             }
             None => None,
@@ -1078,9 +1172,20 @@ impl TableProvider for AsOfTableProvider {
         // A LEFT ASOF join emits exactly one row per left row. Exposing the
         // exact manifest-backed count lets COUNT(*) remain metadata-only and
         // avoids zero-column execution edge cases. Inner joins are not exact.
-        (!self.options.inner)
-            .then(|| self.left.statistics())
-            .flatten()
+        if self.options.inner {
+            return None;
+        }
+        let left = self.left.statistics()?;
+        // Column statistics must match the join output schema's arity: left
+        // columns keep theirs, appended right columns are unknown (they can
+        // be nulled by unmatched rows). Byte size likewise no longer applies.
+        let mut column_statistics = left.column_statistics;
+        column_statistics.resize(self.schema.fields().len(), ColumnStatistics::new_unknown());
+        Some(Statistics {
+            num_rows: left.num_rows,
+            total_byte_size: Precision::Absent,
+            column_statistics,
+        })
     }
 
     fn supports_filters_pushdown(

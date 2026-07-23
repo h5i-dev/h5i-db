@@ -107,7 +107,7 @@ fn parse_interval_str(s: &str) -> DfResult<Width> {
             "time_bucket: interval must be positive".into(),
         ));
     }
-    let unit = unit.trim().trim_end_matches('s');
+    let unit = unit.trim();
     // Whole month count for calendar units; rejects "1.5mo" and overflow.
     let whole_months = |factor: i64| -> DfResult<Width> {
         if n.fract() != 0.0 {
@@ -125,22 +125,37 @@ fn parse_interval_str(s: &str) -> DfResult<Width> {
         })?;
         Ok(Width::Months(validate_months(months)?))
     };
-    let ns_per: i64 = match unit {
-        "ns" | "nanosecond" => 1,
-        "us" | "microsecond" => 1_000,
-        "ms" | "millisecond" => 1_000_000,
-        "s" | "sec" | "second" => 1_000_000_000,
-        "m" | "min" | "minute" => 60_000_000_000,
-        "h" | "hr" | "hour" => 3_600_000_000_000,
-        "d" | "day" => 86_400_000_000_000,
-        "w" | "week" => 7 * 86_400_000_000_000,
-        "mo" | "mon" | "month" => return whole_months(1),
-        "y" | "yr" | "year" => return whole_months(12),
-        other => {
-            return Err(DataFusionError::Plan(format!(
-                "time_bucket: unknown interval unit {other:?}"
-            )))
-        }
+    /// Nanoseconds per unit, or the month factor for calendar units.
+    fn lookup_unit(unit: &str) -> Option<Result<i64, i64>> {
+        Some(match unit {
+            "ns" | "nanosecond" => Ok(1),
+            "us" | "microsecond" => Ok(1_000),
+            "ms" | "millisecond" => Ok(1_000_000),
+            "s" | "sec" | "second" => Ok(1_000_000_000),
+            "m" | "min" | "minute" => Ok(60_000_000_000),
+            "h" | "hr" | "hour" => Ok(3_600_000_000_000),
+            "d" | "day" => Ok(86_400_000_000_000),
+            "w" | "week" => Ok(7 * 86_400_000_000_000),
+            "mo" | "mon" | "month" => Err(1),
+            "y" | "yr" | "year" => Err(12),
+            _ => return None,
+        })
+    }
+    // Exact unit first; only when unknown, retry with one trailing 's'
+    // stripped to accept plurals ("seconds" → "second"). Stripping first
+    // would corrupt units that themselves end in 's' ('s' → "", 'ms' →
+    // minutes, 'us'/'ns' → unknown).
+    let ns_per: i64 = match lookup_unit(unit)
+        .or_else(|| {
+            unit.strip_suffix('s')
+                .filter(|u| !u.is_empty())
+                .and_then(lookup_unit)
+        })
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!("time_bucket: unknown interval unit {unit:?}"))
+        })? {
+        Ok(ns) => ns,
+        Err(month_factor) => return whole_months(month_factor),
     };
     let ns_f = n * ns_per as f64;
     if !ns_f.is_finite() || ns_f > i64::MAX as f64 {
@@ -491,6 +506,61 @@ mod tests {
         assert_eq!(parse_interval_str("1mo").unwrap(), Width::Months(1));
         assert_eq!(parse_interval_str("2y").unwrap(), Width::Months(24));
         assert!(parse_interval_str("h").is_err());
+    }
+
+    /// Units whose spelling ends in 's' ('s', 'ms', 'us', 'ns') must parse as
+    /// themselves — plural stripping may only apply when the exact unit is
+    /// unknown ('seconds' → 'second'), never turn 'ms' into minutes or eat
+    /// 's' entirely.
+    #[test]
+    fn interval_units_ending_in_s() {
+        assert_eq!(
+            parse_interval_str("5s").unwrap(),
+            Width::Nanos(5_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("30s").unwrap(),
+            Width::Nanos(30_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("250ms").unwrap(),
+            Width::Nanos(250_000_000)
+        );
+        assert_eq!(parse_interval_str("10us").unwrap(), Width::Nanos(10_000));
+        assert_eq!(parse_interval_str("100ns").unwrap(), Width::Nanos(100));
+        // Plural spellings still work.
+        assert_eq!(
+            parse_interval_str("5 secs").unwrap(),
+            Width::Nanos(5_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("30 seconds").unwrap(),
+            Width::Nanos(30_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("2 mins").unwrap(),
+            Width::Nanos(120_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("3 hrs").unwrap(),
+            Width::Nanos(3 * 3_600_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("2 days").unwrap(),
+            Width::Nanos(2 * 86_400_000_000_000)
+        );
+        assert_eq!(
+            parse_interval_str("250 milliseconds").unwrap(),
+            Width::Nanos(250_000_000)
+        );
+        assert_eq!(parse_interval_str("6 months").unwrap(), Width::Months(6));
+        assert_eq!(parse_interval_str("2 years").unwrap(), Width::Months(24));
+        // 'm' stays minutes; unknown units still error by their given name.
+        assert_eq!(
+            parse_interval_str("1m").unwrap(),
+            Width::Nanos(60_000_000_000)
+        );
+        assert!(parse_interval_str("5 parsecs").is_err());
     }
 
     #[test]

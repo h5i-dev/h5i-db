@@ -164,8 +164,12 @@ impl Error {
     /// A one-line actionable hint, when one exists.
     pub fn hint(&self) -> Option<String> {
         match self {
+            // Keep this hint surface-neutral: it reaches Rust, CLI, and
+            // Python users alike, so it must not name an API that exists on
+            // only one of them.
             Error::VersionConflict { table, .. } => Some(format!(
-                "re-read the head of {table:?} and retry; for pure appends use append_with_retry"
+                "re-read the head of {table:?} and retry against it; pure appends rebase \
+                 safely (the CLI and Python bindings already auto-retry those)"
             )),
             Error::VersionNotFound { table, hint, .. } => {
                 Some(format!("{hint}; run `h5i-db versions <db> {table}`"))

@@ -789,3 +789,80 @@ async fn snapshot_bound_sessions_are_stable_under_writes() {
         .value(0);
     assert_eq!(n, 2, "h5i('t') resolves the current head");
 }
+
+/// Two uncorrelated scalar subqueries over *different versions* of one table
+/// must not be unified. DataFusion plans every `h5i(...)` call under the same
+/// bare relation name and dedups structurally-equal subqueries, so without a
+/// distinguishing read-point stamp in the provider schema, both filters
+/// receive one shared max(ts) and the other version's rows silently vanish.
+#[tokio::test(flavor = "multi_thread")]
+async fn scalar_subqueries_over_different_versions_stay_distinct() {
+    let (_dir, db) = setup().await;
+    db.create_table("t", trades_schema(), time_options(false))
+        .await
+        .unwrap();
+    // Version 1: A/B at ts 1-2. Version 2 adds C/D at ts 3-4, so the two
+    // versions have different max(ts) and disjoint "latest" row sets.
+    db.append(
+        "t",
+        vec![trades_batch(&[1, 2], &["A", "B"], &[1.0, 2.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    db.append(
+        "t",
+        vec![trades_batch(&[3, 4], &["C", "D"], &[3.0, 4.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+    // cur = the latest row of version 2 (D@4), prev = latest of version 1
+    // (B@2). A merged subquery filters version 1 by version 2's max (or vice
+    // versa), emptying one side.
+    let batches = session
+        .sql(
+            "WITH cur AS (SELECT symbol FROM h5i('t', 2) \
+                          WHERE ts = (SELECT max(ts) FROM h5i('t', 2))), \
+                  prev AS (SELECT symbol FROM h5i('t', 1) \
+                           WHERE ts = (SELECT max(ts) FROM h5i('t', 1))) \
+             SELECT cur.symbol AS c, prev.symbol AS p \
+             FROM cur FULL OUTER JOIN prev ON cur.symbol = prev.symbol \
+             ORDER BY c",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        [
+            "+---+---+",
+            "| c | p |",
+            "+---+---+",
+            "| D |   |",
+            "|   | B |",
+            "+---+---+",
+        ],
+        &batches
+    );
+
+    // Same hazard through the identical-argument case: equal calls SHOULD
+    // still dedup (same data), so this stays correct and cheap.
+    let batches = session
+        .sql(
+            "SELECT count(*) AS n FROM h5i('t', 2) \
+             WHERE ts = (SELECT max(ts) FROM h5i('t', 2)) \
+                OR ts = (SELECT max(ts) FROM h5i('t', 2))",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(["+---+", "| n |", "+---+", "| 1 |", "+---+",], &batches);
+}
