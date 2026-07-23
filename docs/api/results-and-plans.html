@@ -80,16 +80,16 @@ for a specific frame type.</p>
 <span class="nb">len</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>            <span class="c1"># -&gt; row count</span>
 </code></pre></div>
 
-<section class="api-member"><h3 id="queryresultto_arrow"><code><span class="api-qual">QueryResult.</span><span class="api-name">to_arrow</span></code><a class="headerlink" href="#queryresultto_arrow" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_arrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
+<section class="api-member"><h3 id="queryresultto_arrow"><code><span class="api-qual">QueryResult</span><span class="api-name">.to_arrow</span></code><a class="headerlink" href="#queryresultto_arrow" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_arrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
 </code></pre></div><div class="api-body">
 
 <p>The underlying Arrow table, types preserved exactly (timestamps keep unit and
 timezone). Zero-copy.</p>
-</div></section><section class="api-member"><h3 id="queryresultto_pandas"><code><span class="api-qual">QueryResult.</span><span class="api-name">to_pandas</span></code><a class="headerlink" href="#queryresultto_pandas" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_pandas</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span>
+</div></section><section class="api-member"><h3 id="queryresultto_pandas"><code><span class="api-qual">QueryResult</span><span class="api-name">.to_pandas</span></code><a class="headerlink" href="#queryresultto_pandas" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_pandas</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span>
 </code></pre></div><div class="api-body">
 
 <p>Convert to a pandas DataFrame.</p>
-</div></section><section class="api-member"><h3 id="queryresultto_polars"><code><span class="api-qual">QueryResult.</span><span class="api-name">to_polars</span></code><a class="headerlink" href="#queryresultto_polars" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_polars</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">polars</span><span class="o">.</span><span class="n">DataFrame</span>
+</div></section><section class="api-member"><h3 id="queryresultto_polars"><code><span class="api-qual">QueryResult</span><span class="api-name">.to_polars</span></code><a class="headerlink" href="#queryresultto_polars" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_polars</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">polars</span><span class="o">.</span><span class="n">DataFrame</span>
 </code></pre></div><div class="api-body">
 
 <p>Convert to a Polars DataFrame.</p>
@@ -127,16 +127,16 @@ already exist on disk; publishing is a metadata-only atomic swap.</p>
 <dt><code>raw</code> (<code>dict</code>)</dt>
 <dd>The full plan document as stored.</dd>
 </dl>
-</div></section><section class="api-member"><h3 id="mutationplanbefore_sample"><code><span class="api-qual">MutationPlan.</span><span class="api-name">before_sample</span></code><a class="headerlink" href="#mutationplanbefore_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">before_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
+</div></section><section class="api-member"><h3 id="mutationplanbefore_sample"><code><span class="api-qual">MutationPlan</span><span class="api-name">.before_sample</span></code><a class="headerlink" href="#mutationplanbefore_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">before_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
 </code></pre></div><div class="api-body">
 
 <p>Property — a sample of the affected rows <strong>before</strong> the mutation, or <code>None</code>
 when the plan carries no sample.</p>
-</div></section><section class="api-member"><h3 id="mutationplanafter_sample"><code><span class="api-qual">MutationPlan.</span><span class="api-name">after_sample</span></code><a class="headerlink" href="#mutationplanafter_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">after_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
+</div></section><section class="api-member"><h3 id="mutationplanafter_sample"><code><span class="api-qual">MutationPlan</span><span class="api-name">.after_sample</span></code><a class="headerlink" href="#mutationplanafter_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">after_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
 </code></pre></div><div class="api-body">
 
 <p>Property — the same rows <strong>after</strong> the mutation would apply.</p>
-</div></section><section class="api-member"><h3 id="mutationplanapply"><code><span class="api-qual">MutationPlan.</span><span class="api-name">apply</span></code><a class="headerlink" href="#mutationplanapply" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">apply</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</div></section><section class="api-member"><h3 id="mutationplanapply"><code><span class="api-qual">MutationPlan</span><span class="api-name">.apply</span></code><a class="headerlink" href="#mutationplanapply" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">apply</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
 </code></pre></div><div class="api-body">
 
 <p>Publish the plan as a new version.</p>
@@ -149,7 +149,7 @@ when the plan carries no sample.</p>
 retrying</strong> — the plan was computed against a base version that no longer
 reflects reality.</dd>
 </dl>
-</div></section><section class="api-member"><h3 id="mutationplandiscard"><code><span class="api-qual">MutationPlan.</span><span class="api-name">discard</span></code><a class="headerlink" href="#mutationplandiscard" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">discard</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</div></section><section class="api-member"><h3 id="mutationplandiscard"><code><span class="api-qual">MutationPlan</span><span class="api-name">.discard</span></code><a class="headerlink" href="#mutationplandiscard" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">discard</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div><div class="api-body">
 
 <p>Drop the plan; its staged segments become vacuum candidates immediately.
