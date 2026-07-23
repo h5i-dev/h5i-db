@@ -12,7 +12,10 @@ Reproduce:
 ```bash
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 20000000 --quotes 5000000
 python benchmarks/compare_baselines.py <dir>/bench.db \
-    [--engines polars,duckdb,pandas,pyarrow]   # needs those packages
+    [--engines polars,duckdb,pandas,pyarrow,arcticdb]   # needs those packages
+    # engines whose package is missing are skipped with a note; arcticdb has
+    # no Linux aarch64 wheels, so it only runs on x86_64/macOS machines. It
+    # reads from its own LMDB store (populated once, sibling `<db>.arctic`).
 ```
 
 The query-local P0 regression workload reuses the generated `bench.db` and an
