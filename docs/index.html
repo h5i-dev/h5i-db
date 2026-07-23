@@ -641,10 +641,7 @@
       <h2 class="section-title">Fast where quant workloads live.</h2>
       <p class="section-sub">20M trades and 5M quotes, storage included on all sides: Polars, DuckDB,
       pandas, and PyArrow over the identical h5i-db Parquet segment files, ArcticDB over its own LMDB
-      store loaded with the same data — all measured back-to-back in one session (Intel Xeon @
-      2.20&nbsp;GHz, 31&nbsp;GB RAM, Ubuntu 22.04.5, 2026-07-23). Absolute times scale with hardware;
-      the ratios are the story. Reproduce with <code>cargo run -p h5i-db-bench</code> and
-      <code>benchmarks/compare_baselines.py</code>.</p>
+      store loaded with the same data.</p>
       <div class="divider"></div>
     </div>
     <div class="bench-stats reveal">
@@ -665,7 +662,7 @@
         <tr><td>cold read of an old version</td><td><b>1.1 ms</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
       </table>
     </div>
-    <p class="bench-note reveal">The OHLCV rollup wins 2.2–4.7× because storage is already time-sorted
+    <!--<p class="bench-note reveal">The OHLCV rollup wins 2.2–4.7× because storage is already time-sorted
     and declared so — every baseline pays for a 20M-row sort — and re-running it on an unchanged
     version reuses immutable per-segment aggregate states instead of recomputing. ASOF is a tie with
     Polars and 4–7× faster than the rest. Narrow scans: ArcticDB's native time index wins point reads
@@ -675,7 +672,7 @@
     ¹ PyArrow's experimental <code>join_asof</code> is ~1000× slower, excluded.
     ² ArcticDB OHLCV/ASOF compute happens in pandas over its store reads (it has no native ASOF join).
     Full methodology in
-    <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p>
+    <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p>-->
   </div>
 </section>
 
