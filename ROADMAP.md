@@ -1,12 +1,17 @@
 # h5i-db Roadmap
 
-Living roadmap. Last full update 2026-07-22 (branch `improve-performance`).
+Living roadmap. Last full update 2026-07-22 (branch `improve-performance`);
+Parts III–IV added 2026-07-23 (branch `improve-tests`).
 
 This document merges the former `ROADMAP_PERFORMANCE.md` into the
 production-readiness roadmap; the separate file is gone. Part I tracks
-production readiness, Part II the structural performance program. Statuses in
-this update were re-verified against the source (grep/tests/benchmarks), not
-carried forward from earlier revisions.
+production readiness, Part II the structural performance program, Part III a
+fresh production-grade gap analysis against DuckDB, and Part IV a
+QuestDB-inspired performance program. Statuses in the 2026-07-22 update were
+re-verified against the source (grep/tests/benchmarks), not carried forward
+from earlier revisions; Parts III–IV were sourced from a source-level study of
+`~/Ref/duckdb` and `~/Ref/questdb` cross-checked against a full inventory of
+`crates/h5i-db-core` and `crates/h5i-db-query`.
 
 ---
 
@@ -246,3 +251,143 @@ Vortex (SIGMOD 2024), Active Data Lakes (VLDB 2026) → deferred /
 benchmark-gated (§P5, §deferred). Re-check venues and measurements before
 citing externally; no implementation decision here depends on a paper's
 headline speedup.
+
+---
+
+# Part III — Production-grade gap analysis vs DuckDB (2026-07-23)
+
+Sourced from a source-level comparison against `~/Ref/duckdb` cross-checked
+against a full inventory of the storage kernel and query layer.
+
+**Framing (important — do not read this as "become DuckDB").** h5i-db is
+already past POC on the axes people usually worry about: crash-safety, CAS
+commits, checksummed hash-chained manifests, snapshot isolation, spill-to-disk
+(`FairSpillPool` + `DiskManager`, `session.rs:70-78`), and object-store CAS are
+genuinely strong — often stronger than DuckDB's single-file MVCC storage. The
+path to production-grade is therefore **not** chasing DuckDB's OLAP breadth
+(the §9 non-goals in `DESIGN.md` correctly rule that out). It is two things
+DuckDB *earns trust through* that h5i-db has not yet, plus a small set of
+structural gaps specific to the tick/quant workload. Tiers are ordered by
+return-on-trust, not by size.
+
+## Tier 0 — Correctness & trust (highest priority)
+
+This is the single largest gap, and it is about *evidence*, not features.
+DuckDB ships millions of SQLLogicTest assertions + SQLSmith fuzzing +
+TPC-H/DS correctness. h5i-db has ~78 hand-written tests, **zero property-based
+tests**, and its 3 fuzz targets are **disabled in CI** (`ci.yml` fuzz-smoke
+commented out 2026-07-22). `DESIGN.md` itself calls DuckDB the "semantic
+oracle" and Phase 2 promised "SQL differential tests against DuckDB" — the
+honesty ledger admits this does not exist.
+
+| # | Item | Rationale | Acceptance criteria |
+|---|------|-----------|---------------------|
+| T0.1 | **Differential correctness harness vs DuckDB/DataFusion.** Adopt `sqllogictest-rs` (the crate DataFusion itself uses); generate random data + random queries over the supported subset (scan/filter/group/window/ASOF/`time_bucket`/time-travel), run through h5i-db and DuckDB-over-Parquet, assert equal. | The promised-but-missing Phase 2 gate; the only way to trust ASOF ties/NULLs, `time_bucket` DST edges, time-travel, and aggregate-state-cache = SQL-equivalence. | A CI job runs ≥1,000 generated queries/run with 0 result mismatches vs DuckDB on the supported subset; every ASOF/`time_bucket`/gapfill semantic in `DESIGN.md` has a golden `.slt` case. |
+| T0.2 | **Property-based tests (`proptest`).** Storage invariants over generated inputs: append-then-scan preserves the row multiset; `compact` preserves rows & bounds; `delete_range` removes exactly the range; time-travel roundtrip; schema-evolution null-backfill; retract-VWAP ≡ fresh recompute. | Zero exist today; these catch the bug classes example tests never will, on the immutable-manifest core where correctness is everything. | ≥8 invariants encoded as `proptest` cases in CI, each with a shrinking-verified minimal counterexample path; runs on every PR. |
+| T0.3 | **Re-enable fuzzing in CI + commit seed corpora.** Uncomment fuzz-smoke; add seed corpora for `manifest_json`/`csv_ingest`/`sql_parse`; add a target for the string SQL rewriters (T0.4). | 3 targets exist but are dormant (`ci.yml` fuzz-smoke disabled); a dormant fuzzer is no fuzzer (ROADMAP 3.11b). | Fuzz-smoke runs on every PR with committed corpora; a nightly longer run; 0 panics/crashes at merge. |
+| T0.4 | **Harden the string-based SQL rewriters.** `ASOF JOIN` and `rolling_*` are rewritten by naive quote-aware paren scanners (`session.rs:368-465`), not a parser. | Live correctness *and* injection risk — mis-parsing aliases/nested parens silently produces wrong plans. | Move to a DataFusion `ExprPlanner`/`RelationPlanner` or a custom `sqlparser` dialect; fuzz target (T0.3) finds no mis-parse; aliased/nested-paren ASOF forms parse correctly or error explicitly, never mis-plan. |
+
+Do this tier first — every item below is worth less until the engine is
+*proven* correct.
+
+## Tier 1 — Structural gaps specific to the tick/quant workload
+
+| # | Item | Rationale | Acceptance criteria |
+|---|------|-----------|---------------------|
+| T1.1 | **Small-write amplification / ingest buffering** (extends 2.10). Manifest-delta / log-structured manifest (format already reserves the slot) and/or a WAL-backed ingest buffer that batches small appends before sealing a target-size segment. | The canonical tick workload is high-frequency *small* appends; today every commit rewrites the full segment list O(segments) (`manifest.rs:151`) with no WAL. This is the #1 structural blocker for h5i-db's own headline use case. | 10k sequential small appends cost O(1) amortized manifest bytes per append (not O(segments)); ingest throughput on 1-row-batch appends within 2× of bulk append; recovery test survives a crash mid-buffer. |
+| T1.2 | **Decimal128 as a first-class type.** Wire `Decimal128` through `json_stat_to_scalar` (`provider.rs:35-70`, `pruning.rs:17-52`) and the aggregate-state type gate (`aggregate_state.rs:466`). | Table stakes for a finance DB (prices, notionals); today decimal columns get no pruning and no aggregate-state acceleration — `util.rs:83` already has a `Decimal128(18,6)` test fixture. | Decimal columns prune on min/max like Int/Float; OHLCV/VWAP aggregate-state cache accepts Decimal price/volume; differential test (T0.1) covers decimal arithmetic. |
+| T1.3 | **Bloom filters for high-cardinality entity columns** (delivers 2.8b; see also A2). Enable Parquet split-block bloom filters in the segment writer; wire into the existing `contained()` pruning path. | Exact ≤128-distinct-set pruning does not help when `symbol` cardinality is in the thousands (crypto/equities); this is directly on the hot `symbol = …` path. | A point-symbol query on a high-cardinality table skips row groups that a min/max-only plan scans; measured physical-byte reduction reported cold and warm (Part II invariant 7). |
+| T1.4 | **Real S3/object-store runtime tests.** MinIO/LocalStack integration tests exercising commit, CAS conflict, concurrent writers, and read against a live object store. | The entire Phase 5 value prop has zero runtime coverage — `roadmap_features.rs:206` only asserts the backend *constructs*; `DESIGN.md §10` flags that CAS semantics vary across S3-compatible stores. | CI job runs the commit/CAS/conflict/read suite against MinIO; a documented capability-probe refuses multi-writer mode on stores without conditional PUT. |
+
+## Tier 2 — Query engine & optimizer
+
+| # | Item | Rationale | Acceptance criteria |
+|---|------|-----------|---------------------|
+| T2.1 | **Make the ASOF join scale** (see also B1). Hash-repartition on the `by` keys; spillable right buffer. | Flagship operator is single-partition and buffers the entire right side in memory (`asof.rs:366` `TODO(perf)`, `:543`); large right sides OOM and it does not parallelize. | ASOF over a right side larger than the memory limit completes via spill; multi-partition plan shows near-linear speedup with cores on a by-keyed join. |
+| T2.2 | **Stream gapfill.** Respect time-range pushdown; stream instead of loading the whole table into a `MemTable` (`gapfill.rs:212`). | Gapfill over a year of ticks OOMs today. | Gapfill peak memory is bounded independent of table size; time-range predicate prunes segments before gapfill. |
+| T2.3 | **Predicate-based DELETE/UPDATE.** Predicate-delete that rewrites affected segments, or (bigger) deletion vectors / merge-on-read. **Deliberate-decision flag:** this pushes against the "range mutations only" simplicity in `DESIGN.md` — adopt only with an explicit call, not by default. | Only time-range copy-on-write exists (`database.rs:1400` rejects the rest); "delete a delisted symbol's rows" / GDPR corrections are not expressible. | `DELETE … WHERE <predicate>` and `UPDATE … SET` on non-time predicates work through plan/apply; previewable like existing mutations; differential-tested. |
+| T2.4 | **Close the ~20% generic-scan overhead vs raw DataFusion** (Phase 2 ≤10% gate). Ship the decoded-batch cache promised in `DESIGN.md §7 Tier 1` (only footer metadata is cached today). | An agent loop re-reads the same immutable segments constantly; a decoded-batch LRU keyed by segment hash is trivially correct and likely the biggest remaining scan win. | Generic-scan overhead vs raw DataFusion on the same Parquet ≤10% (Part I open item); decoded-batch cache hit-rate reported in `--stats`. |
+
+## Tier 3 — Operational polish (needed to *run* it in production)
+
+| # | Item | Rationale | Acceptance criteria |
+|---|------|-----------|---------------------|
+| T3.1 | **High-N concurrency & soak tests.** N≫2 writer contention, long-running soak. | All current concurrency tests are 2-writer / single-reader-during-write; durability claims need stress evidence. | A soak test runs ≥N writers for a sustained period with 0 corruption and correct conflict accounting. |
+| T3.2 | **Metrics export** (Prometheus/OpenTelemetry). Expose scan/prune/spill/conflict counters from the observability crate. | `tracing` init exists; production operators need scrapeable metrics. | Counters exposed on an opt-in endpoint; documented in `OPERATIONS.md`. |
+| T3.3 | **Backup/restore for the object-store backend** (snapshot → export → import), documented and tested. | No documented DR story today. | Round-trip backup/restore test passes; documented procedure. |
+| T3.4 | **Corruption *recovery*** (vs detection, which is strong). Rebuild-from-good-manifest, partial-write truncation recovery. | Corruption is well *detected* (`durability.rs:242/280`) but recovery is thin. | `verify`/repair reconstructs a usable head from the last good manifest without guessing; tested against injected partial writes. |
+
+## Non-goals reaffirmed (do NOT pursue, per `DESIGN.md §9`)
+
+Row-level MVCC / interactive multi-statement transactions; a cost-based
+optimizer; a custom columnar format; distributed query; broad DuckDB-breadth
+type coverage (nested/JSON/Union); MCP-in-core. Chasing these dilutes what
+makes h5i-db distinctive.
+
+---
+
+# Part IV — QuestDB-inspired performance program (2026-07-23)
+
+Sourced from a source-level study of `~/Ref/questdb` (Java engine + Rust/C++
+native core), filtered to techniques that transfer to h5i-db's model
+(immutable Parquet segments + DataFusion + manifest pruning).
+
+**Principle.** Nearly every QuestDB advantage over a generic engine flows from
+treating `symbol` as a first-class *interned + indexed* type — filters, GROUP
+BY, and JOINs all run on `int` keys, and symbol bitmap indexes power its
+crown-jewel fast paths (indexed ASOF, `LATEST ON`, `WHERE symbol = …`). That is
+exactly h5i-db's target column and its current weak spot: per-file Parquet
+dictionaries cannot be compared across segments, symbol pruning is capped at
+the ≤128-value exact distinct set, and there is no symbol index. So the
+highest-ROI borrows cluster there.
+
+## Tier A — Symbol as a first-class type (the keystone)
+
+| # | Item | Borrowed from | Acceptance criteria |
+|---|------|---------------|---------------------|
+| A1 | **Global symbol dictionary at the manifest level** (`symbol → u32`, stable table-global). Filters/GROUP BY/JOIN run on ints; dictionaries compare without materializing strings; ASOF maps dict→dict once (their `SymbolToSymbolJoinKeyMapping`). | `SymbolMapWriter`/`SymbolMapReaderImpl` | A symbol equality predicate prunes segments at any cardinality (not just ≤128); GROUP BY symbol runs on int keys; aggregate-state cache group-key eligibility no longer restricted to raw non-null Utf8. |
+| A2 | **Per-segment symbol index sidecar** (postings `symbol → row-ranges`, or Parquet split-block bloom as the first tier). Subsumes 2.8b / T1.3. | `BitmapIndexWriter`, `SymbolColumnIndexer`; `parquet2` `bloom_filter/split_block.rs` | A symbol point query reads only row groups the index admits; sidecar is checksummed/immutable/fail-open like the existing predicate & aggregate caches; corruption → miss, never wrong result. |
+| A3 | **Precompute "last row per symbol" per segment** in the manifest/sidecar; queries merge per-segment last-rows in manifest order. **Delivers the deferred `latest-per-key` rewrite** (honesty ledger: currently runs as a generic window plan). | `LatestByAllIndexedRecordCursor` (improved for immutability) | `LATEST ON symbol` / latest-per-key runs O(segments × symbols), not O(rows); reuses across append-only versions like the OHLCV aggregate-state cache; differential-tested vs the generic window plan. |
+
+A1 is the keystone: A2 and A3 (and B1) build on the global dictionary.
+
+## Tier B — Faster time-series operators (exploit sortedness you already have)
+
+| # | Item | Borrowed from | Acceptance criteria |
+|---|------|---------------|---------------------|
+| B1 | **Indexed / short-circuited ASOF join.** `SymbolShortCircuit` — skip master rows whose symbol cannot match (cheap with A2); combine with T2.1's `by`-key repartition. | `SymbolShortCircuit`, `AsOfJoinIndexedRecordCursorFactory` | A by-keyed ASOF with a sparse match set scans fewer right rows than the current full-buffer path; measured row reduction reported. |
+| B2 | **Out-of-order (O3) region-selective Parquet merge.** When a late batch overlaps existing segments, split prefix/merge/suffix and rewrite only touched row groups (16-byte `(ts,rowId)` merge index + radix sort). Ingest-side counterpart of T1.1. | `O3ParquetMergeStrategy`, `ooo_radix.h` | Out-of-order append no longer forces a full-table `write`; rewrite cost is proportional to overlapped row groups, not table size; row order and stats remain correct (property-tested, T0.2). |
+| B3 | **Streaming SAMPLE BY fill variants.** Add `fill(prev/null/value/linear)` and dedicated first/last over the already-streaming `time_bucket` path. | `SampleByFill{Prev,Null,Value,Linear}`, `SampleByFirstLastRecordCursorFactory` | Fill variants stream in bounded memory; parity with DuckDB/QuestDB fill semantics (differential-tested). |
+
+## Tier C — Scan & aggregation quality
+
+| # | Item | Borrowed from | Acceptance criteria |
+|---|------|---------------|---------------------|
+| C1 | **Column byte-range sidecar** so the S3 backend prunes and range-reads without fetching the Parquet footer (eliminates the first-read footer round-trip the footer-metadata cache cannot). | `_pm` metadata (`qdb-parquet-meta`, `ParquetMetaFileReader`) | Cold S3 segment read issues no separate footer GET; byte-range GETs derived from the manifest; measured cold-read latency reduction. |
+| C2 | **Compensated summation** (Kahan/Neumaier) in `vwap`/`wavg`/`ewma` accumulators. | `KSumDouble`, `NSumDouble` | Long-sum VWAP matches a high-precision reference within tolerance where naive f64 drifts; regression-tested on a full-mantissa dataset. |
+| C3 | **HyperLogLog approx-distinct + parallel top-K** (lower priority). | `hyperloglog/`, `GroupByLongTopKJob` | `approx_count_distinct(symbol)` and top-N-by-volume available; opt-in. |
+
+## Do NOT borrow (DataFusion covers it, or a §9 non-goal)
+
+- **asmjit JIT filter compiler** (`jit/compiler.cpp`) — tied to raw pointers
+  over mmapped memory; DataFusion's vectorized eval covers it; `DESIGN.md §7
+  Tier 3` rules out replacing engine internals.
+- **Zero-GC off-heap memory model** — a Java workaround irrelevant to
+  Rust/Arrow.
+- **Page-frame work-stealing, SwissTable `rosti`, in-place O3 rewrite** —
+  DataFusion's parallel scan + repartitioned hash aggregation are the
+  equivalents; do not rebuild them (only the *immutable-Parquet* O3 variant,
+  B2, transfers).
+
+## Cross-references between Parts III and IV
+
+- A2 ⇄ T1.3 ⇄ 2.8b — symbol bloom/index is one investment described from three
+  angles; build it once.
+- B2 ⇄ T1.1 ⇄ 2.10 — out-of-order merge and small-write amplification share the
+  manifest-delta / region-rewrite machinery.
+- A3 delivers the `latest-per-key` rewrite the honesty ledger lists as
+  undelivered.
+- B1 ⇄ T2.1 — indexed short-circuit and `by`-key repartition are the same ASOF
+  scale-up effort.
+- T0.1's `sqllogictest-rs` is the same crate QuestDB uses (`qdb-sqllogictest`,
+  63 `.test` files) and DataFusion uses — adopt, do not build.
