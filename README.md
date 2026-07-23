@@ -1,6 +1,6 @@
 # h5i-db
 
-**An embedded, high-performance analytical database for quant workloads. Fully versioned, built in Rust, and AI-agent friendly.**
+**A high-performance analytical database for quant workloads. Fully versioned, built in Rust, and AI-agent friendly.**
 
 Every write is an atomic commit producing an immutable version. Full SQL via
 DataFusion with native time-series operators (SQL ASOF join, timezone-aware
