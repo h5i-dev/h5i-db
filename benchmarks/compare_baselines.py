@@ -28,7 +28,13 @@ import time
 
 
 def table_segments(db):
-    """Locate each table's segment files + metadata via the catalog files."""
+    """Locate each table's segment files + metadata via the catalog files.
+
+    Files come from the manifest (the live segment set), ordered by segment
+    start time — segment filenames are UUIDs, so a filename sort is random
+    with respect to time, which breaks time-ordered ingestion (ArcticDB
+    append) and could include orphaned segments a glob would pick up.
+    """
     out = {}
     for cat in glob.glob(f"{db}/catalog/tables/*.json"):
         entry = json.load(open(cat))
@@ -37,9 +43,18 @@ def table_segments(db):
         manifest = json.load(
             open(f"{db}/tables/{table_id}/manifests/{head['sequence']:012d}.json")
         )
+        segments = manifest.get("segments", [])
+        if segments and all("path" in seg for seg in segments):
+            ordered = sorted(
+                segments,
+                key=lambda seg: (seg.get("time_range") or [2**63])[0],
+            )
+            files = [os.path.join(db, seg["path"]) for seg in ordered]
+        else:  # fallback for older manifests
+            files = sorted(glob.glob(f"{db}/tables/{table_id}/segments/*.parquet"))
         out[entry["name"]] = {
             "glob": f"{db}/tables/{table_id}/segments/*.parquet",
-            "files": sorted(glob.glob(f"{db}/tables/{table_id}/segments/*.parquet")),
+            "files": files,
             "time_range": manifest.get("time_range"),
             "rows": manifest.get("rows"),
         }
