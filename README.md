@@ -56,16 +56,15 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 - **Manifest pruning.** Every version's manifest carries per-segment time
   ranges and column min/max. Narrow queries prune whole segments before a
-  single file is opened; the baselines must at least touch the footers of
-  all 50 files in the glob.
+  single file is opened.
 - **Declared sort order.** Segments are stored time-sorted and the query
   layer tells DataFusion so. OHLCV rollups stream instead of sorting 20M rows
   first (every baseline pays that sort), and the ASOF join is sort-free.
 - **Immutable segments.** Footer metadata is cached unconditionally (sound
   because segments never change), cutting ~40% off warm scans.
-- **Version-aware aggregate states.** OHLCV/VWAP rollups persist one mergeable
-  state per immutable segment; re-querying an unchanged version merges states
-  (milliseconds) instead of recomputing, and appends only scan new segments.
+- **Version-aware aggregate states.** OHLCV/VWAP rollups persist mergeable
+  states per immutable segment; re-queries merge states in milliseconds
+  instead of recomputing, scanning only newly appended segments.
 - **No kernel heroics.** Generic scans and aggregations run on stock
   DataFusion and tie the best engines; h5i-db only adds structure where
   time-series shape makes it structurally faster.
