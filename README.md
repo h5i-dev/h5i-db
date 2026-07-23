@@ -50,15 +50,9 @@ h5i-db ui market.db                                                # review surf
 ⁵ ArcticDB's native time index wins narrow point reads from its own LMDB
   store; h5i-db's manifest pruning is second and beats every general engine.
 
-All engines measured back-to-back in one session (Intel Xeon @ 2.20 GHz,
-31 GB RAM, Ubuntu 22.04.5, 2026-07-23): Parquet-reading engines over the
-identical h5i-db segment files, ArcticDB over its own LMDB store loaded with
-the same data. Absolute times scale with hardware; the ratios are the story.
 Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Why it's fast
-
-The speed comes from the *versioning*, not from custom kernels:
 
 - **Manifest pruning.** Every version's manifest carries per-segment time
   ranges and column min/max. Narrow queries prune whole segments before a
@@ -77,8 +71,6 @@ The speed comes from the *versioning*, not from custom kernels:
   time-series shape makes it structurally faster.
 
 ## Why for agents
-
-An agent's failure modes are exactly what the storage model removes:
 
 - **Every write is an atomic, immutable commit**: a bad ingest or mutation
   is one `restore` away from undone, and old versions read in O(1).
