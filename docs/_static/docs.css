@@ -435,10 +435,10 @@ article.doc .api-member > h3::before {
   content: ''; position: absolute; left: 0; top: 0; bottom: 0;
   width: 3px; background: var(--red);
 }
-/* class + method are one colour so class.method reads as a single identifier;
-   the dot is a darker-red accent that separates them. (.api-qual styles the
-   CLI binary prefix, which stays neutral.) */
-.api-member > h3 .api-qual { color: var(--text-dim); font-weight: 400; }
+/* class + method (and the CLI binary + command) are one colour so the whole
+   name reads as a single identifier; the dot is a darker-red accent. The
+   command/method is bold, the qualifier regular, for a gentle emphasis. */
+.api-member > h3 .api-qual { color: var(--red-text); font-weight: 400; }
 .api-member > h3 .api-name { color: var(--red-text); }
 .api-member > h3 .api-dot  { color: var(--red); }
 .api-member > h3 .headerlink { font-family: var(--sans); }
