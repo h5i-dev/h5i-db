@@ -400,28 +400,107 @@ article.doc .table-wrap td code, article.doc .table-wrap th code { white-space: 
 .admonition.danger  { border-left-color: var(--red); }
 .admonition.danger  > .admonition-title { color: var(--red-text); }
 
-/* ── API reference entries ─────────────────────────────────── */
-.api-entry {
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
-  background: var(--bg-card); overflow: hidden;
+/* ══════════════════════════════════════════════════════════════
+   API / reference member cards
+   Each method, command, or SQL function renders as one bordered
+   card: a title bar (qualified name), an attached signature bar,
+   then a padded body with typed parameter lists.
+   ══════════════════════════════════════════════════════════════ */
+.api-member {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  overflow: hidden;
   margin: 0 0 1.5rem;
+  scroll-margin-top: 88px;
+  transition: border-color 0.2s;
 }
-.api-entry > .api-sig {
-  font-family: var(--mono); font-size: 0.82rem; line-height: 1.7;
-  padding: 0.9rem 1.3rem;
-  background: var(--bg-term); border-bottom: 1px solid var(--border);
-  color: var(--text); overflow-x: auto; white-space: pre;
+.api-member:hover { border-color: var(--border-hi); }
+
+/* title bar — the h3 heading becomes the card header */
+article.doc .api-member > h3 {
+  margin: 0;
+  padding: 0.62rem 1.2rem;
+  border-top: none;
+  background: var(--bg-card2);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.92rem;
+  font-weight: 700;
+  line-height: 1.4;
+  color: var(--ink);
+  position: relative;
 }
-.api-sig .k { color: var(--red-text); }
-.api-sig .fn { color: var(--ink); font-weight: 700; }
-.api-sig .p { color: var(--text-dim); }
-.api-entry > .api-body { padding: 1.1rem 1.3rem 0.2rem; font-size: 0.92rem; }
-.api-kind {
-  float: right; margin: 0.75rem 0.9rem 0 0.8rem;
-  font-family: var(--mono); font-size: 0.6rem; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--text-faint);
-  border: 1px solid var(--border); border-radius: 999px;
-  padding: 0.14rem 0.6rem;
+article.doc .api-member > h3::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0;
+  width: 3px; background: var(--red);
+}
+.api-member > h3 .api-qual { color: var(--text-faint); font-weight: 400; }
+.api-member > h3 .api-name { color: var(--red-text); }
+.api-member > h3 .headerlink { font-family: var(--sans); }
+.api-member > h3 code {
+  background: none; border: none; padding: 0; color: var(--red-text); font-size: 1em;
+}
+
+/* signature bar — the first code block, attached under the title */
+article.doc .api-member .highlight.api-sig {
+  margin: 0; border: none; border-radius: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-term);
+}
+article.doc .api-member .highlight.api-sig pre {
+  padding: 0.85rem 1.2rem; font-size: 0.82rem; color: var(--text);
+}
+.api-member .highlight.api-sig .gp { color: var(--red-text); }
+
+/* body */
+.api-member > .api-body { padding: 1.05rem 1.3rem 0.35rem; }
+.api-member > .api-body > *:first-child { margin-top: 0; }
+.api-member > .api-body > p:first-of-type { color: var(--text); }
+.api-member > .api-body p { font-size: 0.93rem; }
+.api-member > .api-body .highlight { margin-top: 0.4rem; }
+/* tables inside a card lose their own frame — the card is the frame */
+.api-member > .api-body .table-wrap {
+  border: none; background: transparent; padding: 0;
+  margin-top: 0.3rem;
+}
+
+/* section labels: PARAMETERS / RETURNS / RAISES / EXAMPLE */
+article.doc p.api-label {
+  font-family: var(--mono); font-size: 0.63rem; font-weight: 700;
+  letter-spacing: 0.17em; text-transform: uppercase;
+  color: var(--red-text);
+  margin: 1.5rem 0 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+.api-member > .api-body > p.api-label:first-child { margin-top: 0.2rem; }
+
+/* typed parameter lists (def_list): `name` (`type`, optional) : description */
+article.doc .api-body dl { margin: 0 0 0.4rem; }
+article.doc .api-body dt {
+  font-family: var(--mono); font-size: 0.83rem;
+  color: var(--text-dim); font-weight: 400;
+  margin-top: 0.85rem; line-height: 1.5;
+}
+article.doc .api-body dt:first-child { margin-top: 0; }
+article.doc .api-body dt code {
+  background: none; border: none; padding: 0; font-size: 1em;
+  color: var(--text-dim);
+}
+article.doc .api-body dt code:first-child { color: var(--red-text); font-weight: 700; }
+article.doc .api-body dd {
+  margin: 0.28rem 0 0 0.05rem;
+  padding: 0 0 0 1.05rem;
+  border-left: 1px solid var(--border);
+  color: var(--text-dim); font-size: 0.9rem; line-height: 1.62;
+}
+article.doc .api-body dd > *:last-child { margin-bottom: 0; }
+article.doc .api-body dd code { font-size: 0.86em; }
+
+/* a "Returns" one-liner (label followed by a single paragraph, no dl) */
+article.doc .api-body p.api-label + p {
+  color: var(--text); font-size: 0.9rem;
 }
 
 /* ── Cookbook cards (index pages) ──────────────────────────── */

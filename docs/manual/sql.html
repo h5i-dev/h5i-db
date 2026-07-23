@@ -93,7 +93,7 @@ integers in the time column's unit</strong>. For the common <code>timestamp[us]<
 column: <code>5000000</code> is 5 seconds, <code>60000000</code> is one minute.</p>
 </div>
 <h2 id="reading-tables-time-travel">Reading tables &amp; time travel<a class="headerlink" href="#reading-tables-time-travel" title="Permanent link">#</a></h2>
-<h3 id="plain-names-vs-h5i">Plain names vs <code>h5i()</code><a class="headerlink" href="#plain-names-vs-h5i" title="Permanent link">#</a></h3>
+<section class="api-member"><h3 id="plain-names-vs-h5i">Plain names vs <code>h5i()</code><a class="headerlink" href="#plain-names-vs-h5i" title="Permanent link">#</a></h3><div class="api-body">
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -133,11 +133,10 @@ with everything:</p>
 
 <p>Any string second argument that does not parse as RFC3339 is treated as a
 snapshot name — so avoid naming snapshots like timestamps.</p>
-<h2 id="table-functions">Table functions<a class="headerlink" href="#table-functions" title="Permanent link">#</a></h2>
-<h3 id="asof_join"><code>asof_join</code><a class="headerlink" href="#asof_join" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">asof_join</span><span class="p">(</span><span class="s1">&#39;left&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;right&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;left_on&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;right_on&#39;</span>
+</div></section><h2 id="table-functions">Table functions<a class="headerlink" href="#table-functions" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="asof_join"><code>asof_join</code><a class="headerlink" href="#asof_join" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">asof_join</span><span class="p">(</span><span class="s1">&#39;left&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;right&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;left_on&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;right_on&#39;</span>
 <span class="w">          </span><span class="p">[,</span><span class="w"> </span><span class="s1">&#39;by_cols&#39;</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="s1">&#39;backward&#39;</span><span class="o">|</span><span class="s1">&#39;forward&#39;</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">tolerance</span><span class="p">]]])</span>
-</code></pre></div>
+</code></pre></div><div class="api-body">
 
 <p>For each left row, find the most recent right row at or before it
 (<code>'backward'</code>, the default) or the first at or after it (<code>'forward'</code>),
@@ -166,9 +165,8 @@ optionally matching equality keys — the canonical trades-vs-quotes join:</p>
 <span class="w">  </span><span class="k">ON</span><span class="w"> </span><span class="n">trades</span><span class="p">.</span><span class="n">symbol</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">quotes</span><span class="p">.</span><span class="n">symbol</span><span class="p">;</span>
 </code></pre></div>
 
-<h3 id="gapfill-resample"><code>gapfill</code> / <code>resample</code><a class="headerlink" href="#gapfill-resample" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">gapfill</span><span class="p">(</span><span class="s1">&#39;table&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;time_column&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">step</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="s1">&#39;null&#39;</span><span class="o">|</span><span class="s1">&#39;locf&#39;</span><span class="o">|</span><span class="s1">&#39;interpolate&#39;</span><span class="p">])</span>
-</code></pre></div>
+</div></section><section class="api-member"><h3 id="gapfill-resample"><code>gapfill</code> / <code>resample</code><a class="headerlink" href="#gapfill-resample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">gapfill</span><span class="p">(</span><span class="s1">&#39;table&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;time_column&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">step</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="s1">&#39;null&#39;</span><span class="o">|</span><span class="s1">&#39;locf&#39;</span><span class="o">|</span><span class="s1">&#39;interpolate&#39;</span><span class="p">])</span>
+</code></pre></div><div class="api-body">
 
 <p>Turn an irregular series into a regular grid from the first to the last
 observed timestamp, stepping by <code>step</code> raw time units. <code>resample(...)</code> is an
@@ -207,9 +205,8 @@ to one key first. Also note: observations that don't land exactly on the
 grid are dropped from the output; duplicate timestamps collapse to the
 last row; at most 1,000,000 rows are generated (<code>limit_exceeded</code> beyond).</p>
 </div>
-<h3 id="tail"><code>tail</code><a class="headerlink" href="#tail" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">tail</span><span class="p">(</span><span class="s1">&#39;table&#39;</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">after_version</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">poll_ms</span><span class="p">]])</span>
-</code></pre></div>
+</div></section><section class="api-member"><h3 id="tail"><code>tail</code><a class="headerlink" href="#tail" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">tail</span><span class="p">(</span><span class="s1">&#39;table&#39;</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">after_version</span><span class="w"> </span><span class="p">[,</span><span class="w"> </span><span class="n">poll_ms</span><span class="p">]])</span>
+</code></pre></div><div class="api-body">
 
 <p>Stream rows appended after a version — a message-log view of an append-only
 table. With no version it starts after the current head (future appends
@@ -225,12 +222,11 @@ only). <code>poll_ms</code> defaults to 250 (minimum 10).</p>
 <li>Size <code>LIMIT</code> from <code>versions</code> row deltas to fetch "exactly what's new since
   version N" — no timestamp-cursor guesswork.</li>
 </ul>
-<h2 id="scalar-aggregate-window-functions">Scalar, aggregate &amp; window functions<a class="headerlink" href="#scalar-aggregate-window-functions" title="Permanent link">#</a></h2>
-<h3 id="time_bucket"><code>time_bucket</code><a class="headerlink" href="#time_bucket" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span>
+</div></section><h2 id="scalar-aggregate-window-functions">Scalar, aggregate &amp; window functions<a class="headerlink" href="#scalar-aggregate-window-functions" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="time_bucket"><code>time_bucket</code><a class="headerlink" href="#time_bucket" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span>
 <span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">origin_or_timezone</span><span class="p">)</span>
 <span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">origin</span><span class="p">,</span><span class="w"> </span><span class="n">timezone</span><span class="p">)</span>
-</code></pre></div>
+</code></pre></div><div class="api-body">
 
 <p>Floor timestamps into fixed buckets — DuckDB/TimescaleDB semantics. The
 interval is a literal: an SQL <code>INTERVAL</code> or a string like <code>'30s'</code>, <code>'5m'</code>,
@@ -246,10 +242,9 @@ use calendar bucketing.</p>
 With a timezone, bucketing happens in local wall time and handles DST
 (ambiguous → earliest, gap → first valid instant). Out-of-range inputs yield
 NULL buckets rather than errors.</p>
-<h3 id="vwap-wavg"><code>vwap</code> / <code>wavg</code><a class="headerlink" href="#vwap-wavg" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">vwap</span><span class="p">(</span><span class="n">price</span><span class="p">,</span><span class="w"> </span><span class="k">size</span><span class="p">)</span><span class="w">     </span><span class="c1">-- value first, weight second</span>
+</div></section><section class="api-member"><h3 id="vwap-wavg"><code>vwap</code> / <code>wavg</code><a class="headerlink" href="#vwap-wavg" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">vwap</span><span class="p">(</span><span class="n">price</span><span class="p">,</span><span class="w"> </span><span class="k">size</span><span class="p">)</span><span class="w">     </span><span class="c1">-- value first, weight second</span>
 <span class="n">wavg</span><span class="p">(</span><span class="k">size</span><span class="p">,</span><span class="w"> </span><span class="n">price</span><span class="p">)</span><span class="w">     </span><span class="c1">-- kdb argument order: weight first</span>
-</code></pre></div>
+</code></pre></div><div class="api-body">
 
 <p>Weighted mean as a streaming, mergeable aggregate — the same computation with
 two argument conventions. Returns <code>Float64</code>; NULL when the group is empty or
@@ -259,9 +254,8 @@ Supports retraction, so sliding-window use is O(n):</p>
 <span class="k">FROM</span><span class="w"> </span><span class="n">trades</span><span class="p">;</span>
 </code></pre></div>
 
-<h3 id="ewma"><code>ewma</code><a class="headerlink" href="#ewma" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">ewma</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">alpha</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span>
-</code></pre></div>
+</div></section><section class="api-member"><h3 id="ewma"><code>ewma</code><a class="headerlink" href="#ewma" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">ewma</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">alpha</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="err">…</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span>
+</code></pre></div><div class="api-body">
 
 <p>Exponentially weighted moving average, one ordered pass per partition:
 <code>y₀ = x₀; yᵢ = α·xᵢ + (1−α)·yᵢ₋₁</code>. <code>alpha</code> must be a constant in <code>[0, 1]</code>.
@@ -271,9 +265,8 @@ NULL inputs carry the previous smoothed value forward. Matches
 <span class="k">FROM</span><span class="w"> </span><span class="n">trades</span><span class="p">;</span>
 </code></pre></div>
 
-<h3 id="rolling_avg-rolling_sum-rolling_min-rolling_max"><code>rolling_avg</code> / <code>rolling_sum</code> / <code>rolling_min</code> / <code>rolling_max</code><a class="headerlink" href="#rolling_avg-rolling_sum-rolling_min-rolling_max" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">rolling_avg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">order_by</span><span class="p">,</span><span class="w"> </span><span class="k">rows</span><span class="p">)</span>
-</code></pre></div>
+</div></section><section class="api-member"><h3 id="rolling_avg-rolling_sum-rolling_min-rolling_max"><code>rolling_avg</code> / <code>rolling_sum</code> / <code>rolling_min</code> / <code>rolling_max</code><a class="headerlink" href="#rolling_avg-rolling_sum-rolling_min-rolling_max" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">rolling_avg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">order_by</span><span class="p">,</span><span class="w"> </span><span class="k">rows</span><span class="p">)</span>
+</code></pre></div><div class="api-body">
 
 <p>Convenience sugar, expanded before parsing into the standard window frame
 <code>AVG(value) OVER (ORDER BY order_by ROWS BETWEEN rows−1 PRECEDING AND
@@ -286,11 +279,11 @@ single-key subsets, or write the explicit window:
 <code>AVG(x) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN n−1 PRECEDING
 AND CURRENT ROW)</code>. It also cannot take its own <code>OVER</code> clause.</p>
 </div>
-<h3 id="first_value-last_value"><code>first_value</code> / <code>last_value</code><a class="headerlink" href="#first_value-last_value" title="Permanent link">#</a></h3>
+</div></section><section class="api-member"><h3 id="first_value-last_value"><code>first_value</code> / <code>last_value</code><a class="headerlink" href="#first_value-last_value" title="Permanent link">#</a></h3><div class="api-body">
 <p>Stock DataFusion, but worth knowing the idiom: <code>last_value(x ORDER BY ts)</code>
 inside a <code>GROUP BY</code> is how you take "closing" values without a self-join —
 see the OHLCV query at the top of this page.</p>
-<h2 id="sessions-pruning-performance">Sessions, pruning &amp; performance<a class="headerlink" href="#sessions-pruning-performance" title="Permanent link">#</a></h2>
+</div></section><h2 id="sessions-pruning-performance">Sessions, pruning &amp; performance<a class="headerlink" href="#sessions-pruning-performance" title="Permanent link">#</a></h2>
 <ul>
 <li>Narrow time-range predicates prune segments via manifest statistics before
   any I/O — verify with <code>h5i-db query … --stats</code> or the UI's SQL scratchpad.</li>

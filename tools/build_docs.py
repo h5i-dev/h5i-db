@@ -99,6 +99,82 @@ def render_markdown(text: str) -> tuple[str, list]:
     return wrap_tables(body), getattr(md, "toc_tokens", [])
 
 
+# ── API/reference enhancement ────────────────────────────────────
+# Turns flat rendered markdown for reference pages into member cards:
+# each `### name` heading + its signature code block + typed parameter
+# list becomes one bordered `.api-member`.
+
+API_LABELS = (
+    "Parameters", "Keyword Arguments", "Returns", "Return type", "Raises",
+    "Yields", "Example", "Examples", "Note", "Notes", "Warning", "See also",
+)
+_LABEL_RE = re.compile(
+    r"<p><strong>(" + "|".join(API_LABELS) + r")</strong></p>"
+)
+_HEADING_SPLIT_RE = re.compile(r"(?=<h[23] id=)")
+_H3_RE = re.compile(r'\A(<h3 id="[^"]*">)(.*?)(</h3>)', re.S)
+_FIRST_HIGHLIGHT_RE = re.compile(
+    r'\A(\s*)(<div class="highlight[^"]*">.*?</div>)', re.S
+)
+_FIRST_CODE_RE = re.compile(r"<code>(.*?)</code>", re.S)
+
+
+def _style_heading(inner: str, style: str) -> str:
+    """Dim the qualifier of a member name (``Database.`` / ``h5i-db ``)."""
+    if style == "plain":
+        return inner
+    m = _FIRST_CODE_RE.search(inner)
+    if not m:
+        return inner
+    text = m.group(1)
+    if style == "dotted" and "." in text:
+        qual, name = text.rsplit(".", 1)
+        new = f'<span class="api-qual">{qual}.</span><span class="api-name">{name}</span>'
+    elif style == "cli" and text.startswith("h5i-db "):
+        binary, rest = text.split(" ", 1)
+        new = f'<span class="api-qual">{binary} </span><span class="api-name">{rest}</span>'
+    else:
+        new = f'<span class="api-name">{text}</span>'
+    return inner[: m.start()] + f"<code>{new}</code>" + inner[m.end():]
+
+
+def enhance_api_html(body: str, style: str) -> str:
+    body = _LABEL_RE.sub(r'<p class="api-label">\1</p>', body)
+    out = []
+    for chunk in _HEADING_SPLIT_RE.split(body):
+        if not chunk.startswith("<h3 id="):
+            out.append(chunk)
+            continue
+        m = _H3_RE.match(chunk)
+        if not m:
+            out.append(chunk)
+            continue
+        heading = m.group(1) + _style_heading(m.group(2), style) + m.group(3)
+        rest = chunk[m.end():]
+        sig = ""
+        sm = _FIRST_HIGHLIGHT_RE.match(rest)
+        if sm:
+            sig = sm.group(2).replace(
+                '<div class="highlight"', '<div class="highlight api-sig"', 1
+            )
+            rest = rest[sm.end():]
+        out.append(
+            f'<section class="api-member">{heading}{sig}'
+            f'<div class="api-body">{rest}</div></section>'
+        )
+    return "".join(out)
+
+
+def enhance_style(section: str, stem: str) -> str | None:
+    if section == "api":
+        return "dotted"
+    if section == "manual" and stem == "cli":
+        return "cli"
+    if section == "manual" and stem == "sql":
+        return "plain"
+    return None
+
+
 FRONT_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.S)
 
 
@@ -321,6 +397,9 @@ def load_md_pages(directory: Path, section: str) -> list[Page]:
     for path in sorted(directory.glob("*.md")):
         meta, body_src = parse_front_matter(path.read_text())
         body, toc_tokens = render_markdown(body_src)
+        style = enhance_style(section, path.stem)
+        if style:
+            body = enhance_api_html(body, style)
         slug = "index.html" if path.stem == "index" else f"{path.stem}.html"
         title = meta.get("title", path.stem.replace("-", " ").title())
         page = Page(

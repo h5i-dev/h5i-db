@@ -69,100 +69,88 @@
 <span class="sep">/</span>
 <span>QueryResult &amp; MutationPlan</span></div>
 <h1 id="queryresult-mutationplan"><code>QueryResult</code> &amp; <code>MutationPlan</code><a class="headerlink" href="#queryresult-mutationplan" title="Permanent link">#</a></h1>
+<p>Two small result objects returned by <a href="database.html"><code>Database</code></a>: the lazy
+holder a query produces, and the staged handle a mutation plan produces.</p>
 <h2 id="queryresult">QueryResult<a class="headerlink" href="#queryresult" title="Permanent link">#</a></h2>
-<p>Returned by <a href="database.html#databasesql"><code>Database.sql()</code></a> — a lazy holder of
-an Arrow result with convenience converters.</p>
+<p>Returned by <a href="database.html#databasesql"><code>Database.sql()</code></a>. A lazy holder of an
+Arrow result with convenience converters — data stays in Arrow until you ask
+for a specific frame type.</p>
 <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT symbol, vwap(price, size) AS v FROM trades GROUP BY symbol&quot;</span><span class="p">)</span>
-
-<span class="n">res</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>      <span class="c1"># pyarrow.Table (zero-copy)</span>
-<span class="n">res</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>     <span class="c1"># pandas.DataFrame</span>
-<span class="n">res</span><span class="o">.</span><span class="n">to_polars</span><span class="p">()</span>     <span class="c1"># polars.DataFrame (Polars is an optional dependency)</span>
-<span class="nb">len</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>            <span class="c1"># row count</span>
+<span class="n">res</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>     <span class="c1"># -&gt; pandas.DataFrame</span>
+<span class="nb">len</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>            <span class="c1"># -&gt; row count</span>
 </code></pre></div>
 
-<h3 id="queryresultto_arrow"><code>QueryResult.to_arrow</code><a class="headerlink" href="#queryresultto_arrow" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">to_arrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
-</code></pre></div>
+<section class="api-member"><h3 id="queryresultto_arrow"><code><span class="api-qual">QueryResult.</span><span class="api-name">to_arrow</span></code><a class="headerlink" href="#queryresultto_arrow" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_arrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
+</code></pre></div><div class="api-body">
 
-<p>The underlying Arrow table, as produced by the engine — types preserved
-exactly (timestamps keep unit and timezone).</p>
-<h3 id="queryresultto_pandas"><code>QueryResult.to_pandas</code><a class="headerlink" href="#queryresultto_pandas" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">to_pandas</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span>
-</code></pre></div>
+<p>The underlying Arrow table, types preserved exactly (timestamps keep unit and
+timezone). Zero-copy.</p>
+</div></section><section class="api-member"><h3 id="queryresultto_pandas"><code><span class="api-qual">QueryResult.</span><span class="api-name">to_pandas</span></code><a class="headerlink" href="#queryresultto_pandas" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_pandas</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span>
+</code></pre></div><div class="api-body">
 
-<h3 id="queryresultto_polars"><code>QueryResult.to_polars</code><a class="headerlink" href="#queryresultto_polars" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">to_polars</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">polars</span><span class="o">.</span><span class="n">DataFrame</span>
-</code></pre></div>
+<p>Convert to a pandas DataFrame.</p>
+</div></section><section class="api-member"><h3 id="queryresultto_polars"><code><span class="api-qual">QueryResult.</span><span class="api-name">to_polars</span></code><a class="headerlink" href="#queryresultto_polars" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_polars</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">polars</span><span class="o">.</span><span class="n">DataFrame</span>
+</code></pre></div><div class="api-body">
 
-<p>Imports <code>polars</code> on first use; raises <code>ImportError</code> if it isn't installed.</p>
-<h3 id="dunder-support">Dunder support<a class="headerlink" href="#dunder-support" title="Permanent link">#</a></h3>
-<p><code>len(res)</code> is the row count; <code>repr(res)</code> shows the Arrow table.</p>
-<hr />
-<h2 id="mutationplan">MutationPlan<a class="headerlink" href="#mutationplan" title="Permanent link">#</a></h2>
-<p>A previewable, not-yet-published mutation — created by
-<a href="database.html#databaseplan_replace_range"><code>plan_replace_range</code> / <code>plan_delete_range</code></a>,
-listed by <a href="database.html#databaselist_plans"><code>list_plans</code></a>. The staged
-segments already exist on disk; publishing is a metadata-only atomic swap.</p>
+<p>Convert to a Polars DataFrame.</p>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>ImportError</code></dt>
+<dd>Polars is not installed (it is an optional dependency).</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="dunder-methods">Dunder methods<a class="headerlink" href="#dunder-methods" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="nb">len</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>     <span class="c1"># row count</span>
+<span class="nb">repr</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>    <span class="c1"># repr of the underlying Arrow table</span>
+</code></pre></div><div class="api-body">
+
+</div></section><h2 id="mutationplan">MutationPlan<a class="headerlink" href="#mutationplan" title="Permanent link">#</a></h2>
+<p>A previewable, not-yet-published mutation — returned by
+<a href="database.html#databaseplan_replace_range"><code>plan_replace_range</code> / <code>plan_delete_range</code></a>
+and <a href="database.html#databaselist_plans"><code>list_plans</code></a>. The staged segments
+already exist on disk; publishing is a metadata-only atomic swap.</p>
 <div class="highlight"><pre><span></span><code><span class="n">plan</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">t0_us</span><span class="p">,</span> <span class="n">t1_us</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;strip bad ticks&quot;</span><span class="p">)</span>
 
 <span class="n">plan</span><span class="o">.</span><span class="n">summary</span>            <span class="c1"># {&quot;rows_affected&quot;: 12481, &quot;segments_reused&quot;: 127, …}</span>
 <span class="n">plan</span><span class="o">.</span><span class="n">before_sample</span>      <span class="c1"># pyarrow.Table — rows as they are now</span>
 <span class="n">plan</span><span class="o">.</span><span class="n">after_sample</span>       <span class="c1"># pyarrow.Table — rows as they would become</span>
 
-<span class="n">plan</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>            <span class="c1"># publish — or:</span>
-<span class="n">plan</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>          <span class="c1"># drop; staged segments become vacuumable</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>            <span class="c1"># publish — or plan.discard()</span>
 </code></pre></div>
 
-<h3 id="fields">Fields<a class="headerlink" href="#fields" title="Permanent link">#</a></h3>
-<div class="table-wrap"><table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Type</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>table</code></td>
-<td><code>str</code></td>
-<td>Table the plan targets</td>
-</tr>
-<tr>
-<td><code>plan_id</code></td>
-<td><code>str</code></td>
-<td>UUID — also usable with the CLI (<code>h5i-db plan apply …</code>) and the review UI</td>
-</tr>
-<tr>
-<td><code>summary</code></td>
-<td><code>dict</code></td>
-<td>Machine-readable impact: affected rows, segments rewritten vs. reused</td>
-</tr>
-<tr>
-<td><code>raw</code></td>
-<td><code>dict</code></td>
-<td>The full plan document as stored</td>
-</tr>
-</tbody>
-</table></div>
-<h3 id="mutationplanbefore_sample-after_sample"><code>MutationPlan.before_sample</code> / <code>after_sample</code><a class="headerlink" href="#mutationplanbefore_sample-after_sample" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">before_sample</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>    <span class="c1"># property</span>
-<span class="n">after_sample</span><span class="p">:</span>  <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>   <span class="c1"># property</span>
-</code></pre></div>
+<section class="api-member"><h3 id="attributes">Attributes<a class="headerlink" href="#attributes" title="Permanent link">#</a></h3><div class="api-body">
+<dl>
+<dt><code>table</code> (<code>str</code>)</dt>
+<dd>Table the plan targets.</dd>
+<dt><code>plan_id</code> (<code>str</code>)</dt>
+<dd>UUID — also usable from the CLI (<code>h5i-db plan apply …</code>) and the review UI.</dd>
+<dt><code>summary</code> (<code>dict</code>)</dt>
+<dd>Machine-readable impact: affected rows, segments rewritten vs. reused.</dd>
+<dt><code>raw</code> (<code>dict</code>)</dt>
+<dd>The full plan document as stored.</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="mutationplanbefore_sample"><code><span class="api-qual">MutationPlan.</span><span class="api-name">before_sample</span></code><a class="headerlink" href="#mutationplanbefore_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">before_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
 
-<p>Row samples of the affected range before and after the mutation; <code>None</code> when
-the plan carries no sample (e.g. nothing affected).</p>
-<h3 id="mutationplanapply"><code>MutationPlan.apply</code><a class="headerlink" href="#mutationplanapply" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">apply</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>Property — a sample of the affected rows <strong>before</strong> the mutation, or <code>None</code>
+when the plan carries no sample.</p>
+</div></section><section class="api-member"><h3 id="mutationplanafter_sample"><code><span class="api-qual">MutationPlan.</span><span class="api-name">after_sample</span></code><a class="headerlink" href="#mutationplanafter_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">after_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
 
-<p>Publish the plan as a new version. Raises
-<a href="exceptions.html"><code>ConflictError</code></a> if the table head moved since the plan was
-made — <strong>re-plan instead of retrying</strong>: the plan was computed against a base
-version that no longer reflects reality.</p>
-<h3 id="mutationplandiscard"><code>MutationPlan.discard</code><a class="headerlink" href="#mutationplandiscard" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">discard</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
-</code></pre></div>
+<p>Property — the same rows <strong>after</strong> the mutation would apply.</p>
+</div></section><section class="api-member"><h3 id="mutationplanapply"><code><span class="api-qual">MutationPlan.</span><span class="api-name">apply</span></code><a class="headerlink" href="#mutationplanapply" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">apply</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p>Publish the plan as a new version.</p>
+<p class="api-label">Returns</p>
+<p><code>dict</code> — commit metadata for the new version.</p>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>ConflictError</code></dt>
+<dd>The table head moved since the plan was made. <strong>Re-plan instead of
+retrying</strong> — the plan was computed against a base version that no longer
+reflects reality.</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="mutationplandiscard"><code><span class="api-qual">MutationPlan.</span><span class="api-name">discard</span></code><a class="headerlink" href="#mutationplandiscard" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">discard</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
 
 <p>Drop the plan; its staged segments become vacuum candidates immediately.
 Abandoned plans (neither applied nor discarded) expire after 7 days — see
@@ -171,13 +159,13 @@ Abandoned plans (neither applied nor discarded) expire after 7 days — see
 <p class="admonition-title">Policy interaction</p>
 <p>With the <a href="../manual/concepts.html#the-mutation-policy">mutation policy</a>
 gating direct deletes/writes, the plan flow is the <em>only</em> way to mutate —
-which is exactly the point: every destructive change gets a previewed,
-auditable checkpoint.</p>
-</div>
+which is the point: every destructive change gets a previewed, auditable
+checkpoint.</p>
+</div></div></section>
     <nav class="page-nav"><a class="prev" href="../api/database.html"><span class="dir">← Previous</span><span class="pn-title">Database</span></a><a class="next" href="../api/exceptions.html"><span class="dir">Next →</span><span class="pn-title">Exceptions</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#queryresult">QueryResult</a><ul><li><a href="#queryresultto_arrow">QueryResult.to_arrow</a></li><li><a href="#queryresultto_pandas">QueryResult.to_pandas</a></li><li><a href="#queryresultto_polars">QueryResult.to_polars</a></li><li><a href="#dunder-support">Dunder support</a></li></ul></li><li><a href="#mutationplan">MutationPlan</a><ul><li><a href="#fields">Fields</a></li><li><a href="#mutationplanbefore_sample-after_sample">MutationPlan.before_sample / after_sample</a></li><li><a href="#mutationplanapply">MutationPlan.apply</a></li><li><a href="#mutationplandiscard">MutationPlan.discard</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#queryresult">QueryResult</a><ul><li><a href="#queryresultto_arrow">QueryResult.to_arrow</a></li><li><a href="#queryresultto_pandas">QueryResult.to_pandas</a></li><li><a href="#queryresultto_polars">QueryResult.to_polars</a></li><li><a href="#dunder-methods">Dunder methods</a></li></ul></li><li><a href="#mutationplan">MutationPlan</a><ul><li><a href="#attributes">Attributes</a></li><li><a href="#mutationplanbefore_sample">MutationPlan.before_sample</a></li><li><a href="#mutationplanafter_sample">MutationPlan.after_sample</a></li><li><a href="#mutationplanapply">MutationPlan.apply</a></li><li><a href="#mutationplandiscard">MutationPlan.discard</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">
