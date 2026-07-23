@@ -96,4 +96,4 @@ Workspace crates under `crates/`: `core` (versioned storage kernel), `query`
 
 ## License
 
-Apache-2.0. See [LICENSE](./LICENSE)
+Apache-2.0. See [LICENSE](./LICENSE).
