@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ASOF joins: trades vs quotes, signing and spreads · h5i-db docs</title>
+  <meta name="description" content="Attaching the prevailing quote to every trade is the microstructure join: it powers trade signing, effective/realized spread measurement, TCA and toxicity analytics. In h5i-db asofjoin is a native SQL table function …">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../../_static/logo.png">
+  <link rel="apple-touch-icon" href="../../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="ASOF joins: trades vs quotes, signing and spreads · h5i-db docs">
+  <meta property="og:description" content="Attaching the prevailing quote to every trade is the microstructure join: it powers trade signing, effective/realized spread measurement, TCA and toxicity analytics. In h5i-db asofjoin is a native SQL table function …">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="ASOF joins: trades vs quotes, signing and spreads · h5i-db docs">
+  <meta name="twitter:description" content="Attaching the prevailing quote to every trade is the microstructure join: it powers trade signing, effective/realized spread measurement, TCA and toxicity analytics. In h5i-db asofjoin is a native SQL table function …">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../../">
+    <img src="../../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../../manual/" >Manual</a></li>
+    <li><a href="../../api/" >Python API</a></li>
+    <li><a href="../../cookbook/" class="active">Cookbook</a></li>
+    <li><a href="../../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Market data engineering</div><ul><li><a href="../../cookbook/01_market_data_engineering/01_ohlcv_bars.html">OHLCV bars from tick data</a></li><li><a href="../../cookbook/01_market_data_engineering/02_vwap_twap_execution.html">VWAP, TWAP and execution benchmarks</a></li><li><a href="../../cookbook/01_market_data_engineering/03_gapfill_resample.html">Regular grids for irregular markets: gapfill and resample</a></li><li><a href="../../cookbook/01_market_data_engineering/04_asof_join_trades_quotes.html" class="active">ASOF joins: trades vs quotes, signing and spreads</a></li><li><a href="../../cookbook/01_market_data_engineering/05_corporate_actions.html">Corporate actions: split adjustment without losing the tape</a></li><li><a href="../../cookbook/01_market_data_engineering/06_point_in_time_fundamentals.html">Point-in-time fundamentals: killing lookahead bias with ASOF joins</a></li><li><a href="../../cookbook/01_market_data_engineering/07_tick_data_cleaning.html">Tick data cleaning: find it, preview the fix, keep the audit trail</a></li><li><a href="../../cookbook/01_market_data_engineering/08_nbbo_consolidation.html">NBBO consolidation: best bid/offer across fragmented venues</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../../cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Market data engineering</span>
+<span class="sep">/</span>
+<span>ASOF joins: trades vs quotes, signing and spreads</span></div>
+<h1>ASOF joins: trades vs quotes, signing and spreads</h1>
+<p>Attaching the prevailing quote to every trade is <em>the</em> microstructure
+join: it powers trade signing, effective/realized spread measurement, TCA
+and toxicity analytics. In h5i-db <code>asof_join</code> is a native SQL table
+function over time-sorted storage - no round-trip through pandas - with
+direction (<code>'backward'</code> / <code>'forward'</code>) and a staleness tolerance built in,
+and it composes with CTEs and window functions like any other table.</p>
+<p>On a two-session tape with known ground truth we attach quotes to every
+trade (cross-checked against <code>pandas.merge_asof</code>), sign trades Lee-Ready
+style and score the signing, measure quoted / effective / realized
+spreads, and use tolerance to refuse stale quotes instead of silently
+marking against them.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">time</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;mde_asof&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-a-tape-with-known-ground-truth">1. A tape with known ground truth<a class="headerlink" href="#1-a-tape-with-known-ground-truth" title="Permanent link">#</a></h2>
+<p>To <em>score</em> trade signing we need trades whose true aggressor side we know,
+so we derive the printed tape from the quote stream: each trade takes the
+prevailing bid or ask (10% execute at mid - the hard case for
+classification), 0.2–5ms of exchange reporting latency, and keeps its true
+<code>side</code>. We also store a <code>marks</code> table - each trade's timestamp shifted
++5 minutes - which will drive the realized-spread lookup later.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">quotes</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_quotes</span><span class="p">(</span>
+    <span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">quotes_per_day</span><span class="o">=</span><span class="mi">1_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">11</span>
+<span class="p">)</span>
+
+<span class="n">qp</span> <span class="o">=</span> <span class="n">quotes</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">23</span><span class="p">)</span>
+<span class="n">is_trade</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">random</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">qp</span><span class="p">))</span> <span class="o">&lt;</span> <span class="mf">0.6</span>
+<span class="n">tr</span> <span class="o">=</span> <span class="n">qp</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">is_trade</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="s2">&quot;ask&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">tr</span><span class="p">)</span>
+<span class="n">buy</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">random</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mf">0.5</span>
+<span class="n">at_mid</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">random</span><span class="p">(</span><span class="n">n</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mf">0.10</span>
+<span class="n">px</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">buy</span><span class="p">,</span> <span class="n">tr</span><span class="p">[</span><span class="s2">&quot;ask&quot;</span><span class="p">],</span> <span class="n">tr</span><span class="p">[</span><span class="s2">&quot;bid&quot;</span><span class="p">])</span>
+<span class="n">px</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">at_mid</span><span class="p">,</span> <span class="p">(</span><span class="n">tr</span><span class="p">[</span><span class="s2">&quot;bid&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">tr</span><span class="p">[</span><span class="s2">&quot;ask&quot;</span><span class="p">])</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">px</span><span class="p">)</span>
+<span class="n">tr</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">px</span>
+<span class="n">tr</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">rng</span><span class="o">.</span><span class="n">lognormal</span><span class="p">(</span><span class="mf">4.0</span><span class="p">,</span> <span class="mf">1.2</span><span class="p">,</span> <span class="n">n</span><span class="p">)</span> <span class="o">//</span> <span class="mi">100</span> <span class="o">*</span> <span class="mi">100</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int64&quot;</span><span class="p">)</span>
+<span class="n">tr</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">buy</span><span class="p">,</span> <span class="s2">&quot;B&quot;</span><span class="p">,</span> <span class="s2">&quot;S&quot;</span><span class="p">)</span>
+<span class="n">tr</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">tr</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_timedelta</span><span class="p">(</span><span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mf">0.2</span><span class="p">,</span> <span class="mf">5.0</span><span class="p">,</span> <span class="n">n</span><span class="p">),</span> <span class="n">unit</span><span class="o">=</span><span class="s2">&quot;ms&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">)</span>
+<span class="n">tr</span> <span class="o">=</span> <span class="n">tr</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">tr</span><span class="p">[</span><span class="s2">&quot;trade_id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;int64&quot;</span><span class="p">)</span>
+
+<span class="n">ts_field</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">trade_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span><span class="n">ts_field</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;trade_id&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+     <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+     <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">())]</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trade_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span>
+    <span class="n">tr</span><span class="p">[[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;trade_id&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">]],</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span>
+<span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">trade_schema</span><span class="p">))</span>
+
+<span class="n">quote_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span><span class="n">ts_field</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+     <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;bid_size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+     <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ask_size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">())]</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">,</span> <span class="n">quote_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">,</span> <span class="n">quotes</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">quote_schema</span><span class="p">))</span>
+
+<span class="n">marks</span> <span class="o">=</span> <span class="n">tr</span><span class="p">[[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;trade_id&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+<span class="n">marks</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">marks</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+<span class="n">marks</span> <span class="o">=</span> <span class="n">marks</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">mark_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span><span class="n">ts_field</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span> <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;trade_id&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">())]</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;marks&quot;</span><span class="p">,</span> <span class="n">mark_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;marks&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span><span class="n">marks</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">mark_schema</span><span class="p">))</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">tr</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> trades, </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">qp</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> quotes over 2 sessions&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">3,827 trades, 6,368 quotes over 2 sessions</pre></div></div>
+<h2 id="2-the-join-itself">2. The join itself<a class="headerlink" href="#2-the-join-itself" title="Permanent link">#</a></h2>
+<p><code>asof_join(left, right, left_ts, right_ts, by_key)</code>: for each trade, the
+latest quote at or before it, per symbol. Right-side columns that collide
+get a <code>_right</code> suffix - here the quote's own timestamp arrives as
+<code>ts_right</code>, so trade-time minus <code>ts_right</code> is the quote's age. Because
+both tables are stored time-ordered there is no sort phase to pay for:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">t0</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
+<span class="n">joined</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT ts, symbol, trade_id, price, side, ts_right, bid, ask</span>
+<span class="sd">    FROM asof_join(&#39;trades&#39;, &#39;quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;symbol&#39;)</span>
+<span class="sd">    ORDER BY trade_id</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">elapsed_ms</span> <span class="o">=</span> <span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">t0</span><span class="p">)</span> <span class="o">*</span> <span class="mf">1e3</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">joined</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> trades matched against </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">qp</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> quotes &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;in </span><span class="si">{</span><span class="n">elapsed_ms</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> ms&quot;</span><span class="p">)</span>
+<span class="n">joined</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">3,827 trades matched against 6,368 quotes in 31.8 ms</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>trade_id</th>
+      <th>price</th>
+      <th>side</th>
+      <th>ts_right</th>
+      <th>bid</th>
+      <th>ask</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:13.480432+00:00</td>
+      <td>MSFT</td>
+      <td>0</td>
+      <td>219.730</td>
+      <td>S</td>
+      <td>2026-06-01 13:30:13.476605+00:00</td>
+      <td>219.73</td>
+      <td>219.75</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:14.819772+00:00</td>
+      <td>NVDA</td>
+      <td>1</td>
+      <td>256.550</td>
+      <td>B</td>
+      <td>2026-06-01 13:30:14.815696+00:00</td>
+      <td>256.54</td>
+      <td>256.55</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:18.039449+00:00</td>
+      <td>AAPL</td>
+      <td>2</td>
+      <td>86.290</td>
+      <td>B</td>
+      <td>2026-06-01 13:30:18.038985+00:00</td>
+      <td>86.27</td>
+      <td>86.29</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:20.607466+00:00</td>
+      <td>AAPL</td>
+      <td>3</td>
+      <td>86.275</td>
+      <td>S</td>
+      <td>2026-06-01 13:30:20.604144+00:00</td>
+      <td>86.27</td>
+      <td>86.28</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:30:28.798380+00:00</td>
+      <td>MSFT</td>
+      <td>4</td>
+      <td>219.670</td>
+      <td>B</td>
+      <td>2026-06-01 13:30:28.796644+00:00</td>
+      <td>219.62</td>
+      <td>219.67</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Trust, but verify: the same alignment through <code>pandas.merge_asof</code> must
+produce identical quotes for every trade.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">left</span> <span class="o">=</span> <span class="n">tr</span><span class="p">[[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;trade_id&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+<span class="n">left</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">left</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;datetime64[us, UTC]&quot;</span><span class="p">)</span>  <span class="c1"># match arrow&#39;s us resolution</span>
+<span class="n">ref</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">merge_asof</span><span class="p">(</span>
+    <span class="n">left</span><span class="p">,</span> <span class="n">qp</span><span class="p">[[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="s2">&quot;ask&quot;</span><span class="p">]],</span>
+    <span class="n">on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">direction</span><span class="o">=</span><span class="s2">&quot;backward&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">cmp</span> <span class="o">=</span> <span class="n">joined</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">ref</span><span class="p">[[</span><span class="s2">&quot;trade_id&quot;</span><span class="p">,</span> <span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="s2">&quot;ask&quot;</span><span class="p">]],</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;trade_id&quot;</span><span class="p">,</span> <span class="n">suffixes</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;_pd&quot;</span><span class="p">))</span>
+<span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">cmp</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">tr</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">cmp</span><span class="p">[</span><span class="s2">&quot;bid&quot;</span><span class="p">],</span> <span class="n">cmp</span><span class="p">[</span><span class="s2">&quot;bid_pd&quot;</span><span class="p">])</span> <span class="ow">and</span> <span class="n">np</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">cmp</span><span class="p">[</span><span class="s2">&quot;ask&quot;</span><span class="p">],</span> <span class="n">cmp</span><span class="p">[</span><span class="s2">&quot;ask_pd&quot;</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;asof_join matches pandas.merge_asof on all </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">cmp</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> trades&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">asof_join matches pandas.merge_asof on all 3,827 trades</pre></div></div>
+<p>There is also a keyword spelling - handy when the ASOF join is one clause
+of a larger statement. Two current limitations to know about: it requires
+bare table names (no aliases), and the output columns are referenced
+unqualified:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT ts, symbol, price, bid, ask</span>
+<span class="sd">    FROM trades ASOF JOIN quotes</span>
+<span class="sd">    MATCH_CONDITION (trades.ts &gt;= quotes.ts) ON trades.symbol = quotes.symbol</span>
+<span class="sd">    LIMIT 3</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>bid</th>
+      <th>ask</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:13.480432+00:00</td>
+      <td>MSFT</td>
+      <td>219.73</td>
+      <td>219.73</td>
+      <td>219.75</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:14.819772+00:00</td>
+      <td>NVDA</td>
+      <td>256.55</td>
+      <td>256.54</td>
+      <td>256.55</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:18.039449+00:00</td>
+      <td>AAPL</td>
+      <td>86.29</td>
+      <td>86.27</td>
+      <td>86.29</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="3-lee-ready-trade-signing">3. Lee-Ready trade signing<a class="headerlink" href="#3-lee-ready-trade-signing" title="Permanent link">#</a></h2>
+<p>Quote rule first - above the mid is a buy, below is a sell - then the tick
+test for exact-mid prints (here via <code>lag(price)</code>; strictly Lee-Ready wants
+the last <em>different</em> price, a refinement that matters little on this
+tape). All in one statement: the asof join feeds a window function feeds a
+<code>CASE</code>.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">signed</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    WITH j AS (</span>
+<span class="sd">        SELECT ts, symbol, trade_id, price, size, side, bid, ask,</span>
+<span class="sd">               (bid + ask) / 2 AS mid</span>
+<span class="sd">        FROM asof_join(&#39;trades&#39;, &#39;quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;symbol&#39;)</span>
+<span class="sd">    ),</span>
+<span class="sd">    t AS (</span>
+<span class="sd">        SELECT *, lag(price) OVER (PARTITION BY symbol ORDER BY ts) AS prev_px</span>
+<span class="sd">        FROM j</span>
+<span class="sd">    )</span>
+<span class="sd">    SELECT *,</span>
+<span class="sd">           CASE WHEN price &gt; mid THEN &#39;B&#39;</span>
+<span class="sd">                WHEN price &lt; mid THEN &#39;S&#39;</span>
+<span class="sd">                WHEN price &gt; prev_px THEN &#39;B&#39;</span>
+<span class="sd">                WHEN price &lt; prev_px THEN &#39;S&#39;</span>
+<span class="sd">                ELSE &#39;U&#39; END AS lr_side</span>
+<span class="sd">    FROM t</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+<span class="n">overall</span> <span class="o">=</span> <span class="p">(</span><span class="n">signed</span><span class="p">[</span><span class="s2">&quot;lr_side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">signed</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+<span class="n">quote_rule</span> <span class="o">=</span> <span class="n">signed</span><span class="p">[</span><span class="n">signed</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="n">signed</span><span class="p">[</span><span class="s2">&quot;mid&quot;</span><span class="p">]]</span>
+<span class="n">mid_prints</span> <span class="o">=</span> <span class="n">signed</span><span class="p">[</span><span class="n">signed</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">signed</span><span class="p">[</span><span class="s2">&quot;mid&quot;</span><span class="p">]]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;overall accuracy      : </span><span class="si">{</span><span class="n">overall</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;quote-rule prints     : </span><span class="si">{</span><span class="p">(</span><span class="n">quote_rule</span><span class="p">[</span><span class="s1">&#39;lr_side&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">quote_rule</span><span class="p">[</span><span class="s1">&#39;side&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2"> &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;of </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">quote_rule</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;mid prints (tick test): </span><span class="si">{</span><span class="p">(</span><span class="n">mid_prints</span><span class="p">[</span><span class="s1">&#39;lr_side&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">mid_prints</span><span class="p">[</span><span class="s1">&#39;side&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2"> &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;of </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">mid_prints</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">pd</span><span class="o">.</span><span class="n">crosstab</span><span class="p">(</span><span class="n">signed</span><span class="p">[</span><span class="s2">&quot;lr_side&quot;</span><span class="p">],</span> <span class="n">signed</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">],</span> <span class="n">margins</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">overall accuracy      : 93.3%
+quote-rule prints     : 100.0% of 3,339
+mid prints (tick test): 47.3% of 488</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>side</th>
+      <th>B</th>
+      <th>S</th>
+      <th>All</th>
+    </tr>
+    <tr>
+      <th>lr_side</th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>B</th>
+      <td>1770</td>
+      <td>109</td>
+      <td>1879</td>
+    </tr>
+    <tr>
+      <th>S</th>
+      <td>115</td>
+      <td>1800</td>
+      <td>1915</td>
+    </tr>
+    <tr>
+      <th>U</th>
+      <td>16</td>
+      <td>17</td>
+      <td>33</td>
+    </tr>
+    <tr>
+      <th>All</th>
+      <td>1901</td>
+      <td>1926</td>
+      <td>3827</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>The quote rule is near-perfect - its only failure mode is a quote update
+landing inside the trade's few-ms reporting latency - while mid prints
+fall back to the roughly coin-flip tick test. On real TAQ data the
+quote-rule share is lower and overall accuracy lands around 85–90%; the
+split above shows exactly where the errors live.</p>
+<h2 id="4-quoted-effective-and-realized-spread">4. Quoted, effective and realized spread<a class="headerlink" href="#4-quoted-effective-and-realized-spread" title="Permanent link">#</a></h2>
+<ul>
+<li>quoted: <code>ask - bid</code> at the prevailing quote,</li>
+<li>effective: <code>2·|price - mid|</code> - what aggressors actually paid,</li>
+<li>realized: <code>2·d·(price - mid₊₅ₘ)</code> - what liquidity providers actually
+  kept, using the mid 5 minutes later.</li>
+</ul>
+<p>The 5-minutes-later mid is the <code>marks</code> table asof-joined <strong>forward</strong>: the
+first quote at or after trade-time + 5m. Everything lands in one
+statement, in basis points of the mid.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">spreads</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    WITH j AS (</span>
+<span class="sd">        SELECT symbol, trade_id, price, side, bid, ask, (bid + ask) / 2 AS mid</span>
+<span class="sd">        FROM asof_join(&#39;trades&#39;, &#39;quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;symbol&#39;)</span>
+<span class="sd">    ),</span>
+<span class="sd">    m AS (</span>
+<span class="sd">        SELECT trade_id, (bid + ask) / 2 AS mid_5m</span>
+<span class="sd">        FROM asof_join(&#39;marks&#39;, &#39;quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;symbol&#39;, &#39;forward&#39;)</span>
+<span class="sd">    )</span>
+<span class="sd">    SELECT j.symbol,</span>
+<span class="sd">           avg((j.ask - j.bid) / j.mid) * 1e4                    AS quoted_bps,</span>
+<span class="sd">           avg(2 * abs(j.price - j.mid) / j.mid) * 1e4           AS effective_bps,</span>
+<span class="sd">           avg(2 * (CASE WHEN j.side = &#39;B&#39; THEN 1 ELSE -1 END)</span>
+<span class="sd">                 * (j.price - m.mid_5m) / j.mid) * 1e4           AS realized_bps,</span>
+<span class="sd">           count(*)                                              AS n_trades</span>
+<span class="sd">    FROM j JOIN m USING (trade_id)</span>
+<span class="sd">    WHERE m.mid_5m IS NOT NULL</span>
+<span class="sd">    GROUP BY 1 ORDER BY 1</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">spreads</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>symbol</th>
+      <th>quoted_bps</th>
+      <th>effective_bps</th>
+      <th>realized_bps</th>
+      <th>n_trades</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>AAPL</td>
+      <td>1.775744</td>
+      <td>1.581595</td>
+      <td>2.220676</td>
+      <td>1229</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>MSFT</td>
+      <td>1.742132</td>
+      <td>1.555869</td>
+      <td>-0.421159</td>
+      <td>1335</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>NVDA</td>
+      <td>1.776693</td>
+      <td>1.602655</td>
+      <td>1.263033</td>
+      <td>1212</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">spreads</span><span class="p">))</span>
+<span class="n">w</span> <span class="o">=</span> <span class="mf">0.27</span>
+<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+<span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">col</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">((</span><span class="s2">&quot;quoted_bps&quot;</span><span class="p">,</span> <span class="s2">&quot;effective_bps&quot;</span><span class="p">,</span> <span class="s2">&quot;realized_bps&quot;</span><span class="p">)):</span>
+    <span class="n">ax</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">w</span><span class="p">,</span> <span class="n">spreads</span><span class="p">[</span><span class="n">col</span><span class="p">],</span> <span class="n">width</span><span class="o">=</span><span class="n">w</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">col</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;_bps&quot;</span><span class="p">,</span> <span class="s2">&quot;&quot;</span><span class="p">))</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">spreads</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;Spread measures by symbol (bps of mid)&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;basis points&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+<span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAxYAAAGGCAYAAADmRxfNAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjEsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvctoD+AAAAAlwSFlzAAAPYQAAD2EBqD+naQAATIhJREFUeJzt3XdcVvX///EnIEOUJeBGxYk7M/cemSPNbZZlpWm5WpZSptnScrRLc6VpH00/5aqPe2Wu1EwxNLeCihPQEGS8f3/45fp1BShwXQiXPO63G7cb533e531e57pAryfnfc5xMsYYAQAAAIANnHO7AAAAAACOj2ABAAAAwGYECwAAAAA2I1gAAAAAsBnBAgAAAIDNCBYAAAAAbEawAAAAAGAzggUAAAAAmxEsAAAAANiMYAHgnjFx4kQ5OTkpOjo6t0vJ15ycnDR69OjcLuOuy4nj9vX11bBhwzLVNyEhQRUqVNCkSZNyvK67ITk5WaGhoSpTpoycnZ3VtGnTHN1fVl7rGjVq6OGHH7Ysx8fHq1SpUvr8889zqjzAIRAsgHzo2LFjGjhwoCpVqiRPT0+VLVtWjzzyiJYtW6bk5OTcLg9ANnzyySf6+++/NXTo0NwuxS6+/fZbffDBB5o/f76Sk5O1devW3C4pQx4eHnr99df11ltv6erVq7ldDpBrCBZAPhMeHq46depo//79mjt3ri5evKgtW7aoYsWK6t69uzZu3JjbJQLIops3b2rKlCkaMGCAPD09c7scu9i8ebOCgoLUvHlzOTk55fj+oqOjbTrj8NRTTyk+Pl5ff/21HasCHAvBAshnPvvsM127dk3fffedGjdurEKFCqls2bKaMmWKli9froIFC+Z2iQCy6IcfftCFCxf0xBNP5HYpdnPp0iWH+veoUKFC6tq1q6ZPny5jTG6XA+QKggWQz1y5ckWSVLJkyTTrOnXqpCZNmliWV61aJScnJ23atEkffvihSpcurYIFC6p58+batWuX1bb/7PvRRx8pODhYLi4uOnTokCTp999/V9euXeXv7y93d3dVr15d06dPtxrj3XfflZOTk+XLx8dHbdq00YYNG9LU+t1336latWry8PBQ9erVtXTp0ky/Bv369VPp0qV18eJF9ezZU97e3ipdurS++uorSVJUVJR69eolHx8fBQYGaty4cemOY89jOnz4sHr16qUSJUqoUKFCqlWrliZNmqT4+HhLn5YtW6phw4Zp6kjdx/Xr19Mc46VLl/TYY4/Jz89P9erVs6yfOXOm6tatq4IFC8rb21sdOnTQvn37rMZduHCh6tevLx8fHwUEBKht27Zav3595l5kSWvWrNF9990nDw8PValSRbNmzbJaX61atXSPR5Jq166t+++//7bj36m+rIyfeh3CunXrVKdOHXl6eqphw4bav3+/5Vjuv/9+eXh4qEaNGtq0aVO2j1u6dYbhrbfeUqVKleTm5qZixYrpiSee0JkzZ257zBlZsWKFSpQooZCQEJvqSn0dMtM3uz8fdzr2Q4cOycnJSStXrtThw4ctvzvz58/PcEx7vH/pXWPx999/a/jw4SpatKgKFy6shx9+WBERERnW0bp1a504cUJhYWF3fB2Ae5IBkK989tlnRpIZOXKkSUhIuG3f//3vf0aS6datm3nvvffMhQsXzJEjR0zHjh2Np6enCQsLS9O3e/fu5p133jFRUVFm9erV5tixY2bTpk3G3d3d9O7d2xw+fNjExMSY+fPnm0KFCpl33nkn3X0nJSWZ48ePm0GDBhkPDw/z559/WtbNmzfPSDKjRo0y586dMydOnDCPP/646dy5s5Fkrl69etvjevzxx02JEiXMo48+ajZv3mxiYmIsr8uyZcvMww8/bDZs2GBiYmLMV199ZSSZhQsXWo1hz2NKTEw0QUFBpn379ubIkSPmxo0b5uDBg2b06NFm6dKllu1btGhhGjRokGbcd955x0gy165dS3OM3bp1M6tXrzZXrlwx33zzjTHGmGHDhpmCBQuaL774wly8eNFERESYAQMGmEKFClne07Vr1xpJ5qOPPjJXrlwxMTExZuPGjaZ9+/a3fW2NMUaS6dixo+nZs6c5evSouXDhgnnrrbeMJPPll19a+qW+5nv27LHafuvWrUaS+fzzzzPcR2bqy8r4kkynTp3ME088YU6ePGnOnTtn2rVrZ0qVKmU2bdpk+vbta06cOGHOnz9vOnbsaPz8/Kxe76wctzHGdOnSxXh5eZnvvvvOREdHm99++83UrFnTlChRwpw7d87Sz8fHxwwdOvSOr3mZMmVM586d012Xlboy29eWn4/MHnunTp1MlSpV7jheat22vn/pvdYPPfSQKVKkiFm2bJmJiYkxmzdvNh06dDCVKlUynTp1SlPHgQMH7viz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AAAAbEawAAAAAGAzggUAAAAAmxEsAAAAANiMYAEAAADAZgQLAAAAADYjWAAAAACwGcECAAAAyAHLly/XBx98kOFyTlizZo3efffdHN1HRggWAAAAQA7Yu3evVqxYkeFyTti/f7+WLl2ao/vISIFc2SsAAADyhZpza961fR3of+Cu7Ss7unTpogceeCC3y8gxBAsAAADkS0ePHtXEiRP1/vvva/bs2Tp58qReeuklValSRbGxsZo3b54OHTqkEiVKqGfPnqpSpYpl282bN+vbb7+VJHl5ealmzZrq16+f3NzcMtxfRESEwsPD9fDDDyshIUFDhw5N08fT01OffvqpJN2xBkk6cuSIvvnmGyUlJalJkyb2eFmyjalQAAAAyJfOnz+vWbNmqXHjxrp06ZLq1q0rb29vRUREqHbt2tqwYYMqVaqkixcvqkGDBlqzZo1l22LFiqlhw4Zq2LChgoKC9OWXX6ply5ZKSUnJcH//nArl4uJi2T71a9u2bVq5cqUkZaqGP//8U/fff78OHTqkokWLauLEifroo49y6NW6M85YAAAAIF9744039PTTT1uW+/btq+bNm2vu3LmWtqCgIL3yyis6cODWdKuQkBCFhIRY1j/33HMqV66cVq1apY4dO95xnwUKFNDAgQMty7NmzdLx48e1ceNGSdKrr756xxrGjBmjli1b6r///a8kafjw4WnOaNxNBAsHUW70T7ldwl13cmKn3C4BAOAA+D8SturQoYPV8sqVK1W/fn0999xzMsbIGKNz584pPDxcN2/etEx3+vXXX7V27VqdP39eSUlJcnJyUnh4eKaCxT9t27ZNQ4YM0bRp09SoUaNM17B582arMxRubm7q2rWrfvnlFxtfkewhWAAAACBf8/X1tXyfkJCg69evKyQkRHXq1LHq98gjj1i+//DDDzVx4kQ99dRTqlGjhjw8PLRx40Zdu3YtS/uOiIhQjx49NGTIEMtZk8zUkJSUpKtXr8rf399qfUBAQJb2b08ECwAAAOD/uLu7y9/fXyVKlLCaqvRvX375pSZNmqQBAwZY2saPH5+lfcXHx6tbt26qUaOGJk+enOUaihcvrjNnzli1nTp1Kks12BPBAgCyKD9Ou5CYegEg/+jXr58+++wzPfHEEypbtqykW2cR1qxZo86dO0uSjDFWZye+/fZbRUREZGk/AwcO1NWrV7Vm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f3+1bdtWkjRo0CDNmTNHKSkpafru379fW7du1Q8//KAnnnhCFSpUUJs2bXL8WIB7Qc+ePXX8+HHt3btXmzZtUmxsrB5++GGrPi4uLvrxxx91/vx5Va1aVcWKFVP37t31/fffpxnv4MGDGj16tOWLDylA5tx333169NFH9dprr6W7vn///oqJidGyZcssbbNnz1bfvn3l6emZqX2ULl3a8gc4STpx4oQ2bdpk+WPCs88+q19++UVHjx614UiQF3FXKNxzDh8+rF9//VUjRozQ1q1bJd06/Ttnzhy9+eabcnb+/3l61qxZatq0qX799VdJUsmSJXXu3DmtW7dO7dq1sxr3iy++kLe3t3x9fdWhQweNGDFChQsXvnsHBjgwT09P9e3bV7NmzVJ0dLSefPLJNHdgk6TGjRtr//79OnbsmLZv366ffvpJffv21a5duzR58mRLv2bNmmnp0qV38QiAe8e7776rkJAQLVu2TIUKFbJaV6JECXXs2FGzZ89Wr169tHPnToWFhWXqbH6qGzduWO6cKN0KJlWrVtXZs2d19uxZSVL16tU1e/Zsvf/++/Y5KOQJBAvcc2bOnKlSpUrp008/tWq/fPmyVWA4fPiwduzYIWOMRo8ebekXFBSkmTNnpgkW06dPV8OGDXP+AIB71IABA9SuXTslJCRYbuGckQoVKqhChQrq16+fSpQooWnTpmnSpElycnK6S9UC967g4GA9//zzCg0N1UcffZRm/YABA9StWzdFRERo9uzZqlWrlh544IFMj79nzx5Vr15dkpScnKxvvvlGgYGBVv/XFihQQN98843eeeed296iFo6FYIF7SmJioubNm6ePP/5Yffv2tVo3aNAgq8Awc+ZMNW/eXOvXr7fqt2vXLjVr1kyXLl3iPtuAHdWrV0/t2rVTwYIFVbVq1TTrExMTlZiYmGa6hbe3d7pnNwBk35gxYzRnzpx0z0R06tRJxYsX15dffqmFCxfq3XffzfS4P/30k3bt2qUffvhBkrRq1SpdvXpVR44csTqLkZiYqMDAQP3000/q0qWL7QeEPIFggXvKihUrdPXqVXXs2DHNuq5du6pbt266dOmSfHx8NG/ePI0ZMyZNv3r16ikwMFDffvutXnrppUzve//+/UpKSrJqq1OnTprTzEB+tmjRogzXXbt2TXXq1FHfvn1Vt25d+fr66rffftOHH36oV155hbMVgB0FBATotdde05tvvplmnYuLi/r3768PP/xQBQoUUL9+/dIdIzo6Wlu3blVKSoouXLigdevWac6cORo1apS6desm6daU44ceesgqVEi3HqrXsWNHzZo1i2BxDyFY4J6yb98+DRo0yOqpoqnatGmjxo0ba/v27SpevLgqVaqkrl27punn5OSkoUOHKjw8XNKtueFNmjRJ8/TfVKnr582bl2bdN998o4oVK9p2UIADq1atmtzc3DJcX716dRUsWFDSrbus/f7775ozZ44WL16s6OholS5dWosWLbK60LtatWqZ2ve/nzAM5GchISFWd3qSpJdeekmbN29WXFycChSw/kg4YMAAbdmyRU2bNpWfn1+640VERGj06NFydXWVn5+fatasqd27d6tmzZqSbl1rER0drRdffDHdmp588kl98MEH+vvvv/kj3D3CyRhjcrsIAAAAAI6N280CAAAAsBnBAgAAAIDNCBYAAAAAbEawAAAAAGAzggUAAAAAmxEsAAAAANiMYAEAAADAZgQLAIDDOXLkiH7++Webxzlx4oSWL19uh4oAAAQLAIDDWb16tV5++WWbx9m8ebOGDBlih4oAAAQLAAAAADYjWAAAbHb58mWtWbNGGzZsUGxsrCTp6tWrWrhwof7+++80fRcuXKi4uDjLlKbExETt2bNHy5cv19mzZyVJiYmJ2rx5s37++WdduXIl3f0mJiZq9+7dWrZsmc6fP59un/379+uHH37Q9u3blZKSYsejBgD8U4HcLgAA4NiWLl2qJ598UnXr1pWbm5uOHTum6dOnq3nz5hoxYoTi4uL0zDPPWPpPmzZNc+bMUZ8+fbR69Wq9++67CggIULFixXT9+nXt379fn3/+uaZOnaqSJUvq6tWrOn36tH799VdVqlTJMk50dLQaNmyoggULKiUlRfv27dPChQvVpUsXSVJSUpJ69+6tTZs2qWHDhtq/f7+KFy+u//3vfwoMDLzrrxMA3Os4YwEAsMl7772n0NBQbdy4UatXr9auXbtUoEABubq6qn///po9e7ZV/2+++UbPPPOMnJycJElRUVF69913tX79eu3cuVNt27bVwIEDNWXKFK1du1a7d+9W9erV9dFHH1mNExUVpb59+2rr1q3atm2bXnvtNQ0ePFg3btyQJE2fPl2bN2/Wvn379PPPPys8PFyJiYl644037s4LAwD5DMECAGCTggUL6q+//lJ8fLwkqUiRImrRooUkaeDAgdq2bZv++usvSbculj5x4oT69+9v2b5o0aLq2rWrZblhw4YqU6aM2rdvb9WWOkYqd3d3DR8+3LI8cuRIXbhwQVu2bJEkLVy4UP369VOZMmUkSV5eXhoxYoQWLVpkx6MHAKQiWAAAbPLZZ5/p4MGDCgwM1EMPPaQvvvhCCQkJkqQqVaqoSZMmlrMWs2fPVrt27VSqVCnL9n5+flbjubu7p9uWGlxSlShRQu7u7pblwoULKzAwUKdOnZIknTp1SuXLl7fapkKFCoqNjdXVq1dtPGoAwL8RLAAANqldu7Z27dqlv/76S0888YQ+/vhjPf3005b1zz77rObNm6erV69qyZIlVtdb2CI6Otpq2Rij6OhoBQQESJICAgLSXPR95coVubq6ytvb2y41AAD+P4IFAMAmkZGRkm6dQejXr59GjBihHTt2WNb36tXLcgG3p6en5eJqW0VHR2vTpk2W5Z9//lkpKSmqV6+eJKlp06ZaunSp1Z2gFi9erEaNGsnFxcUuNQAA/j/uCgUAsEn37t1VvXp1NWjQQDdu3NDUqVPVt29fy/qCBQvq8ccf15dffqkXX3xRbm5udtlvoUKF9OSTT2rEiBFKSUnRxIkTNWLECAUFBUmSxowZo8WLF6tjx47q3r27tm/frmXLllmFEQCA/XDGAgBgk61bt6p58+bau3evjh07pk8++UQTJkyw6pN6cfa/p0FVrlxZnTp1smoLCQmxunBbkmrUqKG2bdtabTd48GD99NNPunr1qsLDwzV16lRNmjTJ0qdo0aLat2+fGjdurK1btyowMFB79+5V/fr1LX2Cg4P1yCOP2HT8AIBbnIwxJreLAADc215++WVt27bNaooUAODewlQoAECO2bt3r3799VdNmzZN33//fW6XAwDIQUyFAgDkmD/++EO//fabvv76az388MO5XQ4AIAcxFQoAAACAzThjAQAAAMBmBAsAAAAANiNYAAAAALAZwQIAAACAzQgWAAAAAGxGsAAAAABgM4IFAAAAAJsRLAAAAADYjGABAAAAwGb/D1pPOSdhz4OrAAAAAElFTkSuQmCC" alt="output figure" loading="lazy"></div></div>
+<p>Effective sits a notch below quoted because 10% of prints execute at mid.
+Realized shows no <em>systematic</em> gap to effective - this synthetic flow
+carries no information, so on average the mid does not drift against the
+liquidity provider after the trade (the per-symbol estimates scatter
+around effective because 5-minute mid volatility dwarfs the spread; that
+noisiness is faithful to the real-world estimator too). On a real tape
+realized sits systematically <em>below</em> effective, and the gap
+(2·d·(mid₊₅ₘ − mid), the price impact) is the adverse-selection cost -
+this decomposition is the standard way to measure it.</p>
+<h2 id="5-tolerance-refuse-stale-quotes">5. Tolerance: refuse stale quotes<a class="headerlink" href="#5-tolerance-refuse-stale-quotes" title="Permanent link">#</a></h2>
+<p>By default the asof join reaches arbitrarily far back - against a gappy
+quote feed (outages, subsampled vendor files) that silently marks trades
+against minutes-old NBBO. The optional tolerance (raw microseconds, like
+every raw time argument in h5i-db) bounds the lookback: unmatched trades
+keep NULL quote columns, so staleness becomes <em>visible</em> and countable. We
+thin the quote feed to 25% to simulate the problem:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">qs</span> <span class="o">=</span> <span class="n">qp</span><span class="p">[</span><span class="n">rng</span><span class="o">.</span><span class="n">random</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">qp</span><span class="p">))</span> <span class="o">&lt;</span> <span class="mf">0.25</span><span class="p">]</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;quotes_sparse&quot;</span><span class="p">,</span> <span class="n">quote_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;quotes_sparse&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span><span class="n">qs</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">quote_schema</span><span class="p">))</span>
+
+<span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">tol</span> <span class="ow">in</span> <span class="p">[(</span><span class="s2">&quot;no tolerance&quot;</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;60s tolerance&quot;</span><span class="p">,</span> <span class="mi">60_000_000</span><span class="p">),</span>
+                   <span class="p">(</span><span class="s2">&quot;5s tolerance&quot;</span><span class="p">,</span> <span class="mi">5_000_000</span><span class="p">)]:</span>
+    <span class="n">args</span> <span class="o">=</span> <span class="s2">&quot;&#39;ts&#39;, &#39;ts&#39;, &#39;symbol&#39;&quot;</span> <span class="o">+</span> <span class="p">(</span><span class="sa">f</span><span class="s2">&quot;, &#39;backward&#39;, </span><span class="si">{</span><span class="n">tol</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">tol</span> <span class="k">else</span> <span class="s2">&quot;&quot;</span><span class="p">)</span>
+    <span class="n">r</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;SELECT count(*) AS n, count(bid) AS matched &quot;</span>
+        <span class="sa">f</span><span class="s2">&quot;FROM asof_join(&#39;trades&#39;, &#39;quotes_sparse&#39;, </span><span class="si">{</span><span class="n">args</span><span class="si">}</span><span class="s2">)&quot;</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">label</span><span class="si">:</span><span class="s2">&gt;13</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">r</span><span class="p">[</span><span class="s1">&#39;matched&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="n">r</span><span class="p">[</span><span class="s1">&#39;n&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> trades matched &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">r</span><span class="p">[</span><span class="s1">&#39;matched&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">r</span><span class="p">[</span><span class="s1">&#39;n&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class=""> no tolerance: 3,823 of 3,827 trades matched (99.9%)
+60s tolerance: 2,671 of 3,827 trades matched (69.8%)
+ 5s tolerance: 1,206 of 3,827 trades matched (31.5%)</pre></div></div>
+<p>Without a tolerance every trade gets <em>some</em> quote, however stale; with a
+freshness requirement, the trades whose prevailing quote is too old
+honestly report NULL instead. In production that NULL share is a
+data-quality metric worth alerting on.</p>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li><code>asof_join('trades', 'quotes', 'ts', 'ts', 'symbol')</code> is the whole
+  trades-vs-quotes alignment - per-key, time-correct, streaming on sorted
+  storage, and it agrees with <code>pandas.merge_asof</code> row for row.</li>
+<li>Direction and tolerance are first-class: <code>'forward'</code> fetched the
+  5-minutes-later mid for realized spread; a microsecond tolerance turned
+  stale-quote marking into visible, countable NULLs. Colliding right
+  columns get <code>_right</code>.</li>
+<li>The join composes with the rest of SQL - Lee-Ready signing and the full
+  quoted/effective/realized decomposition are each one statement (CTEs +
+  <code>lag()</code> + <code>CASE</code>).</li>
+<li>Scoring against ground truth requires a tape where trades and quotes
+  share one price process - worth remembering before benchmarking signing
+  accuracy on any synthetic data.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="../../cookbook/01_market_data_engineering/03_gapfill_resample.html"><span class="dir">← Previous</span><span class="pn-title">Regular grids for irregular markets: gapfill and resample</span></a><a class="next" href="../../cookbook/01_market_data_engineering/05_corporate_actions.html"><span class="dir">Next →</span><span class="pn-title">Corporate actions: split adjustment without losing the tape</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-a-tape-with-known-ground-truth">1. A tape with known ground truth</a></li><li><a href="#2-the-join-itself">2. The join itself</a></li><li><a href="#3-lee-ready-trade-signing">3. Lee-Ready trade signing</a></li><li><a href="#4-quoted-effective-and-realized-spread">4. Quoted, effective and realized spread</a></li><li><a href="#5-tolerance-refuse-stale-quotes">5. Tolerance: refuse stale quotes</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../../">Home</a>
+      <a href="../../manual/">Manual</a>
+      <a href="../../api/">Python API</a>
+      <a href="../../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../../";</script>
+<script src="../../_static/docs.js" defer></script>
+</body>
+</html>

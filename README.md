@@ -8,8 +8,9 @@
 - **Agent-Friendly Mutations**: Mutations can be previewed before they commit and gated by policy.
 - **Crash-Safe by Construction**: Proven by tests that kill the writer at every commit step. An agent killed mid-write cannot corrupt the store.  
 
-📖 **[Documentation](https://h5i-dev.github.io/h5i-db/)** · [Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) ·
-[Operations guide](docs/OPERATIONS.md) · [SKILL](SKILL.md)
+📖 **[Documentation](https://db.h5i.dev/manual/)** · [Python API](https://db.h5i.dev/api/) ·
+[Cookbook tutorials](https://db.h5i.dev/cookbook/) ·
+[Operations guide](https://db.h5i.dev/manual/operations.html) · [SKILL](SKILL.md)
 
 ---
 

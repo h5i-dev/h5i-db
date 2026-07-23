@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Exceptions · h5i-db docs</title>
+  <meta name="description" content="The typed error hierarchy: every h5i-db error carries a stable code, an actionable hint, and a retryable flag.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../_static/logo.png">
+  <link rel="apple-touch-icon" href="../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Exceptions · h5i-db docs">
+  <meta property="og:description" content="The typed error hierarchy: every h5i-db error carries a stable code, an actionable hint, and a retryable flag.">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Exceptions · h5i-db docs">
+  <meta name="twitter:description" content="The typed error hierarchy: every h5i-db error carries a stable code, an actionable hint, and a retryable flag.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../">
+    <img src="../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../manual/" >Manual</a></li>
+    <li><a href="../api/" class="active">Python API</a></li>
+    <li><a href="../cookbook/" >Cookbook</a></li>
+    <li><a href="../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html" class="active">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../api/">Python API</a>
+<span class="sep">/</span>
+<span>Exceptions</span></div>
+<h1 id="exceptions">Exceptions<a class="headerlink" href="#exceptions" title="Permanent link">#</a></h1>
+<p>Every h5i-db failure raises a subclass of <code>h5i_db.H5iError</code>, and every
+instance carries the same structured envelope the CLI prints on stderr:</p>
+<div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;nope&quot;</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">NotFoundError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="n">e</span><span class="o">.</span><span class="n">code</span>        <span class="c1"># &quot;table_not_found&quot;   — stable, branchable identifier</span>
+    <span class="n">e</span><span class="o">.</span><span class="n">hint</span>        <span class="c1"># actionable suggestion (e.g. how to list tables)</span>
+    <span class="n">e</span><span class="o">.</span><span class="n">retryable</span>   <span class="c1"># False               — retrying without change won&#39;t help</span>
+</code></pre></div>
+
+<p>Messages are formatted <code>"[{code}] {message} (hint: {hint})"</code>.</p>
+<h2 id="hierarchy">Hierarchy<a class="headerlink" href="#hierarchy" title="Permanent link">#</a></h2>
+<p>Everything subclasses <code>H5iError</code>, which subclasses <code>Exception</code>:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Exception</th>
+<th>Meaning</th>
+<th>Typical codes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>H5iError</code></td>
+<td>Base class for all h5i-db errors (attributes: <code>code</code>, <code>hint</code>, <code>retryable</code>)</td>
+<td><code>closed</code>, <code>query</code></td>
+</tr>
+<tr>
+<td><code>NotFoundError</code></td>
+<td>Database, table, version or snapshot does not exist</td>
+<td><code>database_not_found</code>, <code>table_not_found</code>, <code>version_not_found</code>, <code>snapshot_not_found</code></td>
+</tr>
+<tr>
+<td><code>ConflictError</code></td>
+<td>Concurrent-writer conflict or already-exists collision; usually retryable</td>
+<td><code>version_conflict</code>, <code>table_exists</code>, <code>database_exists</code>, <code>lock_timeout</code></td>
+</tr>
+<tr>
+<td><code>InvalidInputError</code></td>
+<td>Bad argument, schema mismatch, sort-order violation or unsupported operation</td>
+<td><code>invalid_input</code>, <code>schema_mismatch</code>, <code>sort_order_violation</code>, <code>unsupported</code></td>
+</tr>
+<tr>
+<td><code>PolicyError</code></td>
+<td>Operation forbidden by the mutation policy or a read-only handle</td>
+<td><code>policy_violation</code>, <code>read_only</code></td>
+</tr>
+<tr>
+<td><code>CorruptionError</code></td>
+<td>Checksum/format verification failed; data may be damaged or written by a newer h5i-db</td>
+<td><code>corruption</code>, <code>format_too_new</code></td>
+</tr>
+<tr>
+<td><code>LimitError</code></td>
+<td>A configured limit (memory, max_rows, segment count) was exceeded</td>
+<td><code>limit_exceeded</code></td>
+</tr>
+<tr>
+<td><code>TimeoutError</code></td>
+<td>The operation exceeded its deadline</td>
+<td><code>timeout</code></td>
+</tr>
+<tr>
+<td><code>StorageError</code></td>
+<td>Underlying storage / IO / encoding failure</td>
+<td><code>storage</code>, <code>io</code>, <code>arrow</code>, <code>parquet</code>, <code>metadata</code></td>
+</tr>
+</tbody>
+</table></div>
+<div class="admonition note">
+<p class="admonition-title"><code>h5i_db.TimeoutError</code> shadows the builtin</p>
+<p>It subclasses <code>H5iError</code>, <strong>not</strong> Python's builtin <code>TimeoutError</code> — catch
+<code>h5i_db.TimeoutError</code> (or <code>H5iError</code>) specifically.</p>
+</div>
+<h2 id="patterns">Patterns<a class="headerlink" href="#patterns" title="Permanent link">#</a></h2>
+<p><strong>Branch on type for control flow, on <code>.code</code> for precision:</strong></p>
+<div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">batch</span><span class="p">,</span> <span class="n">expected_version</span><span class="o">=</span><span class="n">v</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">ConflictError</span><span class="p">:</span>
+    <span class="n">v</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;version&quot;</span><span class="p">]</span>     <span class="c1"># re-read, re-derive, retry</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">e</span><span class="o">.</span><span class="n">code</span> <span class="o">==</span> <span class="s2">&quot;sort_order_violation&quot;</span><span class="p">:</span>
+        <span class="n">batch</span> <span class="o">=</span> <span class="n">batch</span><span class="o">.</span><span class="n">sort_by</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>              <span class="c1"># fix and retry once</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="k">raise</span>
+</code></pre></div>
+
+<p><strong>Respect <code>retryable</code>:</strong> it encodes whether backing off can help.
+<code>ConflictError</code> and <code>TimeoutError</code> generally can be retried;
+<code>InvalidInputError</code> and <code>PolicyError</code> cannot — fix the call (or get the plan
+reviewed) instead.</p>
+<p><strong>Surface <code>hint</code>:</strong> hints are written to be shown — to a user, a log, or an
+LLM agent deciding its next step. Don't swallow them.</p>
+<p><strong>Catch-all:</strong> <code>except h5i_db.H5iError</code> catches every h5i-db failure while
+letting genuine bugs (<code>TypeError</code>, …) propagate. A closed handle raises
+<code>H5iError</code> with <code>code == "closed"</code>.</p>
+    <nav class="page-nav"><a class="prev" href="../api/results-and-plans.html"><span class="dir">← Previous</span><span class="pn-title">QueryResult &amp; MutationPlan</span></a><a class="next" href="../cookbook/index.html"><span class="dir">Next →</span><span class="pn-title">Cookbook</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#hierarchy">Hierarchy</a></li><li><a href="#patterns">Patterns</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../">Home</a>
+      <a href="../manual/">Manual</a>
+      <a href="../api/">Python API</a>
+      <a href="../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../";</script>
+<script src="../_static/docs.js" defer></script>
+</body>
+</html>

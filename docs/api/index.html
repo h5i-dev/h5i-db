@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Overview · h5i-db docs</title>
+  <meta name="description" content="The h5i_db Python library — install, the five-minute tour, data interchange, and error handling.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../_static/logo.png">
+  <link rel="apple-touch-icon" href="../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Overview · h5i-db docs">
+  <meta property="og:description" content="The h5i_db Python library — install, the five-minute tour, data interchange, and error handling.">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Overview · h5i-db docs">
+  <meta name="twitter:description" content="The h5i_db Python library — install, the five-minute tour, data interchange, and error handling.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../">
+    <img src="../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../manual/" >Manual</a></li>
+    <li><a href="../api/" class="active">Python API</a></li>
+    <li><a href="../cookbook/" >Cookbook</a></li>
+    <li><a href="../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html" class="active">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../api/">Python API</a>
+<span class="sep">/</span>
+<span>Overview</span></div>
+<h1 id="python-api">Python API<a class="headerlink" href="#python-api" title="Permanent link">#</a></h1>
+<p class="doc-lede">The <code>h5i_db</code> package is an ergonomic wrapper over the
+native Rust engine. All tabular data crosses the boundary as Arrow, so it plugs
+directly into pyarrow, pandas, and Polars.</p>
+
+<div class="doc-divider"></div>
+
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>pip<span class="w"> </span>install<span class="w"> </span>h5i-db
+</code></pre></div>
+
+<p>The only required dependency is <code>pyarrow &gt;= 14</code>. <code>to_pandas()</code> /
+<code>to_polars()</code> activate when pandas / Polars are installed.</p>
+<h2 id="the-five-minute-tour">The five-minute tour<a class="headerlink" href="#the-five-minute-tour" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="s2">&quot;market.db&quot;</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">([</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+<span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">table</span><span class="p">)</span>                    <span class="c1"># pyarrow Table / RecordBatch(es)</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+<span class="n">old</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>            <span class="c1"># time travel</span>
+<span class="n">plan</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">t0_us</span><span class="p">,</span> <span class="n">t1_us</span><span class="p">)</span>   <span class="c1"># previewable mutation</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>                                  <span class="c1"># or plan.discard()</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>                                    <span class="c1"># or use `with h5i_db.Database(...) as db:`</span>
+</code></pre></div>
+
+<h2 id="the-pieces">The pieces<a class="headerlink" href="#the-pieces" title="Permanent link">#</a></h2>
+<div class="card-grid">
+  <a class="card" href="database.html">
+    <span class="card-no">CLASS</span>
+    <span class="card-title">Database</span>
+    <span class="card-desc">Open/create databases; tables, ingest, SQL, time travel, snapshots, plans, policy, maintenance.</span>
+  </a>
+  <a class="card" href="results-and-plans.html">
+    <span class="card-no">CLASSES</span>
+    <span class="card-title">QueryResult &amp; MutationPlan</span>
+    <span class="card-desc">Result conversion to Arrow/pandas/Polars, and the preview → apply mutation flow.</span>
+  </a>
+  <a class="card" href="exceptions.html">
+    <span class="card-no">EXCEPTIONS</span>
+    <span class="card-title">Error types</span>
+    <span class="card-desc">The typed hierarchy under H5iError, with .code, .hint, and .retryable on every error.</span>
+  </a>
+</div>
+
+<h2 id="data-in-data-out">Data in, data out<a class="headerlink" href="#data-in-data-out" title="Permanent link">#</a></h2>
+<p>Everything tabular is Arrow:</p>
+<ul>
+<li><strong>In</strong>: <code>write()</code> / <code>append()</code> accept a <code>pyarrow.Table</code>, a <code>RecordBatch</code>,
+  or a sequence of batches (<code>TableLike</code>). Coming from pandas or Polars:
+  <code>pa.Table.from_pandas(df)</code> / <code>pl_df.to_arrow()</code>.</li>
+<li><strong>Out</strong>: <code>read()</code> returns a <code>pyarrow.Table</code>; <code>sql()</code> returns a
+  <a href="results-and-plans.html#queryresult"><code>QueryResult</code></a> with <code>.to_arrow()</code>,
+  <code>.to_pandas()</code>, <code>.to_polars()</code>.</li>
+</ul>
+<p>Because the interchange is Arrow IPC, there is no per-row conversion cost and
+no type fidelity loss.</p>
+<h2 id="error-handling">Error handling<a class="headerlink" href="#error-handling" title="Permanent link">#</a></h2>
+<p>Every failure raises a subclass of <code>h5i_db.H5iError</code> carrying the same
+structured envelope the CLI prints: <code>.code</code> (stable string), <code>.hint</code>
+(actionable), <code>.retryable</code> (worth retrying?).</p>
+<div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM h5i(&#39;trades&#39;)&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">max_rows</span><span class="o">=</span><span class="mi">1_000_000</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">TimeoutError</span><span class="p">:</span>
+    <span class="o">...</span>                                   <span class="c1"># raise the timeout or narrow the query</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">LimitError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="p">)</span>                         <span class="c1"># &quot;limit_exceeded&quot;</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">ConflictError</span><span class="p">:</span>
+    <span class="o">...</span>                                   <span class="c1"># retryable — another writer won the race</span>
+</code></pre></div>
+
+<p>See <a href="exceptions.html">Exceptions</a> for the full hierarchy and code table.</p>
+<h2 id="versioning-note">Versioning note<a class="headerlink" href="#versioning-note" title="Permanent link">#</a></h2>
+<p><code>h5i_db.__version__</code> reports the installed engine version. The pure-Python
+wrapper (<code>Database</code>, <code>QueryResult</code>, <code>MutationPlan</code>) sits on the private
+native module <code>h5i_db._native</code>; treat everything not exported from <code>h5i_db</code>
+itself as internal.</p>
+    <nav class="page-nav"><a class="prev" href="../manual/operations.html"><span class="dir">← Previous</span><span class="pn-title">Operations guide</span></a><a class="next" href="../api/database.html"><span class="dir">Next →</span><span class="pn-title">Database</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-five-minute-tour">The five-minute tour</a></li><li><a href="#the-pieces">The pieces</a></li><li><a href="#data-in-data-out">Data in, data out</a></li><li><a href="#error-handling">Error handling</a></li><li><a href="#versioning-note">Versioning note</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../">Home</a>
+      <a href="../manual/">Manual</a>
+      <a href="../api/">Python API</a>
+      <a href="../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../";</script>
+<script src="../_static/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Streaming appends and tail(): a live feed on a versioned store · h5i-db docs</title>
+  <meta name="description" content="An h5i-db table with an append-only history doubles as a message log: every append is one commit, commits are strictly ordered, and a reader that remembers the last version it processed can fetch exactly the rows added …">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../../_static/logo.png">
+  <link rel="apple-touch-icon" href="../../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Streaming appends and tail(): a live feed on a versioned store · h5i-db docs">
+  <meta property="og:description" content="An h5i-db table with an append-only history doubles as a message log: every append is one commit, commits are strictly ordered, and a reader that remembers the last version it processed can fetch exactly the rows added …">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Streaming appends and tail(): a live feed on a versioned store · h5i-db docs">
+  <meta name="twitter:description" content="An h5i-db table with an append-only history doubles as a message log: every append is one commit, commits are strictly ordered, and a reader that remembers the last version it processed can fetch exactly the rows added …">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../../">
+    <img src="../../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../../manual/" >Manual</a></li>
+    <li><a href="../../api/" >Python API</a></li>
+    <li><a href="../../cookbook/" class="active">Cookbook</a></li>
+    <li><a href="../../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html" class="active">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html">Maintenance: verify, compact, vacuum - keeping a versioned store healthy</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../../cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Fundamentals</span>
+<span class="sep">/</span>
+<span>Streaming appends and tail(): a live feed on a versioned store</span></div>
+<h1>Streaming appends and tail(): a live feed on a versioned store</h1>
+<p>An h5i-db table with an append-only history doubles as a message log:
+every <code>append</code> is one commit, commits are strictly ordered, and a reader
+that remembers the last version it processed can fetch exactly the rows
+added since - no timestamps-as-cursors guesswork, no missed or double
+rows. That turns "intraday ticks land in the research database with a
+one-day lag" into "the research database <em>is</em> the feed consumer". In this
+recipe we:</p>
+<ol>
+<li>simulate a live tick feed as a writer appending in chunks,</li>
+<li>consume it with SQL <code>tail('trades', after_version, poll_ms)</code> - and see
+   why the <code>LIMIT</code> is not optional,</li>
+<li>show the simpler high-water-mark polling pattern used in production,</li>
+<li>maintain 1-minute bars <strong>incrementally</strong>, recomputing only the buckets
+   the newest chunk touched,</li>
+<li>break the pure-append chain on purpose and read the error.</li>
+</ol>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_streaming&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-one-trading-day-chopped-into-feed-chunks">1. One trading day, chopped into feed chunks<a class="headerlink" href="#1-one-trading-day-chopped-into-feed-chunks" title="Permanent link">#</a></h2>
+<p><code>tail</code> works on a <strong>pure-append version chain</strong>: any <code>write</code>, delete,
+replace or restore in the version range breaks the incremental diff (we
+demonstrate this in section 5). So streaming tables should be append-only
+by construction - raw feeds usually are.</p>
+<p>We interleave writer and reader sequentially in one process. That is not a
+limitation of the database (handles from different processes coordinate
+through optimistic concurrency - see the multi-writer recipe); it keeps
+this notebook deterministic.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">15_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+
+<span class="n">N_CHUNKS</span> <span class="o">=</span> <span class="mi">6</span>
+<span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">trades</span><span class="p">)</span>
+<span class="n">step</span> <span class="o">=</span> <span class="n">n</span> <span class="o">//</span> <span class="n">N_CHUNKS</span>
+<span class="n">chunks</span> <span class="o">=</span> <span class="p">[</span><span class="n">trades</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="n">i</span> <span class="o">*</span> <span class="n">step</span><span class="p">,</span> <span class="n">step</span> <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">N_CHUNKS</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">n</span> <span class="o">-</span> <span class="p">(</span><span class="n">N_CHUNKS</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">step</span><span class="p">)</span>
+          <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">N_CHUNKS</span><span class="p">)]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">n</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> trades -&gt; </span><span class="si">{</span><span class="n">N_CHUNKS</span><span class="si">}</span><span class="s2"> feed chunks of ~</span><span class="si">{</span><span class="n">step</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">29,233 trades -&gt; 6 feed chunks of ~4,872 rows</pre></div></div>
+<h2 id="2-writer-appends-reader-tails">2. Writer appends, reader tails<a class="headerlink" href="#2-writer-appends-reader-tails" title="Permanent link">#</a></h2>
+<p>The reader's cursor is a <strong>version number</strong>, not a timestamp.
+<code>tail('trades', after_version, poll_ms)</code> streams every row committed after
+<code>after_version</code>, polling for new commits every <code>poll_ms</code> - which makes it
+an <em>unbounded</em> source: without a <code>LIMIT</code> the query never finishes, it
+just waits for the next commit. So the reader first peeks at
+<code>versions()</code> to learn how many rows are actually available, then tails
+with exactly that <code>LIMIT</code>.</p>
+<p>We also maintain 1-minute bars incrementally as rows arrive - but only
+for the buckets the new batch touched. The first affected bucket is the
+minute containing the batch's earliest row; everything before that is
+closed and never recomputed. <code>read(time_start=...)</code> (raw microseconds)
+prunes the re-read to that tail of the table.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">consume_new</span><span class="p">(</span><span class="n">last_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">rows_seen</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Fetch exactly the rows committed after `last_version`, or None.&quot;&quot;&quot;</span>
+    <span class="n">head</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">available</span> <span class="o">=</span> <span class="n">head</span><span class="p">[</span><span class="s2">&quot;rows&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">rows_seen</span>
+    <span class="k">if</span> <span class="n">available</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">return</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;SELECT * FROM tail(&#39;trades&#39;, </span><span class="si">{</span><span class="n">last_version</span><span class="si">}</span><span class="s2">, 25) LIMIT </span><span class="si">{</span><span class="n">available</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+
+<span class="k">def</span> <span class="nf">recompute_bars</span><span class="p">(</span><span class="n">bars</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">batch</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Recompute 1m bars from the first bucket `batch` touches, in place.&quot;&quot;&quot;</span>
+    <span class="n">first_bucket</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;1min&quot;</span><span class="p">)</span>
+    <span class="n">part</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">time_start</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">first_bucket</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">))</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="n">grp</span> <span class="o">=</span> <span class="n">part</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="n">part</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;1min&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="n">fresh</span> <span class="o">=</span> <span class="n">grp</span><span class="o">.</span><span class="n">apply</span><span class="p">(</span>
+        <span class="k">lambda</span> <span class="n">g</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">({</span>
+            <span class="s2">&quot;high&quot;</span><span class="p">:</span> <span class="n">g</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span>
+            <span class="s2">&quot;low&quot;</span><span class="p">:</span> <span class="n">g</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span>
+            <span class="s2">&quot;volume&quot;</span><span class="p">:</span> <span class="n">g</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span>
+            <span class="s2">&quot;vwap&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">g</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="n">g</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">/</span> <span class="n">g</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span>
+        <span class="p">}),</span>
+        <span class="n">include_groups</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">bars</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">fresh</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="s2">&quot;index&quot;</span><span class="p">))</span>
+    <span class="k">return</span> <span class="nb">len</span><span class="p">(</span><span class="n">fresh</span><span class="p">)</span>
+
+
+<span class="n">bars</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="n">last_version</span><span class="p">,</span> <span class="n">rows_seen</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;sequence&quot;</span><span class="p">],</span> <span class="mi">0</span>
+
+<span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">chunk</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">chunks</span><span class="p">):</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">chunk</span><span class="p">)</span>                      <span class="c1"># -- the writer</span>
+
+    <span class="n">batch</span> <span class="o">=</span> <span class="n">consume_new</span><span class="p">(</span><span class="n">last_version</span><span class="p">,</span> <span class="n">rows_seen</span><span class="p">)</span>    <span class="c1"># -- the reader</span>
+    <span class="n">last_version</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span>
+    <span class="n">rows_seen</span> <span class="o">+=</span> <span class="nb">len</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span>
+    <span class="n">touched</span> <span class="o">=</span> <span class="n">recompute_bars</span><span class="p">(</span><span class="n">bars</span><span class="p">,</span> <span class="n">batch</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;chunk </span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">: consumed </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">batch</span><span class="p">)</span><span class="si">:</span><span class="s2">&gt;5,</span><span class="si">}</span><span class="s2"> rows &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;(</span><span class="si">{</span><span class="n">batch</span><span class="p">[</span><span class="s1">&#39;ts&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="si">:</span><span class="s2">%H:%M:%S</span><span class="si">}</span><span class="s2"> -&gt; </span><span class="si">{</span><span class="n">batch</span><span class="p">[</span><span class="s1">&#39;ts&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="si">:</span><span class="s2">%H:%M:%S</span><span class="si">}</span><span class="s2">), &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;recomputed </span><span class="si">{</span><span class="n">touched</span><span class="si">:</span><span class="s2">&gt;3</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">bars</span><span class="p">)</span><span class="si">}</span><span class="s2"> bars&quot;</span><span class="p">)</span>
+
+<span class="k">assert</span> <span class="n">rows_seen</span> <span class="o">==</span> <span class="n">n</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">reader consumed all </span><span class="si">{</span><span class="n">rows_seen</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows; cursor at version </span><span class="si">{</span><span class="n">last_version</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">chunk 0: consumed 4,872 rows (13:30:00 -&gt; 13:52:09), recomputed  46 of 46 bars
+chunk 1: consumed 4,872 rows (13:52:09 -&gt; 14:19:08), recomputed  56 of 100 bars</pre><pre class="">chunk 2: consumed 4,872 rows (14:19:10 -&gt; 15:16:46), recomputed 116 of 214 bars</pre><pre class="">chunk 3: consumed 4,872 rows (15:16:49 -&gt; 17:50:28), recomputed 310 of 522 bars
+chunk 4: consumed 4,872 rows (17:50:33 -&gt; 19:23:06), recomputed 188 of 708 bars</pre><pre class="">chunk 5: consumed 4,873 rows (19:23:06 -&gt; 19:59:59), recomputed  74 of 780 bars
+
+reader consumed all 29,233 rows; cursor at version 6</pre></div></div>
+<p>The incremental bars must equal a from-scratch rollup - one SQL
+<code>time_bucket</code> over the full table is the ground truth:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">full</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT time_bucket(&#39;1m&#39;, ts) AS bar, symbol,</span>
+<span class="sd">           max(price) AS high, min(price) AS low,</span>
+<span class="sd">           sum(size) AS volume, vwap(price, size) AS vwap</span>
+<span class="sd">    FROM trades GROUP BY bar, symbol ORDER BY bar, symbol</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+<span class="n">inc</span> <span class="o">=</span> <span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="o">.</span><span class="n">from_dict</span><span class="p">(</span><span class="n">bars</span><span class="p">,</span> <span class="n">orient</span><span class="o">=</span><span class="s2">&quot;index&quot;</span><span class="p">)</span>
+       <span class="o">.</span><span class="n">rename_axis</span><span class="p">([</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+       <span class="o">.</span><span class="n">astype</span><span class="p">({</span><span class="s2">&quot;volume&quot;</span><span class="p">:</span> <span class="s2">&quot;int64&quot;</span><span class="p">}))</span>  <span class="c1"># the pd.Series aggregation upcast volume to float</span>
+<span class="n">pd</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_frame_equal</span><span class="p">(</span>
+    <span class="n">full</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">inc</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span> <span class="n">check_like</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">full</span><span class="p">)</span><span class="si">}</span><span class="s2"> incremental bars match the full recompute exactly&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">780 incremental bars match the full recompute exactly</pre></div></div>
+<h2 id="3-tail-is-unbounded-respect-the-limit">3. <code>tail</code> is unbounded - respect the LIMIT<a class="headerlink" href="#3-tail-is-unbounded-respect-the-limit" title="Permanent link">#</a></h2>
+<p>Ask for more rows than have been committed and <code>tail</code> does exactly what a
+feed consumer should: it <em>waits</em> for the next commit. In a notebook that
+means hanging forever, so always pair <code>tail</code> with a <code>LIMIT</code> sized to what
+you know is available (as above) and a <code>timeout=</code> backstop. Here we
+request one row too many, with a 1.5 s deadline:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">&quot;SELECT * FROM tail(&#39;trades&#39;, 0, 25) LIMIT </span><span class="si">{</span><span class="n">n</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="n">timeout</span><span class="o">=</span><span class="mf">1.5</span><span class="p">,</span>
+    <span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">TimeoutError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: code=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">!r}</span><span class="s2"> retryable=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">retryable</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;tail kept polling for a commit that never came - the timeout, not&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;the LIMIT, ended the query.&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">TimeoutError: code=&#x27;timeout&#x27; retryable=True
+tail kept polling for a commit that never came - the timeout, not
+the LIMIT, ended the query.</pre></div></div>
+<p>One more streaming caveat: <code>tail</code> produces an unbounded stream, so
+pipeline-breaking operators (aggregations, sorts) cannot run directly on
+top of it. Consume rows first, aggregate client-side - exactly what the
+incremental-bar loop above does.</p>
+<h2 id="4-the-high-water-mark-pattern-no-tail-required">4. The high-water-mark pattern (no <code>tail</code> required)<a class="headerlink" href="#4-the-high-water-mark-pattern-no-tail-required" title="Permanent link">#</a></h2>
+<p>Most production pollers do not need a blocking stream: on a schedule,
+compare the head version to your cursor and range-read only the new rows.
+<code>read(time_start=...)</code> prunes on the time column, so re-reading "everything
+after my high-water mark" costs proportionally to the new data, not the
+table size. This is the pattern to reach for first - <code>tail</code> adds value
+when you want push-style blocking delivery.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">cursor_version</span><span class="p">,</span> <span class="n">hwm_us</span> <span class="o">=</span> <span class="mi">2</span><span class="p">,</span> <span class="kc">None</span>  <span class="c1"># pretend we last processed version 2</span>
+
+<span class="n">head</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span>
+<span class="k">if</span> <span class="n">head</span> <span class="o">&gt;</span> <span class="n">cursor_version</span><span class="p">:</span>
+    <span class="n">hwm_us</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">compute</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">cursor_version</span><span class="p">)[</span><span class="s2">&quot;ts&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+    <span class="n">new_rows</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">time_start</span><span class="o">=</span><span class="n">hwm_us</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cursor v</span><span class="si">{</span><span class="n">cursor_version</span><span class="si">}</span><span class="s2"> -&gt; head v</span><span class="si">{</span><span class="n">head</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">new_rows</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> new rows &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;(matches tail-based count: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">new_rows</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">n</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">step</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">cursor v2 -&gt; head v6: 19,489 new rows (matches tail-based count: True)</pre></div></div>
+<h2 id="5-breaking-the-pure-append-chain">5. Breaking the pure-append chain<a class="headerlink" href="#5-breaking-the-pure-append-chain" title="Permanent link">#</a></h2>
+<p>Apply any non-append commit - here a one-minute <code>delete_range</code> - and
+<code>tail</code> across that version can no longer compute an incremental diff. The
+error is loud and specific, which is the point: silent gaps are what kill
+feed consumers.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">lo</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 15:00:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">lo</span><span class="p">,</span> <span class="n">lo</span> <span class="o">+</span> <span class="mi">60_000_000</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;ops correction&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM tail(&#39;trades&#39;, 0, 25) LIMIT 10&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">H5iError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: code=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">))</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">InvalidInputError: code=&#x27;unsupported&#x27;
+[unsupported] unsupported operation: incremental diff requires a pure-append chain, but version 7 is `delete_range`; fall back to a full scan of version 7, or diff a range that excludes it</pre></div></div>
+<p>The message names the offending version and offers the fallback: full
+scan of the post-mutation state, or tail a version range that excludes
+it. If a table must stay tail-able, protect it with
+<code>set_policy(direct_delete=False, direct_write=False, ...)</code> (recipe 06) and
+route corrections to a downstream <em>cleaned</em> table instead.</p>
+<h2 id="batch-size-guidance">Batch-size guidance<a class="headerlink" href="#batch-size-guidance" title="Permanent link">#</a></h2>
+<p>Every commit writes a manifest and at least one Parquet segment, so
+commits-per-second - not rows-per-commit - is what you should budget:</p>
+<ul>
+<li><strong>Batch ticks into commits</strong> (per second, per venue message-block, per
+  1k-10k rows). One row per commit is pathological: thousands of tiny
+  segments slow every scan.</li>
+<li>Readers see whole commits atomically, so your batch size is also your
+  delivery latency floor. A 1 s writer batch + <code>poll_ms=25</code> reader gives
+  ~1 s end-to-end.</li>
+<li>After a day of small streaming appends, <code>db.compact("trades")</code> merges
+  the small segments (recipe 08). Compaction is a version like any other -
+  but note it breaks pure-append <code>tail</code> chains across it, so compact at
+  session boundaries, not mid-stream.</li>
+</ul>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>Append-only tables double as message logs: the reader's cursor is a
+  <strong>version number</strong>, and <code>tail('t', after_version, poll_ms)</code> delivers
+  exactly-once, in-order rows after it.</li>
+<li><code>tail</code> is unbounded by design - always size the <code>LIMIT</code> from
+  <code>versions()</code> and set a <code>timeout=</code> backstop; aggregate after consuming,
+  not inside the stream.</li>
+<li>The high-water-mark pattern (<code>versions()</code> delta + <code>read(time_start=hwm)</code>)
+  is the simpler production default; time-column pruning makes it cheap.</li>
+<li>Incremental bar maintenance falls out of the same idea: only recompute
+  buckets the new batch touched - verified equal to the full rollup.</li>
+<li><code>tail</code> requires a pure-append chain and fails loudly (not silently)
+  when a mutation lands in the range: keep streaming tables append-only
+  by policy.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="../../cookbook/00_fundamentals/06_previewable_mutations.html"><span class="dir">← Previous</span><span class="pn-title">Previewable mutations: fix bad ticks without fearing the delete key</span></a><a class="next" href="../../cookbook/00_fundamentals/08_maintenance.html"><span class="dir">Next →</span><span class="pn-title">Maintenance: verify, compact, vacuum - keeping a versioned store healthy</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-one-trading-day-chopped-into-feed-chunks">1. One trading day, chopped into feed chunks</a></li><li><a href="#2-writer-appends-reader-tails">2. Writer appends, reader tails</a></li><li><a href="#3-tail-is-unbounded-respect-the-limit">3. tail is unbounded - respect the LIMIT</a></li><li><a href="#4-the-high-water-mark-pattern-no-tail-required">4. The high-water-mark pattern (no tail required)</a></li><li><a href="#5-breaking-the-pure-append-chain">5. Breaking the pure-append chain</a></li><li><a href="#batch-size-guidance">Batch-size guidance</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../../">Home</a>
+      <a href="../../manual/">Manual</a>
+      <a href="../../api/">Python API</a>
+      <a href="../../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../../";</script>
+<script src="../../_static/docs.js" defer></script>
+</body>
+</html>

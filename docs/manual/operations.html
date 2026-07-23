@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Operations guide · h5i-db docs</title>
+  <meta name="description" content="Running h5i-db in production: backup and restore, vacuum and compaction cadence, plan hygiene, disk-usage math, filesystem caveats, and the torn-HEAD recovery runbook.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../_static/logo.png">
+  <link rel="apple-touch-icon" href="../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Operations guide · h5i-db docs">
+  <meta property="og:description" content="Running h5i-db in production: backup and restore, vacuum and compaction cadence, plan hygiene, disk-usage math, filesystem caveats, and the torn-HEAD recovery runbook.">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Operations guide · h5i-db docs">
+  <meta name="twitter:description" content="Running h5i-db in production: backup and restore, vacuum and compaction cadence, plan hygiene, disk-usage math, filesystem caveats, and the torn-HEAD recovery runbook.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../">
+    <img src="../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../manual/" class="active">Manual</a></li>
+    <li><a href="../api/" >Python API</a></li>
+    <li><a href="../cookbook/" >Cookbook</a></li>
+    <li><a href="../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html" class="active">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../manual/">Manual</a>
+<span class="sep">/</span>
+<span>Operations guide</span></div>
+<h1 id="h5i-db-operations-guide">h5i-db Operations Guide<a class="headerlink" href="#h5i-db-operations-guide" title="Permanent link">#</a></h1>
+<p>How to run an h5i-db database in production: backup and restore, vacuum and
+compaction cadence, plan hygiene, disk-usage math, filesystem caveats, and
+the torn-HEAD recovery runbook.</p>
+<p>Everything below refers to the on-disk layout (see <code>crates/h5i-db-core/src/layout.rs</code>):</p>
+<div class="highlight"><pre><span></span><code>&lt;root&gt;/
+  FORMAT                              # format + minimum reader version
+  catalog/tables/&lt;hash-of-name&gt;.json  # table name -&gt; table UUID
+  snapshots/&lt;hash-of-name&gt;.json       # snapshot name -&gt; {table uuid: version}
+  tables/&lt;table-uuid&gt;/
+    HEAD                              # the ONLY mutable object per table
+    spec/&lt;revision&gt;.json              # schema revisions
+    manifests/&lt;seq&gt;.json              # one immutable manifest per version
+    segments/&lt;segment-uuid&gt;.parquet   # immutable data
+</code></pre></div>
+
+<p>Two properties make operations simple:</p>
+<ul>
+<li><strong>Everything except <code>HEAD</code> is immutable.</strong> Segments, manifests, specs,
+  catalog entries, and snapshots are write-once. Only <code>HEAD</code> (one small JSON
+  file per table) ever changes, and it changes by atomic rename.</li>
+<li><strong>History is a hash chain.</strong> Each manifest records the blake3 checksum of
+  its parent's bytes, and <code>HEAD</code> records the checksum of the manifest it
+  points at, so any prefix of history is self-verifying
+  (<code>h5i-db verify &lt;db&gt; &lt;table&gt; [--deep]</code>).</li>
+</ul>
+<hr />
+<h2 id="backup">Backup<a class="headerlink" href="#backup" title="Permanent link">#</a></h2>
+<p>Immutable objects mean a plain file copy is a correct backup <strong>if you copy in
+the right order and don't run destructive maintenance concurrently</strong>.</p>
+<h3 id="procedure">Procedure<a class="headerlink" href="#procedure" title="Permanent link">#</a></h3>
+<ol>
+<li><strong>Don't run <code>vacuum --apply</code> (or <code>drop-table</code>) during the backup window.</strong>
+   Vacuum is the only thing that deletes objects; a copy that races it can
+   miss files it already indexed. Plain writers are safe to leave running.</li>
+<li>Copy in this order (older references first, <code>HEAD</code> before the objects it
+   references is the one order that is <em>wrong</em> — copy <code>HEAD</code> <strong>first</strong>, per
+   table, then its immutable objects):</li>
+</ol>
+<p><code>bash
+   DB=/data/market.db BK=/backup/market.db-$(date +%F)
+   mkdir -p "$BK"
+   cp "$DB/FORMAT" "$BK/"
+   cp -r "$DB/catalog" "$DB/snapshots" "$BK/" 2&gt;/dev/null || true
+   for t in "$DB"/tables/*/; do
+     b="$BK/tables/$(basename "$t")"; mkdir -p "$b"
+     cp "$t/HEAD" "$b/"                        # 1. pin the version to back up
+     cp -r "$t/spec" "$t/manifests" "$b/"      # 2. immutable metadata
+     cp -r "$t/segments" "$b/"                 # 3. immutable data
+   done</code></p>
+<p>Why this order works: the copied <code>HEAD</code> names some sequence <em>S</em>. Every
+   manifest <code>0..=S</code> and every segment they reference already existed when
+   <code>HEAD</code> was copied, and (with vacuum paused) nothing deletes them — so all
+   of them are present in the later copy steps. Commits that land <em>during</em>
+   the backup produce manifests <code>&gt; S</code>; they may be half-copied, which is
+   harmless: they are unreachable from the copied <code>HEAD</code> and are exactly what
+   <code>vacuum</code> classifies as debris.
+3. Skip transient files if you meet them: <code>HEAD.lock</code>, <code>HEAD.tmp.*</code>.
+4. Validate the backup before trusting it:</p>
+<p><code>bash
+   h5i-db tables "$BK"
+   h5i-db verify "$BK" &lt;table&gt; --deep   # re-reads every segment checksum</code></p>
+<p>Filesystem/LVM/ZFS snapshots are also fine (crash-consistent is enough: the
+commit protocol fsyncs data before <code>HEAD</code> moves, so any point-in-time image
+is a valid database).</p>
+<h3 id="restore">Restore<a class="headerlink" href="#restore" title="Permanent link">#</a></h3>
+<p>A backup <strong>is</strong> a database. Point the CLI at it, or copy it back into place
+and run <code>h5i-db verify</code> per table. There is no replay/WAL step.</p>
+<p>Note that restoring an old backup rewinds <em>all</em> tables to the backup time;
+to rewind a single table inside a live database, prefer
+<code>h5i-db restore &lt;db&gt; &lt;table&gt; &lt;version&gt;</code> — that is what versioning is for.</p>
+<hr />
+<h2 id="vacuum">Vacuum<a class="headerlink" href="#vacuum" title="Permanent link">#</a></h2>
+<p><code>h5i-db vacuum &lt;db&gt; [table] [--grace-seconds N] [--apply]</code> removes
+unreachable objects: segments referenced by no committed manifest and no
+live mutation plan, manifests above <code>HEAD</code> (crashed-writer leftovers), and
+<code>*.lock</code> / <code>HEAD.tmp.*</code> debris. Without <code>--apply</code> it is a dry run.</p>
+<p>Guidance:</p>
+<ul>
+<li><strong>Always review a dry run first</strong> in scripted maintenance
+  (<code>vacuum</code> then <code>vacuum --apply</code> on the same candidate list you inspected).</li>
+<li><strong>Grace period</strong> (default 3600 s): objects younger than this are never
+  touched. Set it comfortably above your <em>longest</em> ingest or plan-prepare
+  duration — staged segments exist on disk before the commit that references
+  them, and a grace period shorter than a slow bulk load can delete a
+  commit-in-progress out from under it.</li>
+<li><strong>Cadence</strong>: daily or weekly is plenty. Debris accrues only from crashed
+  or conflicted writers and discarded/expired plans; a healthy append-only
+  workload generates almost none.</li>
+<li><strong>Never run two <code>vacuum --apply</code> concurrently</strong>, and don't run it during
+  backups (above).</li>
+</ul>
+<h2 id="compaction">Compaction<a class="headerlink" href="#compaction" title="Permanent link">#</a></h2>
+<p>Frequent small appends produce many small segments; queries then pay
+per-segment open/prune cost. <code>h5i-db compact &lt;db&gt; &lt;table&gt;</code> rewrites them
+into target-sized segments as a new version (row count is verified to be
+preserved; the commit aborts otherwise).</p>
+<ul>
+<li>Compact when a table accumulates hundreds of small segments, or when
+  <code>versions</code> shows the segment count growing much faster than data volume.</li>
+<li>Compaction does <strong>not</strong> free disk: the pre-compaction segments remain
+  pinned by historical versions (see disk math below). It is a <em>query
+  performance</em> tool, not a space reclaimer.</li>
+</ul>
+<h2 id="mutation-plan-hygiene">Mutation-plan hygiene<a class="headerlink" href="#mutation-plan-hygiene" title="Permanent link">#</a></h2>
+<p>Plans (<code>--plan</code> on <code>delete-range</code> / <code>replace-range</code>) stage their segments at
+plan time and protect them from vacuum until applied, discarded, or expired
+(TTL: <strong>7 days</strong>, <code>PLAN_TTL_SECONDS</code>).</p>
+<ul>
+<li>List pending plans per table: <code>h5i-db plan list &lt;db&gt; &lt;table&gt;</code>.</li>
+<li>Discard plans you won't apply (<code>plan discard</code>) — an applied-or-discarded
+  plan's staged segments become vacuum candidates immediately; an abandoned
+  plan holds its staged bytes for the full 7 days.</li>
+<li>Applying a plan after the table head moved fails with a conflict (409 from
+  the UI); re-plan instead of retrying.</li>
+</ul>
+<h2 id="disk-usage-math">Disk-usage math<a class="headerlink" href="#disk-usage-math" title="Permanent link">#</a></h2>
+<p>Nothing is ever deleted except by vacuum, and vacuum only deletes
+<em>unreachable</em> objects — every committed version pins its segments forever
+(version retention/GC is roadmap work). Practical consequences:</p>
+<ul>
+<li><strong>Append-only tables</strong>: disk ≈ total data ever appended, plus one manifest
+  per commit. The manifest lists every live segment, so manifest overhead is
+  O(segments) per commit — another reason to compact and to batch appends.</li>
+<li><strong><code>replace-range</code> / <code>delete-range</code> / <code>compact</code> / <code>write</code></strong>: each rewrites
+  or re-references segments; the <em>old</em> segments stay pinned by history. A
+  daily full <code>write</code> of a 1 GiB table costs ~365 GiB/year until retention
+  exists.</li>
+<li>Quick audit: <code>du -sh &lt;db&gt;/tables/*/segments</code> vs.
+  <code>h5i-db tables &lt;db&gt;</code> row counts shows how much is history vs. head.</li>
+</ul>
+<h2 id="filesystem-caveats">Filesystem caveats<a class="headerlink" href="#filesystem-caveats" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Local ext4/xfs/apfs/NTFS</strong>: the supported case. Durability relies on
+  fsync-before-<code>HEAD</code>-swap plus atomic rename — standard semantics on all of
+  these.</li>
+<li><strong>NFS and other network filesystems</strong>: not recommended for multi-host
+  access. Writer exclusion uses an OS-level <code>flock</code> on an open descriptor;
+  its cross-host semantics depend on the NFS version and lock-daemon setup
+  (NFSv3 needs a working <code>lockd</code>; some mounts silently downgrade locks to
+  local-only). Close-to-open cache consistency can also delay another host's
+  view of a renamed <code>HEAD</code>. Single-host access to an NFS mount works but
+  still trusts the server's fsync honesty.</li>
+<li><strong>WSL2</strong>: keep databases on the Linux filesystem (e.g. <code>~/data/…</code>,
+  ext4). On <code>/mnt/c</code> (drvfs/9p) fsync and rename atomicity are not
+  faithfully passed through to Windows, which voids the crash-safety
+  guarantees. (This repository's own benchmarks are run from the ext4 side
+  for the same reason.)</li>
+<li><strong>Containers</strong>: overlayfs upper layers are fine; bind-mount the database
+  directory to a real volume for anything you care about.</li>
+</ul>
+<hr />
+<h2 id="runbook-torn-or-corrupt-head">Runbook: torn or corrupt HEAD<a class="headerlink" href="#runbook-torn-or-corrupt-head" title="Permanent link">#</a></h2>
+<p><strong>Should not happen</strong> on a supported filesystem — <code>HEAD</code> is replaced by
+write-temp → fsync → rename → directory-fsync — so treat an occurrence as a
+signal of filesystem misbehavior (see caveats above), not routine wear.</p>
+<h3 id="symptoms">Symptoms<a class="headerlink" href="#symptoms" title="Permanent link">#</a></h3>
+<ul>
+<li>Any command fails with <code>Corruption { object: ".../HEAD", ... }</code>
+  ("HEAD parse error"), or</li>
+<li><code>HEAD</code> parses but <code>verify</code> reports <code>manifest missing</code> /
+  <code>checksum mismatch</code> at the head sequence, or readers fail opening the
+  manifest <code>HEAD</code> points at.</li>
+</ul>
+<h3 id="diagnosis">Diagnosis<a class="headerlink" href="#diagnosis" title="Permanent link">#</a></h3>
+<div class="highlight"><pre><span></span><code>h5i-db<span class="w"> </span>verify<span class="w"> </span>&lt;db&gt;<span class="w"> </span>&lt;table&gt;<span class="w">        </span><span class="c1"># walks the checksum chain from HEAD back</span>
+cat<span class="w"> </span>&lt;db&gt;/tables/&lt;uuid&gt;/HEAD<span class="w">       </span><span class="c1"># {&quot;format&quot;:1,&quot;table_id&quot;:&quot;…&quot;,&quot;sequence&quot;:N,</span>
+<span class="w">                                  </span><span class="c1">#  &quot;manifest_checksum&quot;:&quot;&lt;blake3-hex&gt;&quot;}</span>
+ls<span class="w"> </span>&lt;db&gt;/tables/&lt;uuid&gt;/manifests/<span class="w">  </span><span class="c1"># zero-padded sequence-numbered JSON</span>
+</code></pre></div>
+
+<p>Find the table's UUID via the catalog: <code>h5i-db tables &lt;db&gt;</code> then match, or
+<code>grep -l '&lt;name&gt;' &lt;db&gt;/catalog/tables/*.json</code>.</p>
+<h3 id="recovery">Recovery<a class="headerlink" href="#recovery" title="Permanent link">#</a></h3>
+<ol>
+<li><strong>Stop writers</strong> for the affected table.</li>
+<li><strong>Find the newest intact manifest.</strong> Starting from the highest file in
+   <code>manifests/</code>, compute each candidate's checksum and walk its parent
+   chain:</li>
+</ol>
+<p><code>bash
+   b3sum &lt;db&gt;/tables/&lt;uuid&gt;/manifests/&lt;seq&gt;.json   # blake3 of file bytes</code></p>
+<p>A manifest is a good recovery point if it parses, its <code>parent_checksum</code>
+   matches the blake3 of the parent file, and every segment <code>path</code> it lists
+   exists with the recorded byte size. (This is exactly the check <code>verify</code>
+   runs from <code>HEAD</code>; you are doing it from a candidate sequence instead.)
+3. <strong>Rewrite HEAD</strong> to point at that manifest — <code>HEAD</code> is four fields of
+   JSON; <code>manifest_checksum</code> must be the blake3 hex of the chosen manifest's
+   exact bytes:</p>
+<p><code>bash
+   SEQ=…; UUID=…; DB=…
+   SUM=$(b3sum --no-names "$DB/tables/$UUID/manifests/$(printf %012d $SEQ).json")
+   printf '{"format":1,"table_id":"%s","sequence":%d,"manifest_checksum":"%s"}' \
+       "$UUID" "$SEQ" "$SUM" &gt; /tmp/HEAD.new
+   mv /tmp/HEAD.new "$DB/tables/$UUID/HEAD"</code></p>
+<ol start="4">
+<li><strong>Re-verify</strong>: <code>h5i-db verify &lt;db&gt; &lt;table&gt; --deep</code> must be clean.</li>
+<li><strong>Clean up</strong>: manifests above the recovered sequence and any
+   <code>HEAD.tmp.*</code> / <code>HEAD.lock</code> files are debris; a later
+   <code>vacuum</code> (dry-run first) removes them. Do <strong>not</strong> delete them by hand
+   before verify is clean.</li>
+</ol>
+<p>If no manifest verifies, restore the table from backup (above). Rolling
+<code>HEAD</code> back this way discards the commits after the recovery point — check
+<code>committed_at_ns</code> / <code>note</code> in the recovered manifest to know exactly where
+the table now stands.</p>
+    <nav class="page-nav"><a class="prev" href="../manual/agents.html"><span class="dir">← Previous</span><span class="pn-title">Agents &amp; automation</span></a><a class="next" href="../api/index.html"><span class="dir">Next →</span><span class="pn-title">Overview</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#backup">Backup</a><ul><li><a href="#procedure">Procedure</a></li><li><a href="#restore">Restore</a></li></ul></li><li><a href="#vacuum">Vacuum</a></li><li><a href="#compaction">Compaction</a></li><li><a href="#mutation-plan-hygiene">Mutation-plan hygiene</a></li><li><a href="#disk-usage-math">Disk-usage math</a></li><li><a href="#filesystem-caveats">Filesystem caveats</a></li><li><a href="#runbook-torn-or-corrupt-head">Runbook: torn or corrupt HEAD</a><ul><li><a href="#symptoms">Symptoms</a></li><li><a href="#diagnosis">Diagnosis</a></li><li><a href="#recovery">Recovery</a></li></ul></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../">Home</a>
+      <a href="../manual/">Manual</a>
+      <a href="../api/">Python API</a>
+      <a href="../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../";</script>
+<script src="../_static/docs.js" defer></script>
+</body>
+</html>

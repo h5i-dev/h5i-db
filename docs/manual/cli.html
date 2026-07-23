@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CLI reference · h5i-db docs</title>
+  <meta name="description" content="Every command, flag, output format, and exit code of the h5i-db command-line tool.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../_static/logo.png">
+  <link rel="apple-touch-icon" href="../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="CLI reference · h5i-db docs">
+  <meta property="og:description" content="Every command, flag, output format, and exit code of the h5i-db command-line tool.">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="CLI reference · h5i-db docs">
+  <meta name="twitter:description" content="Every command, flag, output format, and exit code of the h5i-db command-line tool.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../">
+    <img src="../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../manual/" class="active">Manual</a></li>
+    <li><a href="../api/" >Python API</a></li>
+    <li><a href="../cookbook/" >Cookbook</a></li>
+    <li><a href="../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html" class="active">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../manual/">Manual</a>
+<span class="sep">/</span>
+<span>CLI reference</span></div>
+<h1 id="cli-reference">CLI reference<a class="headerlink" href="#cli-reference" title="Permanent link">#</a></h1>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>&lt;command&gt;<span class="w"> </span>&lt;db&gt;<span class="w"> </span><span class="o">[</span>args…<span class="o">]</span><span class="w"> </span><span class="o">[</span>--format<span class="w"> </span>table<span class="p">|</span>json<span class="p">|</span>jsonl<span class="p">|</span>csv<span class="p">|</span>arrow<span class="o">]</span>
+</code></pre></div>
+
+<p>The <code>h5i-db</code> binary is non-interactive by design: no prompts, no pager, SQL
+from an argument or stdin, results on stdout, diagnostics on stderr. The
+database path is always the first positional argument of a command (there is
+no global <code>--db</code> flag).</p>
+<h2 id="global-behavior">Global behavior<a class="headerlink" href="#global-behavior" title="Permanent link">#</a></h2>
+<h3 id="output-formats">Output formats<a class="headerlink" href="#output-formats" title="Permanent link">#</a></h3>
+<p><code>--format</code> is global and defaults to <code>table</code>.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Format</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>table</code></td>
+<td>Human-readable aligned columns (buffered; metadata commands render pretty JSON)</td>
+</tr>
+<tr>
+<td><code>json</code></td>
+<td>One JSON array of row objects; explicit nulls; empty result is <code>[]</code></td>
+</tr>
+<tr>
+<td><code>jsonl</code></td>
+<td>One compact JSON object per row per line</td>
+</tr>
+<tr>
+<td><code>csv</code></td>
+<td>With header row; empty result still emits the header</td>
+</tr>
+<tr>
+<td><code>arrow</code></td>
+<td>Arrow IPC stream on stdout — lossless, pipe into other tools</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="errors-and-exit-codes">Errors and exit codes<a class="headerlink" href="#errors-and-exit-codes" title="Permanent link">#</a></h3>
+<p>Errors are a single JSON envelope on <strong>stderr</strong>:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;version_conflict&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;…&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;retryable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;hint&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;…&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Exit codes are stable and branchable:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code></td>
+<td>Success (including broken pipe from <code>… \| head</code>)</td>
+</tr>
+<tr>
+<td><code>2</code></td>
+<td>User error — bad arguments, bad SQL, missing table</td>
+</tr>
+<tr>
+<td><code>3</code></td>
+<td>Conflict — another writer moved the head; usually retryable</td>
+</tr>
+<tr>
+<td><code>4</code></td>
+<td>Limit exceeded — <code>--max-rows</code>, <code>--max-bytes</code>, memory budget, timeout</td>
+</tr>
+<tr>
+<td><code>5</code></td>
+<td>Internal error</td>
+</tr>
+</tbody>
+</table></div>
+<p>Diagnostics volume is controlled with <code>RUST_LOG</code> (default <code>warn</code>).</p>
+<h3 id="shared-write-flags">Shared write flags<a class="headerlink" href="#shared-write-flags" title="Permanent link">#</a></h3>
+<p>Commands that commit a version (<code>ingest</code>, <code>restore</code>, <code>replace-range</code>,
+<code>delete-range</code>, <code>compact</code>) accept:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--expected-version &lt;N&gt;</code></td>
+<td>Require the table head to be exactly version N (optimistic guard); mismatch exits 3</td>
+</tr>
+<tr>
+<td><code>--note &lt;text&gt;</code></td>
+<td>Free-text note recorded in the version manifest</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="database-tables">Database &amp; tables<a class="headerlink" href="#database-tables" title="Permanent link">#</a></h2>
+<h3 id="h5i-db-init"><code>h5i-db init</code><a class="headerlink" href="#h5i-db-init" title="Permanent link">#</a></h3>
+<p>Create a new database directory.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>init<span class="w"> </span>market.db
+</code></pre></div>
+
+<h3 id="h5i-db-create-table"><code>h5i-db create-table</code><a class="headerlink" href="#h5i-db-create-table" title="Permanent link">#</a></h3>
+<p>Create a table. The schema comes from <code>--schema</code> JSON <strong>or</strong> <code>--like</code> a data
+file (exactly one required).</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>create-table<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--like<span class="w"> </span>ticks.parquet<span class="w"> </span>--time-column<span class="w"> </span>ts
+<span class="gp">$ </span>h5i-db<span class="w"> </span>create-table<span class="w"> </span>market.db<span class="w"> </span>bars<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--schema<span class="w"> </span><span class="err">&#39;</span><span class="o">[{</span><span class="s2">&quot;name&quot;</span>:<span class="s2">&quot;ts&quot;</span>,<span class="s2">&quot;type&quot;</span>:<span class="s2">&quot;timestamp_us&quot;</span>,<span class="s2">&quot;nullable&quot;</span>:false<span class="o">}</span>,
+<span class="go">               {&quot;name&quot;:&quot;symbol&quot;,&quot;type&quot;:&quot;utf8&quot;},{&quot;name&quot;:&quot;close&quot;,&quot;type&quot;:&quot;float64&quot;}]&#39; \</span>
+<span class="go">    --time-column ts --sort-key ts,symbol</span>
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--schema &lt;json&gt;</code></td>
+<td>Explicit schema. Types: <code>int8..int64</code>, <code>uint8..uint64</code>, <code>float32/float64</code>, <code>utf8</code>, <code>bool</code>, <code>timestamp_s/ms/us/ns</code> (UTC), <code>date32</code>, <code>date64</code>. Aliases accepted: <code>int</code>→int32, <code>long</code>/<code>bigint</code>→int64, <code>float</code>→float32, <code>double</code>→float64, <code>string</code>/<code>str</code>/<code>text</code>→utf8, <code>boolean</code>→bool, <code>date</code>→date32, <code>timestamp</code>→timestamp_ns. <code>nullable</code> defaults to <code>true</code>.</td>
+</tr>
+<tr>
+<td><code>--like &lt;file&gt;</code></td>
+<td>Infer the schema from a Parquet/CSV/Arrow file</td>
+</tr>
+<tr>
+<td><code>--time-column &lt;col&gt;</code></td>
+<td>Time index column — strongly recommended for time-series tables; forced non-nullable</td>
+</tr>
+<tr>
+<td><code>--sort-key &lt;cols&gt;</code></td>
+<td>Comma-separated sort key (defaults to the time column)</td>
+</tr>
+<tr>
+<td><code>--target-segment-mb &lt;N&gt;</code></td>
+<td>Target segment size in MiB of in-memory data (default 128)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="h5i-db-tables"><code>h5i-db tables</code><a class="headerlink" href="#h5i-db-tables" title="Permanent link">#</a></h3>
+<p>List tables with row counts and time ranges. Columns: <code>table</code>, <code>version</code>,
+<code>rows</code>, <code>bytes</code>, <code>segments</code>, <code>time_range</code>, <code>time_column</code>.</p>
+<h3 id="h5i-db-schema"><code>h5i-db schema</code><a class="headerlink" href="#h5i-db-schema" title="Permanent link">#</a></h3>
+<p>Show a table's schema and options (<code>schema_revision</code>, <code>time_column</code>,
+<code>sort_key</code>, fields with types and nullability).</p>
+<h3 id="h5i-db-sample"><code>h5i-db sample</code><a class="headerlink" href="#h5i-db-sample" title="Permanent link">#</a></h3>
+<p>Show the first rows of a table.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>-n, --rows &lt;N&gt;</code></td>
+<td>Row count (default 10)</td>
+</tr>
+<tr>
+<td><code>--version &lt;N&gt;</code></td>
+<td>Read at a specific version</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="h5i-db-rename"><code>h5i-db rename</code><a class="headerlink" href="#h5i-db-rename" title="Permanent link">#</a></h3>
+<p>Rename a table — a catalog edit, no data moves.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>rename<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>trades_raw
+</code></pre></div>
+
+<h3 id="h5i-db-drop-table"><code>h5i-db drop-table</code><a class="headerlink" href="#h5i-db-drop-table" title="Permanent link">#</a></h3>
+<p>Drop a table and its data. Refuses if the table is pinned by a snapshot, and
+requires <code>--yes</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>drop-table<span class="w"> </span>market.db<span class="w"> </span>scratch<span class="w"> </span>--yes
+</code></pre></div>
+
+<div class="admonition danger">
+<p class="admonition-title">Irreversible</p>
+<p><code>drop-table</code> permanently deletes data — it is the one command that
+bypasses versioning. Snapshots protect tables from it; use them.</p>
+</div>
+<hr />
+<h2 id="reading-querying">Reading &amp; querying<a class="headerlink" href="#reading-querying" title="Permanent link">#</a></h2>
+<h3 id="h5i-db-query"><code>h5i-db query</code><a class="headerlink" href="#h5i-db-query" title="Permanent link">#</a></h3>
+<p>Run SQL. The query comes from the argument, or stdin when <code>-</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT symbol, vwap(price, size) FROM trades GROUP BY symbol&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--format<span class="w"> </span>json<span class="w"> </span>--max-rows<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--timeout<span class="w"> </span>30s
+<span class="gp">$ </span>cat<span class="w"> </span>report.sql<span class="w"> </span><span class="p">|</span><span class="w"> </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span>-<span class="w"> </span>--format<span class="w"> </span>csv<span class="w"> </span>&gt;<span class="w"> </span>out.csv
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--max-rows &lt;N&gt;</code></td>
+<td>Abort after N produced rows</td>
+</tr>
+<tr>
+<td><code>--max-bytes &lt;N&gt;</code></td>
+<td>Stop after N output bytes (checked at batch boundaries); truncation exits 4 with a <code>limit_exceeded</code> envelope</td>
+</tr>
+<tr>
+<td><code>--timeout &lt;dur&gt;</code></td>
+<td>Query timeout, e.g. <code>30s</code>, <code>5m</code></td>
+</tr>
+<tr>
+<td><code>--memory-limit-mb &lt;N&gt;</code></td>
+<td>Memory budget in MiB; enables disk spilling under pressure</td>
+</tr>
+<tr>
+<td><code>--spill-dir &lt;path&gt;</code></td>
+<td>Spill directory (with <code>--memory-limit-mb</code>)</td>
+</tr>
+<tr>
+<td><code>--threads &lt;N&gt;</code></td>
+<td>Number of threads / partitions</td>
+</tr>
+<tr>
+<td><code>--stats</code></td>
+<td>Print scan/pruning statistics to stderr after the query</td>
+</tr>
+<tr>
+<td><code>--predicate-cache</code></td>
+<td>Read and build immutable predicate-cache sidecars</td>
+</tr>
+</tbody>
+</table></div>
+<p>See the <a href="sql.html">SQL reference</a> for <code>h5i()</code> time travel, <code>asof_join</code>, and
+the time-series function library.</p>
+<h3 id="h5i-db-versions"><code>h5i-db versions</code><a class="headerlink" href="#h5i-db-versions" title="Permanent link">#</a></h3>
+<p>List a table's committed versions: <code>version</code>, <code>op</code>, <code>committed_at</code>, <code>rows</code>,
+<code>bytes</code>, <code>segments</code>, <code>note</code>.</p>
+<hr />
+<h2 id="writing-data">Writing data<a class="headerlink" href="#writing-data" title="Permanent link">#</a></h2>
+<h3 id="h5i-db-ingest"><code>h5i-db ingest</code><a class="headerlink" href="#h5i-db-ingest" title="Permanent link">#</a></h3>
+<p>Ingest Parquet/CSV/Arrow into a table — from a file, or stdin with <code>-</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>ingest<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>ticks.parquet
+<span class="gp">$ </span>curl<span class="w"> </span>-s<span class="w"> </span>https://…/ticks.csv<span class="w"> </span><span class="p">|</span><span class="w"> </span>h5i-db<span class="w"> </span>ingest<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>-<span class="w"> </span>--input-format<span class="w"> </span>csv
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--input-format &lt;fmt&gt;</code></td>
+<td><code>auto</code> (default) | <code>parquet</code> | <code>csv</code> | <code>arrow</code>. Auto uses the file extension, or sniffs leading bytes on stdin</td>
+</tr>
+<tr>
+<td><code>--mode &lt;mode&gt;</code></td>
+<td><code>append</code> (default) — strict ordered append; <code>write</code> — replace table contents</td>
+</tr>
+<tr>
+<td><code>--retries &lt;N&gt;</code></td>
+<td>Retry appends on version conflicts (default 5; safe for pure appends)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Plus the <a href="#shared-write-flags">shared write flags</a>. Input batches are
+schema-aligned against the table (purely representational casts like
+timezone-less CSV timestamps are applied automatically). CSV assumes a header
+row.</p>
+<div class="admonition note">
+<p class="admonition-title">Arrow over stdin</p>
+<p>Pipe an Arrow IPC <strong>stream</strong>, not an IPC <em>file</em> — a file's random-access
+footer can't be consumed from a pipe. h5i-db detects the difference and
+tells you.</p>
+</div>
+<h3 id="h5i-db-restore"><code>h5i-db restore</code><a class="headerlink" href="#h5i-db-restore" title="Permanent link">#</a></h3>
+<p>Make a historical version current. History moves forward — restore commits a
+<em>new</em> version with the old contents.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>restore<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span><span class="m">42</span><span class="w"> </span>--note<span class="w"> </span><span class="s2">&quot;roll back bad load&quot;</span>
+</code></pre></div>
+
+<h3 id="h5i-db-replace-range"><code>h5i-db replace-range</code><a class="headerlink" href="#h5i-db-replace-range" title="Permanent link">#</a></h3>
+<p>Replace all rows in <code>[start, end)</code> of the time column with the given input.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>replace-range<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--start<span class="w"> </span><span class="m">2026</span>-07-01T09:30:00Z<span class="w"> </span>--end<span class="w"> </span><span class="m">2026</span>-07-01T16:00:00Z<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--input<span class="w"> </span>corrected.parquet<span class="w"> </span>--plan
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--start &lt;t&gt;</code></td>
+<td>Range start, <strong>inclusive</strong> — RFC3339, or a raw integer in the column's unit</td>
+</tr>
+<tr>
+<td><code>--end &lt;t&gt;</code></td>
+<td>Range end, <strong>exclusive</strong></td>
+</tr>
+<tr>
+<td><code>--input &lt;file&gt;</code></td>
+<td>Replacement data (or <code>-</code> for stdin); <strong>omit to delete the range</strong></td>
+</tr>
+<tr>
+<td><code>--input-format &lt;fmt&gt;</code></td>
+<td>As in <code>ingest</code></td>
+</tr>
+<tr>
+<td><code>--plan</code></td>
+<td>Stage a previewable plan instead of committing immediately</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="h5i-db-delete-range"><code>h5i-db delete-range</code><a class="headerlink" href="#h5i-db-delete-range" title="Permanent link">#</a></h3>
+<p>Delete all rows in <code>[start, end)</code> — shorthand for <code>replace-range</code> with no
+input. Same <code>--start</code>/<code>--end</code>/<code>--plan</code> flags.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>delete-range<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--start<span class="w"> </span><span class="m">09</span>:30…<span class="w"> </span>--end<span class="w"> </span><span class="m">09</span>:31…<span class="w"> </span>--plan
+<span class="go">{&quot;plan_id&quot;: &quot;5c41…&quot;, &quot;summary&quot;: {&quot;rows_affected&quot;: 12481, &quot;segments_reused&quot;: 127}}</span>
+</code></pre></div>
+
+<hr />
+<h2 id="plans-policy-snapshots">Plans, policy &amp; snapshots<a class="headerlink" href="#plans-policy-snapshots" title="Permanent link">#</a></h2>
+<h3 id="h5i-db-plan"><code>h5i-db plan</code><a class="headerlink" href="#h5i-db-plan" title="Permanent link">#</a></h3>
+<p>Manage previewable-mutation plans (created by <code>--plan</code> above).</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>plan list &lt;db&gt; &lt;table&gt;</code></td>
+<td>Pending plans: <code>plan_id</code>, <code>op</code>, <code>base_version</code>, <code>created_at</code>, <code>expired</code>, summary</td>
+</tr>
+<tr>
+<td><code>plan show &lt;db&gt; &lt;table&gt; &lt;plan-id&gt;</code></td>
+<td>Full plan JSON on stdout; before/after row samples on stderr</td>
+</tr>
+<tr>
+<td><code>plan apply &lt;db&gt; &lt;table&gt; &lt;plan-id&gt;</code></td>
+<td>Publish the plan — fails with a conflict if the head moved</td>
+</tr>
+<tr>
+<td><code>plan discard &lt;db&gt; &lt;table&gt; &lt;plan-id&gt;</code></td>
+<td>Drop the plan; staged segments become vacuumable</td>
+</tr>
+</tbody>
+</table></div>
+<p>Plans expire after 7 days; see
+<a href="operations.html#mutation-plan-hygiene">plan hygiene</a>.</p>
+<h3 id="h5i-db-policy"><code>h5i-db policy</code><a class="headerlink" href="#h5i-db-policy" title="Permanent link">#</a></h3>
+<p>The mutation policy decides which operations may commit <strong>without</strong> a
+reviewed plan.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>policy<span class="w"> </span>show<span class="w"> </span>market.db
+<span class="gp">$ </span>h5i-db<span class="w"> </span>policy<span class="w"> </span><span class="nb">set</span><span class="w"> </span>market.db<span class="w"> </span><span class="nv">direct_delete</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="nv">direct_write</span><span class="o">=</span><span class="nb">false</span>
+</code></pre></div>
+
+<p>Keys: <code>direct_append</code>, <code>direct_write</code>, <code>direct_replace</code>, <code>direct_delete</code>,
+<code>direct_restore</code>, <code>direct_compact</code> — each <code>true</code>/<code>false</code>. The update is an
+atomic read-modify-write.</p>
+<h3 id="h5i-db-snapshot"><code>h5i-db snapshot</code><a class="headerlink" href="#h5i-db-snapshot" title="Permanent link">#</a></h3>
+<p>Pin table versions under a name.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>snapshot create &lt;db&gt; &lt;name&gt; [tables…]</code></td>
+<td>Pin current versions (all tables when omitted); <code>--note</code> supported</td>
+</tr>
+<tr>
+<td><code>snapshot list &lt;db&gt;</code></td>
+<td>List snapshots</td>
+</tr>
+<tr>
+<td><code>snapshot delete &lt;db&gt; &lt;name&gt;</code></td>
+<td>Delete a snapshot (the versions it pinned remain readable by number)</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="maintenance-tools">Maintenance &amp; tools<a class="headerlink" href="#maintenance-tools" title="Permanent link">#</a></h2>
+<h3 id="h5i-db-compact"><code>h5i-db compact</code><a class="headerlink" href="#h5i-db-compact" title="Permanent link">#</a></h3>
+<p>Rewrite small segments into target-sized ones, as a new version. Row count is
+verified preserved.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--target-mb &lt;N&gt;</code></td>
+<td>Override the target segment size (MiB of in-memory data)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="h5i-db-vacuum"><code>h5i-db vacuum</code><a class="headerlink" href="#h5i-db-vacuum" title="Permanent link">#</a></h3>
+<p>Remove unreachable objects — dry run unless <code>--apply</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>vacuum<span class="w"> </span>market.db<span class="w">                    </span><span class="c1"># inspect candidates</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>vacuum<span class="w"> </span>market.db<span class="w"> </span>--apply<span class="w">            </span><span class="c1"># actually delete</span>
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>[table]</code></td>
+<td>Restrict to one table (optional positional)</td>
+</tr>
+<tr>
+<td><code>--grace-seconds &lt;N&gt;</code></td>
+<td>Never touch objects newer than this (default 3600)</td>
+</tr>
+<tr>
+<td><code>--apply</code></td>
+<td>Actually delete</td>
+</tr>
+</tbody>
+</table></div>
+<p>Read <a href="operations.html#vacuum">the cadence guidance</a> before scripting this.</p>
+<h3 id="h5i-db-verify"><code>h5i-db verify</code><a class="headerlink" href="#h5i-db-verify" title="Permanent link">#</a></h3>
+<p>Check structural integrity: checksums, hash chain, object existence.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>verify<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--deep
+</code></pre></div>
+
+<p><code>--deep</code> additionally re-reads every segment and verifies content checksums.
+Problems are reported in the chosen format and the command exits non-zero.</p>
+<h3 id="h5i-db-ui"><code>h5i-db ui</code><a class="headerlink" href="#h5i-db-ui" title="Permanent link">#</a></h3>
+<p>Launch the local review UI — loopback only.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--port &lt;N&gt;</code></td>
+<td>Port (default 7351)</td>
+</tr>
+<tr>
+<td><code>--allow-mutations</code></td>
+<td>Enable plan apply/discard from the UI (default: read-only)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The UI shows pending plans with previews, the version timeline with audit
+badges, version diffs, and an SQL scratchpad that reports pruning per query.</p>
+    <nav class="page-nav"><a class="prev" href="../manual/concepts.html"><span class="dir">← Previous</span><span class="pn-title">Core concepts</span></a><a class="next" href="../manual/sql.html"><span class="dir">Next →</span><span class="pn-title">SQL reference</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../">Home</a>
+      <a href="../manual/">Manual</a>
+      <a href="../api/">Python API</a>
+      <a href="../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../";</script>
+<script src="../_static/docs.js" defer></script>
+</body>
+</html>

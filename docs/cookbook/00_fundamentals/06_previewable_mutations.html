@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Previewable mutations: fix bad ticks without fearing the delete key · h5i-db docs</title>
+  <meta name="description" content="Deleting or rewriting rows in a shared tick store is the scariest routine operation on a quant desk - a fat-fingered DELETE WHERE has ruined more research datasets than any hardware failure. h5i-db&#x27;s answer is the …">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../../_static/logo.png">
+  <link rel="apple-touch-icon" href="../../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Previewable mutations: fix bad ticks without fearing the delete key · h5i-db docs">
+  <meta property="og:description" content="Deleting or rewriting rows in a shared tick store is the scariest routine operation on a quant desk - a fat-fingered DELETE WHERE has ruined more research datasets than any hardware failure. h5i-db&#x27;s answer is the …">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Previewable mutations: fix bad ticks without fearing the delete key · h5i-db docs">
+  <meta name="twitter:description" content="Deleting or rewriting rows in a shared tick store is the scariest routine operation on a quant desk - a fat-fingered DELETE WHERE has ruined more research datasets than any hardware failure. h5i-db&#x27;s answer is the …">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../../">
+    <img src="../../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../../manual/" >Manual</a></li>
+    <li><a href="../../api/" >Python API</a></li>
+    <li><a href="../../cookbook/" class="active">Cookbook</a></li>
+    <li><a href="../../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html" class="active">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html">Maintenance: verify, compact, vacuum - keeping a versioned store healthy</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../../cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Fundamentals</span>
+<span class="sep">/</span>
+<span>Previewable mutations: fix bad ticks without fearing the delete key</span></div>
+<h1>Previewable mutations: fix bad ticks without fearing the delete key</h1>
+<p>Deleting or rewriting rows in a shared tick store is the scariest routine
+operation on a quant desk - a fat-fingered <code>DELETE WHERE</code> has ruined more
+research datasets than any hardware failure. h5i-db's answer is the
+<strong>plan/apply flow</strong>: a mutation is first <em>staged</em> as a plan with a machine
+summary and before/after row samples, reviewed, and only then applied - as
+a new version, with the old one intact. In this recipe we:</p>
+<ol>
+<li>inject two classic tick-data pathologies (a feed glitch and a 10x
+   scaling bug) and find them with SQL,</li>
+<li>stage a delete, catch ourselves over-deleting in the preview, discard,
+   re-plan narrower, apply,</li>
+<li>stage a <code>replace_range</code> that repairs prices in place,</li>
+<li>lock the database down with a mutation policy so direct destructive
+   writes raise <code>PolicyError</code> - the safety story for shared and
+   agent-operated databases.</li>
+</ol>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_mutations&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-two-days-of-ticks-two-injected-pathologies">1. Two days of ticks, two injected pathologies<a class="headerlink" href="#1-two-days-of-ticks-two-injected-pathologies" title="Permanent link">#</a></h2>
+<p>We corrupt the synthetic feed the way real feeds break:</p>
+<ul>
+<li><strong>Feed glitch</strong>: for ten seconds on day 1 (15:00:00-15:00:10 UTC) every
+  print, all symbols, comes in at 10x - a decimal-shift burst.</li>
+<li><strong>Scaling bug</strong>: for ten minutes on day 2 (14:00-14:10 UTC) one symbol's
+  (MSFT) prices are all 10x - a per-symbol multiplier bug in a handler.</li>
+</ul>
+<p>The glitch rows are garbage (delete them); the scaling-bug rows are real
+trades with a recoverable price (repair them).</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">20_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">trades</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+<span class="n">glitch</span> <span class="o">=</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="s2">&quot;2026-06-01 15:00:00+00:00&quot;</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="s2">&quot;2026-06-01 15:00:10+00:00&quot;</span><span class="p">)</span>
+<span class="n">scaling</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="s2">&quot;2026-06-02 14:00:00+00:00&quot;</span><span class="p">)</span>
+    <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="s2">&quot;2026-06-02 14:10:00+00:00&quot;</span><span class="p">)</span>
+    <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">glitch</span> <span class="o">|</span> <span class="n">scaling</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">]</span> <span class="o">*=</span> <span class="mf">10.0</span>
+<span class="n">corrupted</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span><span class="n">df</span><span class="p">,</span> <span class="n">schema</span><span class="o">=</span><span class="n">trades</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">corrupted</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;raw feed capture, days 1-2&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">glitch</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="si">}</span><span class="s2"> glitch prints, </span><span class="si">{</span><span class="n">scaling</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="si">}</span><span class="s2"> scaled prints, </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">df</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows total&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">18 glitch prints, 1502 scaled prints, 118,219 rows total</pre></div></div>
+<h2 id="2-find-the-damage-with-sql">2. Find the damage with SQL<a class="headerlink" href="#2-find-the-damage-with-sql" title="Permanent link">#</a></h2>
+<p>A robust screen: compare every print to its symbol's daily median
+(<code>approx_percentile_cont</code>). The corrupt rows sit at ~10x their median; the
+median itself barely moves because the corrupt fraction is small. This is
+why medians, not means, anchor outlier screens.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">flagged</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    WITH med AS (</span>
+<span class="sd">        SELECT symbol, time_bucket(&#39;1d&#39;, ts) AS day,</span>
+<span class="sd">               approx_percentile_cont(price, 0.5) AS med_px</span>
+<span class="sd">        FROM trades GROUP BY symbol, day</span>
+<span class="sd">    )</span>
+<span class="sd">    SELECT t.ts, t.symbol, t.price, t.price / m.med_px AS x_median</span>
+<span class="sd">    FROM trades t</span>
+<span class="sd">    JOIN med m ON t.symbol = m.symbol AND time_bucket(&#39;1d&#39;, t.ts) = m.day</span>
+<span class="sd">    WHERE t.price &gt; 3 * m.med_px</span>
+<span class="sd">    ORDER BY t.ts</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+<span class="n">flagged</span><span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="n">flagged</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;1D&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="s2">&quot;day&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>day                        symbol
+2026-06-01 00:00:00+00:00  AAPL         6
+                           MSFT         9
+                           NVDA         3
+2026-06-02 00:00:00+00:00  MSFT      1502
+dtype: int64</pre></div></div>
+<p>Two clusters, exactly as injected: an all-symbol burst on day 1 and an
+MSFT-only stretch on day 2. Derive the time bounds of each from the
+flagged rows. <strong>Mutation-plan ranges are raw int64 microseconds</strong> (the
+unit of the <code>ts</code> column) and half-open <code>[start, end)</code> - so add 1µs past
+the last bad print.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">burst</span> <span class="o">=</span> <span class="n">flagged</span><span class="p">[</span><span class="n">flagged</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="s2">&quot;2026-06-02&quot;</span><span class="p">]</span>
+<span class="n">bug</span> <span class="o">=</span> <span class="n">flagged</span><span class="p">[(</span><span class="n">flagged</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="s2">&quot;2026-06-02&quot;</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">flagged</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">)]</span>
+
+<span class="n">burst_lo</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">burst</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
+<span class="n">burst_hi</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">burst</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
+<span class="n">bug_lo</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">bug</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
+<span class="n">bug_hi</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">bug</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span> <span class="o">+</span> <span class="mi">1</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;burst window:&quot;</span><span class="p">,</span> <span class="n">burst</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="s2">&quot;-&gt;&quot;</span><span class="p">,</span> <span class="n">burst</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;bug   window:&quot;</span><span class="p">,</span> <span class="n">bug</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="s2">&quot;-&gt;&quot;</span><span class="p">,</span> <span class="n">bug</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">burst window: 2026-06-01 15:00:00.057277+00:00 -&gt; 2026-06-01 15:00:09.919403+00:00
+bug   window: 2026-06-02 14:00:00.344957+00:00 -&gt; 2026-06-02 14:09:59.689919+00:00</pre></div></div>
+<h2 id="3-stage-a-delete-and-catch-the-over-delete-before-it-happens">3. Stage a delete - and catch the over-delete before it happens<a class="headerlink" href="#3-stage-a-delete-and-catch-the-over-delete-before-it-happens" title="Permanent link">#</a></h2>
+<p>First instinct: "nuke the whole five minutes around the glitch, to be
+safe." Stage it and look at the plan before believing it. A plan is not a
+commit: nothing has changed in the table yet.</p>
+<p>One crucial property of range mutations: <strong>the range is on time only</strong> -
+it does not filter by symbol. A "safe, wide" window silently takes healthy
+AAPL and NVDA prints with it. The plan summary makes that visible <em>before</em>
+any damage.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sloppy</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span>
+    <span class="s2">&quot;trades&quot;</span><span class="p">,</span>
+    <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 15:00:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">),</span>
+    <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 15:05:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">),</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;delete glitch burst (wide window)&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">sloppy</span><span class="o">.</span><span class="n">summary</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;rows_before&#x27;: 118219,
+ &#x27;rows_after&#x27;: 117737,
+ &#x27;rows_affected&#x27;: 482,
+ &#x27;segments_reused&#x27;: 0,
+ &#x27;segments_added&#x27;: 1,
+ &#x27;added_bytes&#x27;: 879306,
+ &#x27;affected_time_range&#x27;: [1780326000000000, 1780326300000000]}</pre></div></div>
+<p><code>rows_affected</code> is ~25x the number of bad prints - the wide window would
+destroy hundreds of good trades. <code>before_sample</code> shows the doomed rows:
+healthy \$200-ish prints mixed in with the 10x garbage. Discard and
+re-plan on the tight bounds the detector gave us.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sloppy</span><span class="o">.</span><span class="n">before_sample</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>size</th>
+      <th>exchange</th>
+      <th>side</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 15:00:00.057277+00:00</td>
+      <td>MSFT</td>
+      <td>3591.4</td>
+      <td>1</td>
+      <td>BATS</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 15:00:00.862948+00:00</td>
+      <td>AAPL</td>
+      <td>2664.0</td>
+      <td>1</td>
+      <td>IEX</td>
+      <td>S</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 15:00:01.169986+00:00</td>
+      <td>MSFT</td>
+      <td>3591.8</td>
+      <td>1</td>
+      <td>IEX</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 15:00:01.410323+00:00</td>
+      <td>MSFT</td>
+      <td>3591.4</td>
+      <td>1</td>
+      <td>ARCA</td>
+      <td>S</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 15:00:01.654483+00:00</td>
+      <td>NVDA</td>
+      <td>3181.7</td>
+      <td>100</td>
+      <td>ARCA</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>2026-06-01 15:00:01.980758+00:00</td>
+      <td>MSFT</td>
+      <td>3591.9</td>
+      <td>400</td>
+      <td>NASDAQ</td>
+      <td>B</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sloppy</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
+
+<span class="n">tight</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">burst_lo</span><span class="p">,</span> <span class="n">burst_hi</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;delete 10s decimal-shift burst&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;rows_affected:&quot;</span><span class="p">,</span> <span class="n">tight</span><span class="o">.</span><span class="n">summary</span><span class="p">[</span><span class="s2">&quot;rows_affected&quot;</span><span class="p">],</span> <span class="s2">&quot; (bad prints:&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">burst</span><span class="p">),</span> <span class="s2">&quot;)&quot;</span><span class="p">)</span>
+<span class="n">commit</span> <span class="o">=</span> <span class="n">tight</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;applied as version&quot;</span><span class="p">,</span> <span class="n">commit</span><span class="p">[</span><span class="s2">&quot;sequence&quot;</span><span class="p">],</span> <span class="s2">&quot;op:&quot;</span><span class="p">,</span> <span class="n">commit</span><span class="p">[</span><span class="s2">&quot;op&quot;</span><span class="p">])</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rows_affected: 18  (bad prints: 18 )</pre><pre class="">applied as version 2 op: delete_range</pre></div></div>
+<p><code>apply()</code> re-checks the table head first: if anyone committed after the
+plan was staged, it raises <code>ConflictError</code> instead of publishing a
+mutation computed against a stale base - the same optimistic concurrency
+as <code>append(expected_version=...)</code>.</p>
+<h2 id="4-repair-in-place-with-plan_replace_range">4. Repair in place with <code>plan_replace_range</code><a class="headerlink" href="#4-repair-in-place-with-plan_replace_range" title="Permanent link">#</a></h2>
+<p>The MSFT scaling bug is different: the trades are real, the prices are
+recoverable (<code>/10</code>). <code>plan_replace_range(start, end, data)</code> swaps
+<em>everything</em> in the window for the data you provide - so the replacement
+must contain the window's AAPL and NVDA rows unchanged, plus the repaired
+MSFT rows.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">win</span> <span class="o">=</span> <span class="n">df</span><span class="p">[(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">bug_lo</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">))</span>
+         <span class="o">&amp;</span> <span class="p">(</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">bug_hi</span><span class="p">,</span> <span class="n">unit</span><span class="o">=</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">))]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+<span class="n">win</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">win</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">]</span> <span class="o">/=</span> <span class="mf">10.0</span>
+<span class="n">repaired</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span><span class="n">win</span><span class="p">,</span> <span class="n">schema</span><span class="o">=</span><span class="n">trades</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+<span class="n">fix</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_replace_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">bug_lo</span><span class="p">,</span> <span class="n">bug_hi</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">repaired</span><span class="p">,</span>
+                            <span class="n">note</span><span class="o">=</span><span class="s2">&quot;MSFT 10x scaling bug: prices /10&quot;</span><span class="p">)</span>
+<span class="n">fix</span><span class="o">.</span><span class="n">summary</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;rows_before&#x27;: 118201,
+ &#x27;rows_after&#x27;: 118201,
+ &#x27;rows_affected&#x27;: 4179,
+ &#x27;segments_reused&#x27;: 0,
+ &#x27;segments_added&#x27;: 1,
+ &#x27;added_bytes&#x27;: 879593,
+ &#x27;affected_time_range&#x27;: [1780408800344957, 1780409399689920]}</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="c1"># after_sample previews the post-mutation rows - MSFT back at sane levels:</span>
+<span class="n">fix</span><span class="o">.</span><span class="n">after_sample</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">query</span><span class="p">(</span><span class="s2">&quot;symbol == &#39;MSFT&#39;&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>size</th>
+      <th>exchange</th>
+      <th>side</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-02 14:00:00.344957+00:00</td>
+      <td>MSFT</td>
+      <td>355.32</td>
+      <td>100</td>
+      <td>IEX</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-02 14:00:00.688344+00:00</td>
+      <td>MSFT</td>
+      <td>355.34</td>
+      <td>1</td>
+      <td>NYSE</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>2026-06-02 14:00:01.093424+00:00</td>
+      <td>MSFT</td>
+      <td>355.26</td>
+      <td>1</td>
+      <td>BATS</td>
+      <td>S</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">fix</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>
+<span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    WITH med AS (SELECT symbol, time_bucket(&#39;1d&#39;, ts) AS day,</span>
+<span class="sd">                        approx_percentile_cont(price, 0.5) AS med_px</span>
+<span class="sd">                 FROM trades GROUP BY symbol, day)</span>
+<span class="sd">    SELECT t.ts FROM trades t</span>
+<span class="sd">    JOIN med m ON t.symbol = m.symbol AND time_bucket(&#39;1d&#39;, t.ts) = m.day</span>
+<span class="sd">    WHERE t.price &gt; 3 * m.med_px</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">))</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;detector re-run: 0 outliers remaining&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">detector re-run: 0 outliers remaining</pre></div></div>
+<p>Every correction is a version. The uncorrected capture is one integer
+away - so "did the cleaning change my backtest?" is a SQL join, not an
+archaeology project (recipe 05).</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))[[</span><span class="s2">&quot;sequence&quot;</span><span class="p">,</span> <span class="s2">&quot;op&quot;</span><span class="p">,</span> <span class="s2">&quot;rows&quot;</span><span class="p">,</span> <span class="s2">&quot;note&quot;</span><span class="p">]]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>sequence</th>
+      <th>op</th>
+      <th>rows</th>
+      <th>note</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>0</td>
+      <td>create</td>
+      <td>0</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>1</td>
+      <td>append</td>
+      <td>118219</td>
+      <td>raw feed capture, days 1-2</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2</td>
+      <td>delete_range</td>
+      <td>118201</td>
+      <td>delete 10s decimal-shift burst</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>3</td>
+      <td>replace_range</td>
+      <td>118201</td>
+      <td>MSFT 10x scaling bug: prices /10</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+
+<span class="n">before</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT ts, price FROM h5i(&#39;trades&#39;, 1)</span>
+<span class="sd">    WHERE symbol = &#39;MSFT&#39; AND ts &gt;= &#39;2026-06-02T13:50:00Z&#39; AND ts &lt; &#39;2026-06-02T14:20:00Z&#39;</span>
+<span class="sd">    ORDER BY ts</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">after</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT ts, price FROM trades</span>
+<span class="sd">    WHERE symbol = &#39;MSFT&#39; AND ts &gt;= &#39;2026-06-02T13:50:00Z&#39; AND ts &lt; &#39;2026-06-02T14:20:00Z&#39;</span>
+<span class="sd">    ORDER BY ts</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">before</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">],</span> <span class="n">before</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">],</span> <span class="n">lw</span><span class="o">=</span><span class="mf">0.8</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;tab:red&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;version 1 (raw capture)&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">after</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">],</span> <span class="n">after</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">],</span> <span class="n">lw</span><span class="o">=</span><span class="mf">0.8</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;tab:blue&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;head (repaired)&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_yscale</span><span class="p">(</span><span class="s2">&quot;log&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;MSFT prints around the scaling bug: raw capture vs repaired head&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;time (UTC)&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;price (log scale)&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+<span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA94AAAGGCAYAAACNL1mYAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjEsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvctoD+AAAAAlwSFlzAAAPYQAAD2EBqD+naQAAiUJJREFUeJzs3XV8E+cfB/DPJXWhghZaSpECRYtLcR0uQ4fDGDKGjA0YbNiGbMhvAzZsyHAZzoYUHQyH4lDokFIoxeqePL8/So6mSdoktLTQz/v12miee+7ue5fL5b6553lOEkIIEBEREREREVGWUGR3AEREREREREQfMibeRERERERERFmIiTcRERERERFRFmLiTURERERERJSFmHgTERERERERZSEm3kRERERERERZiIk3ERERERERURZi4k1ERERERESUhZh4ExEREREREWUhJt5ERK/dv38fkiRh+fLl2R1KrrBq1SpIkoRbt26ZvYyxY8fCwsIiE6PKGb7//ntIkoT4+Ph0y96lD3VfE71r58+fhyRJ2LFjxztZ35w5cyBJEp4/f55uvX79+qFQoULvJCZjGRs70fuAiTdRLubn5wdJkuDm5gaVSqUz/eHDh1AoFJAkCaNGjdKalpCQgAULFqBq1apwcXGBq6sratasiVmzZiEsLEzvevT9t3btWtSqVcvg9NT/tWnTJit3x1u7desWJEnCqlWrsjuUD8qkSZMgSRKSk5OzOxSi9w4/P0REOQMTb6Jczs7ODqGhodi3b5/OtNWrV8POzk7vfB06dMDXX3+NIUOG4Pbt23j48CHGjBmDRYsW4YsvvtCpX7BgQQghdP7r1asXTp8+rVW2bNkyAMDu3bu1yvfs2ZO5G59GsWLFIITAoEGDsnQ9ROaYNGkShBCwsbHJ7lCI6C1Uq1YNQgh06NAhu0MhoneIiTdRLufm5obatWvr3KUVQmDVqlX4+OOPdea5ePEi9u3bh5EjR+LTTz9FgQIF4ODggG7duiEgIADVq1d/R9ETEREREeV8TLyJCP369cPu3bvx8uVLuez48eP477//0K9fP536mnpFihTRmZY3b158+eWXWRarPgEBAZAkCRs3bsTSpUtRvHhx2NjYoHr16vD39zdYd+XKlShdujQsLCxw9OhRvX28U9dft24dvL29YWNjgypVquDo0aNyvX379qFs2bIAgP79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QoUKoVWrVsiXLx969+4NX19fVKxYEUDKo+aaN2+ODh06oHDhwli4cCHWrVsHBwcHk7fHVK1atcL27dvx77//yu9D+fLl8dFHHwHQvStlyMKFC7Flyxa4u7vjo48+QvXq1XH48GHY2trKdUw5ljIrLlOY8j40bdoUkiTJz27W0GyLZsyGjGTF8WHMe5He5yezPvPffPMNtm3bhuPHj6Ny5crImzcvOnfujPv372Py5MkZzq9pWh4cHIwqVaroPMbys88+Q758+fDpp5+iYMGCKF26NI4cOYKdO3eiVatWJsWqYW9vj+PHj6NPnz6YNGkS3N3dUbJkSYwdOxa+vr7o3LmzVv3hw4fDwsIClStXho+PD549ewZ/f3+tWIcNG4bp06dj1qxZyJ8/P/r27YuvvvrKpB9K9fHz88OFCxdga2uLVq1awcnJCQ0aNMCmTZvw/fffy5+RXr16Yd26ddizZw88PT3RvHlztG7dGvXq1Xur9b9NTFu2bEHVqlXRrFkzeHh4YP369di4caNOk/p3GTtRdpGEoRE0iIjeEwEBAfD19cWGDRve6k4YUW707bffYsaMGYiMjEx3xO13LafGlROMHTsW//vf/96qBQgZx9/fH82aNcPBgwezpSUXEX04eMebiIgolxJCYPv27ahatWqOSm5zalxERETmYuJNRESUCyQkJMjjMsTExCAwMBB9+vTBzZs35ccdMS4iIqKsYXj0JCIiIvpgWFtbo2PHjhg9ejSuXbsGlUolj3iv6U/NuIiIiLIG+3gTERERERERZSE2NSciIiIiIiLKQky8iYiIiIiIiLIQ+3hnIbVajcePH8PR0RGSJGV3OERERERERJRJhBCIiopC4cKFoVCkf0+biXcWevz4MTw8PLI7DCIiIiIiIsoiwcHBcHd3T7cOE+8s5OjoCCDljciTJ082R0NERERERESZJTIyEh4eHnLelx4m3llI07w8T548TLyJiIiIiIg+QMZ0K+bgakRERERERERZiIk3ERERERERURZi4k1ERERERESUhdjHm4iIiIjoA6NSqZCUlJTdYRC91ywtLaFUKjNlWUy8iYiIiIg+EEIIhIaGIjw8PLtDIfogODs7o1ChQkYNoJYeJt5ERERERB8ITdJdoEAB2NnZvXWyQJRbCSEQGxuLsLAwAICbm9tbLY+JNxERERHRB0ClUslJd968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sACVKlXCxo0bER0djXr16mH69OkmrR8A/ve//+HmzZv46quv4OjoiH379mmN3D537lx89913+PTTTwGkdC/4+eef8d1332HSpEkoVKgQxo0bh8WLF2v109e3X+zt7XHixAnMnz8f8+fPR1JSEipXrowtW7Zo1V28eDG++OKLdLc/M0jC2OEGyWSRkZFwcnJCREQE8uTJk93hEBFliqhDh/B80a/w2vZndodCRO+J8O07ELFzJzxXrczuUD5o8fHxuHfvHry8vLI8iaB34/bt2xgyZAgOHDggj7T+vsqXLx8WLlyI7t27Z3cosv/++w/9+/fHvn37YGtrq7dOep8rU/I93vEmIiLT8PdaIiKid6J06dJ6+6NT5ihevLj8iLWsxsHViIiIiIiIKEvpaw6em/CONxERmY4DJRGRqdhahihXSz1afG7EO94m2LhxI7p27YrRo0frfaYeERERERERUVpMvI20Zs0a7N+/H926dYNarX7rRwoQEb2vOCYnEZmMjWSIKJdjU3MjdezYEb179wYA1K1bF5UrV87egIiIiIiIiOi9kK13vO/fv4/BgwfD09MTefPmRf369bF///5MX09YWBhmzZqF4sWLw8LCQn5wfWoxMTEYOnQoChQoAGdnZ3Tt2hWhoaHydAcHB+zfvx/NmjVD3bp1sWTJkkyPk4jovcE+3kRERERGy9bE+6effkL9+vVx+vRp3Lp1C02aNEGbNm1w9erVTF3PpEmT8OrVK0yfPh0qlUpvM8nBgwfj0KFD8Pf3x6VLl/D06VO0a9dOq265cuUwatQo9OvXD5MnT0ZSUlKmxklEREREREQfnmxNvBctWoRevXrBzc0N+fPnx7fffgsAOHv2rN76e/bswYABA6BWq7XK79y5gxYtWiAiIkLvfEuXLsXs2bNRokQJvdMfPXqEDRs24Mcff0TFihXh5eWFX3/9FefOnZOfm/f333+jUKFCaN26Nb766is8efIEL1++NHfTiYjeX+zjTURERGSSHDO4WkxMDH7++WfY29ujSZMmeutUqFABhw8fxsCBA+XkOygoCI0aNUKxYsWQJ08es9Z96tQpCCHQqFEjuaxcuXIoWLAg/v33XwBAdHQ0vL290ahRIxQvXhzt2rVDwYIFzVofEdF7j03NichU/NGO0lGxYkXs2rUr29bftGlTrFq1Kt06V65cQY0aNXJMq9cbN27A3d0dr169ypLlL1myBK1bt9Z6PXTo0CxZV26Q7Yn3gQMHYGFhAQcHB0ybNg2bN29GsWLF9Nb19PTEkSNHcOjQIQwePBh3795Fo0aN0LJlSyxevBiSmReCT548gZWVFZycnLTK8+fPL/fz7tKlC86dO4epU6fi9OnTWLZsmcHlLVq0CD4+PqhevbpZ8RARERF9SMy9RqPc4/Hjx4iNjc229YeGhiI6OjrdOqNGjUKfPn1gaWn5jqJKX2JiIkJCQqBSqbJk+VFRUXj69Kn8+pNPPsHWrVsNtk6m9GV74t2sWTPEx8fjyZMnGDVqFNq3b49z584ZrO/l5YXDhw/j77//RoUKFdCkSRMsXbo0S07oCoVCq4+3ZgC4okWLpjvf8OHDcePGjXS3g4iIiIiI3g/nz5/HmTNn0KdPn+wORVauXDkEBwfD1dX1nazPwcEBPXr0wNy5c9/J+j402Z54S5IECwsLFCpUCJMnT4aPjw+WL1+e7jwWFhawsLCAWq2GtbX1WyfdBQsWRGJiIiIjI7XKw8LC2JyciCgtthYlIqIsEBYWhkGDBqFChQqoXbs2tmzZojVdrVZj3rx5qFGjBkqXLo1OnTrhypUrWnXatWsHd3d3eHh4oEaNGvj2228RFxenVScyMhJDhgxBqVKl0KBBA6xYsSLD2NasWYOmTZtqdW2tWLEili5dil69eqFUqVKYMmUKAODp06cYNmwYypYti8qVK2PkyJEIDw+X5zt37hzc3d2xf/9+tGzZEt7e3ujYsSP+++8/uc6zZ8/g7u4Od3d3eHl5oXHjxjr7486dO6hVq5Y8zpVmuQcPHkTDhg1RrFgxnDp1CgDw77//ok2bNihZsiTq1auHJUuW6Aw4vWrVKlStWhWVKlXCsGHD9I6f1bFjR2zfvj3D1gGkK9sT77QMjTquERwcjEaNGqFevXoICAjArl278Pnnn7/VOmvXrg0AOHbsmFx269YthIaGok6dOm+1bCKiDxKbjRIRUSabNGkS6tSpg61bt6Jr167o0aMHbt68KU8fMmQINmzYgFmzZmHXrl2oXbs26tSpg3v37sl1fv/9d5w+fRr//vsvfvrpJ/z1118YNWqU1nr69euHU6dOYdWqVfjxxx+xZMkSrfXoc+zYMZ1upI8fP8bo0aNRr1497Nu3D6NHj0ZkZCT8/PygVquxceNGrFq1Cg8ePECbNm3kHCchIQEhISEYPHgwRo0ahc2bN0MIgebNm8v9x/PmzYvTp0/j9OnTOHToEAYMGIABAwbg77//lteftqm5ZrkjR47EpEmT8M8//6BKlSo4duwYWrVqhXbt2mHv3r2YOHEiZs2ahZ9++kle1q5duzB06FAMGTIE69evh4uLC2bMmKGzH2rUqIHk5GR5HCwygcgm0dHRonv37uLSpUsiPj5ePH36VHz77bdCoVCIY8eO6Z3n0aNHokSJEqJHjx4iOTlZCCHEzZs3RcGCBcUXX3yR4TpPnTolAIg7d+7oTOvSpYvw8fERgYGB4vHjx6JJkyaicuXKQqVSmb2NERERAoCIiIgwexlERDlNxL794r8uXbM7DCJ6j4Tv2CHu9+6T3WF88OLi4sSNGzdEXFycVrlarRaRcYnv/D+1Wm107Hnz5hXjx4/XKitZsqRYuHChEEKIO3fuCEmSxP3797XqfPTRR2LChAkGl3vy5ElhbW0tx3Ljxg0BQFy8eFGuExgYKCRJEgsWLDC4HGdnZ7F8+XKdmEeMGKFVNmfOHOHr66tVFh0dLSwtLcWZM2eEEEL8888/AoDYvHmzXCciIkLkyZNHrFmzxmAMX331leja9c3376VLlwQA8ezZM63lHjp0SGs+Pz8/MXXqVK2yTZs2CTc3N/l1zZo1dfIpPz8/UbVqVZ04nJycxJIlSwzG+aEx9LkSwrR8zyK7En57e3t069YNw4YNQ0BAAOzs7ODr6wt/f3/Ur19f7zznzp1DjRo1sGbNGiiVSgBAmTJlcOTIEQwZMgQRERE6A6QBwIwZM/Ddd9/Jr8uUKQMg5TFjAwYMAJDy69iIESNQpUoVJCUloVmzZti9ezcUihzXKICIiIjo/cNRzbNNdEIyKkw58M7Xe3VKczjaGD8QWfny5bVeFyxYEM+fPwcAucl0gwYNAABCCAgh8PLlSzg4OMjzBAQEYPbs2bh27RrCw8ORnJyMhIQEhIaGws3NDVeuXJHzDo1SpUqhUKFC6caWnJwMCwvd1KlKlSpar//9918EBgaiWLFicoxCCKhUKty9exc1atSQ6/r5+cl/58mTB5UqVdJqOr9+/XqsWLECDx48QFxcHKKjo1G6dOl040wbk1qtxunTp3H79m2sWLFCjichIQFhYWGIiYmBnZ0drly5gi+//FJrOfXq1cOBA7rHjYWFBZKTkzOMg7RlW+INAB06dECHDh3eun7ZsmW1momnNWHCBHz99dc65ZrkHQAcHR2xatWqDB8jQESU6/HimYjoveJgbYGrU5pny3pNkfraXEO8/s6Jj4+HtbU1/vnnH53xnWxtbQGk9Itu3Lgx+vfvj7FjxyJfvnwICgpCkyZNkJCQACClObaVlZXOevSVpebm5oawsDCdchsbG63X8fHxaNy4MX799VedumkHQUu7TisrKznOrVu3YsiQIViwYAGqV6+OPHnyYMGCBdi/f3+6caaNSaVSITk5GVOmTEG7du106trZ2UGtViMpKUlvPGklJyfj1atXcHNzyzAO0patife7ohnAjYiIMgm7eBORKTguRLaSJMmkO885Ubly5eQnIaW+a5zauXPnkJiYqDXqtuZOuUapUqUQHh6O4OBgeHh4AABevHiBkJCQdNdfq1YtXLx40ag4N23ahIIFC2b42LGrV6+iYcOGAFIS2hs3bsg3GQ8cOIC2bduib9++cv0HDx5kuP60LC0tUapUKVy7dg3Dhg3TW0epVKJ48eK4evUq2rdvL5dfvnxZp25AQADUajXHwTID21ETEREREVGOVqdOHfj5+WHw4MEIDAwEAERHR2PZsmXYtWsXAMDd3R2xsbFyS9jAwEBMmjRJazm1atVC5cqVMXr0aMTFxSEhIQGjR4/OsOl0ly5d4O/vLw9+ZsjQoUPx6tUrDB8+XB75Ozg4GCNHjsSrV6+06k6YMAEvXryASqXCtGnTEBMTg549e8rbcu7cOTx//hxCCGzduhVbt241cm9p+/rrr7F8+XJs2LABarUaKpUKp0+f1to3Q4cOxYIFC3D16lUAwJ49e7B7926dZe3btw/16tXjk5/MwMSbiIhMxKbmRET07u3atQsVK1ZEpUqV4OLiAnd3d1y8eFF+QlHFihUxefJktGjRAq6urqhdu7ZON1VJkrB+/XrcuXMHzs7OKFSoEKytrVGyZMl01926dWu4urpi586d6dbz8vLCoUOHcPXqVTg7O8PZ2Rn169dHqVKldMaiatWqFby9vZEnTx4sX74cmzZtkpujjxo1CsWKFUPhwoXh5OSEqVOnomvXribusRSDBg3CL7/8gq+//hoODg5wdnbG2LFj0bz5m+4Hn3/+Odq3b48qVarA2dkZ3377LXr16qW1HLVajdWrV+uMEk/GkYRgZ72sEhkZCScnJ0RERGg984+I6H0WuW8fXqxcCa9Nm7I7FCJ6T0Ts2oXwLVvhueaP7A7lgxYfH4979+7By8tLp+9xTvfkyRM4OzvL/bWBlD7b1tbWOtfRSUlJCA8PR/78+fUuKzk5GS9fvkS+fPkghMCTJ0/g5uam04f8xYsXcHFxgUKhwNOnT+Hg4AB7e3uDMe7ZswfffPMNAgICoFAo9MacWkxMDJKTk3US7hMnTqBevXqIi4uDjY2NVhxpRUdHIzk5Gc7OzoiOjkZsbCwKFCgg74enT5+icOHCUCgUSExMRFhYGNzd3Q1uw4sXL+Dg4ABra2uDMQMpA2GnXd8ff/yB5cuX4/jx4waX/yFK73NlSr7Hjs9ERGQyiZ28iYgoE+kbrMtQYm1paWlwGpAy6rYmWQRgMBHNmzev/LcxTafbtGkDX19fecC3jAYYSy+JNxRHWqlHbHdwcNB6bWlpqbVtVlZW6SbdGa0L0I457fratGmDTp06pTs/GcbEm4iIiIiyHhtZ0gegSJEi2R1Ctkk7KjuZhn28iYjINLx4JiJTcVRzIlmNGjUQHBz83nUHoLfDxJuIiIiIiOgdMaZJOH14mHgTEZHpePeKiIiIyGhMvImIiIiIPiB8aBFR5smszxMTbyIiMg0v6IiIciRLS0sAQGxsbDZHQvTh0HyeNJ8vc3FUcyIiIiKiD4BSqYSzszPCwsIAAHZ2dpDYNYjILEIIxMbGIiwsDM7OzjrPgTcVE28iIjIdL+SIyEQCbC3zLhQqVAgA5OSbiN6Os7Oz/Ll6G0y8iYiIiCiL8ce6d0WSJLi5uaFAgQJISkrK7nCI3muWlpZvfadbg4k3ERGZhIP2EBHlfEqlMtMSBiJ6exxcjYiITMem5kRERERGY+JNRERERERElIWYeBMRERERERFlISbeRERkGnbxJiJz8NxBRLkYE28iIjId+3gTERERGY2JNxERERFlLf5YR0S5HBNvIiIiIiIioizExJuIiEzD53gTERERmYSJNxERmY6tRomIiIiMxsSbiIiIiIiIKAsx8SYiIhOxqTkRmYHdVIgoF2PiTURERERZi91TiCiXY+JNREQmk3gVTURERGQ0Jt5EREREREREWYiJNxERmYb9NImIiIhMwsSbiIiIiIiIKAsx8SYiItNJ7ONNRCZiaxkiysWYeBMRERERERFlISbeRERkGt61IiITSWwlQ0S5HBNvIiIiIiIioizExNtIkZGRGDRoEFxdXVGhQgUcPHgwu0MiIso+vHtFREREZDQm3kbas2cPGjVqhHv37mH69Ono379/dodERERERERE7wGL7A4gKSkJt27dgoWFBUqUKAErK6ssW1dQUBCCg4NRs2ZN2Nra6kxXq9W4du0aEhMTUbFiRa1YevbsCQAQQiBPnjxwdXXNsjiJiHIywT7eRERERCbJtjveQghMnToV7u7u+OSTT9C2bVsUK1YMO3fuzPR1+fv7o2nTpqhVqxYaNWqEkJAQnTqBgYEoW7YsWrRogW7duqFo0aI4fvy4Vp0VK1bAwsICbdu2xY8//pjpcRIRERF9sPijHRHlYtmaeAshcPv2bVy5cgV3797F0KFD0aNHDzx58sTgfBERESaVA8Dt27cxbtw47Nq1y2Cdnj17wtvbGyEhIQgKCkK3bt3QpUsXxMTEyHX69++P2NhY+Pv7Y+DAgYiKijJiS4mIPkDs401EpuA5g4hyuWxLvBUKBaZMmQJnZ2e5bPDgwYiLi8OlS5f0zvP777/Dz88Pz58/1yrftm0bSpUqhfDwcL3zDR8+HM2aNTP4KIsrV67gwoULmDBhAhSKlF0yYcIEPH/+HH/99RcAYM6cOQgICICFhQUsLS0RExMDtVpt4lYTERERERFRbpOjBlc7e/YsAKBkyZJ6p/fu3RseHh5o0qQJXrx4AQDYsWMHPvnkE/zvf//TSuJNoUn0q1atKpcVKlQIRYoUkae1atUKn3/+Oezs7NCzZ0/8+uuvcHJy0ru8RYsWwcfHB9WrVzcrHiKiHI2tRYmIiIhMku2Dq2mEhYXh888/R48ePeDt7a23jpWVFbZt24Z27dqhadOmGDVqFIYMGYKlS5fKg5+Z49WrV7Czs4O1tbVWeb58+fDq1SsAgI+PD06ePGnU8oYPH47hw4cjMjLSYHJORPReY7NRIiIiIqPliDver169QsuWLeHu7o5ly5alW9fGxgY7d+6EQqFAv379MHv2bPTu3fut1m9lZYWEhASdkXpjY2OzdJR1IiIiIiIi+vBle+IdHh6O5s2bw8bGBvv27YO9vX2G8xw5cgQ3btyAj48P/vjjD4N9u43l6ekJlUqF0NBQuUytViM0NBSenp5vtWwiIiIiAkc1J6JcLVsT74iICDRv3hwWFhbYt28fHB0dM5znwIED+Pjjj7FgwQKcO3cODg4OaNGiBSIjI82Oo169erCxsdEa9fzIkSOIiIhAs2bNzF4uEdEHiRfPRERERCbJtj7eSUlJaNmyJR48eIBly5bh4sWL8rTSpUvDzc1NZ54jR46gY8eOmDdvHgYNGgQA2Lt3Lz766CO0aNECBw8ehIODg858Dx48wL1793Djxg0AwJkzZ/Do0SN5PXny5MGkSZPw1VdfQa1Ww8HBARMnTkSvXr1QoUKFLNoDRETvMXbxJiJTcFwIIsrlsi3xjo2NhbW1NcqWLYt58+ZpTfvqq6/QunVrnXkKFSqEn3/+WU66AcDe3h5//fUX5s2bB1tbW73rOn78OH7//XcAQIMGDeR+5KnXM3HiRHh6euLPP/9EYmIivvzySwwbNixTtpWIiIiIiIhyL0mkHVGMMo1mVPOIiAjkyZMnu8MhIsoU4X9uQ8Se3fBcuTK7QyGi90Tkvn14uXIVim3amN2hEBFlGlPyvWwfXI2IiIiIiIjoQ8bEm4iITCaxvyYRERGR0Zh4ExEREVGWE2DvRiLKvZh4ExGRiXjxTERERGQKJt5ERERElMXYPYWIcjcm3kREZAZeRBMREREZy+TneD98+BBbt27F8ePH8ejRIwCAh4cH6tevjy5dusDd3T3TgyQiIiIiIiJ6Xxl9x/v+/fvo3r07SpQogeXLl8PJyQmNGzdG48aNkSdPHixduhReXl7o0aMHHjx4kJUxExFRdhLs401ERERkCqPveNeoUQMDBw7ErVu3UKJECb117t69i99//x3Vq1dHWFhYpgVJRERERERE9L4yOvG+fv068ufPn26dkiVLYubMmRgzZsxbB0ZERDkYn+NNRKZiYxkiysWMbmqeUdJtbl0iIiIi+sDxxzoiyuXMHtU8JiYGO3fuxPz58+WywMBACPb9IyL6oPE8T0RERGQasxLvwMBAlCtXDp999plWs/Lp06dj06ZNmRYcERERERER0fvOrMR71KhR6Nq1K548eaJVPnLkSMyZMydTAiMiohyMzUaJiIiIjGbyc7wB4NSpU1i/fj2kNBdeZcqUwdWrVzMlMCIiIiIiIqIPgVl3vNVqNRITEwFAK/m+f/8+nJycMicyIiLKmdjHm4jMwXMHEeViZiXezZo1k5uUaxLv58+f44svvkDLli0zLzoiIsqZ2NSciIiIyGhmNTWfO3cuGjZsiN27d0MIgUaNGuH8+fPInz8/1q5dm9kxEhEREdH7jL/VEVEuZ1bi7enpiStXrmDt2rU4f/481Go1OnXqhL59+yJPnjyZHSMRERERERHRe8usxBsAHB0dMXTo0MyMhYiI3gfspklERERkEqMT71u3bhm90DJlypgVDBERvSfYbJSIiIjIaEYn3mXLljV6oYKjVhIREREREREBMCHxDg4Ozso4iIjofcEfV4nIHDx3EFEuZnTi7e7unpVxEBEREdGHio8gJKJczqzneBMRUS7Hi2giIiIio5k1qnlycjJ+++03bNmyBQ8fPkRycrLW9EePHmVKcERERERERETvO7PueP/www+YP38+OnXqhAcPHmDSpElo3rw5QkND0b1798yOkYiIchT20yQiIiIyhVmJ9+rVq7Fp0yaMGjUKAPDZZ59hxYoVWLJkCQICAjIxPCIiIiIiIqL3m1mJ98OHD+Hr6wsAsLW1RVRUFACga9euOHXqVOZFR0REOZLEB3kTkak4qjkR5WJmJd4qlQoWFindw728vHDixAkAwO3bt2Fra5t50RERERERERG958waXC21IUOGoEePHqhduzbOnj2LXr16ZUZcRESUU/GuFRGZSOKTEIgolzMr8U5KSpL/HjFiBIoWLYpTp06he/fu6NOnT6YFR0RERERERPS+Myvx1jQz12jfvj3at2+fKQEREdF7gHeviIiIiIxmVh/vyMhIbNiwQad8w4YNiIyMfOugiIiIiIiIiD4UZiXeX375JWJiYnTKo6Oj8fXXX791UERElHMJ9vEmIiIiMolZife2bdvQuXNnnfLOnTtj27Ztbx0UEREREX1g+KMdEeViZiXearUaL1680Cl/8eIFEhMT3zooIiLK4djHm4hMwXMGEeVyZiXezZo1w9ixYxEdHS2XRUVFYcyYMWjatGmmBUdERERERET0vjNrVPOffvoJ9erVg6enJ3x9fSGEwKVLl+Do6Ihjx45ldoxERJSTsLkoERERkUnMSrw9PT1x9epV/PHHH7h48SIkSUKHDh3Qp08fODk5ZXaMRESU07DZKBEREZHRzEq8AcDJyQkjRoyQX9+/fx+WlpaZEhQRERERERHRh8KsPt4XLlzQSrp79eoFLy8vFCpUCP/++2+mBUdEREREHwYBdlMhotzLrMR77Nix6NatGwDg2rVr2L17N06fPo2vvvoKEyZMyNQAiYgoh+G1MxEREZFJzGpqfv78eVStWhUAcODAAXTs2BE1a9ZEuXLlMGfOnEwNkIiIciD28SYiU/CcQUS5nFl3vB0cHHD//n0AwJ49e9C4cWMAQEREBBwcHDItOCIiIiIiIqL3nVl3vD/++GO0bt0a5cuXR0BAANq2bQsA2L9/Pz766KNMDZCIiIiIiIjofWZW4j1v3jyULFkSDx48wNSpU+Hi4gIAuHXrFiZPnpypARIRUQ7D53gTERERmcSsxNvS0hIjR47UKf/xxx/fOiAiInoPsLsmERERkdHM6uNNRERERGQSNpYholyMiTcREZmGTc2JiIiITMLEm4iIiIiyGPunEFHuxsSbiIhMJvGZvERERERGM2twtYCAAIPTrK2tUbRoUdjb25sbExEREREREdEHw6zE29fXN93pSqUSXbt2xfLly2FnZ2dWYERElFOxjzcRERGRKcxqar5s2TKULl0a27Ztw/379/HgwQP8+eefKFWqFBYsWIC9e/ciICAAEydOzOx4iYiIiIiIiN4rZt3x/vnnn7F582ZUrFhRLitatChKlCiB3r1748qVK1i1ahW6d++O+fPnZ1qwRESUU7CPNxGZiE9EIKJczKw73nfv3oW7u7tOubu7O+7evQsA8PHxwfPnz98uOiIiIiJ6//G3OiLK5cxKvL29vfH9998jOTlZLktOTsb06dPh7e0NALh06RKqV6+eOVESEVHOwbtWRERERCYxq6n5okWL0LZtW2zatAmVK1eGEAKXL19GbGws9uzZAwA4ePAgZs+enanBEhEREREREb1vzEq8/fz8cO/ePaxevRo3b96EJElo0aIF+vbtC2dnZwDAtGnTMjNOIiLKSfgcbyIiIiKjmZV4A4CzszNGjhyZmbEQERERERERfXDMTryBlEHWbt68CSEEfHx8ULJkycyKi4iIcijBPt5EZA6eO4goFzMr8Y6IiMCAAQOwbds2KBQp47Op1Wp06tQJK1asgJOTU6YGSUREOQybmhMREREZzaxRzUeNGoWgoCD8888/iI+PR3x8PP755x/cvXsXo0ePzuwYiYiIiOh9xh/riCiXM+uO986dO3Hy5EmULVtWLvPz88PGjRvh5+eXacERERERERERve/MuuMdFxeHfPny6ZTnzZsXsbGxbx0UERHlYOymSURERGQSsxLv2rVrY9KkSUhMTJTLEhISMHHiRNSuXTvTgiMiohyKzUaJiIiIjGZWU/P58+ejRYsW2LFjBypVqgQACAgIgEKhwP79+zM1QCIiIiIiIqL3mVmJd6VKlXDnzh2sXr0a169fhyRJaNeuHfr27QtHR8fMjpGIiIiI3nd8nBgR5WJmP8fb0dERn3/+eWbGkmNt2rQJ/v7+KFWqFIYNGwYHB4fsDomIKPvw4pmITCSxewoR5XJGJ963bt0yeqFlypQxK5icaP78+QgICECDBg2wa9cuXLx4ERs3bszusIiIshevoYmIiIiMZnTinfrRYRkRH9DdkL59+8rPJq9SpQr69++fzRERERERERHR+8ToxDs4ODgr48gSL168wKpVq/D7778jLCwMISEhsLa21qoTERGB8ePHY9++fbCwsECHDh0wffp02NjYAABcXV2xdetWbNy4Ebdv38bPP/+cHZtCRJRzfEA/rhIRERG9C0Yn3u7u7lkZR5bo1asXypYtiz59+mDChAl678R36dIFz549w9atWxEfH49evXohLCwMq1evluuUKVMG7du3x7Fjx/Dzzz+jcePG73IziIiIiIiI6D1m9HO8e/TogTt37mRYLzAwED169HiroDLLX3/9hXnz5qFkyZJ6p587dw4HDx7E0qVLUbVqVdStWxfz5s3DmjVr8PDhQwDAkSNHUL58efTu3Rvz58/HwYMHoVar3+VmEBHlOBwoiYhMxtYyRJSLGX3Hu3LlyqhWrRpq1KiBtm3bomrVqihYsCCEEAgNDcW5c+fkwce++eabrIzZaBldGB4/fhxOTk6oXr26XNa8eXMIIXDixAn07NkTZ86cwahRo1C8eHFcuHABn332GRQK/b9XJCQkICEhQX4dGRmZORtCRERERERE7y2jE+9x48ahf//+WLx4MRYvXoybN29qTffx8UGPHj2wZcsW5M+fP9MDzQqPHz9GgQIFtMrs7e1hb2+PJ0+eAADGjx+PTp064datW5g9eza8vb0NLm/mzJmYOnVqlsZMRJT9eNeKiEzEVjJElMuZ9BzvAgUK4LvvvsN3332Hly9f4tGjR5AkCUWKFIGrq2tWxZhlhBBQKpU65RYWFlrNyb29vdNNuDUmTJiAMWPGyK8jIyPh4eGROcESERERERHRe8mkxDs1V1fX9zLZTi1//vx49uyZVlliYiIiIiLMumtvbW2tM2o6EdGHiXeviIiIiIxl9OBqH6KaNWvixYsXuHXrllx2/PhxeRoRERERERHR28rViXeDBg1QsWJFfPnll4iIiMCzZ88wceJENGnSBGXLls3u8IiIciaOTExERERkkg868R47dizy5cuHAQMGAEh5Fnm+fPlw+PBhAIBSqcTOnTsRExODfPnyoXDhwsifPz/Wr1+fnWETERERfYD4ox0R5V5m9/F+H0ydOhXjx4/XKXdycpL/LlasGI4ePYq4uDgoFAr20SYiMgZHKCYiU/CcQUS5nNmJd0xMDPz9/fHff/9h9OjRAIDAwECUKlUqw+dnvyuaR4MZw9bWNoujISIiIiIiotzIrKbmgYGBKFeuHD777DOtx2dNnz4dmzZtyrTgiIgo5xHs401ERERkErMS71GjRqFr16548uSJVvnIkSMxZ86cTAmMiIhysBzSsomIiIjofWBWU/NTp05h/fr1Ok3Ky5Qpg6tXr2ZKYEREREREREQfArPueKvVaiQmJgKAVvJ9//59rYHLiIiIiIgAdlMhotzNrMS7WbNmcpNyTeL9/PlzfPHFF2jZsmXmRfeeWrRoEXx8fFC9evXsDoWIKPPx2pmIiIjIJGYl3nPnzsWWLVtQtmxZCCHQqFEjeHl54f79+5g1a1Zmx/jeGT58OG7cuIFz585ldyhERFmDfbyJyCQ8ZxBR7mZWH29PT09cuXIFa9euxfnz56FWq9GpUyf07dsXefLkyewYiYiIiIiIiN5bZj/H29HREUOHDs3MWIiIiIiIiIg+OGY1NY+MjMSGDRt0yjds2IDIyMi3DoqIiHIwDpBEREREZBKzEu8vv/wSMTExOuXR0dH4+uuv3zooIiLK4dhdk4iIiMhoZiXe27ZtQ+fOnXXKO3fujG3btr11UERERET0gWFjGSLKxcx+jveLFy90yl+8eCE/35uIiD5QbGpOREREZBKzn+M9duxYREdHy2VRUVEYM2YMmjZtmmnBEREREdEHgI8gJKJczqxRzX/66SfUq1cPnp6e8PX1hRACly5dgqOjI44dO5bZMRIRUQ4j8SKaiIiIyGhmP8f76tWr+OOPP3Dx4kVIkoQOHTqgT58+cHJyyuwYiYiIiIiIiN5bZj/H28nJCSNGjMjMWIiI6L3APt5EREREpjA68b516xYAoEyZMvLfhpQpU+btoiIiIiIiIiL6QBideJctWxYAIISQ/zZEcMRbIqIPHPt4E5GJeH1IRLmY0Yl3cHCw3r9J16JFi7Bo0SKoVKrsDoWIiIgo+/G3OiLK5YxOvN3d3eW/T58+jY8//jhLAvoQDB8+HMOHD0dkZCQHmyOiDw/vWhERERGZxKznePfo0QNqtTqzYyEiIiIiIiL64JiVeJcqVQrXrl3L7FiIiOh9wed4ExERERnNrMeJjRo1Cp988glmzpwJHx8fWFlZaU1P3SydiIiIiIiIKDczK/H+7LPPAABt27bVO52jmhMRfbh4jicis/DcQUS5mFmJ982bNzM7DiIiep+wqTkRERGR0cxKvMuUKZPZcRARERHRB0rij3VElMuZlXgDwLNnz7B8+XL57rePjw8GDRqEfPnyZVpwRERERERERO87s0Y1P3r0KIoXL45ly5YhLi4OcXFxWLp0KYoXL47jx49ndoxERJSTsJ8mERERkUnMuuM9YsQIDBs2DDNnzoRCkZK7q9VqTJgwAZ9//jmuXLmSqUESEVEOw2ajREREREYz6453UFAQxo8fLyfdAKBQKDBu3DjcvXs304IjIiIiIiIiet+ZlXh7e3vrTbCDgoLg7e391kERERER0QeG3VSIKBczq6n5kCFD0KVLF0ybNg3Vq1eHEALnz5/Hd999hwkTJuDRo0dyXXd390wLloiIcgBeOxORqdg9hYhyObMS76FDhwIA+vbtqzNtyJAhWq8Ff90kIvrw8BqaiIiIyGhmJd6aR4gRERERERERUfrMSrzLlCmT2XEQEdH7gi2ZiIiIiExi1uBqlL5FixbBx8cH1atXz+5QiIiIiIiIKJsx8c4Cw4cPx40bN3Du3LnsDoWIKGtwoCQiMhVbyxBRLsbEm4iIiIiIiCgLMfEmIiLT8K4VEZmKrWSIKJdj4k1ERERERESUhZh4ExGRySTevSIiIiIyGhNvIiIiIiIioizExJuIiEzEPt5EREREpmDiTURERERZTvBHOyLKxZh4ExGRGdjHm4iIiMhYTLyJiIiIKIvxxzoiyt2YeJsgPj4e58+fx7Nnz7I7FCKibCP4HG8iIiIikzDxNtLff/8Nb29vDBkyBCVLlsSiRYuyOyQiouzDx4kRERERGY2Jt5Gio6Nx6dIlnD9/Hn/99Rfmz5+f3SERERERERHRe8AiuwMAgAsXLuDIkSOws7ND586dUbBgwUxfR1RUFDZs2ICHDx9izJgxcHV11alz584d7N69G4mJiWjatCmqVasmT+vSpYv894sXL1ClSpVMj5GIiIiIiIg+PNl6x1sIgaFDh6JJkya4d+8e7t27h2bNmiEwMDBT1zN37lyULl0a27Ztww8//ICXL1/q1Nm5cycqVKiA8+fP4969e6hfv77eu9pnz57F3Llz8euvv2ZqjERE7w328SYic/DUQUS5WLbe8V6yZAlWrVqFCxcuwMfHBwDwzTffID4+Xm/9yMhIBAYGat2J1jh8+DAaN26sd76aNWvi9u3buH79Ovbv368zPSkpCUOGDMHo0aMxc+ZMAECNGjUwbNgwdOvWDYULFwYA7N27F/PmzcP27dv13jEnIso12MebiEzBcwYR5XLZesf7l19+Qc+ePeWkGwBcXFzg5uamt/6uXbvQuHFjnDp1Sqt81KhR+OSTTxAeHq53Pj8/Pzg6OhqM499//0VoaCj69+8vl/Xo0QMKhQJ79uwBAKxZswbDhw/H6NGjceXKFfzzzz/GbiYRERERERHlYtl2xzsqKgo3b97EuHHjsG/fPly4cAGFCxdGu3btkDdvXr3z9OrVCw8fPkTLli1x8OBB1KhRA2PGjMGGDRtw5MgRODs7mxXL7du3IUkSSpQoIZfZ2dmhSJEiuH37NgDg7t27KFasGObMmQMAsLW1xd9//613eYsWLcKiRYugUqnMioeIiIiIiIg+HNmWeEdERAAAFixYAHt7e9StWxdr167Fl19+CX9/f4ODl33zzTdISkpC8+bN0bZtW+zbtw9HjhzRumtuqpiYGNjZ2UGpVGqVOzk5ISYmBgAwdepUo5c3fPhwDB8+HJGRkXBycjI7LiKiHIn9NImIiIhMkm2Jt4ODA4CUO8vHjh2Ty5s1a4bx48fjwIEDBuedPHky9u/fj7Vr12LVqlUoX778W8cSExOD5ORkWFi82SXh4eFynERElAq7axIREREZLdv6eDs7O6NQoUKoVauWVnnt2rVx586ddOf95ptvcPv2bQwaNAijR4/GpUuX3iqWMmXKAIDWemNiYvD48WN5GhERERG9BT4RgYhysWwdXK1bt244ceIERKoT8T///INy5coZnOe7777D4sWL4e/vj2XLluGzzz5Ds2bNcOXKFbPjqF27NgoXLozff/9dLluzZg2EEGjTpo3ZyyUi+iDx4pmIiIjIJNn6OLHJkyejYcOGqF27NurUqYMzZ87g3r17OHLkiN76q1evxi+//AJ/f3/4+voCAGbOnAm1Wo2mTZsiMDBQ7wBrx44dw8GDBxESEgIAmD9/PlxcXNCxY0dUrVoVFhYWWLZsGTp37ox79+7BwcEBmzdvxty5c1GoUKEs234iIiKiXIHdU4gol8vWxNvFxQVnz57Frl278ODBA4wcORKtW7eGvb293vqdO3dG5cqVUalSJa3y2bNno3379gZHNVcqlbCxsUGJEiUwffp0rXKNVq1a4ebNm9i7dy8SExMxduxYVKhQ4e03kojoQ8Rn8hIREREZLVsTbwCwtrZGly5djKrr4OCgk3Rr1KlTx+B8fn5+8PPzy3D5xYoVw/Dhw42KhYiIiIiIiMgY2drHm4iI3kPs401ERERkEibeRERERERERFmIiTcREZlMYh9vIjIVW8sQUS7GxJuIiIiIshR/rCOi3I6JNxERmYh3rYiIiIhMwcSbiIiIiIiIKAsx8SYiIjOw2SgRERGRsZh4ExEREREREWUhJt5ERGQajkxMRObguYOIcjEm3kRERERERERZiIk3ERGZjo8GIiJT8JxBRLkcE28iIiIiIiKiLMTEm4iITCLYT5OIiIjIJEy8iYjIdGw2SkRERGQ0Jt5ZYNGiRfDx8UH16tWzOxQiIiIiIiLKZky8s8Dw4cNx48YNnDt3LrtDISIiIsoZ2E2FiHIxJt5ERGQaXjsTkanYPYWIcjkm3kREZDpeRBMREREZjYk3ERERERERURZi4k1ERKZhP00iIiIikzDxJiIiIiIiIspCTLyJiMh07OJNRCYSHJmRiHIxJt5EREREREREWYiJNxERmYZ9vInIVHwSAhHlcky8iYiIiIiIiLIQE28iIjKZxLtXREREREZj4k1ERERERESUhZh4ExGRadjHm4iIiMgkTLyJiIiIKOvxNzsiysWYeBMRkRnYx5uIiIjIWEy8iYiIiCiL8cc6IsrdmHgTEZGJ2F6UiIiIyBRMvImIiIiIiIiyEBNvIiIyHZ/jTURERGQ0i+wO4H1y7tw5HDt2DKVKlULbtm2hUPB3CyIiIiIiIkofM0cjzZ8/HyNGjEBoaCgmTpyIwYMHZ3dIRETZQvA53kRkDp47iCgX4x1vIzVt2hSjR48GAHz66ado1apVNkdERJSN2NSciEzBUwYR5XI55o73xo0b4efnh19++SVLln/06FH07NkTfn5+CAkJ0Vtn9erVaNeuHVq2bIl58+YhKSlJnlahQgX57127dqFbt25ZEicRERERERF9WHLEHe87d+7gq6++glqtxn///Zfpyx8wYACCgoJQt25dbNiwAXFxcTp1pk2bhrlz5+Knn36Co6Mjxo8fjwsXLmDdunVa9RYtWoRr165hxYoVmR4nERERERERfXiy/Y53QkICunXrhp9++gn58+dPt+7169exZMkSnfKoqChMnjwZycnJeuebO3cujh07hnbt2umdHhERgZkzZ+Knn37C4MGD0aNHD6xatQrr16/HlStXAKT0aZwwYQJu3ryJVatWQalUmrilREQfCHbTJCIiIjJJtifeX3/9NcqVK4fu3btnWPf58+cYM2YMFi1aJJdFR0fjo48+wqFDh5CQkKB3PhcXl3SX+88//yA+Pl4rMW/QoAGcnJxw8OBBAMA333yDNWvWIF++fJg6dSpmzJhhzOYREX2Y2MebiIiIyGjZ2tR89+7d2L17NwICAoyq36BBA+zcuRPt2rWDhYUFevXqhVatWkGlUuHAgQOwt7c3K44HDx5AqVSiYMGCcplCoYCbmxsePnwIAPD19YW1tbVRy1u0aBEWLVoElUplVjxEREREHxyOak5EuVi2Jd4hISEYNGgQ/vzzT+TJk8fo+Zo2bYrt27ejQ4cO+N///gdHR0ccPHgQjo6OZseSlJQEa2trSGnu4Nja2iIxMREA0LVrV6OXN3z4cAwfPhyRkZFwcnIyOy4iohyJF89EREREJsm2xHvHjh2IjY3F+PHj5bK7d+/i2bNnOH/+PI4dO2awH3W9evXg4+ODixcvYv78+W+d3Lq6uiI2Nhbx8fGwsbGRy1+8eAFXV9e3WjYRERFRbpf25gYRUW6TbYl3p06dUKlSJa2y/v37w9fXF1988YXBpDsuLk7ui7127VoMGjQIzs7O6Nevn9mx+Pr6AgAuXLiAunXrAgBCQ0Px6NEjeRoREaXCa2giIiIio2Vb4u3m5gY3NzetMnt7exQuXBh+fn5650lISECHDh3w4sULHD58GC4uLnB0dES3bt2gVCrRu3dvs2KpUKECqlevjhkzZmDXrl1QKpX4/vvvUaBAAbRq1cqsZRIREREREREBOWBUc1OsXbsWoaGh8Pf3l0cqb9euHTZu3IixY8ciPDxc73x//PEH/Pz88NlnnwEAunfvDj8/P+zZs0eus379ety7dw+FCxeGp6cntm3bhi1btsDOzi7Lt4uI6L3CPt5EREREJsnWUc3TWrVqVbr9tQcOHIiuXbvqDKTWvn17NG7c2OAAa40aNULx4sV1ykuVKiX/XbJkSVy/fh03btxAYmIiypcvD0tLSzO3hIiIiIiIiChFjkq8K1eunGEdQ8l1eqOae3h4wMPDI8NlS5KEcuXKZViPiCi340BJRGQytpYholzsvWpqTkRERETvIf5YR0S5HBNvIiIyDe9aEREREZmEiTcRERERERFRFmLiTUREpmOzUSIiIiKjMfEmIiIiIiIiykI5alRzevfW/74bl+6/AABYSBKsLd/8FqNWC6hf9+WUJECCBOn135De/C3h9TTpzU0wKdV0aE1PKVDIdTX1tOdPSFLLcVgqFVCp1VCpBVRqAU3vUvE6NiHedDkVSJkuBOR6EELrtcCb16m7qqaUvV5mqmW8qZMyVaUGVEJALQCllFJHLVJiVwBQSBIslRIsFVKq7Xyz/zT7E5IEvF6O6nWMAKAWQl5mSllKHU0saiEQp0r5WyEBFoqUf5WQoHj9d5JKQCFJEAKIVQkoJMBaAVgpFUhWC4QnCdgpAWullG533QRVSiwKCVC9jsfy9TrevA+avaMr7bSM5tGtr3k/3txdFWn+0K37hlJzHEJA8foYxOvtSSl/cwy/KUupp1QAVoo3nwcLpXasUpq/0t7/1bkfLKXzUpIgpdkbBpdn4E6zIoMb0FKaVzrLlwR0t0pPIAASHwHWHq6wP3o33aWmDjUxWQ1HG4vXx3XKuUX9+ngWr8usLZRQKiRYKCUoFRKUkpTqtQJWSgm2VhYp86oFbC2VkCQJyWo1klWa9//NfpSPp9Sf81TxyecQrbLUWyB0ytIewwbXqWc9WkvWM78QQLJKIFGlhhACCclq+RwcFZ8MRxsLWCkVUCgkKKSU/5QKvP73ddnr/aaQAIVCgkr9+hyOlPOsQkqp//r0A7UQsFBKsLZQQiFJSFKpkaxWQ6WGvJ8lSYKFIuX8Ir/H0ptlppb6VepJ6R0b2p8F0+fRicFgPaQh6Z2m+9nQ87nQmcdwDOmVS4ZiSPW3SPU50XxuhBCws7JI93Of0UgMGQ3VIDJcghHLSDU94VUiQq1cEH38IiQLJSSFMmUdVlbaFSXN2VnzjwSoVAAEYGkFKBSvd4oaQq0GVCoIzX/JyUBy8pv1q1SAMuU8oXWR8Xr5QhOkUgnJ2irlXCwpUtYBAfH6i1hoXVTIcxrcEUKthkhOTlmvlRUkK6uUiwe1KmVZanVKvImJUKkE4uMToFQqoLRQwkKphNJCAYWU8lkHAAsrC1golYBC0nP2TmFpqYSkVEApKaBQKgBJgkKhgCQBCfGJSExIlEOV31u15tyj/a861fYoFSlxWVlbweL1F6GkVMjflQpFyj6TJCmlXD7HKCAppJRyhSLl/PG6TKFQwMLSAkpLCygU6d8DVKvVEGoBtSpl3wm1gDplAqBQwNrGSmsZqmQVkhOToH6zgJT5NNuoFhBCrZmUsn8tlUiITUBCfDwSE5KgUqlhaW0JK0tLqNUqxMbGIyE2AVBIECo1kpKSERsTD5VaLZ8fUl/nal0Lp3rPpNcXHIrX5XKd18e89HozFK/L5HPP62Vo9i0Aed9CkmBpaQEra0tIkgJCqGFtYwOFpRIpVxYG3mv5tVrrPX/zvWnoGFFDrdauC7w5phLiEmDvYJsStkIpz2frYAd9b7XSwgJKpRKWr9/H5KRkKJSKDI+L9xUT71xOALBSpnyIVWqBV3HJkF6XKyVAqdAkZtoJrfwdJFIlu6nLU9c1WC4gNOlGqjIJEqxef69KEpAkUg5USUqJKXVCD2gnT/JrSFrf21Ka+eTTZOr5UidegHwCfFNHk5ApYCGlXISq1EK+iNXsQ5UAklRqJKk0P1xIeHNK0t6Hb5K+N0m6Ail/KyXNDxSSnDRqLpxtrVI+umq1SPkRINW/agFY2khQiZRlu1spoX59EZ+QrIaDUglJSoaTtVLeQEPXblYWCiglCWoh5B9fklRq+WT75stFez59F6qpf4DQnld7ZoXOMnUTW/mLLk1dKVVdgZT3Q4g3Kbnq9ZesJvHTXMimlL350UOIlHkTVWpIkKASAklJqZIrORrdxE2zLK3XaaenN1FevtCtYugHC91FmFQu0hRmuHxXd1i6esAiNOpNnXS2OTIuCZZKhZwkaj4zmuNe8foYS1SlJNBqIZD8+oe2ZFXKsa1SC8QnqRCfpILy9UVIfLIKaiFgqVDA8vUFX1pGJU1pjh+d6doLTH9ZetZtVLL2+k+r19thqVTAxlLx5lwmgIi4JNhaKeUfRVXi9TlArfkhQ/M35NfK1xdmItXxrvlX8z4kJr/+YfN1fUs5uX/zHZCsTnXhKl+PaadmqX9gSDdHMWIe3eNJ98cNffW05jEUT9plGFh2+jEZO4+RMaRTD8DrY/71v68PovhEVYapcTp5uVEVMpwfuudw3emv/1CpoarUC9j5H+QvfQCSEOmv6PW+0Uoi0sb45n9pzgNShr8OSHIsBk6wcoGhk8LrbdAq0P7lRHsbtX9UUEDAUqihkiQISEh+/a8aEsTr5SRLipTXBnaUkCSoX8+X8rdu0mKpSkp1nZRq/0Ozf7Vfv9n6lGUnKSz0LvdtSUINhRBQCjUUQg0hSUiSlBCSBGHk+pRqlcHtNodCqLWWpVCrXscnoHyd0tupkqBIcw0gUu098fr91T/tzQ8/mvdU/lfSU//198Cbuq+X/bpMpUhzZyAbKdQqqM2MR7PfNftb856qJQVuftcEtnY2mRztu8fEO5f7ZGDb7A6BiIiIKENCpUr5Q6HIMOHPSYQQ7zxetVoNtUoNtUoFCyvLTL2DqFm20NxNTnUXWnOHOuXO6OsfttQipb5IacWjTlYjOTk55e50sgpqVcq/qmQVJEmCtZ01lJo75gqFfNdYkgClpgXD67vPCfEJSEpMgqRUwEKphMJCCQulQr4LD607y2/uxgOQ7zonJyfDxtYa1rY28r5SJauQmJgEpUKClY11pu27rKBWq6FKSoZapYakkJAQF4/kJJU8PfWdc+DNj74K+QaT9v54c3NDM1/KdM0RJKX6AVB6PU1zdx8AkhOTAKS0PlAoFEhOTk5pMaCHpiVGUnIyVInJUFpZICEuAepkVcqdb6USFhZKWNtYmbdzchgm3kRERESU40nKnHNnzxTZ8SOBQvG6ua5l5l/qy8v+gCktlLBN28csh1IoFFBYv0lMs/uHgrTrtwZgn8che4LJYT7sTw0RERERERFRNmPiTURERERERJSFmHgTERERERERZSEm3kRERERERERZiIk3ERERERERURZi4k1ERERERESUhZh4ExEREREREWUhJt5EREREREREWYiJNxEREREREVEWYuJNRERERERElIUssjuAD5kQAgAQGRmZzZEQERERERFRZtLkeZq8Lz1MvLNQVFQUAMDDwyObIyEiIiIiIqKsEBUVBScnp3TrSMKY9JzMolar8fjxYzg6OkKSpOwOR6/IyEh4eHggODgYefLkye5wKAfhsUGG8NggQ3hskCE8NsgQHhuUnpx+fAghEBUVhcKFC0OhSL8XN+94ZyGFQgF3d/fsDsMoefLkyZEHM2U/HhtkCI8NMoTHBhnCY4MM4bFB6cnJx0dGd7o1OLgaERERERERURZi4k1ERERERESUhZh453LW1taYPHkyrK2tszsUymF4bJAhPDbIEB4bZAiPDTKExwal50M6Pji4GhEREREREVEW4h1vIiIiIiIioizExJuIiIiIiIgoCzHxJiIiIiIiIspCfI53DpOQkIDr16/D3t4epUuX1lvn5cuXePDgATw9PeHq6mrUctVqNS5cuAAbGxtUqFBBb52YmBgEBgYib968KFq0aIbLTEpKwpkzZ3TKy5Yti7x582qVGbNdlL7k5GRcv34dFhYW8PHxgSRJOnWioqJw9+5dFC5cGAULFjR62QEBAVCpVKhatare6fHx8bh9+zYcHR1RrFgxKBQZ/2Z38uRJpB1Conjx4ihcuLBJdShjQgjcuHEDycnJKFeuHCwsdE/tsbGxCAwMRP78+VGkSBGjl33jxg2Eh4ejTp066da7f/8+Hj16hPLly8PZ2TlTYjamDmXs9u3biImJQbly5fQOTpOQkIDbt2/D2dkZHh4ees8t+ty9exehoaGoXbs2lEqlwXqPHz/Gf//9B29vbxQoUOCtY75y5QoiIyO1ygoUKABvb2+jlk1v3Lt3Dy9fvkSZMmVgb2+vMz0pKQm3b9+GnZ0dPD09032fU3v48CEePnyIKlWqwM7OzmC958+f49atW/D09ISHh0emLTuj7aKMPXr0CKGhoShZsqTec7parcadO3cgSRK8vLxgaWlp1HKfPn2KO3fuZPhdERUVhcuXL8PNzQ0lSpR462Xfu3cPISEhWmW2trYGr3vIsLCwMDx48ADFihVD/vz5daYLIfDff/8hISEBJUqUMHpQtPDwcFy7dg2lSpVK9xo2ISEB586dg6urK3x8fDJcrrHxZLRdmUJQjvHXX3+JvHnziuLFiwsXFxdRtWpV8fjxY3l6QECAaN68uXB1dRWVK1cWdnZ2onv37iImJsbgMhMTE8XMmTNF8eLFhZOTk2jQoIFOnZcvX4pBgwYJV1dXUaVKFXn5N27cSDfeJ0+eCADC19dX1K1bV/7vyJEjJm0XZezMmTPC3d1deHh4iIIFCwpvb29x8+ZNeXpQUJDo3LmzcHZ2FpUrVxaOjo6iZcuW4tmzZ+kud+HChcLHx0c4OzuLEiVK6EyPi4sTY8aMEXnz5hW+vr6iYMGColSpUuLkyZMZxqxUKkW5cuW0jo3NmzebXIfSd/v2bVGmTBlRoEAB4eHhIYoUKSL+/fdfeXpoaKjo37+/cHJyEpUrVxaurq6idu3aIigoKN3lrlu3TlSvXl24uLgIa2vrdOs+ffpUFC5cWAAQf//991vHbGwdSt/jx49F1apVhYuLiyhevLjImzev+Ouvv+TpERER4vPPPxfOzs6iYsWKokCBAqJixYoiICAg3eXu3r1bNGjQQLi4uAgA4tWrVwbrRkVFiTJlyggAYuXKlW8dsxBC1KxZUxQtWlTrvDFt2rQMl01vREREiKZNmwoHBwfh7e0tHBwcxB9//CFPT0hIEN98843Ily+fKFeunChSpIgoUaKEOHr0aLrLPX78uGjdurXImzevACCuXr1qsG5SUpKoU6eOUCgUYvr06RnGbMyyM9ouylhCQoLo1q2bsLW1FWXLlhU2Njbip59+0qoza9Ys4ebmJsqUKSO8vLyEm5ub2LZtW7rLvXTpkujatasoUKCAUd8VnTp1EgqFQnz22WcZxmzMskeOHClcXFy0zhvdunXLcNn0hlqtFiNGjBDW1tbCx8dHWFtbiy+//FKrzvLly0WxYsVE8eLFRZkyZYSzs7NYunRpusu9c+eOGDBggHBzcxOSJIlly5alW3/EiBFCoVCI1q1bZxizMfEYs12ZhYl3DvHs2TPh6OgoXzzExcWJWrVqiY8++kius2XLFnHgwAH5dXBwsChSpIgYPXq0weWGh4eLcePGiaCgIDFw4EC9ifeNGzfEhg0bhEqlEkIIER8fL5o1aybq1q2bbsyaxDu9L1ZjtovSFx8fL9zd3cXgwYOFEEKoVCrRrl07UbFiRbnOgQMHxNatW4VarRZCCPHixQtRoUIF0aVLl3SXPWbMGHH16lUxefJkvYl3aGioWLx4sUhISBBCCJGcnCx69+4tihYtmmHcSqUywy9WY+pQ+nx9fUXbtm1FcnKyEEKIzz77TBQuXFjExcUJIYQ4d+6cWLlypUhKShJCCBEdHS0aN24sateune5yv/32W3H69GmxbNmydBNvtVotWrZsKcaNG2d04p1RzMbWofS1bNlS1KlTR95nkydPFnny5JF/kAsMDBQLFiyQpyckJIguXboILy+vdJc7a9YscfjwYbF79+4ME+/evXvLx4YxiXdGMQuRkngbk6iRYYMGDRKlS5cWL1++FEIIsWzZMmFhYSFu374thEj5Qf6HH34QkZGRQoiU750RI0YIFxcXERUVZXC5ixYtErt37xYXLlzI8PpgwoQJ4pNPPhFFihQx6v00ZtkZbRdlbMqUKaJQoULi4cOHQoiUmyeSJIljx47JdSZOnCjCwsLk1zNnzhTW1tbiwYMHBpe7du1asWHDBhESEpLhd8WiRYtEw4YNRfXq1Y1KvI1Z9siRI41K1Miw5cuXCwcHB3HlyhUhRMr1hbW1tVi3bp1c5/vvv9c6DtasWSMkSRLnzp0zuNw9e/aI5cuXi5iYGGFtbZ1u4r1z505Rvnx50bp1a6PeT2PiMWa7MgsT7xzi119/FXZ2dlp3r7du3SokSUr37vCQIUNE9erVjVqHocRbn++++04UK1ZMq+zkyZMiODhYfq1JvPfu3SsuXLggwsPDdZZj7nbRG7t27RIAtPb96dOnBYB0T2Tff/+9cHNzM2odhhJvfZYuXSqsra3lH2qEEOL8+fM6d1CVSqVYsWKFOHfunHj+/LneZRlThwy7ePGiACBOnz4tlwUHBwtJksT27dsNzrdq1SqhUCjkZDw9GSXes2fPFs2aNROPHz/We8Fz5coVrdYzxsRs7nbRGyEhIUKSJLFjxw65LDo6Wtja2orffvvN4Hz79u0TAERISEiG68go8f7jjz9ElSpVRGJiot7E+9atW+Ly5csmx1yzZk0xduxYcfbsWfHo0aMM4yRt8fHxws7OTixcuFAuU6vVonDhwmLixIkG57t27ZoAIM6cOZPhOi5dupRu4u3v7y+8vLxEeHi43sT73r174uzZsyYt29ztIm1FixYV48eP1yqrVq2a6Nu3r8F5wsPDBQDx559/Zrj8Z8+epZt4X7lyRbi5uYng4GBRs2ZNncQ7JCRE/PPPPyYve+TIkaJZs2biwoUL4s6dO/KPumS8OnXqiF69emmVdejQQTRp0iTd+RwcHMTPP/9s1DrSS7yDg4NF4cKFxeXLl0Xnzp11Eu/nz5+Lf/75R75ZZGw85m6XOTi4Wg5x6dIllC1bVqu/Uo0aNSCEQEBAgN55hBC4cOECSpYsmSkxXLlyBceOHcPixYuxZMkSTJ06VWt648aNsXbtWp35BgwYgD59+iB//vzo27cvoqOj32q7SNulS5dQsGBBuLu7y2XVqlWDJEm4dOmSwfnOnTuXacfGrVu3cPz4caxatQozZszA1KlTtfp5d+vWDfPmzdOZb+zYsRg4cCCKFCmCdu3aISwszKw6pJ/m/a9SpYpc5u7uDjc3twyPDU9Pz7fuM3327FnMnz8fq1atMtgveMSIEZgwYYJJMZu7XfRGQEAAhBBa/Rft7e1RtmzZDI8NBwcHk8aI0OfOnTsYO3Ys1q1bZ7Dv5+TJkzF48GCzYv7111/x6aefwsfHB1WqVMGVK1feKt7c5Pbt24iNjdXaz5IkoVq1ahkeGwqFAl5eXm+1/mfPnqFv375YvXo1nJyc9NZZuHAhOnbsaNJyzd0ueuPly5d4+PChTr/nGjVqZHhsAHjra47Y2Fh069YN//vf/7SueVLbvHkz6tWrZ9byDx8+jL59+8LPzw8eHh7YuXPn24Sb61y6dMnkY+PmzZuIjo5+62NDpVLhk08+wZdffomKFSvqrXPkyBHUq1cv3etIffGYs13mYuKdQ7x8+VJnQDLN65cvX+qdZ+7cubh8+TK+/vrrTIlh0aJF+PrrrzFhwgRUrVoVTZo00Zpet25drcFPrK2tsXnzZoSGhuLatWu4evUq/P398eWXX77VdpE2fftQqVTC2dnZ4D7cuHEjdu3ahUmTJmVKDOvWrcO4cePw9ddfo0iRImjfvr3W9GrVqukMfvLbb7/h2bNnuHz5Mu7evYugoCD079/f5Dpk2MuXL5EnTx6dxCZv3rwGj42jR49iyZIl+Pbbb99q3ZGRkejRowd+/fXXdAfDq1ChgtbgJ8bEbM52kTbNftJ3/jW0Dy9fvoyZM2fim2++MXoQLX0SExPRvXt3TJ06FWXKlDFYr0yZMqhUqZLJMQ8fPhzPnz9HQEAAQkJC4OHhgQ4dOiA2NtbsmHMTc46Nhw8f4uuvv8aQIUPeatAhIQT69OmDfv36pZs8eXl5oUaNGiYt25ztIm3m7MNXr15h6NChaNeuncGEyFgjRoxAjRo10LVrV4N1ihQpgrp165q87MaNG+PRo0e4evUqHj9+jIEDB6Jbt264efPm24Sca8THxyMuLk7vsfHq1SudgXI18/Tv3x81atRAixYt3mr906ZNg5WVFUaPHm2wTr58+VC3bl2Dg6fpi8ec7XobTLxzCEtLS8THx2uVxcXFAQCsrKx06q9ZswbffPMNVq9ejcqVK2dKDEuWLMGZM2cQEhICa2trNG/eHGq1Wp5+6NAhfPLJJ/JrFxcXdOnSRX5dunRpjB49Gps2bTJ7u0iXvn0IpJws9O3DAwcOoF+/fpg7dy6aN2+eKTFMnz4dp06dQkhICCpUqIBGjRohJiZGnr5x40adk+Gnn34q3xV3d3fHt99+i7/++ktrNGJj6pBhho6NuLg4vcfGhQsX0KFDB4wcOfKtf+AYP348ChcujPz58+PEiRM4e/YsAOD69eu4du2aXG/BggWYMWOGSTGbul2kS/Ojhb7zr759eOfOHXz00Ufo3Lkzxo8f/1brnjVrFuLj41G+fHmcOHECJ06ckNeR+g7ClClTsGTJEpNj7t27N2xtbQEADg4OmDt3Lu7du6f3KRuky9Rj4+nTp2jevDl8fX31tmwyxcqVK3H58mU0adJEPjYSExPx8OFDnD59Wq43fPhwbNu2zaRlm7pdpMvUfRgdHY3WrVvDyckJf/zxx1ut+8CBA9i8eTO6desmHxtRUVEIDQ3FiRMn5OvRLl26yOcUU7Rr1w6FChUCACgUCkydOhV58uTBjh073iru3CK9Y8PCwkKn1VtSUhK6du2KZ8+eYdu2bW/1Y+7Vq1cxe/ZsfPrppzh58iROnDiBFy9e4NWrVzhx4oScVzRs2BAnTpzQ++OgoXhM3a63xWez5BCenp5yUx0NzWMP0j7aa926dRg4cCBWrlyJ7t27Z3osdnZ2GD58OJo2bYqHDx+iWLFiRs9bsGBBREREIDo6Gg4ODiZtF+nn6emJp0+fQqVSySeKly9fIi4uTmcfHjx4EB06dMD333+f7q+C5rK0tMSoUaOwePFiXLp0CX5+fkbPq2m6+vjxY+TJk8fsOvSGp6cnEhMT8fz5c+TLlw9ASnOsp0+f6hwbFy9eRLNmzdC/f3/MmTPnrdft6OgIIYScpCUlJQFIubB+9OgR5s+fb3bMpmwX6efp6Qkg5Xzr4uIil4eEhOh8bu/evYtGjRqhUaNGWLly5VtfaFhbW8PFxUUngd+yZQuCg4MNXqCbEnNqmvNG2kcFkX6p93Pqx4uGhITI0zTCwsLQuHFjuVmusY8FSk/x4sW1WtxERERg//79CA4Oxt9//232ck3ZLtKvcOHCsLS01PkshYSE6Jx7o6Oj8dFHHyE+Ph7+/v4Guw0YKzExEZUqVcIPP/wglwUHB+Ply5cYP348Dh48KP/glhkUCgXy58/P84aRlEolihQpovfYSPv5SkpKQrdu3XDt2jUcPXrUpEeY6hMbG4tq1arhl19+kctu3boFtVqN8ePHY/369eleG6QXjynblSkyvdc4mcXf318AENevX5fLpk2bJlxdXUViYqJctn79emFlZSXWrFlj8joMDa4WHR2tU7Z48WKhVCq1Bs1JO7iavvl69eolPD095dfGbhcZdvPmTQFA7N+/Xy5bsWKFsLS01Brp19/fX9ja2orZs2ebvA5Dg6vpe4/37NkjAGgNmJV2cDV9840fP17Y29vLoxUbU4fS9+LFC2FlZSV+//13uezAgQM6n7lLly4JV1dX8cUXX5i8jowGV9PQDLaY0eBqxsRs7HaRYYmJicLV1VX88MMPctmVK1cEAHHo0CG5LCgoSLi7u4sePXqYPNiQMaOaa8CIwdWMiTk2NlZrYEchUgbsBCAuXbpkUvy5WZkyZcTQoUPl10+fPhUWFhZi9erVcllYWJgoV66caNKkiYiNjTVp+RkNrpZaZg2uJoRx20Xpa9q0qWjbtq38Oi4uTudzGR0dLerVqyd8fX3FixcvTFp+RoOrpZaZg6ulvea4d++esLS0THewSdLWr18/UaVKFfkJOiqVSuczl5SUJDp16iS8vLzSHeXekIxGNdcwdnA1Y+IxZrsyC+945xBNmjRB8+bN0aVLF0ydOhWPHz/GDz/8gPnz58vNIHbt2oXevXtj8ODBKFasmNzUxtraGtWrVze47PPnzyM+Ph5Pnz5FRESEPJ/mDsL8+fMRFBSEFi1awNXVFefPn8fs2bMxatQoODs7y8tp3LgxpkyZIt/F+OWXX3Djxg20bt0ajo6O2LlzJzZu3Ih169aZtF2UvjJlyqB///4YOHCg3IRz7Nix+Oqrr+S7gadPn0a7du3QqlUr1KlTR6sZVnp3iq5evYqIiAg8fPgQ8fHx8nw1atSAlZUVNm3ahL1796JDhw4oVKgQrl+/jlmzZqFbt24oW7asvJxu3bqhZcuWWLhwIQBg69at2L59Ozp37oz8+fPD398fv/zyC3766SfY2NgYXYfS5+rqinHjxuHLL7+EWq2GnZ0dxo0bhz59+sj9qgMDA9G0aVOUL19ep4me5n3W5/bt23j27Bnu3r0LIYQ8X6VKleDo6Gh0jCNGjICzs7PcnM+YmI2pQ+mztLTE9OnT8eWXX8LBwQFubm6YPHkymjdvjsaNGwMAnjx5gkaNGiFv3rz47LPPcOrUKXn+ypUrw8HBQe+y7927h5CQENy4cQNAyvnHwcEBPj4+cHV1NTrGyZMn4/79+3ITY2NivnPnDj799FMMGDAAXl5euHz5MmbMmIHevXtnWrer3GDmzJn4+OOPUbhwYZQvXx4//vgjypUrhx49egBIuZvZpEkTREdHY9y4cbhw4YI8b3rvc0hICO7du4e7d+8CSBm0KDw8HCVKlICbm5vR8S1cuBAbN27Eo0ePTFp2RttFGZs+fToaNGiAsWPHon79+li8eDEcHBwwbNgwACmtj9q0aYMbN25gxYoV8nkAQLrv8/Pnz3Hr1i1EREQASOmW5ODgAA8PD5PuLG7evBmjR4/W6ntrzLKrVauGgQMHonz58nj8+DFmzpyJcuXKoU+fPqbtoFzsm2++QbVq1TBgwAB06tQJGzduxNOnTzFu3Di5Tp8+ffD3339j+fLlePjwIR4+fAgA6b7PkZGR8gCZQgjcvXsXJ06cQIECBeDt7W10fEeOHEGXLl0QHBwsD85nTDzGbFdmkYTI5F7jZLbY2FjMmzcPx48fh52dHT755BOtPtTz58/Hn3/+qTNfgQIF0u0L1aVLFzx58kSnPPUF+J9//ont27fj2bNnKFq0KLp27YpmzZpp1W/SpAkGDBig1c9bM9+LFy9QqlQpDBkyROfCOKPtoowlJydj4cKF2LdvHywsLNChQwcMHDhQbhK6bt06/Pbbb3rnTa8v1LBhw/SOBrx9+3a5j8zBgwexYcMGPHr0CEWKFEHbtm3RsWNHreao3bt3R82aNbWat/v7+2PdunV48uQJvLy80K9fP9SsWVNrPcbUofQJIbBq1Sr8+eefSE5ORosWLfD555/LP2wdOHAA06ZN0ztv6vc5rSlTpsDf31+nfOnSpXqT35cvX6Jdu3aYO3eu1ns4YsQIODo6avXzzihmY+tQxrZs2YJ169YhNjYW9evXx5gxY+SnTJw/fx6jRo3SO9/vv/+O0qVL6532yy+/YPPmzTrlM2fONDhglp+fHyZOnIiPPvpILpsyZQqePHmi1c87o5gB4Nq1a1i8eDECAwNRuHBhtGvXDp06dUp3P5CugwcPYtmyZXj58iWqVauGcePGyU38Hz58iJ49e+qdL733eePGjfIPsKmNGTPG4HvUqVMndOjQQSsBWrRoEQ4dOqR1bWPsstPbLjLOmTNnsGDBAjx58gTlypXDuHHj5Oa5cXFxOteHGum9z4cOHcLkyZN1ynv16oUhQ4boneezzz5DqVKlMHbsWLlsy5Yt+Pnnn7WubYxZdlhYGBYsWIALFy7AyckJdevWxeDBg9n/30Q3btyQx9UoUaIEvvrqK63k+KOPPkJUVJTOfOm9z1evXsXQoUN1ylu0aGFwINhvv/0WiYmJmD17tlx29OhRTJo0Sevaxth4MtquzMLEm4iIiIiIiCgLcVRzIiIiIiIioizExJuIiIiIiIgoCzHxJiIiIiIiIspCTLyJiIiIiIiIshATbyIiIiIiIqIsxMSbiIiIiIiIKAsx8SYiIiIiIiLKQky8iYiIPjAXL17EiRMnsjWGI0eO4MGDB9my7hs3buDs2bPZsm4iIiJ9LLI7ACIiIjLf+fPnkZCQgLp168plK1aswKNHj+Dn55ctMd26dQvdu3fHrVu3AAAnT55EcnIyGjRooFUvLCwMhw8fRps2bXDgwAEkJiYaXGaRIkVQr149+XVQUBBu3rwJS0tLlC5dGsWKFZOnWVhYoE2bNrh58yby5s2buRtHRERkBibeRERE77Hly5fj+fPnWol31apV4eXllW0xTZo0CYMGDYKLiwsAYP78+YiOjtZJvG/cuIEePXrgzp072Lt3L2JiYgAAISEhOHHiBDp27AgrKysAQJUqVVCvXj0EBQWhX79+uHr1KmrVqgWFQoHbt2+jWLFiWL58Oby8vODt7Y2GDRvixx9/xOzZs9/txhMREenBxJuIiOg9dfXqVQQFBSEqKgobN24EADRq1AiVKlVCbGysXO/MmTMQQqB8+fIICAhAREQE6tevD0dHR0RFReHkyZOwsrJCnTp1YGNjY3A9Hh4eqFy5MpRKpcGYQkJCsGPHDty8edOkbfn999/lv3fs2IETJ05g6dKlyJcvn1weFhaG+vXro0aNGggODoajo6M87dixY4iKipJf9+7dG/369cO0adNgbW1tUixERESZjYk3ERHRe+rmzZu4d+8eEhISsGPHDgBA+fLldZqa//bbb7h48SIiIyPh4+ODoKAgRERE4Mcff8TkyZNRtmxZBAYGws7ODmfOnIGtrS0AICoqCl27dsW1a9fg6+uLwMBAODo6Yvfu3ShUqJDemP7++2+4ubmhVKlSmb698+bNQ3R0NJYtW6aVdAPQuZvesGFDhIeH49SpU2jYsGGmx0JERGQKJt5ERETvqa5du+Lw4cN4/vy5fMfbkLt37yIgIADe3t5ITExEqVKl8Pnnn+Py5cvw8vJCbGwsvLy8sGHDBgwYMAAAMHbsWEiShKCgIFhZWUGtVqNLly4YO3Ys1q5dq3c9Fy9ehI+PT6ZvKwDs378f9evX17oLboijoyM8PT1x7tw5Jt5ERJTtmHgTERHlAo0aNYK3tzcAwMrKClWqVIFCoZD7gtvZ2aFixYoIDAwEACQnJ2Pt2rUYNmwYdu3aBSEEhBBwd3fH1q1bDa7n+fPnct/uzBYaGoo6deoYXd/FxQXPnz/PkliIiIhMwcSbiIgoF0ibDFtbW8PBwUGnLD4+HkBKf+rY2FgEBAQgODhYq156d5AdHBzw7NkzrTJJkiCE0KmrKZMkyahtcHR0xIsXL4yqCwAxMTE6TdKJiIiyAxNvIiIi0uHo6AhJkvDpp5+ia9euRs/n7e2t8wztQoUKISgoSKduWFgYJEky2F88rRo1auDUqVNQqVTpDvAGACqVCo8ePfp/e3fskloYxnH8dw80ZSBRuISDiyJhQ2XgkKSIo5M2hINLpIObbflHFAhigzhlIEhDINoUEijUpLQGNgstnal7hwuC5L1X7u3tEnw/4znnPe/D2X48h/eR1+udu3YAAEyx/ncBAADg7zkcjkmX+iMtLS0pFAqpXC6/61Y/Pz//cl00GtVwONR4PJ5cCwaDGgwGGo1GU8+2Wi35/X4tLi7OVVM+n9fT05NOT0/f3bNte6rT/vDwINu2tbe3N9e7AQAwiY43AABf2NbWls7Pz1UqlbS8vPyhQbNUKikajSoSiSiZTMq2bd3c3Mjj8ejs7Gzmmu3tbW1sbKher+vo6EiSdHBwoGq1qnA4rGw2K6fTqdvbWzUaDV1dXc1dTzAYVKVSUS6XU7fbVSwWm8zxbjabqtVqWl1dlSTV63UlEom5DmIDAMA0gjcAAF9YKpXS6+ur7u7u9PLyovX1dW1ubk4OTZOknZ0dvb29Ta2bNbN7d3d36rfvQCCgwWCgarWqXq+nlZUV5fN5xePx39Z0cnKiYrGow8NDWZYly7LUbrd1eXmpfr+vx8dHeb1eDYdDud3ud+vX1ta0v78/c/52JpNRLBbTxcWFer2eFhYW5PP51O125XK5JP0cg1ar1XR9ff3nDwgAwCf49n3WaScAAAD/oFAoKJ1OKxAIfPrenU5H9/f3Oj4+/vS9AQCYheANAAAAAIBBHK4GAAAAAIBBBG8AAAAAAAwieAMAAAAAYBDBGwAAAAAAgwjeAAAAAAAYRPAGAAAAAMAggjcAAAAAAAYRvAEAAAAAMIjgDQAAAACAQQRvAAAAAAAMIngDAAAAAGDQD1jXnaZZp9gmAAAAAElFTkSuQmCC" alt="output figure" loading="lazy"></div></div>
+<h2 id="5-mutation-policy-make-the-safe-path-the-only-path">5. Mutation policy: make the safe path the only path<a class="headerlink" href="#5-mutation-policy-make-the-safe-path-the-only-path" title="Permanent link">#</a></h2>
+<p>On a shared database - or one an automated agent writes to - you want
+direct destructive operations off by default. <code>set_policy</code> flips boolean
+gates per operation class; a gated direct call raises <code>PolicyError</code>
+<strong>before touching anything</strong>. The plan/apply flow stays available: that
+<em>is</em> the sanctioned route, because it forces a previewable, reviewable
+artifact between intent and mutation.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;default policy:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">policy</span><span class="p">())</span>
+<span class="n">db</span><span class="o">.</span><span class="n">set_policy</span><span class="p">(</span><span class="n">direct_write</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">direct_delete</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">direct_restore</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">corrupted</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">PolicyError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">write blocked -&gt; </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;  code:&quot;</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;  hint:&quot;</span><span class="p">,</span> <span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">default policy: {&#x27;direct_append&#x27;: True, &#x27;direct_write&#x27;: True, &#x27;direct_replace&#x27;: True, &#x27;direct_delete&#x27;: True, &#x27;direct_restore&#x27;: True, &#x27;direct_compact&#x27;: True}
+
+write blocked -&gt; PolicyError
+  code: policy_violation
+  hint: run the write with --plan to preview it, review, then `h5i-db plan apply`; or relax the policy with `h5i-db policy set`</pre></div></div>
+<p>Planning is still allowed under the restrictive policy. Pending plans are
+first-class objects: <code>list_plans</code> shows what is staged and by which
+summary; plans expire after a 7-day TTL, and their staged segments are
+protected from <code>vacuum</code> until they are applied, discarded, or expire.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">pending</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span>
+    <span class="s2">&quot;trades&quot;</span><span class="p">,</span>
+    <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 16:00:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">),</span>
+    <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 16:00:30&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">),</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;staged under restrictive policy&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">db</span><span class="o">.</span><span class="n">list_plans</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">):</span>
+    <span class="n">ttl_days</span> <span class="o">=</span> <span class="p">(</span><span class="n">p</span><span class="o">.</span><span class="n">raw</span><span class="p">[</span><span class="s2">&quot;expires_at_ns&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">p</span><span class="o">.</span><span class="n">raw</span><span class="p">[</span><span class="s2">&quot;created_at_ns&quot;</span><span class="p">])</span> <span class="o">/</span> <span class="mf">86_400e9</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;plan </span><span class="si">{</span><span class="n">p</span><span class="o">.</span><span class="n">plan_id</span><span class="p">[:</span><span class="mi">8</span><span class="p">]</span><span class="si">}</span><span class="s2">…  note=</span><span class="si">{</span><span class="n">p</span><span class="o">.</span><span class="n">raw</span><span class="p">[</span><span class="s1">&#39;note&#39;</span><span class="p">]</span><span class="si">!r}</span><span class="s2">  &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;rows_affected=</span><span class="si">{</span><span class="n">p</span><span class="o">.</span><span class="n">summary</span><span class="p">[</span><span class="s1">&#39;rows_affected&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">  ttl=</span><span class="si">{</span><span class="n">ttl_days</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">d&quot;</span><span class="p">)</span>
+
+<span class="n">pending</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
+<span class="n">db</span><span class="o">.</span><span class="n">set_policy</span><span class="p">(</span><span class="n">direct_write</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">direct_delete</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">direct_restore</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">plan 6dcc28f8…  note=&#x27;staged under restrictive policy&#x27;  rows_affected=30  ttl=7d</pre><pre>{&#x27;direct_append&#x27;: True,
+ &#x27;direct_write&#x27;: True,
+ &#x27;direct_replace&#x27;: True,
+ &#x27;direct_delete&#x27;: True,
+ &#x27;direct_restore&#x27;: True,
+ &#x27;direct_compact&#x27;: True}</pre></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Plan, look, then apply.</strong> <code>plan_delete_range</code> / <code>plan_replace_range</code>
+  stage a mutation with a row-count summary and before/after samples; the
+  over-wide delete announced itself in <code>rows_affected</code> before it could do
+  any harm.</li>
+<li>Mutation ranges are <strong>raw int64 microseconds, half-open, time-only</strong> -
+  they never filter by symbol, so a replacement must carry the innocent
+  rows of the window through unchanged.</li>
+<li><code>apply()</code> is conflict-checked against the table head; every applied plan
+  is a new version with a note, and the uncorrected data stays one
+  <code>h5i('trades', v)</code> away.</li>
+<li><code>set_policy(direct_write=False, ...)</code> turns "please be careful" into
+  <code>PolicyError</code> - the right default for shared stores and for anything an
+  LLM agent is allowed to touch.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html"><span class="dir">← Previous</span><span class="pn-title">Time travel and versioning: which version did my backtest see?</span></a><a class="next" href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html"><span class="dir">Next →</span><span class="pn-title">Streaming appends and tail(): a live feed on a versioned store</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-two-days-of-ticks-two-injected-pathologies">1. Two days of ticks, two injected pathologies</a></li><li><a href="#2-find-the-damage-with-sql">2. Find the damage with SQL</a></li><li><a href="#3-stage-a-delete-and-catch-the-over-delete-before-it-happens">3. Stage a delete - and catch the over-delete before it happens</a></li><li><a href="#4-repair-in-place-with-plan_replace_range">4. Repair in place with plan_replace_range</a></li><li><a href="#5-mutation-policy-make-the-safe-path-the-only-path">5. Mutation policy: make the safe path the only path</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../../">Home</a>
+      <a href="../../manual/">Manual</a>
+      <a href="../../api/">Python API</a>
+      <a href="../../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../../";</script>
+<script src="../../_static/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Maintenance: verify, compact, vacuum - keeping a versioned store healthy · h5i-db docs</title>
+  <meta name="description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates - manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../../_static/logo.png">
+  <link rel="apple-touch-icon" href="../../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Maintenance: verify, compact, vacuum - keeping a versioned store healthy · h5i-db docs">
+  <meta property="og:description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates - manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Maintenance: verify, compact, vacuum - keeping a versioned store healthy · h5i-db docs">
+  <meta name="twitter:description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates - manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../../">
+    <img src="../../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../../manual/" >Manual</a></li>
+    <li><a href="../../api/" >Python API</a></li>
+    <li><a href="../../cookbook/" class="active">Cookbook</a></li>
+    <li><a href="../../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html" class="active">Maintenance: verify, compact, vacuum - keeping a versioned store healthy</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../../cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Fundamentals</span>
+<span class="sep">/</span>
+<span>Maintenance: verify, compact, vacuum - keeping a versioned store healthy</span></div>
+<h1>Maintenance: verify, compact, vacuum - keeping a versioned store healthy</h1>
+<p>A versioned database makes an unusual bargain: it never overwrites data, so
+it accumulates - manifests, segments, history. That is the feature. But it
+means three maintenance questions need honest answers:</p>
+<ol>
+<li><strong>Is the data intact?</strong> <code>verify()</code> walks the manifest checksum chain;
+   <code>verify(deep=True)</code> re-checksums every stored byte.</li>
+<li><strong>Why did queries get slower?</strong> Streaming ingestion leaves many small
+   Parquet segments; <code>compact()</code> merges them into one - as a new version.</li>
+<li><strong>Where did my disk go, and what can I get back?</strong> <code>vacuum()</code> reclaims
+   <em>unreferenced</em> objects only. We test - rather than assume - what that
+   means for old versions.</li>
+</ol>
+<p>The dataset is deliberately mistreated: a week of ticks appended in 150
+tiny commits, the way an unbatched feed writer would.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">time</span>
+<span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_maintenance&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">du_mb</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Directory size in MiB - the du -s of this recipe.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">stat</span><span class="p">()</span><span class="o">.</span><span class="n">st_size</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">Path</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="o">.</span><span class="n">rglob</span><span class="p">(</span><span class="s2">&quot;*&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">f</span><span class="o">.</span><span class="n">is_file</span><span class="p">())</span> <span class="o">/</span> <span class="mi">2</span><span class="o">**</span><span class="mi">20</span>
+
+
+<span class="k">def</span> <span class="nf">bench</span><span class="p">(</span><span class="n">fn</span><span class="p">,</span> <span class="n">repeat</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Min-of-N wall time: the standard cheap timing harness.&quot;&quot;&quot;</span>
+    <span class="n">times</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">repeat</span><span class="p">):</span>
+        <span class="n">t0</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
+        <span class="n">fn</span><span class="p">()</span>
+        <span class="n">times</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">t0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">min</span><span class="p">(</span><span class="n">times</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-simulate-an-unbatched-writer-150-tiny-commits">1. Simulate an unbatched writer: 150 tiny commits<a class="headerlink" href="#1-simulate-an-unbatched-writer-150-tiny-commits" title="Permanent link">#</a></h2>
+<p>Every commit writes a manifest and at least one segment. 150 appends of
+~2,000 rows leave the table with 150 small Parquet files - each one a file
+open, a footer parse, and a merge step for every query that follows.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">20_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+
+<span class="n">N</span> <span class="o">=</span> <span class="mi">150</span>
+<span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">trades</span><span class="p">)</span>
+<span class="n">step</span> <span class="o">=</span> <span class="n">n</span> <span class="o">//</span> <span class="n">N</span>
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">N</span><span class="p">):</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="n">i</span> <span class="o">*</span> <span class="n">step</span><span class="p">,</span> <span class="n">step</span> <span class="k">if</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="n">N</span> <span class="o">-</span> <span class="mi">1</span> <span class="k">else</span> <span class="n">n</span> <span class="o">-</span> <span class="p">(</span><span class="n">N</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">step</span><span class="p">))</span>
+
+<span class="n">head</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">head</span><span class="p">[</span><span class="s1">&#39;rows&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows across </span><span class="si">{</span><span class="n">head</span><span class="p">[</span><span class="s1">&#39;segments&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> segments, &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">head</span><span class="p">[</span><span class="s1">&#39;bytes&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">2</span><span class="o">**</span><span class="mi">20</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MiB of live data, db dir = </span><span class="si">{</span><span class="n">du_mb</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">path</span><span class="p">)</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MiB&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">313,164 rows across 150 segments, 2.4 MiB of live data, db dir = 11.3 MiB</pre></div></div>
+<h2 id="2-verify-the-checksum-chain">2. <code>verify()</code>: the checksum chain<a class="headerlink" href="#2-verify-the-checksum-chain" title="Permanent link">#</a></h2>
+<p>Shallow <code>verify</code> checks the table's manifest chain - each manifest commits
+to its predecessor and to every segment it references, so a truncated
+file, a lost commit, or a tampered manifest breaks the chain. It reads
+metadata only (<code>bytes_checked: 0</code>), so it is cheap enough to run on every
+open. <code>deep=True</code> additionally re-reads and re-checksums every segment
+byte - the periodic bit-rot audit, priced accordingly.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;shallow:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;deep   :&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">deep</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">shallow: {&#x27;table&#x27;: &#x27;trades&#x27;, &#x27;head_sequence&#x27;: 150, &#x27;manifests_checked&#x27;: 151, &#x27;segments_checked&#x27;: 150, &#x27;bytes_checked&#x27;: 0, &#x27;problems&#x27;: []}</pre><pre class="">deep   : {&#x27;table&#x27;: &#x27;trades&#x27;, &#x27;head_sequence&#x27;: 150, &#x27;manifests_checked&#x27;: 151, &#x27;segments_checked&#x27;: 11325, &#x27;bytes_checked&#x27;: 190082365, &#x27;problems&#x27;: []}</pre></div></div>
+<p>An empty <code>problems</code> list from a deep verify is an attestation you can
+hand to anyone: the bytes on disk are exactly the bytes every commit
+signed for.</p>
+<h2 id="3-compact-undo-the-segment-sprawl">3. <code>compact()</code>: undo the segment sprawl<a class="headerlink" href="#3-compact-undo-the-segment-sprawl" title="Permanent link">#</a></h2>
+<p>Time a representative aggregation against the 150-segment table, compact,
+and time it again. Compaction rewrites the <em>same rows</em> into one
+well-sized segment and commits the result as a new version - history is
+untouched, so this is safe to run whenever ingestion leaves debris.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">QUERY</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">    SELECT time_bucket(&#39;5m&#39;, ts) AS bar, symbol,</span>
+<span class="s2">           vwap(price, size) AS vwap, sum(size) AS volume</span>
+<span class="s2">    FROM trades GROUP BY bar, symbol ORDER BY bar, symbol</span>
+<span class="s2">&quot;&quot;&quot;</span>
+
+<span class="n">t_before</span> <span class="o">=</span> <span class="n">bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="n">QUERY</span><span class="p">)</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">())</span>
+
+<span class="n">commit</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">compact</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;merge 150 streaming appends&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">({</span><span class="n">k</span><span class="p">:</span> <span class="n">commit</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;sequence&quot;</span><span class="p">,</span> <span class="s2">&quot;op&quot;</span><span class="p">,</span> <span class="s2">&quot;segments_total&quot;</span><span class="p">,</span> <span class="s2">&quot;segments_added&quot;</span><span class="p">)})</span>
+
+<span class="n">t_after</span> <span class="o">=</span> <span class="n">bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="n">QUERY</span><span class="p">)</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">())</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">5m-bar rollup: </span><span class="si">{</span><span class="n">t_before</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> ms on 150 segments &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;-&gt; </span><span class="si">{</span><span class="n">t_after</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> ms on 1 segment  (</span><span class="si">{</span><span class="n">t_before</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">t_after</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">x)&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">{&#x27;sequence&#x27;: 151, &#x27;op&#x27;: &#x27;compact&#x27;, &#x27;segments_total&#x27;: 1, &#x27;segments_added&#x27;: 1}
+
+5m-bar rollup: 22.3 ms on 150 segments -&gt; 14.0 ms on 1 segment  (1.6x)</pre></div></div>
+<p>Two honest observations. First, the speedup here is real but modest -
+per-segment overhead scales with segment count, so a day of per-tick
+commits (tens of thousands of segments) hurts far more than our 150.
+Second, the directory <em>grew</em>: the 150 old segments are still referenced
+by versions 1-150, and the compacted table carries one more copy of every
+row. Version history is a storage bargain, and compaction does not break
+it:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;db dir after compact: </span><span class="si">{</span><span class="n">du_mb</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">path</span><span class="p">)</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MiB&quot;</span><span class="p">)</span>
+<span class="n">v75</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">75</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;version 75 still readable: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">v75</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows (head has </span><span class="si">{</span><span class="n">head</span><span class="p">[</span><span class="s1">&#39;rows&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">db dir after compact: 13.1 MiB
+version 75 still readable: 156,525 rows (head has 313,164)</pre></div></div>
+<h2 id="4-vacuum-what-it-does-and-does-not-reclaim">4. <code>vacuum()</code>: what it does - and does not - reclaim<a class="headerlink" href="#4-vacuum-what-it-does-and-does-not-reclaim" title="Permanent link">#</a></h2>
+<p>The natural fear is that vacuum trades history for disk. Test it instead
+of assuming: a dry run (<code>apply=False</code>) with <code>grace_seconds=0</code> - the most
+aggressive setting - right after compacting.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;scanned_objects&#x27;: 306,
+ &#x27;candidates&#x27;: [],
+ &#x27;candidate_bytes&#x27;: 0,
+ &#x27;deleted&#x27;: 0,
+ &#x27;dry_run&#x27;: True}</pre></div></div>
+<p><strong>Zero candidates.</strong> Every one of those 151 segments is referenced by some
+version's manifest, and vacuum only ever collects <em>unreferenced</em> objects:
+staging files from discarded mutation plans, debris from interrupted
+ingests. In this build, vacuum never prunes version history - every
+version stays readable no matter how aggressively you vacuum. Retention
+is a policy decision it refuses to make implicitly, which is the correct
+default for anything auditors may ask about.</p>
+<p>So let's manufacture the garbage vacuum <em>does</em> exist for: stage a
+replace plan (which writes its repaired segment to storage immediately)
+and then discard it. The staged segment is now referenced by nothing.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">lo</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 15:00:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
+<span class="n">hi</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 16:00:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
+<span class="n">window</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">time_start</span><span class="o">=</span><span class="n">lo</span><span class="p">,</span> <span class="n">time_end</span><span class="o">=</span><span class="n">hi</span><span class="p">)</span>
+
+<span class="n">plan</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_replace_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">lo</span><span class="p">,</span> <span class="n">hi</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">window</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;staged then abandoned&quot;</span><span class="p">)</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;dry run, default grace (1h):&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;dry run, grace_seconds=0   :&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">dry run, default grace (1h): {&#x27;scanned_objects&#x27;: 307, &#x27;candidates&#x27;: [], &#x27;candidate_bytes&#x27;: 0, &#x27;deleted&#x27;: 0, &#x27;dry_run&#x27;: True}
+dry run, grace_seconds=0   : {&#x27;scanned_objects&#x27;: 307, &#x27;candidates&#x27;: [&#x27;tables/adffd103-130b-4fe9-adac-7c35ac569e78/segments/d7ddfe3a-00fa-411b-a336-3a46a21e9b46.parquet&#x27;], &#x27;candidate_bytes&#x27;: 1973203, &#x27;deleted&#x27;: 0, &#x27;dry_run&#x27;: True}</pre></div></div>
+<p>The default one-hour grace period hides the orphan: vacuum will not touch
+young files, because a file that looks unreferenced <em>right now</em> might be
+part of a commit another process is seconds away from publishing. Only
+<code>grace_seconds=0</code> - safe here, since nothing else is writing - exposes
+the discarded plan's segment as a candidate. Reclaim it for real:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">size_before</span> <span class="o">=</span> <span class="n">du_mb</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">path</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;db dir: </span><span class="si">{</span><span class="n">size_before</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> MiB -&gt; </span><span class="si">{</span><span class="n">du_mb</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">path</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> MiB&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">{&#x27;scanned_objects&#x27;: 307, &#x27;candidates&#x27;: [&#x27;tables/adffd103-130b-4fe9-adac-7c35ac569e78/segments/d7ddfe3a-00fa-411b-a336-3a46a21e9b46.parquet&#x27;], &#x27;candidate_bytes&#x27;: 1973203, &#x27;deleted&#x27;: 1, &#x27;dry_run&#x27;: False}
+db dir: 15.01 MiB -&gt; 13.13 MiB</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="c1"># The load-bearing claim, checked: vacuum deleted the orphan and nothing else.</span>
+<span class="n">versions</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">versions</span><span class="p">:</span>  <span class="c1"># every version&#39;s manifest still resolves and reads</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">v</span><span class="p">[</span><span class="s2">&quot;sequence&quot;</span><span class="p">],</span> <span class="n">limit</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">&quot;candidates&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="p">[]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;all </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">versions</span><span class="p">)</span><span class="si">}</span><span class="s2"> versions still readable after vacuum; &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;deep verify clean: </span><span class="si">{</span><span class="n">db</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="n">deep</span><span class="o">=</span><span class="kc">True</span><span class="p">)[</span><span class="s1">&#39;problems&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="p">[]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">all 152 versions still readable after vacuum; deep verify clean: True</pre></div></div>
+<h2 id="5-snapshots-named-checksummed-pins">5. Snapshots: named, checksummed pins<a class="headerlink" href="#5-snapshots-named-checksummed-pins" title="Permanent link">#</a></h2>
+<p>Since vacuum never eats history here, snapshots are not a defensive
+necessity - their maintenance role is different. <code>snapshot(name)</code> records
+the head version of chosen tables <em>plus the manifest checksum</em> under a
+durable name: a read point humans can cite ("the EOD cut") and an
+integrity anchor you can later re-verify against. Pending mutation plans
+get the same courtesy: their staged segments are protected from vacuum
+until applied, discarded, or expired (7-day TTL).</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">snap</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;eod-2026-06-05&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;trades&quot;</span><span class="p">],</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;post-compact EOD cut&quot;</span><span class="p">)</span>
+<span class="n">entry</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">snap</span><span class="p">[</span><span class="s2">&quot;entries&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;snapshot </span><span class="si">{</span><span class="n">snap</span><span class="p">[</span><span class="s1">&#39;name&#39;</span><span class="p">]</span><span class="si">!r}</span><span class="s2"> pins </span><span class="si">{</span><span class="n">entry</span><span class="p">[</span><span class="s1">&#39;table_name&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> @ v</span><span class="si">{</span><span class="n">entry</span><span class="p">[</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;manifest checksum: </span><span class="si">{</span><span class="n">entry</span><span class="p">[</span><span class="s1">&#39;manifest_checksum&#39;</span><span class="p">][:</span><span class="mi">16</span><span class="p">]</span><span class="si">}</span><span class="s2">…&quot;</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT count(*) AS rows FROM h5i(&#39;trades&#39;, &#39;eod-2026-06-05&#39;)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">snapshot &#x27;eod-2026-06-05&#x27; pins trades @ v151
+manifest checksum: b267bcbb2daf43ee…</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>rows</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>313164</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="a-maintenance-cadence-that-works">A maintenance cadence that works<a class="headerlink" href="#a-maintenance-cadence-that-works" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Every open / hourly</strong>: shallow <code>verify</code> - metadata-only, effectively free.</li>
+<li><strong>After each ingestion session</strong>: <code>compact</code> tables that streamed in as
+  many small commits (recipe 07's batch-size guidance reduces the need).</li>
+<li><strong>Daily, off-hours</strong>: <code>vacuum(apply=False)</code>, review the candidate list,
+  then <code>apply=True</code> with the default grace period. Never pass
+  <code>grace_seconds=0</code> while writers may be active.</li>
+<li><strong>Weekly / before attestations</strong>: <code>verify(deep=True)</code> plus a named
+  snapshot of the tables you would have to defend.</li>
+</ul>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li><code>verify()</code> proves the manifest checksum chain cheaply; <code>deep=True</code> turns
+  it into a full bit-rot audit with an empty <code>problems</code> list as the receipt.</li>
+<li>Small commits are a <em>query</em> tax, not just a storage tax: <code>compact()</code>
+  merged 150 segments into 1 as an ordinary new version, with measurable
+  speedup and zero history lost.</li>
+<li><code>vacuum()</code> collects unreferenced objects only - discarded plan staging,
+  interrupted-write debris. We verified that even <code>grace_seconds=0,
+  apply=True</code> leaves every historical version readable: history pruning is
+  simply not something vacuum does in this build.</li>
+<li>The grace period is crash-safety for concurrent writers; zero it only in
+  single-writer maintenance windows.</li>
+<li>Snapshots are named, checksummed read points - the citable artifact for
+  EOD cuts and attestations, not a vacuum workaround.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html"><span class="dir">← Previous</span><span class="pn-title">Streaming appends and tail(): a live feed on a versioned store</span></a><a class="next" href="../../cookbook/01_market_data_engineering/01_ohlcv_bars.html"><span class="dir">Next →</span><span class="pn-title">OHLCV bars from tick data</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-simulate-an-unbatched-writer-150-tiny-commits">1. Simulate an unbatched writer: 150 tiny commits</a></li><li><a href="#2-verify-the-checksum-chain">2. verify(): the checksum chain</a></li><li><a href="#3-compact-undo-the-segment-sprawl">3. compact(): undo the segment sprawl</a></li><li><a href="#4-vacuum-what-it-does-and-does-not-reclaim">4. vacuum(): what it does - and does not - reclaim</a></li><li><a href="#5-snapshots-named-checksummed-pins">5. Snapshots: named, checksummed pins</a></li><li><a href="#a-maintenance-cadence-that-works">A maintenance cadence that works</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../../">Home</a>
+      <a href="../../manual/">Manual</a>
+      <a href="../../api/">Python API</a>
+      <a href="../../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../../";</script>
+<script src="../../_static/docs.js" defer></script>
+</body>
+</html>

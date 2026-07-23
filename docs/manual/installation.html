@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Installation · h5i-db docs</title>
+  <meta name="description" content="Install the h5i-db CLI and Python library, or build both from source.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="icon" type="image/png" href="../_static/logo.png">
+  <link rel="apple-touch-icon" href="../_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Installation · h5i-db docs">
+  <meta property="og:description" content="Install the h5i-db CLI and Python library, or build both from source.">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Installation · h5i-db docs">
+  <meta name="twitter:description" content="Install the h5i-db CLI and Python library, or build both from source.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="../_static/docs.css">
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="../">
+    <img src="../_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="../manual/" class="active">Manual</a></li>
+    <li><a href="../api/" >Python API</a></li>
+    <li><a href="../cookbook/" >Cookbook</a></li>
+    <li><a href="../#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html" class="active">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="../">h5i-db</a>
+<span class="sep">/</span>
+<a href="../manual/">Manual</a>
+<span class="sep">/</span>
+<span>Installation</span></div>
+<h1 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">#</a></h1>
+<p>h5i-db ships as two installable artifacts backed by the same Rust core: the
+<code>h5i-db</code> command-line tool and the <code>h5i_db</code> Python library. Install either or
+both — they read and write the same database directories.</p>
+<h2 id="cli">CLI<a class="headerlink" href="#cli" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>cargo<span class="w"> </span>install<span class="w"> </span>h5i-db-cli
+<span class="gp">$ </span>h5i-db<span class="w"> </span>--version
+</code></pre></div>
+
+<p>The binary is self-contained; no runtime dependencies, no server to start.
+Requires a Rust toolchain (<a href="https://rustup.rs">rustup.rs</a>) to build during
+install.</p>
+<h2 id="python">Python<a class="headerlink" href="#python" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>pip<span class="w"> </span>install<span class="w"> </span>h5i-db
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">h5i_db</span><span class="o">.</span><span class="n">__version__</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The wheel bundles the native engine — no separate CLI install needed. The only
+required dependency is <code>pyarrow &gt;= 14</code>; <code>to_pandas()</code> and <code>to_polars()</code> work
+when pandas/Polars are present.</p>
+<h2 id="build-from-source">Build from source<a class="headerlink" href="#build-from-source" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/h5i-dev/h5i-db
+<span class="gp">$ </span><span class="nb">cd</span><span class="w"> </span>h5i-db
+<span class="gp">$ </span>cargo<span class="w"> </span>build<span class="w"> </span>--release<span class="w"> </span>-p<span class="w"> </span>h5i-db-cli<span class="w">          </span><span class="c1"># CLI -&gt; target/release/h5i-db</span>
+<span class="gp">$ </span>pip<span class="w"> </span>install<span class="w"> </span>maturin
+<span class="gp">$ </span>maturin<span class="w"> </span>develop<span class="w"> </span>-m<span class="w"> </span>crates/h5i-db-python/Cargo.toml<span class="w"> </span>--release<span class="w">   </span><span class="c1"># Python module</span>
+</code></pre></div>
+
+<div class="admonition note">
+<p class="admonition-title">Filesystem requirements</p>
+<p>Crash-safety relies on POSIX <code>fsync</code> and atomic rename. Keep databases on a
+local filesystem (ext4, xfs, apfs, NTFS). On WSL2 use the Linux side
+(<code>~/data/…</code>), not <code>/mnt/c</code>. Network filesystems are not recommended — see
+the <a href="operations.html#filesystem-caveats">Operations guide</a>.</p>
+</div>
+<h2 id="verifying-the-install">Verifying the install<a class="headerlink" href="#verifying-the-install" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>init<span class="w"> </span>/tmp/smoke.db
+<span class="gp">$ </span>h5i-db<span class="w"> </span>tables<span class="w"> </span>/tmp/smoke.db
+<span class="gp">$ </span>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import h5i_db; h5i_db.Database(&#39;/tmp/smoke.db&#39;)&quot;</span>
+</code></pre></div>
+
+<p>Next: the <a href="quickstart.html">Quickstart</a>.</p>
+    <nav class="page-nav"><a class="prev" href="../manual/index.html"><span class="dir">← Previous</span><span class="pn-title">Overview</span></a><a class="next" href="../manual/quickstart.html"><span class="dir">Next →</span><span class="pn-title">Quickstart</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#cli">CLI</a></li><li><a href="#python">Python</a></li><li><a href="#build-from-source">Build from source</a></li><li><a href="#verifying-the-install">Verifying the install</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="../_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="../">Home</a>
+      <a href="../manual/">Manual</a>
+      <a href="../api/">Python API</a>
+      <a href="../cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "../";</script>
+<script src="../_static/docs.js" defer></script>
+</body>
+</html>
