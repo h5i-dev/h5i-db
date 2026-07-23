@@ -15,17 +15,49 @@
 
 ## Quickstart
 
-```bash
-cargo install --path crates/h5i-db-cli
-# Python: pip install h5i-db  (first PyPI release pending; until then:
-#   maturin build --release -m crates/h5i-db-python/Cargo.toml)
+**CLI**
 
+```bash
+cargo install h5i-db-cli
+```
+
+```bash
 h5i-db init market.db
 h5i-db create-table market.db trades --like ticks.parquet --time-column ts
 h5i-db ingest market.db trades ticks.parquet
 h5i-db query market.db "SELECT symbol, vwap(price,size) FROM trades GROUP BY symbol"
 h5i-db query market.db "SELECT count(*) FROM h5i('trades', 1)"     # time travel
 h5i-db ui market.db                                                # review surface
+```
+
+**Python Library**
+
+```bash
+pip install h5i-db
+```
+
+```python
+import pyarrow as pa
+import h5i_db
+
+db = h5i_db.Database("market.db", create=True)
+
+db.create_table(
+    "trades",
+    pa.schema([("ts", pa.timestamp("us")), ("symbol", pa.string()), ("price", pa.float64())]),
+    time_column="ts",
+)
+db.append("trades", pa.table({
+    "ts": pa.array([1_700_000_000_000_000, 1_700_000_060_000_000], pa.timestamp("us")),
+    "symbol": ["AAPL", "MSFT"], "price": [187.4, 411.2],
+}))
+
+df = db.sql("SELECT symbol, avg(price) AS px FROM trades GROUP BY symbol").to_pandas()
+old = db.read("trades", version=1)                # time travel: read any past version
+
+plan = db.plan_delete_range("trades", 1_700_0_000_000)
+print(plan.summary)                               # preview the mutation before it lands
+plan.apply()
 ```
 
 ---
