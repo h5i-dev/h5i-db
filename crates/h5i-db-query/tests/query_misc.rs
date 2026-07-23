@@ -634,6 +634,64 @@ async fn reported_queries_isolate_scans_and_persist_private_telemetry() {
     assert_eq!(envelope.reports, telemetry);
 }
 
+#[tokio::test]
+async fn failed_and_cancelled_executions_still_record_reports() {
+    let (_dir, db) = setup_trades().await;
+    let session = H5iSession::new(
+        db,
+        SessionOptions {
+            telemetry_capacity: 4,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Runtime failure: planning succeeds, execution errors. The stream must
+    // finalize a Failed report instead of losing the execution.
+    let failing = session
+        .sql_reported("SELECT 1 / (count(*) - count(*)) FROM trades")
+        .await
+        .unwrap();
+    let failed_id = failing.query_id();
+    let mut stream = failing.execute_stream().await.unwrap();
+    let mut saw_error = false;
+    while let Some(batch) = futures::StreamExt::next(&mut stream).await {
+        if batch.is_err() {
+            saw_error = true;
+            break;
+        }
+    }
+    assert!(saw_error, "division by zero should fail execution");
+    let report = stream.report().expect("failed stream still reports");
+    assert_eq!(report.status, QueryStatus::Failed);
+    assert_eq!(report.query_id, failed_id);
+
+    // Cancellation: dropping the stream mid-query finalizes as Cancelled.
+    let cancelled = session.sql_reported("SELECT * FROM trades").await.unwrap();
+    let cancelled_id = cancelled.query_id();
+    let stream = cancelled.execute_stream().await.unwrap();
+    drop(stream);
+
+    let telemetry = session.workload_telemetry();
+    let status_of = |id| {
+        telemetry
+            .iter()
+            .find(|r| r.query_id == id)
+            .map(|r| r.status)
+    };
+    assert_eq!(status_of(failed_id), Some(QueryStatus::Failed));
+    assert_eq!(status_of(cancelled_id), Some(QueryStatus::Cancelled));
+
+    // Neither abandoned execution may leave scan records behind for the next
+    // query to drain.
+    let session_wide = session.take_scan_metrics();
+    assert!(
+        session_wide.is_empty(),
+        "finalized reports must drain their scan records: {session_wide:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // P2 immutable predicate cache.
 // ---------------------------------------------------------------------------

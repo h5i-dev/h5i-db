@@ -766,3 +766,109 @@ fn restore_verify_and_arrow_roundtrip() {
     );
     assert!(out.status.success());
 }
+
+/// `query --stats` must emit exactly one machine-readable performance report
+/// on stderr — with the privacy contract (no SQL text) — and
+/// `--predicate-cache` must build on the first run and hit on the second
+/// without changing results.
+#[test]
+fn query_stats_report_and_predicate_cache_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    std::fs::write(cwd.join("trades.csv"), CSV).unwrap();
+    stdout_json(&run(&["init", "s.db", "--format", "json"], cwd));
+    stdout_json(&run(
+        &[
+            "create-table",
+            "s.db",
+            "trades",
+            "--like",
+            "trades.csv",
+            "--time-column",
+            "ts",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    stdout_json(&run(
+        &["ingest", "s.db", "trades", "trades.csv", "--format", "json"],
+        cwd,
+    ));
+
+    let report = |out: &std::process::Output| -> serde_json::Value {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("SELECT"),
+            "reports must never leak SQL text: {stderr}"
+        );
+        stderr
+            .lines()
+            .rev()
+            .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .expect("stderr carries a JSON performance report")
+    };
+
+    // Without --stats: no report on stderr.
+    let quiet = run(
+        &[
+            "query",
+            "s.db",
+            "SELECT count(*) FROM trades",
+            "--format",
+            "json",
+        ],
+        cwd,
+    );
+    assert!(quiet.status.success());
+    assert!(quiet.stderr.is_empty(), "no --stats means silent stderr");
+
+    // With --stats: a succeeded report with a 64-hex fingerprint and scans.
+    let sql = "SELECT count(*) AS n FROM trades WHERE symbol = 'AAPL'";
+    let with_stats = run(&["query", "s.db", sql, "--stats", "--format", "json"], cwd);
+    let baseline_rows = stdout_json(&with_stats);
+    let r = report(&with_stats);
+    assert_eq!(r["status"], "succeeded");
+    let fingerprint = r["query_fingerprint"].as_str().unwrap();
+    assert_eq!(fingerprint.len(), 64);
+    assert!(fingerprint.chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(!r["scans"].as_array().unwrap().is_empty());
+
+    // Predicate cache: cold run builds, warm run hits, results identical.
+    let cold = run(
+        &[
+            "query",
+            "s.db",
+            sql,
+            "--stats",
+            "--predicate-cache",
+            "--format",
+            "json",
+        ],
+        cwd,
+    );
+    let cold_rows = stdout_json(&cold);
+    let cold_report = report(&cold);
+    assert_eq!(cold_report["predicate_cache_builds"], 1);
+    assert_eq!(cold_report["predicate_cache_hits"], 0);
+
+    let warm = run(
+        &[
+            "query",
+            "s.db",
+            sql,
+            "--stats",
+            "--predicate-cache",
+            "--format",
+            "json",
+        ],
+        cwd,
+    );
+    let warm_rows = stdout_json(&warm);
+    let warm_report = report(&warm);
+    assert_eq!(warm_report["predicate_cache_hits"], 1);
+    assert_eq!(warm_report["predicate_cache_builds"], 0);
+
+    assert_eq!(baseline_rows, cold_rows);
+    assert_eq!(baseline_rows, warm_rows);
+}

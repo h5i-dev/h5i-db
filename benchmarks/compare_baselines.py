@@ -3,11 +3,17 @@
 h5i-db wrote (disk-backed, not preloaded DataFrames — see DESIGN_CLAUDE.md
 benchmark framing: the honest comparison is storage included).
 
-Engines: polars, duckdb, pandas, pyarrow — each runs the same five workloads
-the Rust bench runs, reading from disk every iteration.
+Engines: polars, duckdb, pandas, pyarrow, arcticdb — each runs the same five
+workloads the Rust bench runs, reading from disk every iteration. Engines
+whose package is not installed are skipped with a note. ArcticDB reads from
+its own LMDB store (populated once from the same data, sibling directory
+`<db>.arctic`), since reading foreign Parquet is not its model; its OHLCV and
+ASOF compute happens in pandas over ArcticDB reads, which is the idiomatic
+ArcticDB usage.
 
 Usage:
-    compare_baselines.py <bench.db path> [--repeat 3] [--engines polars,duckdb,pandas,pyarrow]
+    compare_baselines.py <bench.db path> [--repeat 3]
+                         [--engines polars,duckdb,pandas,pyarrow,arcticdb]
                          [--pyarrow-asof]   # run pyarrow's experimental (very slow) join_asof
 
 Prints JSON to stdout; human lines to stderr.
@@ -15,12 +21,20 @@ Prints JSON to stdout; human lines to stderr.
 
 import glob
 import json
+import os
+import shutil
 import sys
 import time
 
 
 def table_segments(db):
-    """Locate each table's segment files + metadata via the catalog files."""
+    """Locate each table's segment files + metadata via the catalog files.
+
+    Files come from the manifest (the live segment set), ordered by segment
+    start time — segment filenames are UUIDs, so a filename sort is random
+    with respect to time, which breaks time-ordered ingestion (ArcticDB
+    append) and could include orphaned segments a glob would pick up.
+    """
     out = {}
     for cat in glob.glob(f"{db}/catalog/tables/*.json"):
         entry = json.load(open(cat))
@@ -29,9 +43,18 @@ def table_segments(db):
         manifest = json.load(
             open(f"{db}/tables/{table_id}/manifests/{head['sequence']:012d}.json")
         )
+        segments = manifest.get("segments", [])
+        if segments and all("path" in seg for seg in segments):
+            ordered = sorted(
+                segments,
+                key=lambda seg: (seg.get("time_range") or [2**63])[0],
+            )
+            files = [os.path.join(db, seg["path"]) for seg in ordered]
+        else:  # fallback for older manifests
+            files = sorted(glob.glob(f"{db}/tables/{table_id}/segments/*.parquet"))
         out[entry["name"]] = {
             "glob": f"{db}/tables/{table_id}/segments/*.parquet",
-            "files": sorted(glob.glob(f"{db}/tables/{table_id}/segments/*.parquet")),
+            "files": files,
             "time_range": manifest.get("time_range"),
             "rows": manifest.get("rows"),
         }
@@ -307,12 +330,104 @@ def run_pyarrow(trades, quotes, repeat):
 
 
 # --------------------------------------------------------------------------
+# arcticdb
+
+
+def run_arcticdb(trades, quotes, repeat):
+    import arcticdb as adb
+    import pandas as pd
+
+    print(f"arcticdb {adb.__version__}", file=sys.stderr)
+    results = []
+
+    def safe(name, rep, fn):
+        """Version-tolerant: a workload an older ArcticDB cannot express is
+        skipped with a note instead of aborting the engine."""
+        try:
+            results.append(timed("arcticdb", name, rep, fn))
+        except Exception as e:  # noqa: BLE001 — engine coverage over precision
+            print(f"  arcticdb: {name} skipped ({type(e).__name__}: {e})", file=sys.stderr)
+
+    # One-time ingest of the same data into ArcticDB's own LMDB store — its
+    # native format is the honest storage-included comparison, not foreign
+    # Parquet. Chunked per segment file to bound memory on small machines.
+    db_root = trades["glob"].split("/tables/")[0].rstrip("/")
+    store = os.path.abspath(db_root + ".arctic")
+    shutil.rmtree(store, ignore_errors=True)
+    ac = adb.Arctic(f"lmdb://{store}?map_size=20GB")
+    lib = ac.get_library("bench", create_if_missing=True)
+
+    def ingest():
+        for symbol, meta in (("trades", trades), ("quotes", quotes)):
+            for i, path in enumerate(meta["files"]):
+                df = pd.read_parquet(path).set_index("ts")
+                if i == 0:
+                    lib.write(symbol, df)
+                else:
+                    lib.append(symbol, df, validate_index=False)
+
+    safe("ingest into LMDB store (one-time)", 1, ingest)
+    if not results:
+        return results  # ingest failed; nothing below can run
+
+    def full_agg():
+        try:
+            q = adb.QueryBuilder().groupby("symbol").agg(
+                {"price": ["count", "mean"], "size": "sum"}
+            )
+            return lib.read("trades", query_builder=q).data
+        except Exception:  # older QueryBuilder: single aggregate per column
+            q = adb.QueryBuilder().groupby("symbol").agg(
+                {"price": "mean", "size": "sum"}
+            )
+            return lib.read("trades", query_builder=q).data
+
+    safe("full aggregation (group by symbol)", repeat, full_agg)
+
+    for label, lo, hi in windows(trades):
+        lo_ts = pd.Timestamp(lo, unit="ns", tz="UTC")
+        hi_ts = pd.Timestamp(hi - 1, unit="ns", tz="UTC")  # date_range is inclusive
+
+        def scan(lo_ts=lo_ts, hi_ts=hi_ts):
+            df = lib.read("trades", date_range=(lo_ts, hi_ts), columns=["price"]).data
+            return len(df), df["price"].mean()
+
+        safe(f"time-range scan {label}", repeat, scan)
+
+    def ohlcv():
+        df = lib.read("trades", columns=["symbol", "price", "size"]).data
+        df["pv"] = df["price"] * df["size"]
+        out = df.groupby(["symbol", pd.Grouper(level=0, freq="1min")]).agg(
+            open=("price", "first"), high=("price", "max"),
+            low=("price", "min"), close=("price", "last"),
+            volume=("size", "sum"), pv=("pv", "sum"),
+        )
+        out["vwap"] = out["pv"] / out["volume"]
+        return out
+
+    safe("1-minute OHLCV + VWAP rollup", repeat, ohlcv)
+
+    def asof():
+        # Column-pruned like the pandas variant; ArcticDB has no native ASOF
+        # join, so this measures its idiomatic path: store reads + merge_asof.
+        t = lib.read("trades", columns=["symbol", "price"]).data.reset_index()
+        q = lib.read("quotes", columns=["symbol", "bid"]).data.reset_index()
+        t = t.sort_values("ts", kind="stable")
+        q = q.sort_values("ts", kind="stable")
+        return len(pd.merge_asof(t, q, on="ts", by="symbol", direction="backward"))
+
+    safe("ASOF join trades x quotes", repeat, asof)
+    return results
+
+
+# --------------------------------------------------------------------------
 
 ENGINES = {
     "polars": run_polars,
     "duckdb": run_duckdb,
     "pandas": run_pandas,
     "pyarrow": run_pyarrow,
+    "arcticdb": run_arcticdb,
 }
 
 

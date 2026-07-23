@@ -354,3 +354,57 @@ fn sum_plan_metric_prefix(plan: &Arc<dyn ExecutionPlan>, prefix: &str) -> u64 {
 fn nanos(duration: std::time::Duration) -> u64 {
     duration.as_nanos().min(u64::MAX as u128) as u64
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scan(query_id: Option<Uuid>, table: &str) -> ScanMetrics {
+        ScanMetrics {
+            query_id,
+            table: table.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn take_for_drains_only_the_requested_query_and_retains_the_rest() {
+        let collector = ScanMetricsCollector::default();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        collector.record(scan(Some(a), "t1"));
+        collector.record(scan(Some(b), "t2"));
+        collector.record(scan(None, "t3")); // plain sql() path, unattributed
+
+        let mine = collector.take_for(a);
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].table, "t1");
+
+        // b's and the unattributed record stay for their own consumers.
+        let rest = collector.take();
+        let tables: Vec<_> = rest.iter().map(|m| m.table.as_str()).collect();
+        assert_eq!(tables, vec!["t2", "t3"]);
+        assert!(collector.take().is_empty());
+    }
+
+    #[test]
+    fn records_inside_query_scope_are_attributed_to_that_query() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let collector = ScanMetricsCollector::default();
+        let id = Uuid::new_v4();
+        runtime.block_on(query_scope(id, async {
+            collector.record(scan(None, "scoped"));
+        }));
+        collector.record(scan(None, "unscoped"));
+
+        let scoped = collector.take_for(id);
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].query_id, Some(id));
+        assert_eq!(scoped[0].table, "scoped");
+        let rest = collector.take();
+        assert_eq!(rest.len(), 1);
+        assert_eq!(rest[0].query_id, None);
+    }
+}

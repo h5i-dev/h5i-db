@@ -522,7 +522,7 @@
     <li><a href="#agents">For Agents</a></li>
     <li><a href="#ui">Review UI</a></li>
     <li><a href="#quickstart">Quickstart</a></li>
-    <li><a href="https://github.com/Koukyosyumei/h5i-db" class="nav-cta">GitHub →</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
   </ul>
   <div class="nav-hamburger" id="hamburger" onclick="toggleNav()">
     <span></span><span></span><span></span>
@@ -544,7 +544,7 @@
     </p>
     <p class="hero-punch">Polars-class analytics, with a real database underneath.</p>
     <div class="hero-actions">
-      <a href="https://github.com/Koukyosyumei/h5i-db" class="btn btn-primary">View on GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db" class="btn btn-primary">View on GitHub</a>
       <a href="#quickstart" class="btn btn-ghost">Quickstart</a>
     </div>
     <div class="hero-installs">
@@ -637,35 +637,43 @@
     <div class="section-head reveal">
       <span class="section-tag">Benchmarks</span>
       <h2 class="section-title">Fast where quant workloads live.</h2>
-      <p class="section-sub">20M trades and 5M quotes, disk-backed on all sides: h5i-db segments vs
-      Polars, DuckDB, pandas, and PyArrow over the identical Parquet files, measured back-to-back
-      in one session. Reproduce with <code>cargo run -p h5i-db-bench</code>.</p>
+      <p class="section-sub">20M trades and 5M quotes, storage included on all sides: Polars, DuckDB,
+      pandas, and PyArrow over the identical h5i-db Parquet segment files, ArcticDB over its own LMDB
+      store loaded with the same data — all measured back-to-back in one session (Intel Xeon @
+      2.20&nbsp;GHz, 31&nbsp;GB RAM, Ubuntu 22.04.5, 2026-07-23). Absolute times scale with hardware;
+      the ratios are the story. Reproduce with <code>cargo run -p h5i-db-bench</code> and
+      <code>benchmarks/compare_baselines.py</code>.</p>
       <div class="divider"></div>
     </div>
     <div class="bench-stats reveal">
-      <div class="bench-stat"><div class="val">2×</div><div class="lbl">faster selective scans</div></div>
-      <div class="bench-stat"><div class="val">4.7×</div><div class="lbl">faster OHLCV than any engine</div></div>
-      <div class="bench-stat"><div class="val">3.7M</div><div class="lbl">rows/s durable ingest</div></div>
-      <div class="bench-stat"><div class="val">1.4ms</div><div class="lbl">cold read, any version</div></div>
+      <div class="bench-stat"><div class="val">2.2–4.7×</div><div class="lbl">faster OHLCV than every engine</div></div>
+      <div class="bench-stat"><div class="val">72×</div><div class="lbl">repeat aggregates via warm version-aware states</div></div>
+      <div class="bench-stat"><div class="val">1.9M</div><div class="lbl">rows/s durable versioned ingest</div></div>
+      <div class="bench-stat"><div class="val">1.1ms</div><div class="lbl">cold read, any version</div></div>
     </div>
     <div class="bench-wrap reveal">
       <table class="bench">
-        <tr><th>workload</th><th>h5i-db</th><th>polars 1.43</th><th>duckdb 1.5</th><th>pandas 3.0</th><th>pyarrow 25</th></tr>
-        <tr><td>time-range scan 0.01% (48/50 segments pruned)</td><td><b>7.3 ms</b></td><td>15.0 ms</td><td>17.0 ms</td><td>13.5 ms</td><td>10.1 ms</td></tr>
-        <tr><td>time-range scan 1%</td><td><b>6.3 ms</b></td><td>14.1 ms</td><td>15.0 ms</td><td>13.3 ms</td><td>10.3 ms</td></tr>
-        <tr><td>1-minute OHLCV + VWAP rollup</td><td><b>164 ms</b></td><td>2 392 ms</td><td>774 ms</td><td>4 242 ms</td><td>2 369 ms</td></tr>
-        <tr><td>ASOF join trades × quotes (by symbol)</td><td>439 ms</td><td>408 ms</td><td>952 ms</td><td>4 535 ms</td><td>n/a¹</td></tr>
-        <tr><td>full aggregation (group by symbol)</td><td>47 ms</td><td>90 ms</td><td>47 ms</td><td>653 ms</td><td>113 ms</td></tr>
-        <tr><td>ingest (50 durable commits)</td><td><b>3.7 M rows/s</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
-        <tr><td>cold read of an old version</td><td><b>1.4 ms</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
+        <tr><th>workload</th><th>h5i-db</th><th>polars 1.35</th><th>duckdb 1.3</th><th>pandas 2.3</th><th>pyarrow 24</th><th>arcticdb 6.19</th></tr>
+        <tr><td>time-range scan 0.01% (48/50 segments pruned)</td><td>10.0 ms</td><td>28.1 ms</td><td>45.5 ms</td><td>23.9 ms</td><td>22.8 ms</td><td><b>4.2 ms</b>²</td></tr>
+        <tr><td>time-range scan 1%</td><td>12.8 ms</td><td>29.9 ms</td><td>40.9 ms</td><td>25.6 ms</td><td>24.0 ms</td><td><b>5.6 ms</b>²</td></tr>
+        <tr><td>1-minute OHLCV + VWAP rollup</td><td><b>1 558 ms</b></td><td>7 309 ms</td><td>7 237 ms</td><td>5 115 ms</td><td>7 121 ms</td><td>3 504 ms</td></tr>
+        <tr><td>ASOF join trades × quotes (by symbol)</td><td>1 548 ms</td><td><b>1 485 ms</b></td><td>11 566 ms</td><td>6 624 ms</td><td>n/a¹</td><td>7 008 ms</td></tr>
+        <tr><td>full aggregation (group by symbol)</td><td>353 ms</td><td>370 ms</td><td><b>228 ms</b></td><td>2 578 ms</td><td>553 ms</td><td>886 ms</td></tr>
+        <tr><td>ingest (50 durable versioned commits)</td><td><b>1.9 M rows/s</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
+        <tr><td>cold read of an old version</td><td><b>1.1 ms</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>
       </table>
     </div>
-    <!--<p class="bench-note reveal">Narrow scans win on manifest pruning. The OHLCV rollup wins 4.7–26×
-    because storage is already time-sorted and declared so — every baseline pays for a 20M-row sort.
-    ASOF is a tie with Polars, full-scan decode a tie with DuckDB, both by design — and only one side
-    has time travel, snapshots, previewable mutations, and crash-safe commits.
-    ¹ PyArrow's experimental <code>join_asof</code>: 44.5 s at 2M rows, excluded. Full methodology in
-    <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p> -->
+    <p class="bench-note reveal">The OHLCV rollup wins 2.2–4.7× because storage is already time-sorted
+    and declared so — every baseline pays for a 20M-row sort — and re-running it on an unchanged
+    version reuses immutable per-segment aggregate states instead of recomputing. ASOF is a tie with
+    Polars and 4–7× faster than the rest. Narrow scans: ArcticDB's native time index wins point reads
+    from its own store²; h5i-db's manifest pruning is second and beats every general engine. The
+    cross-sectional aggregate is DuckDB's home turf — h5i-db stays within 1.5× on stock DataFusion —
+    and only one column has time travel, snapshots, previewable mutations, and crash-safe commits.
+    ¹ PyArrow's experimental <code>join_asof</code> is ~1000× slower, excluded.
+    ² ArcticDB OHLCV/ASOF compute happens in pandas over its store reads (it has no native ASOF join).
+    Full methodology in
+    <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p>
   </div>
 </section>
 
@@ -782,9 +790,9 @@
       <p class="cta-sub">One embedded database for backtests, live research, and the agents that run
       them. Rust core, DataFusion SQL, versioned Parquet storage. Apache 2.0, no server, no lock-in.</p>
       <div class="hero-actions">
-        <a href="https://github.com/Koukyosyumei/h5i-db" class="btn btn-primary">Star on GitHub</a>
-        <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/DESIGN.md" class="btn btn-ghost">Read the Design</a>
-        <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/benchmarks/RESULTS.md" class="btn btn-ghost">Benchmark Methodology</a>
+        <a href="https://github.com/h5i-dev/h5i-db" class="btn btn-primary">Star on GitHub</a>
+        <a href="https://github.com/h5i-dev/h5i-db/blob/main/DESIGN.md" class="btn btn-ghost">Read the Design</a>
+        <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md" class="btn btn-ghost">Benchmark Methodology</a>
       </div>
     </div>
   </div>
@@ -798,11 +806,11 @@
       <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
     </div>
     <nav class="footer-links">
-      <a href="https://github.com/Koukyosyumei/h5i-db">GitHub</a>
-      <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/DESIGN.md">Design</a>
-      <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/benchmarks/RESULTS.md">Benchmarks</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/DESIGN.md">Design</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md">Benchmarks</a>
       <a href="https://h5i.dev/">h5i.dev</a>
-      <a href="https://github.com/Koukyosyumei/h5i-db/blob/main/LICENSE">License</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
     </nav>
     <div class="footer-legal">Apache 2.0 · Built with Rust</div>
   </div>
