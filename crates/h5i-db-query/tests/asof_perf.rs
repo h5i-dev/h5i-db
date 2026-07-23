@@ -353,6 +353,222 @@ async fn declared_ordering_elides_order_by_sort() {
     assert_eq!(rows, 3);
 }
 
+/// Correctness at scale: inputs larger than one Arrow batch (8,192 rows) per
+/// side must join completely — every left row emitted, every match taken from
+/// the *latest* right row at or before it, across batch and segment
+/// boundaries. Guards against partial consumption of repartitioned children
+/// (the physical operator reads exactly one partition per side).
+#[tokio::test(flavor = "multi_thread")]
+async fn joins_completely_beyond_one_batch_per_side() {
+    let (_dir, db) = setup().await;
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.create_table("quotes", quotes_schema(), time_options())
+        .await
+        .unwrap();
+
+    // 20k trades / 30k quotes across several appends (=> several segments),
+    // two symbols. Quotes at even times, trades at odd times, so for a trade
+    // at t the prevailing quote is at t-1 and bid == (t-1) as f64.
+    const TRADES: i64 = 20_000;
+    const QUOTES: i64 = 30_000;
+    for chunk in 0..4i64 {
+        let ts: Vec<i64> = (0..TRADES / 4).map(|i| (chunk * TRADES / 4 + i) * 2 + 1).collect();
+        let symbols: Vec<&str> = ts.iter().map(|t| if t % 4 == 1 { "A" } else { "B" }).collect();
+        let prices: Vec<f64> = ts.iter().map(|t| *t as f64).collect();
+        db.append(
+            "trades",
+            vec![trades_batch(&ts, &symbols, &prices)],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    for chunk in 0..4i64 {
+        let ts: Vec<i64> = (0..QUOTES / 4).map(|i| (chunk * QUOTES / 4 + i) * 2).collect();
+        let symbols: Vec<&str> = ts.iter().map(|t| if t % 4 == 0 { "A" } else { "B" }).collect();
+        let bids: Vec<f64> = ts.iter().map(|t| *t as f64).collect();
+        db.append(
+            "quotes",
+            vec![quotes_batch(&ts, &symbols, &bids)],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+
+    // Keyless join: trade at t matches quote at t-1 exactly (same parity
+    // stream), so bid == ts - 1 for every one of the 20k rows.
+    let batches = session
+        .sql(
+            "SELECT count(*) AS n, \
+                    sum(CASE WHEN arrow_cast(ts, 'Int64') - arrow_cast(bid, 'Int64') = 1 \
+                        THEN 0 ELSE 1 END) AS wrong \
+             FROM asof_join('trades', 'quotes', 'ts', 'ts', '')",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        [
+            "+-------+-------+",
+            "| n     | wrong |",
+            "+-------+-------+",
+            "| 20000 | 0     |",
+            "+-------+-------+",
+        ],
+        &batches
+    );
+
+    // Keyed join: symbols alternate by parity of (t-1)/2, and quote times
+    // within a symbol step by 4, so the prevailing same-symbol quote for a
+    // trade at t is at t-1 when parities line up, else t-3.
+    let batches = session
+        .sql(
+            "SELECT count(*) AS n, \
+                    sum(CASE WHEN arrow_cast(ts, 'Int64') - arrow_cast(bid, 'Int64') IN (1, 3) \
+                        THEN 0 ELSE 1 END) AS wrong \
+             FROM asof_join('trades', 'quotes', 'ts', 'ts', 'symbol')",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        [
+            "+-------+-------+",
+            "| n     | wrong |",
+            "+-------+-------+",
+            "| 20000 | 0     |",
+            "+-------+-------+",
+        ],
+        &batches
+    );
+
+    // Materialized (non-aggregate) path returns every row too.
+    let batches = session
+        .sql("SELECT * FROM asof_join('trades', 'quotes', 'ts', 'ts', 'symbol')")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, TRADES as usize, "left rows dropped by the join");
+
+    // Forward direction at the same scale: the earliest quote at/after a
+    // trade at t is at t+1 or t+3 (same reasoning, mirrored).
+    let batches = session
+        .sql(
+            "SELECT count(*) AS n, \
+                    sum(CASE WHEN arrow_cast(bid, 'Int64') - arrow_cast(ts, 'Int64') IN (1, 3) \
+                        THEN 0 ELSE 1 END) AS wrong \
+             FROM asof_join('trades', 'quotes', 'ts', 'ts', 'symbol', 'forward')",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        [
+            "+-------+-------+",
+            "| n     | wrong |",
+            "+-------+-------+",
+            "| 20000 | 0     |",
+            "+-------+-------+",
+        ],
+        &batches
+    );
+}
+
+/// String-family by-keys join across physical encodings: a Utf8 table joins
+/// a LargeUtf8 one (pandas-built tables store large_string, and the SQL
+/// table-function surface offers no place to cast).
+#[tokio::test(flavor = "multi_thread")]
+async fn by_key_string_encodings_coerce() {
+    use arrow::array::LargeStringArray;
+
+    let (_dir, db) = setup().await;
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    let lq_schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("symbol", DataType::LargeUtf8, false),
+        Field::new("bid", DataType::Float64, false),
+    ]));
+    db.create_table("quotes_lg", lq_schema.clone(), time_options())
+        .await
+        .unwrap();
+
+    db.write(
+        "trades",
+        vec![trades_batch(
+            &[1_000, 2_000, 3_000],
+            &["A", "A", "B"],
+            &[10.0, 20.0, 30.0],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let quotes = RecordBatch::try_new(
+        lq_schema,
+        vec![
+            Arc::new(
+                TimestampNanosecondArray::from(vec![500i64, 1_500, 2_500])
+                    .with_timezone("UTC".to_string()),
+            ),
+            Arc::new(LargeStringArray::from(vec!["A", "A", "B"])),
+            Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+        ],
+    )
+    .unwrap();
+    db.write("quotes_lg", vec![quotes], WriteOptions::default())
+        .await
+        .unwrap();
+
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+    let batches = session
+        .sql(
+            "SELECT symbol, price, bid \
+             FROM asof_join('trades', 'quotes_lg', 'ts', 'ts', 'symbol') \
+             ORDER BY price",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        [
+            "+--------+-------+-----+",
+            "| symbol | price | bid |",
+            "+--------+-------+-----+",
+            "| A      | 10.0  | 1.0 |",
+            "| A      | 20.0  | 2.0 |",
+            "| B      | 30.0  | 3.0 |",
+            "+--------+-------+-----+",
+        ],
+        &batches
+    );
+}
+
 /// 2.1: a bare LIMIT forwards to the left scan of a LEFT asof join.
 #[tokio::test(flavor = "multi_thread")]
 async fn limit_bounds_left_scan() {
