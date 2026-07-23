@@ -40,6 +40,7 @@ REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "docs-src"
 OUT = REPO / "docs"
 DEFAULT_COOKBOOK = REPO.parent / "h5i-db-cookbook"
+BASE_URL = "https://db.h5i.dev/"
 
 MD_EXTENSIONS = ["extra", "admonition", "toc", "sane_lists"]
 MD_CONFIG = {
@@ -74,6 +75,7 @@ class Page:
     search_text: str = ""
     group: str = ""     # sidebar group label (cookbook sections)
     order: float = 0.0
+    source: "Path | None" = None   # source markdown file, for llms-full.txt
 
 
 # ── Markdown rendering ───────────────────────────────────────────
@@ -97,6 +99,179 @@ def render_markdown(text: str) -> tuple[str, list]:
     md = make_md()
     body = md.convert(text)
     return wrap_tables(body), getattr(md, "toc_tokens", [])
+
+
+# ── API/reference enhancement ────────────────────────────────────
+# Turns flat rendered markdown for reference pages into member cards:
+# each `### name` heading + its signature code block + typed parameter
+# list becomes one bordered `.api-member`.
+
+API_LABELS = (
+    "Parameters", "Keyword Arguments", "Returns", "Return type", "Raises",
+    "Yields", "Example", "Examples", "Note", "Notes", "Warning", "See also",
+)
+_LABEL_RE = re.compile(
+    r"<p><strong>(" + "|".join(API_LABELS) + r")</strong></p>"
+)
+_HEADING_SPLIT_RE = re.compile(r"(?=<h[23] id=)")
+_H3_RE = re.compile(r'\A(<h3 id="[^"]*">)(.*?)(</h3>)', re.S)
+_FIRST_HIGHLIGHT_RE = re.compile(
+    r'\A(\s*)(<div class="highlight[^"]*">.*?</div>)', re.S
+)
+_FIRST_CODE_RE = re.compile(r"<code>(.*?)</code>", re.S)
+
+
+def _style_heading(inner: str, style: str) -> str:
+    """Dim the qualifier of a member name (``Database.`` / ``h5i-db ``)."""
+    if style == "plain":
+        return inner
+    m = _FIRST_CODE_RE.search(inner)
+    if not m:
+        return inner
+    text = m.group(1)
+    if style == "dotted" and "." in text:
+        qual, name = text.rsplit(".", 1)
+        # class and method share one colour; the dot is the only accent
+        new = (f'<span class="api-name">{qual}</span>'
+               f'<span class="api-dot">.</span>'
+               f'<span class="api-name">{name}</span>')
+    elif style == "cli" and text.startswith("h5i-db "):
+        binary, rest = text.split(" ", 1)
+        new = f'<span class="api-qual">{binary} </span><span class="api-name">{rest}</span>'
+    else:
+        new = f'<span class="api-name">{text}</span>'
+    return inner[: m.start()] + f"<code>{new}</code>" + inner[m.end():]
+
+
+def enhance_api_html(body: str, style: str) -> str:
+    body = _LABEL_RE.sub(r'<p class="api-label">\1</p>', body)
+    out = []
+    for chunk in _HEADING_SPLIT_RE.split(body):
+        if not chunk.startswith("<h3 id="):
+            out.append(chunk)
+            continue
+        m = _H3_RE.match(chunk)
+        if not m:
+            out.append(chunk)
+            continue
+        heading = m.group(1) + _style_heading(m.group(2), style) + m.group(3)
+        rest = chunk[m.end():]
+        sig = ""
+        sm = _FIRST_HIGHLIGHT_RE.match(rest)
+        if sm:
+            sig = sm.group(2).replace(
+                '<div class="highlight"', '<div class="highlight api-sig"', 1
+            )
+            rest = rest[sm.end():]
+        out.append(
+            f'<section class="api-member">{heading}{sig}'
+            f'<div class="api-body">{rest}</div></section>'
+        )
+    return "".join(out)
+
+
+# ── llms.txt / llms-full.txt (answer-engine optimization) ────────
+# https://llmstxt.org — a root-level markdown index that lets LLMs and
+# answer engines discover and ingest the docs efficiently.
+
+LLMS_SUMMARY = (
+    "h5i-db is a high-performance, embedded, versioned analytical database for "
+    "quantitative finance and time-series workloads. It runs full DataFusion SQL "
+    "with native ASOF joins, OHLCV/VWAP rollups, time travel, and previewable "
+    "mutations over immutable, time-sorted Parquet segments — driven from a CLI, "
+    "Rust, or Python, and designed to be safe for AI agents. Written in Rust; "
+    "Apache-2.0."
+)
+LLMS_INTRO = (
+    "A database is a single directory on disk; there is no server. Every write is "
+    "an atomic commit that produces a new immutable version, and any past version "
+    "is readable in O(1). Storage is time-sorted and pruned by manifest statistics "
+    "before I/O. Destructive changes (delete/replace ranges) can be staged as "
+    "previewable plans and gated by a mutation policy. The CLI emits machine-"
+    "readable output and structured errors with stable exit codes."
+)
+
+
+def _llms_link(page: Page) -> str:
+    line = f"- [{page.title}]({BASE_URL}{page.url})"
+    if page.description:
+        line += f": {page.description}"
+    return line
+
+
+def write_llms_index(manual, api, cookbook_groups, cookbook_index, skip_cookbook):
+    """Write docs/llms.txt — the structured, link-first index."""
+    out = ["# h5i-db", "", f"> {LLMS_SUMMARY}", "", LLMS_INTRO, ""]
+
+    out.append("## Manual")
+    out += [_llms_link(p) for p in manual]
+    out.append("")
+
+    out.append("## Python API")
+    out += [_llms_link(p) for p in api]
+    out.append("")
+
+    if not skip_cookbook:
+        out.append("## Cookbook")
+        out.append(_llms_link(cookbook_index))
+        out.append("")
+        for _sec_dir, label in COOKBOOK_SECTIONS:
+            out.append(f"## Cookbook: {label}")
+            out += [_llms_link(p) for p in cookbook_groups[label]]
+            out.append("")
+
+    out.append("## Optional")
+    out += [
+        f"- [Full documentation in one file]({BASE_URL}llms-full.txt): the entire "
+        "manual and Python API reference as plain markdown.",
+        "- [GitHub repository](https://github.com/h5i-dev/h5i-db): source, issues, and README.",
+        "- [Design document](https://github.com/h5i-dev/h5i-db/blob/main/DESIGN.md): "
+        "storage engine and query-layer internals.",
+        "- [Benchmark methodology](https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md): "
+        "full benchmark setup and results.",
+    ]
+    out.append("")
+    (OUT / "llms.txt").write_text("\n".join(out))
+
+
+def write_llms_full(manual, api):
+    """Write docs/llms-full.txt — manual + API reference concatenated as markdown."""
+    out = [
+        "# h5i-db — full documentation",
+        "",
+        f"> {LLMS_SUMMARY}",
+        "",
+        f"Canonical site: {BASE_URL}",
+        "This file concatenates the manual and Python API reference as plain "
+        "markdown for LLM ingestion. Cookbook tutorials (36 executed notebooks) "
+        f"are at {BASE_URL}cookbook/.",
+        "",
+    ]
+    for page in list(manual) + list(api):
+        if not page.source:
+            continue
+        _, body = parse_front_matter(page.source.read_text())
+        # drop navigational card-grid HTML blocks (redundant with llms.txt links)
+        body = re.sub(r'<div class="card-grid">.*?</div>\s*', "", body, flags=re.S)
+        # unwrap the lede paragraph wrapper, keeping its text
+        body = re.sub(r'<p class="doc-lede">(.*?)</p>', r"\1", body, flags=re.S)
+        out.append("\n\n---\n")
+        out.append(f"# {page.title}   ({BASE_URL}{page.url})\n")
+        # keep the page's own body; drop a leading duplicate H1 if present
+        body = re.sub(r"\A\s*#\s+.*?\n", "", body, count=1)
+        out.append(body.strip())
+        out.append("")
+    (OUT / "llms-full.txt").write_text("\n".join(out))
+
+
+def enhance_style(section: str, stem: str) -> str | None:
+    if section == "api":
+        return "dotted"
+    if section == "manual" and stem == "cli":
+        return "cli"
+    if section == "manual" and stem == "sql":
+        return "plain"
+    return None
 
 
 FRONT_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.S)
@@ -321,6 +496,9 @@ def load_md_pages(directory: Path, section: str) -> list[Page]:
     for path in sorted(directory.glob("*.md")):
         meta, body_src = parse_front_matter(path.read_text())
         body, toc_tokens = render_markdown(body_src)
+        style = enhance_style(section, path.stem)
+        if style:
+            body = enhance_api_html(body, style)
         slug = "index.html" if path.stem == "index" else f"{path.stem}.html"
         title = meta.get("title", path.stem.replace("-", " ").title())
         page = Page(
@@ -332,6 +510,7 @@ def load_md_pages(directory: Path, section: str) -> list[Page]:
             toc_tokens=toc_tokens,
             search_text=plain_text(body),
             order=float(meta.get("order", 99)),
+            source=path,
         )
         pages.append(page)
     pages.sort(key=lambda p: p.order)
@@ -383,6 +562,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             toc_tokens=toc_tokens,
             search_text=plain_text(body),
             order=float(meta["order"]),
+            source=path,
         ))
     manual_pages.sort(key=lambda p: p.order)
     api_pages = load_md_pages(SRC / "api", "api")
@@ -513,9 +693,15 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
     ]
     (static / "search-index.json").write_text(json.dumps(search_index, separators=(",", ":")))
 
+    # ── llms.txt / llms-full.txt (answer-engine optimization) ────
+    write_llms_index(manual_pages, api_pages, cookbook_groups,
+                     None if skip_cookbook else cookbook_index, skip_cookbook)
+    write_llms_full(manual_pages, api_pages)
+
     n_nb = len(cookbook_pages)
     print(f"built {len(ordered)} pages "
-          f"({len(manual_pages)} manual, {len(api_pages)} api, {n_nb} cookbook) -> {OUT}")
+          f"({len(manual_pages)} manual, {len(api_pages)} api, {n_nb} cookbook) "
+          f"+ llms.txt, llms-full.txt -> {OUT}")
 
 
 def main() -> None:

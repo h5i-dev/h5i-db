@@ -69,205 +69,331 @@
 <span class="sep">/</span>
 <span>Database</span></div>
 <h1 id="database"><code>Database</code><a class="headerlink" href="#database" title="Permanent link">#</a></h1>
-<div class="highlight"><pre><span></span><code><span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">create</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span> <span class="n">read_only</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span>
-</code></pre></div>
+<p>An h5i-db database directory — the top-level handle everything hangs off. A
+database is a plain directory on disk; there is no server. The handle is a
+context manager, so the idiomatic form is:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">h5i_db</span>
 
-<p>An h5i-db database directory. <code>create=True</code> opens or creates;
-<code>read_only=True</code> rejects every write at the handle level (raises
-<a href="exceptions.html"><code>PolicyError</code></a>). The handle is a context manager.</p>
-<div class="highlight"><pre><span></span><code><span class="k">with</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="s2">&quot;market.db&quot;</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
+<span class="k">with</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="s2">&quot;market.db&quot;</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
     <span class="o">...</span>
 </code></pre></div>
 
-<p>Many methods return plain <code>dict</code>s decoded from the engine's JSON — commit
-results carry keys like <code>version</code>, <code>rows</code>, <code>bytes</code>; inspect them, they are
-made to be logged.</p>
-<h2 id="lifecycle">Lifecycle<a class="headerlink" href="#lifecycle" title="Permanent link">#</a></h2>
-<h3 id="databaseclose"><code>Database.close</code><a class="headerlink" href="#databaseclose" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">close</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
-</code></pre></div>
+<p>Many methods return plain <code>dict</code>s decoded from the engine — commit results
+carry keys like <code>version</code>, <code>rows</code>, <code>bytes</code>, <code>segments</code>; they are made to be
+logged.</p>
+<h2 id="constructor">Constructor<a class="headerlink" href="#constructor" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="h5i_dbdatabase"><code><span class="api-name">h5i_db</span><span class="api-dot">.</span><span class="api-name">Database</span></code><a class="headerlink" href="#h5i_dbdatabase" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">Database</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">read_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</code></pre></div><div class="api-body">
 
-<p>Release the native handle (idempotent). Later operations on this object raise
-<code>H5iError</code> with <code>code == "closed"</code>. In-flight operations on other threads
-finish normally. Also called by <code>__exit__</code>.</p>
-<h3 id="databaseclosed"><code>Database.closed</code><a class="headerlink" href="#databaseclosed" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">closed</span><span class="p">:</span> <span class="nb">bool</span>     <span class="c1"># property</span>
-</code></pre></div>
+<p>Open (or create) a database directory.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>path</code> (<code>str</code>)</dt>
+<dd>Filesystem path to the database directory.</dd>
+<dt><code>create</code> (<code>bool</code>, default <code>False</code>)</dt>
+<dd>Open-or-create — create the directory if it does not exist.</dd>
+<dt><code>read_only</code> (<code>bool</code>, default <code>False</code>)</dt>
+<dd>Reject every write at the handle level; write calls raise
+<a href="exceptions.html"><code>PolicyError</code></a>.</dd>
+</dl>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>NotFoundError</code></dt>
+<dd>The directory does not exist and <code>create</code> is <code>False</code>.</dd>
+</dl>
+</div></section><h2 id="lifecycle">Lifecycle<a class="headerlink" href="#lifecycle" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="databaseclose"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">close</span></code><a class="headerlink" href="#databaseclose" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">close</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
 
-<h3 id="databasepath"><code>Database.path</code><a class="headerlink" href="#databasepath" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">path</span><span class="p">:</span> <span class="nb">str</span>        <span class="c1"># the directory this handle was opened on</span>
-</code></pre></div>
+<p>Release the native handle. Idempotent, and also called by <code>__exit__</code>.
+In-flight operations on other threads finish normally; later calls on this
+object raise <code>H5iError</code> with <code>code == "closed"</code>.</p>
+</div></section><section class="api-member"><h3 id="databaseclosed"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">closed</span></code><a class="headerlink" href="#databaseclosed" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">closed</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+</code></pre></div><div class="api-body">
 
-<h2 id="tables">Tables<a class="headerlink" href="#tables" title="Permanent link">#</a></h2>
-<h3 id="databasecreate_table"><code>Database.create_table</code><a class="headerlink" href="#databasecreate_table" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">schema</span><span class="p">:</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span><span class="p">,</span>
-             <span class="n">time_column</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-             <span class="n">sort_key</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>Property — whether the handle has been closed.</p>
+</div></section><section class="api-member"><h3 id="databasepath"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">path</span></code><a class="headerlink" href="#databasepath" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">path</span> <span class="o">-&gt;</span> <span class="nb">str</span>
+</code></pre></div><div class="api-body">
 
-<p>Create a table from an Arrow schema. <code>time_column</code> declares the time axis —
-strongly recommended for time-series tables (it enables pruning, ASOF joins,
-range plans, <code>tail</code>); the column is forced non-nullable. <code>sort_key</code> defaults
-to the time column.</p>
+<p>The directory this handle was opened on.</p>
+</div></section><h2 id="tables">Tables<a class="headerlink" href="#tables" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="databasecreate_table"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">create_table</span></code><a class="headerlink" href="#databasecreate_table" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p>Create a table from an Arrow schema.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>name</code> (<code>str</code>)</dt>
+<dd>Table name, unique within the database.</dd>
+<dt><code>schema</code> (<code>pyarrow.Schema</code>)</dt>
+<dd>The Arrow schema. Field order is preserved.</dd>
+<dt><code>time_column</code> (<code>str</code>, optional)</dt>
+<dd>The time-axis column — strongly recommended for time-series tables. It
+enables segment pruning, ASOF joins, range plans, and <code>tail</code>, and is
+forced non-nullable.</dd>
+<dt><code>sort_key</code> (<code>Iterable[str]</code>, optional)</dt>
+<dd>Columns the table is sorted by on disk. Defaults to <code>[time_column]</code>.</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>dict</code> — creation metadata (table id, schema revision).</p>
 <div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
 </code></pre></div>
 
-<h3 id="databasetables"><code>Database.tables</code><a class="headerlink" href="#databasetables" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">tables</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
-</code></pre></div>
+</div></section><section class="api-member"><h3 id="databasetables"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">tables</span></code><a class="headerlink" href="#databasetables" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">tables</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+</code></pre></div><div class="api-body">
 
-<h3 id="databaseschema"><code>Database.schema</code><a class="headerlink" href="#databaseschema" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">schema</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-       <span class="n">as_of</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">snapshot</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span>
-</code></pre></div>
+<p>Names of all tables in the database.</p>
+</div></section><section class="api-member"><h3 id="databaseschema"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">schema</span></code><a class="headerlink" href="#databaseschema" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">schema</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Schema</span>
+</code></pre></div><div class="api-body">
 
-<p>Schema of a table at a read point (latest by default). At most one of
-<code>version</code> / <code>as_of</code> (RFC3339 string) / <code>snapshot</code> may be given.</p>
-<h3 id="databaseversions"><code>Database.versions</code><a class="headerlink" href="#databaseversions" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">versions</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span>
-</code></pre></div>
+<p>Schema of a table at a read point (latest by default).</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>name</code> (<code>str</code>)</dt>
+<dd>Table name.</dd>
+<dt><code>version</code> (<code>int</code>, optional)</dt>
+<dd>Read the schema as of this exact version.</dd>
+<dt><code>as_of</code> (<code>str</code>, optional)</dt>
+<dd>RFC3339 timestamp — the schema as of the latest commit at or before it.</dd>
+<dt><code>snapshot</code> (<code>str</code>, optional)</dt>
+<dd>Named snapshot to resolve the version from.</dd>
+</dl>
+<div class="admonition note">
+<p class="admonition-title">One read point</p>
+<p>Pass at most one of <code>version</code> / <code>as_of</code> / <code>snapshot</code>; more than one raises
+<a href="exceptions.html"><code>InvalidInputError</code></a>. This rule holds for every
+read-point method below.</p>
+</div>
+</div></section><section class="api-member"><h3 id="databaseversions"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">versions</span></code><a class="headerlink" href="#databaseversions" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">versions</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span>
+</code></pre></div><div class="api-body">
 
-<p>Committed versions, one dict per version: version number, operation, commit
-time, row/byte/segment counts, note.</p>
-<h3 id="databasedrop_table"><code>Database.drop_table</code><a class="headerlink" href="#databasedrop_table" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">drop_table</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
-</code></pre></div>
+<p>Committed versions, oldest first — one dict per version with the version
+number, operation, commit time, and row / byte / segment counts, plus any
+<code>note</code>.</p>
+</div></section><section class="api-member"><h3 id="databasedrop_table"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">drop_table</span></code><a class="headerlink" href="#databasedrop_table" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">drop_table</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
 
-<p>Permanently drops the table and its data. Refuses (with <code>ConflictError</code>) if a
-snapshot pins it.</p>
-<h2 id="writing">Writing<a class="headerlink" href="#writing" title="Permanent link">#</a></h2>
-<h3 id="databaseappend"><code>Database.append</code><a class="headerlink" href="#databaseappend" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">TableLike</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span>
-       <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>Permanently drop the table and its data.</p>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>ConflictError</code></dt>
+<dd>A snapshot pins the table — delete the snapshot first.</dd>
+</dl>
+</div></section><h2 id="writing">Writing<a class="headerlink" href="#writing" title="Permanent link">#</a></h2>
+<p>Every write is one atomic, durable commit that produces a new version.</p>
+<section class="api-member"><h3 id="databaseappend"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">append</span></code><a class="headerlink" href="#databaseappend" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">expected_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
-<p>Strict ordered append — one atomic, durable commit. <code>data</code> is a
-<code>pyarrow.Table</code>, <code>RecordBatch</code>, or sequence of batches. Rows must respect the
-table's sort order; violations raise <code>InvalidInputError</code>
-(<code>sort_order_violation</code>). Version conflicts with concurrent writers are
-retried internally (up to 5 times) — safe for pure appends; pass
-<code>expected_version</code> for optimistic locking when the append depends on what you
-last read. <code>note</code> lands in the version manifest.</p>
-<h3 id="databasewrite"><code>Database.write</code><a class="headerlink" href="#databasewrite" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">write</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">TableLike</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span>
-      <span class="n">expected_version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>Strict ordered append.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>name</code> (<code>str</code>)</dt>
+<dd>Table name.</dd>
+<dt><code>data</code> (<code>TableLike</code>)</dt>
+<dd>A <code>pyarrow.Table</code>, <code>RecordBatch</code>, or sequence of batches. Rows must
+respect the table's sort order.</dd>
+<dt><code>expected_version</code> (<code>int</code>, optional)</dt>
+<dd>Optimistic guard — commit only if the head is exactly this version, else
+<a href="exceptions.html"><code>ConflictError</code></a>. Use it when the append depends on
+what you last read.</dd>
+<dt><code>note</code> (<code>str</code>, optional)</dt>
+<dd>Free-text note recorded in the version manifest.</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>dict</code> — commit metadata (<code>version</code>, <code>rows</code>, <code>bytes</code>, <code>segments</code>).</p>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>InvalidInputError</code></dt>
+<dd><code>sort_order_violation</code> if rows are out of order, or <code>schema_mismatch</code>.</dd>
+<dt><code>ConflictError</code></dt>
+<dd>Another writer moved the head; retryable. Pure appends are retried
+internally (up to 5 times) before this surfaces.</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="databasewrite"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">write</span></code><a class="headerlink" href="#databasewrite" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">write</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">expected_version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
-<p>Replace the table's contents in one commit. The previous state remains
-readable as its version — a restatement, not an overwrite.</p>
-<h3 id="databaserestore"><code>Database.restore</code><a class="headerlink" href="#databaserestore" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">restore</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">version</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>Replace the table's contents in one commit — a restatement, not an
+overwrite: the previous state stays readable as its version. Parameters match
+<a href="#databaseappend"><code>append</code></a>.</p>
+</div></section><section class="api-member"><h3 id="databaserestore"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">restore</span></code><a class="headerlink" href="#databaserestore" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">restore</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">version</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
 <p>Make a historical version current by committing a new version with its
-contents. History only moves forward.</p>
-<h2 id="reading-sql">Reading &amp; SQL<a class="headerlink" href="#reading-sql" title="Permanent link">#</a></h2>
-<h3 id="databasesql"><code>Database.sql</code><a class="headerlink" href="#databasesql" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">sql</span><span class="p">(</span><span class="n">query</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">memory_limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">max_rows</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">QueryResult</span>
-</code></pre></div>
+contents. History only moves forward — nothing is erased.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>name</code> (<code>str</code>)</dt>
+<dd>Table name.</dd>
+<dt><code>version</code> (<code>int</code>)</dt>
+<dd>The version to restore.</dd>
+</dl>
+</div></section><h2 id="reading-sql">Reading &amp; SQL<a class="headerlink" href="#reading-sql" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="databasesql"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">sql</span></code><a class="headerlink" href="#databasesql" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">sql</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">memory_limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">max_rows</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">QueryResult</span>
+</code></pre></div><div class="api-body">
 
 <p>Run SQL — full DataFusion plus the <a href="../manual/sql.html">h5i extensions</a>.
-<code>timeout</code> is a deadline in seconds (raises
-<a href="exceptions.html"><code>TimeoutError</code></a> and cancels execution). <code>max_rows</code> raises
-<a href="exceptions.html"><code>LimitError</code></a> as soon as the result exceeds it — execution
-stops early rather than silently truncating. <code>memory_limit</code> (bytes) enables
-disk spilling under pressure.</p>
-<div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM h5i(&#39;trades&#39;, 42)&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">max_rows</span><span class="o">=</span><span class="mi">1_000_000</span><span class="p">)</span>
-<span class="n">df</span> <span class="o">=</span> <span class="n">res</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+Returns a <a href="results-and-plans.html#queryresult"><code>QueryResult</code></a>.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>query</code> (<code>str</code>)</dt>
+<dd>The SQL text.</dd>
+<dt><code>memory_limit</code> (<code>int</code>, optional)</dt>
+<dd>Query memory budget in <strong>bytes</strong>; enables disk spilling under pressure.</dd>
+<dt><code>timeout</code> (<code>float</code>, optional)</dt>
+<dd>Deadline in seconds. On expiry, raises
+<a href="exceptions.html"><code>TimeoutError</code></a> and cancels execution.</dd>
+<dt><code>max_rows</code> (<code>int</code>, optional)</dt>
+<dd>Raise <a href="exceptions.html"><code>LimitError</code></a> as soon as the result exceeds this —
+execution stops early rather than truncating silently.</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>QueryResult</code> — with <code>.to_arrow()</code>, <code>.to_pandas()</code>, <code>.to_polars()</code>, <code>len()</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">df</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+    <span class="s2">&quot;SELECT * FROM h5i(&#39;trades&#39;, 42)&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">max_rows</span><span class="o">=</span><span class="mi">1_000_000</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 </code></pre></div>
 
-<h3 id="databaseread"><code>Database.read</code><a class="headerlink" href="#databaseread" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">read</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-     <span class="n">snapshot</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-     <span class="n">time_start</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">time_end</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-     <span class="n">limit</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
-</code></pre></div>
+</div></section><section class="api-member"><h3 id="databaseread"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">read</span></code><a class="headerlink" href="#databaseread" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">read</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+     <span class="n">time_start</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">time_end</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">limit</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
+</code></pre></div><div class="api-body">
 
-<p>Direct scan of one table version — no SQL layer, minimal overhead. At most
-one of <code>version</code> / <code>as_of</code> / <code>snapshot</code>. <code>columns</code> projects;
-<code>time_start</code>/<code>time_end</code> are a half-open <code>[start, end)</code> range in <strong>raw time
-units</strong> (µs for <code>timestamp[us]</code> columns) and prune segments before I/O.</p>
+<p>Direct scan of one table version — no SQL layer, minimal overhead.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>name</code> (<code>str</code>)</dt>
+<dd>Table name.</dd>
+<dt><code>version</code> / <code>as_of</code> / <code>snapshot</code></dt>
+<dd>Read point (latest by default); at most one. <code>as_of</code> is an RFC3339 string.</dd>
+<dt><code>columns</code> (<code>list[str]</code>, optional)</dt>
+<dd>Project to these columns.</dd>
+<dt><code>time_start</code> (<code>int</code>, optional)</dt>
+<dd>Inclusive lower time bound, in <strong>raw time units</strong> (µs for <code>timestamp[us]</code>).
+Prunes segments before I/O.</dd>
+<dt><code>time_end</code> (<code>int</code>, optional)</dt>
+<dd>Exclusive upper time bound, same units.</dd>
+<dt><code>limit</code> (<code>int</code>, optional)</dt>
+<dd>Stop after this many rows.</dd>
+<dt><code>timeout</code> (<code>float</code>, optional)</dt>
+<dd>Deadline in seconds.</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>pyarrow.Table</code></p>
 <div class="highlight"><pre><span></span><code><span class="n">window</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">],</span>
                  <span class="n">time_start</span><span class="o">=</span><span class="n">t0_us</span><span class="p">,</span> <span class="n">time_end</span><span class="o">=</span><span class="n">t1_us</span><span class="p">)</span>
 </code></pre></div>
 
-<h2 id="snapshots">Snapshots<a class="headerlink" href="#snapshots" title="Permanent link">#</a></h2>
-<h3 id="databasesnapshot"><code>Database.snapshot</code><a class="headerlink" href="#databasesnapshot" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">snapshot</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">tables</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-         <span class="n">note</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+</div></section><h2 id="snapshots">Snapshots<a class="headerlink" href="#snapshots" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="databasesnapshot"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">snapshot</span></code><a class="headerlink" href="#databasesnapshot" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">snapshot</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
-<p>Pin current table versions under a name (all tables when <code>tables</code> is
-omitted). Address it from SQL as <code>h5i('t', 'name')</code> or <code>read(snapshot=…)</code>.</p>
-<h2 id="mutation-plans">Mutation plans<a class="headerlink" href="#mutation-plans" title="Permanent link">#</a></h2>
-<p>See <a href="results-and-plans.html#mutationplan">MutationPlan</a> for the object these
-return.</p>
-<h3 id="databaseplan_replace_range"><code>Database.plan_replace_range</code><a class="headerlink" href="#databaseplan_replace_range" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">plan_replace_range</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">start</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">end</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-                   <span class="n">data</span><span class="p">:</span> <span class="n">TableLike</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-                   <span class="n">note</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MutationPlan</span>
-</code></pre></div>
+<p>Pin current table versions under a name. Address it later from SQL as
+<code>h5i('t', 'name')</code> or <code>read(snapshot=…)</code>.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>name</code> (<code>str</code>)</dt>
+<dd>Snapshot name.</dd>
+<dt><code>tables</code> (<code>list[str]</code>, optional)</dt>
+<dd>Tables to pin. Defaults to <strong>all</strong> tables.</dd>
+<dt><code>note</code> (<code>str</code>, optional)</dt>
+<dd>Free-text note.</dd>
+</dl>
+</div></section><h2 id="mutation-plans">Mutation plans<a class="headerlink" href="#mutation-plans" title="Permanent link">#</a></h2>
+<p>The previewable plan/apply flow. These return a
+<a href="results-and-plans.html#mutationplan"><code>MutationPlan</code></a> — the staged segments
+already exist on disk; publishing is a metadata-only swap.</p>
+<section class="api-member"><h3 id="databaseplan_replace_range"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">plan_replace_range</span></code><a class="headerlink" href="#databaseplan_replace_range" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">plan_replace_range</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MutationPlan</span>
+</code></pre></div><div class="api-body">
 
-<p>Stage a previewable replacement of <code>[start, end)</code> (raw time units) with
-<code>data</code> — or a deletion when <code>data</code> is <code>None</code>. The full write path runs and
-new segments are staged, but nothing is published until
-<a href="results-and-plans.html#mutationplanapply"><code>plan.apply()</code></a>.</p>
-<h3 id="databaseplan_delete_range"><code>Database.plan_delete_range</code><a class="headerlink" href="#databaseplan_delete_range" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">plan_delete_range</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">start</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">end</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-                  <span class="n">note</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MutationPlan</span>
-</code></pre></div>
+<p>Stage a previewable replacement of the half-open time range <code>[start, end)</code>.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>name</code> (<code>str</code>)</dt>
+<dd>Table name.</dd>
+<dt><code>start</code> (<code>int</code>)</dt>
+<dd>Inclusive range start, in <strong>raw time units</strong> (µs for <code>timestamp[us]</code>).</dd>
+<dt><code>end</code> (<code>int</code>)</dt>
+<dd>Exclusive range end, same units.</dd>
+<dt><code>data</code> (<code>TableLike</code>, optional)</dt>
+<dd>Replacement rows. Omit (or <code>None</code>) to <strong>delete</strong> the range.</dd>
+<dt><code>note</code> (<code>str</code>, optional)</dt>
+<dd>Free-text note carried onto the resulting version.</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>MutationPlan</code> — inspect <code>.summary</code> / <code>.before_sample</code>, then <code>.apply()</code>.</p>
+</div></section><section class="api-member"><h3 id="databaseplan_delete_range"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">plan_delete_range</span></code><a class="headerlink" href="#databaseplan_delete_range" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">plan_delete_range</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">start</span><span class="p">,</span> <span class="n">end</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">MutationPlan</span>
+</code></pre></div><div class="api-body">
 
-<p>Sugar for <code>plan_replace_range(name, start, end, None, note)</code>.</p>
-<h3 id="databaselist_plans"><code>Database.list_plans</code><a class="headerlink" href="#databaselist_plans" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">list_plans</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">MutationPlan</span><span class="p">]</span>
-</code></pre></div>
+<p>Sugar for <code>plan_replace_range(name, start, end, None, note)</code> — stage a
+range deletion.</p>
+</div></section><section class="api-member"><h3 id="databaselist_plans"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">list_plans</span></code><a class="headerlink" href="#databaselist_plans" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">list_plans</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">MutationPlan</span><span class="p">]</span>
+</code></pre></div><div class="api-body">
 
-<p>Pending (not yet applied/discarded) plans for a table.</p>
-<h2 id="policy">Policy<a class="headerlink" href="#policy" title="Permanent link">#</a></h2>
-<h3 id="databasepolicy"><code>Database.policy</code><a class="headerlink" href="#databasepolicy" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">policy</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>Pending (not yet applied or discarded) plans for a table.</p>
+</div></section><h2 id="policy">Policy<a class="headerlink" href="#policy" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="databasepolicy"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">policy</span></code><a class="headerlink" href="#databasepolicy" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">policy</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
-<p>The mutation policy as a dict of boolean flags:
-<code>{"direct_append": True, "direct_write": True, "direct_replace": True,
-"direct_delete": True, "direct_restore": True, "direct_compact": True}</code>.</p>
-<h3 id="databaseset_policy"><code>Database.set_policy</code><a class="headerlink" href="#databaseset_policy" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">set_policy</span><span class="p">(</span><span class="n">policy</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">flags</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>The <a href="../manual/concepts.html#the-mutation-policy">mutation policy</a> as a dict
+of boolean flags: <code>direct_append</code>, <code>direct_write</code>, <code>direct_replace</code>,
+<code>direct_delete</code>, <code>direct_restore</code>, <code>direct_compact</code>.</p>
+</div></section><section class="api-member"><h3 id="databaseset_policy"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">set_policy</span></code><a class="headerlink" href="#databaseset_policy" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">set_policy</span><span class="p">(</span><span class="n">policy</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">flags</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
 <p>Update the mutation policy; unspecified flags keep their value. The merge is
-atomic (read-modify-write under the database metadata lock). Unknown flags
-raise <code>InvalidInputError</code>. Returns the merged policy that was stored.</p>
-<div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">set_policy</span><span class="p">(</span><span class="n">direct_delete</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">direct_write</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</code></pre></div>
+atomic (read-modify-write under the metadata lock).</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>policy</code> (<code>dict</code>, optional)</dt>
+<dd>Flags to set, as a dict.</dd>
+<dt><code>**flags</code> (<code>bool</code>)</dt>
+<dd>Flags to set, as keyword arguments — <code>db.set_policy(direct_delete=False)</code>.</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>dict</code> — the merged policy that was stored.</p>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>InvalidInputError</code></dt>
+<dd>An unknown flag name.</dd>
+</dl>
+</div></section><h2 id="maintenance">Maintenance<a class="headerlink" href="#maintenance" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="databasecompact"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">compact</span></code><a class="headerlink" href="#databasecompact" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">compact</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
-<h2 id="maintenance">Maintenance<a class="headerlink" href="#maintenance" title="Permanent link">#</a></h2>
-<h3 id="databasecompact"><code>Database.compact</code><a class="headerlink" href="#databasecompact" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">compact</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">note</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>Rewrite small segments into target-sized ones as a new version — a query-speed
+tool; old segments stay pinned by history.</p>
+</div></section><section class="api-member"><h3 id="databasevacuum"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">vacuum</span></code><a class="headerlink" href="#databasevacuum" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">vacuum</span><span class="p">(</span><span class="n">table</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="o">=</span><span class="mi">3600</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
-<p>Rewrite small segments into target-sized ones as a new version. A query-speed
-tool — old segments stay pinned by history.</p>
-<h3 id="databasevacuum"><code>Database.vacuum</code><a class="headerlink" href="#databasevacuum" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">vacuum</span><span class="p">(</span><span class="n">table</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">3600</span><span class="p">,</span>
-       <span class="n">apply</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
+<p>Remove unreachable objects (crashed-writer debris, discarded plans). Committed
+history is never touched.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>table</code> (<code>str</code>, optional)</dt>
+<dd>Restrict to one table. Defaults to the whole database.</dd>
+<dt><code>grace_seconds</code> (<code>int</code>, default <code>3600</code>)</dt>
+<dd>Never touch objects newer than this — keep it above your longest ingest.</dd>
+<dt><code>apply</code> (<code>bool</code>, default <code>False</code>)</dt>
+<dd>Actually delete. The default is a dry run.</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>dict</code> — the candidate (or deleted) object list.</p>
+</div></section><section class="api-member"><h3 id="databaseverify"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">verify</span></code><a class="headerlink" href="#databaseverify" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">verify</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">deep</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
 
-<p>Remove unreachable objects. Dry run unless <code>apply=True</code>; <code>grace_seconds</code>
-protects recent objects (keep it above your longest ingest). Returns the
-candidate/deleted list.</p>
-<h3 id="databaseverify"><code>Database.verify</code><a class="headerlink" href="#databaseverify" title="Permanent link">#</a></h3>
-<div class="highlight"><pre><span></span><code><span class="n">verify</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">deep</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
-</code></pre></div>
-
-<p>Structural integrity check: checksum chain, object existence; <code>deep=True</code>
-re-reads every segment and verifies content checksums. Returns a report dict;
-problems are listed rather than raised.</p>
+<p>Structural integrity check: checksum chain and object existence.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>name</code> (<code>str</code>)</dt>
+<dd>Table name.</dd>
+<dt><code>deep</code> (<code>bool</code>, default <code>False</code>)</dt>
+<dd>Also re-read every segment and verify content checksums.</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>dict</code> — a report; problems are listed in it rather than raised.</p></div></section>
     <nav class="page-nav"><a class="prev" href="../api/index.html"><span class="dir">← Previous</span><span class="pn-title">Overview</span></a><a class="next" href="../api/results-and-plans.html"><span class="dir">Next →</span><span class="pn-title">QueryResult &amp; MutationPlan</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#constructor">Constructor</a><ul><li><a href="#h5i_dbdatabase">h5i_db.Database</a></li></ul></li><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

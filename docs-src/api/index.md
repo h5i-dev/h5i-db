@@ -63,6 +63,11 @@ db.close()                                    # or use `with h5i_db.Database(...
     <span class="card-title">Error types</span>
     <span class="card-desc">The typed hierarchy under H5iError, with .code, .hint, and .retryable on every error.</span>
   </a>
+  <a class="card" href="../cookbook/">
+    <span class="card-no">TUTORIALS</span>
+    <span class="card-title">Cookbook</span>
+    <span class="card-desc">36 executed notebooks that put the API to work — fundamentals, market data, alpha research, and risk.</span>
+  </a>
 </div>
 
 ## Data in, data out

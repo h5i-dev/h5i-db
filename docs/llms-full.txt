@@ -1,0 +1,2110 @@
+# h5i-db — full documentation
+
+> h5i-db is a high-performance, embedded, versioned analytical database for quantitative finance and time-series workloads. It runs full DataFusion SQL with native ASOF joins, OHLCV/VWAP rollups, time travel, and previewable mutations over immutable, time-sorted Parquet segments — driven from a CLI, Rust, or Python, and designed to be safe for AI agents. Written in Rust; Apache-2.0.
+
+Canonical site: https://db.h5i.dev/
+This file concatenates the manual and Python API reference as plain markdown for LLM ingestion. Cookbook tutorials (36 executed notebooks) are at https://db.h5i.dev/cookbook/.
+
+
+
+---
+
+# Overview   (https://db.h5i.dev/manual/index.html)
+
+h5i-db is a high-performance analytical database for quantitative
+finance and time-series workloads: an embedded, versioned store with DataFusion SQL,
+native ASOF joins, and previewable mutations — written in Rust, driven from the CLI
+or Python, designed to be safe in the hands of AI agents.
+
+<div class="doc-divider"></div>
+
+A database is a **single directory on disk** — like SQLite or DuckDB, there is no
+server process. Data lives in immutable, time-sorted Parquet segments; every write is
+an atomic commit that produces a new **version**, and any past version stays readable
+forever:
+
+```console
+$ h5i-db init market.db
+$ h5i-db ingest market.db trades ticks.parquet
+$ h5i-db query market.db "SELECT symbol, vwap(price, size) FROM trades GROUP BY symbol"
+```
+
+```python
+import h5i_db
+
+db = h5i_db.Database("market.db")
+df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
+```
+
+## What makes it different
+
+- **Time-series SQL, natively.** Full SQL through DataFusion, plus `asof_join`,
+  `time_bucket`, `vwap`, `ewma`, `gapfill`, and friends. Storage is time-sorted
+  and declares it, so bucketed aggregations stream instead of sorting.
+- **Every write is a version.** Immutable segments and per-version manifests make
+  version reads O(1) and `as_of` lookups O(log V). Named snapshots pin exact
+  versions across tables, keeping backtests reproducible forever.
+- **Previewable mutations.** Deletes and range replacements can be staged as
+  **plans**: exact affected-row counts and before/after samples first, a
+  metadata-only `apply` second. A mutation policy can *require* this flow.
+- **Crash-safe by construction.** fsync-before-swap, checksums on every object,
+  and a manifest hash chain. The old head survives a crash at any step.
+- **Agent-ready by contract.** Machine-readable output formats, structured
+  errors with a `retryable` flag, stable exit codes, and resource limits as
+  flags — the same CLI and API humans use, safe to hand to automation.
+
+## Finding your way around
+
+## Where to go next
+
+- Never used h5i-db? Start with [Installation](installation.html), then the
+  [Quickstart](quickstart.html).
+- Coming from pandas/Polars research code? The
+  [Cookbook fundamentals](../cookbook/#00_fundamentals) teach the database
+  concepts through market-data examples.
+- Running it in production? Read the [Operations guide](operations.html) —
+  backup, vacuum, compaction, and the recovery runbook.
+- Wiring it into an agent or pipeline? See
+  [Agents & automation](agents.html) for the machine contract.
+
+
+
+---
+
+# Installation   (https://db.h5i.dev/manual/installation.html)
+
+h5i-db ships as two installable artifacts backed by the same Rust core: the
+`h5i-db` command-line tool and the `h5i_db` Python library. Install either or
+both — they read and write the same database directories.
+
+## CLI
+
+```console
+$ cargo install h5i-db-cli
+$ h5i-db --version
+```
+
+The binary is self-contained; no runtime dependencies, no server to start.
+Requires a Rust toolchain ([rustup.rs](https://rustup.rs)) to build during
+install.
+
+## Python
+
+```console
+$ pip install h5i-db
+```
+
+```python
+import h5i_db
+print(h5i_db.__version__)
+```
+
+The wheel bundles the native engine — no separate CLI install needed. The only
+required dependency is `pyarrow >= 14`; `to_pandas()` and `to_polars()` work
+when pandas/Polars are present.
+
+## Build from source
+
+```console
+$ git clone https://github.com/h5i-dev/h5i-db
+$ cd h5i-db
+$ cargo build --release -p h5i-db-cli          # CLI -> target/release/h5i-db
+$ pip install maturin
+$ maturin develop -m crates/h5i-db-python/Cargo.toml --release   # Python module
+```
+
+!!! note "Filesystem requirements"
+    Crash-safety relies on POSIX `fsync` and atomic rename. Keep databases on a
+    local filesystem (ext4, xfs, apfs, NTFS). On WSL2 use the Linux side
+    (`~/data/…`), not `/mnt/c`. Network filesystems are not recommended — see
+    the [Operations guide](operations.html#filesystem-caveats).
+
+## Verifying the install
+
+```console
+$ h5i-db init /tmp/smoke.db
+$ h5i-db tables /tmp/smoke.db
+$ python -c "import h5i_db; h5i_db.Database('/tmp/smoke.db')"
+```
+
+Next: the [Quickstart](quickstart.html).
+
+
+
+---
+
+# Quickstart   (https://db.h5i.dev/manual/quickstart.html)
+
+Five minutes from an empty directory to time-series SQL with time travel. The
+CLI and the Python library drive the same engine and the same on-disk format —
+pick either, or mix freely.
+
+## CLI
+
+```console
+$ cargo install h5i-db-cli
+$ h5i-db init market.db
+$ h5i-db create-table market.db trades --like ticks.parquet --time-column ts
+$ h5i-db ingest market.db trades ticks.parquet
+$ h5i-db query market.db "SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol"
+```
+
+`init` creates the database — a plain directory, no server. `create-table`
+infers the schema from an existing Parquet/CSV/Arrow file (or takes explicit
+JSON via `--schema`); `--time-column` declares the time axis, which is what
+makes pruning and the time-series operators work. `ingest` appends the file's
+rows as one atomic, durable commit.
+
+Query output goes to stdout in your chosen `--format`:
+
+```console
+$ h5i-db query market.db "SELECT time_bucket('1m', ts) AS bar, vwap(price, size) AS vwap
+                          FROM trades GROUP BY bar ORDER BY bar" --format csv | head -3
+bar,vwap
+2026-07-01T09:30:00,101.24
+2026-07-01T09:31:00,101.31
+```
+
+Every write created a version. Look at the history, read an old version, pin a
+reproducible snapshot:
+
+```console
+$ h5i-db versions market.db trades
+$ h5i-db query market.db "SELECT count(*) FROM h5i('trades', 1)"   # time travel
+$ h5i-db snapshot create market.db eod-2026-07-01
+```
+
+And when something needs fixing, preview before you commit:
+
+```console
+$ h5i-db delete-range market.db trades --start 2026-07-01T09:30:00Z \
+    --end 2026-07-01T09:31:00Z --plan
+{"plan_id": "5c41…", "summary": {"rows_affected": 12481, "segments_reused": 127}}
+$ h5i-db plan show market.db trades 5c41…     # before/after samples
+$ h5i-db plan apply market.db trades 5c41…    # metadata-only swap
+```
+
+Finally, `h5i-db ui market.db` serves a loopback-only review surface: pending
+plans with previews, the version timeline, and an SQL scratchpad.
+
+## Python
+
+```console
+$ pip install h5i-db
+```
+
+```python
+import pyarrow as pa
+import h5i_db
+
+schema = pa.schema([
+    pa.field("ts", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("symbol", pa.string()),
+    pa.field("price", pa.float64()),
+    pa.field("size", pa.int64()),
+])
+
+db = h5i_db.Database("market.db", create=True)
+db.create_table("trades", schema, time_column="ts")
+db.append("trades", ticks)                 # pyarrow.Table / RecordBatch(es)
+
+bars = db.sql("""
+    SELECT time_bucket('1m', ts) AS bar, symbol,
+           vwap(price, size) AS vwap, sum(size) AS volume
+    FROM trades GROUP BY bar, symbol ORDER BY bar
+""").to_pandas()
+```
+
+Time travel and reproducibility:
+
+```python
+old = db.read("trades", version=3)                         # exact version
+asof = db.sql("SELECT * FROM h5i('trades', '2026-07-01T00:00:00Z')")
+db.snapshot("eod-2026-07-01")                              # pin all tables
+```
+
+Previewable mutation, the same plan/apply flow as the CLI:
+
+```python
+plan = db.plan_delete_range("trades", start_us, end_us)    # raw µs bounds
+plan.summary                 # {"rows_affected": …, "segments_reused": …}
+plan.before_sample           # pyarrow.Table of rows to be removed
+plan.apply()                 # or plan.discard()
+```
+
+!!! note "Raw time units in Python"
+    SQL takes RFC3339 strings, but the Python range APIs
+    (`plan_delete_range`, `read(time_start=…)`) take **raw integers in the
+    time column's unit** — microseconds for `timestamp[us]`. See
+    [Core concepts](concepts.html#the-time-axis).
+
+Errors are typed and machine-actionable:
+
+```python
+try:
+    db.append("trades", batch)
+except h5i_db.ConflictError as e:     # another writer won the race
+    print(e.code, e.retryable)        # "version_conflict", True
+```
+
+## Where next
+
+- [Core concepts](concepts.html) — what a version, segment, snapshot, and plan
+  actually are.
+- [SQL reference](sql.html) — `h5i()`, `asof_join`, `time_bucket`, `gapfill`,
+  and the rest of the function library.
+- The [Cookbook quickstart notebook](../cookbook/00_fundamentals/01_quickstart.html)
+  — this page as an executed notebook on real data.
+
+
+
+---
+
+# Core concepts   (https://db.h5i.dev/manual/concepts.html)
+
+h5i-db has a small set of load-bearing ideas. Once they click, every command
+and API method is predictable.
+
+## The database is a directory
+
+A database is one directory on disk; there is no server. Inside it, each table
+owns immutable Parquet **segments** (the data), immutable JSON **manifests**
+(one per version), and a single small mutable file, `HEAD`, that names the
+current version:
+
+```text
+market.db/
+  FORMAT
+  catalog/  snapshots/
+  tables/<table-uuid>/
+    HEAD                       # the only mutable file per table
+    manifests/<seq>.json       # one immutable manifest per version
+    segments/<uuid>.parquet    # immutable, time-sorted data
+```
+
+Everything except `HEAD` is write-once. That single fact is what makes
+backups a file copy, crash recovery trivial, and old versions permanently
+readable — see the [Operations guide](operations.html).
+
+## Versions: every write is a commit
+
+Every write — append, full write, range replace/delete, restore, compact —
+produces a new **version**: a manifest listing exactly which segments make up
+the table at that point, plus statistics, a commit timestamp, and your
+optional `--note`. Publishing a version is an atomic compare-and-swap on
+`HEAD`:
+
+- **Readers never block** and never see partial writes; a reader holds a
+  manifest, and everything a manifest references is immutable.
+- **Racing writers never interleave.** The loser of the swap gets an explicit
+  `version_conflict` error (retryable). Pass `--expected-version` /
+  `expected_version=` to demand the head hasn't moved — optimistic locking.
+- **History is a hash chain.** Each manifest records its parent's blake3
+  checksum; `verify` walks the chain.
+
+Reading old versions is O(1) — a version *is* a manifest read:
+
+```sql
+SELECT * FROM h5i('trades', 42);                        -- exact version
+SELECT * FROM h5i('trades', '2026-07-01T00:00:00Z');    -- as of commit time
+```
+
+`restore` makes an old version current by committing a *new* version with the
+old contents — history only moves forward, nothing is erased.
+
+## The time axis
+
+Declaring `--time-column` at table creation is the single highest-leverage
+schema decision:
+
+- Storage is **sorted by the time column** (plus any additional `--sort-key`
+  columns). Appends must respect that order — out-of-order appends are
+  rejected, which is what keeps bucketed aggregations streaming instead of
+  sorting.
+- Each segment's manifest entry records its **time range and column min/max**.
+  A query for a narrow time window prunes non-overlapping segments *before any
+  I/O* — run `query --stats` to watch it happen.
+- The time-series operators (`asof_join`, `gapfill`, `tail`, time-range plans)
+  are keyed off the declared time column.
+
+!!! warning "Raw units"
+    APIs that take numeric time arguments — plan ranges, `gapfill` step, ASOF
+    tolerance, `read(time_start=…)` — use **raw integers in the time column's
+    unit**. For the common `timestamp[us]` column, that is microseconds:
+    `60_000_000` is one minute. The CLI's `--start`/`--end` accept RFC3339
+    strings and convert for you.
+
+## Snapshots
+
+A **snapshot** pins the current version of one or more tables under a name:
+
+```console
+$ h5i-db snapshot create market.db eod-2026-07-18
+```
+
+```sql
+SELECT * FROM h5i('trades', 'eod-2026-07-18');
+```
+
+A snapshot is a tiny checksummed JSON map `{table → version}` — O(1) to
+create, free to keep. Snapshots make backtests reproducible ("run against
+`eod-2026-07-18`, forever") and answer audit questions ("what did we know at
+close on date X?"). A table pinned by a snapshot cannot be dropped.
+
+## Previewable mutations: plan / apply
+
+Destructive operations (`delete-range`, `replace-range`) can run in two modes:
+
+- **Direct**: commit immediately, like any write.
+- **Planned** (`--plan` / `plan_delete_range()`): run the *full* write path —
+  affected rows computed, new segments staged on disk — but stop before
+  publishing. You get a plan id, a machine-readable summary (rows affected,
+  segments rewritten vs. reused), and before/after row samples.
+
+```console
+$ h5i-db delete-range market.db trades --start … --end … --plan
+$ h5i-db plan show market.db trades <plan-id>
+$ h5i-db plan apply market.db trades <plan-id>     # metadata-only swap
+```
+
+`apply` is cheap and atomic; it fails with a conflict if the table head moved
+after the plan was made (re-plan, don't retry). `discard` drops the staged
+segments; abandoned plans expire after 7 days. Every manifest records whether
+it was committed directly or via a reviewed plan (`execution_mode` and the
+plan hash) — an audit trail, not just a safety net.
+
+## The mutation policy
+
+The **policy** is a per-database set of boolean gates deciding which
+operations may commit *without* a reviewed plan:
+
+```console
+$ h5i-db policy set market.db direct_delete=false direct_write=false
+```
+
+Flags: `direct_append`, `direct_write`, `direct_replace`, `direct_delete`,
+`direct_restore`, `direct_compact`. With a flag off, the direct form of that
+operation fails with a `policy_violation`; the plan/apply flow still works.
+This is the recommended guardrail when [agents](agents.html) or shared
+pipelines write to the database: the write path is identical, only the
+review requirement changes.
+
+## Queries and sessions
+
+SQL runs on DataFusion with h5i-db's storage underneath:
+
+- **Plain table names** (`FROM trades`) are snapshot-bound when the session
+  opens — every query in a session sees a consistent set of versions.
+- **`h5i('trades')`** re-resolves to the latest version at each query.
+- Segment pruning, projection pushdown, and (for unchanged versions) cached
+  per-segment aggregate states make repeat analytics fast.
+
+Resource guards are first-class: row caps, timeouts, and memory budgets with
+disk spilling are available as CLI flags and `sql()` keyword arguments — they
+raise clean, typed errors instead of truncating silently.
+
+## Maintenance in one paragraph
+
+`verify` re-checks structural integrity (checksums, object existence;
+`--deep` re-reads every segment). `compact` rewrites accumulations of small
+segments into target-sized ones — a query-speed tool, not a space reclaimer.
+`vacuum` deletes *unreachable* objects (crashed-writer debris, discarded
+plans) — dry run by default. Committed history is never deleted. Cadence and
+disk-usage math: [Operations guide](operations.html).
+
+## Read more
+
+- [SQL reference](sql.html) — the full function library with signatures.
+- [CLI reference](cli.html) — every command and flag.
+- Cookbook deep dives:
+  [time travel](../cookbook/00_fundamentals/05_time_travel_and_versioning.html),
+  [previewable mutations](../cookbook/00_fundamentals/06_previewable_mutations.html),
+  [maintenance](../cookbook/00_fundamentals/08_maintenance.html).
+
+
+
+---
+
+# CLI reference   (https://db.h5i.dev/manual/cli.html)
+
+```console
+$ h5i-db <command> <db> [args…] [--format table|json|jsonl|csv|arrow]
+```
+
+The `h5i-db` binary is non-interactive by design: no prompts, no pager, SQL
+from an argument or stdin, results on stdout, diagnostics on stderr. The
+database path is always the first positional argument of a command (there is
+no global `--db` flag).
+
+## Global behavior
+
+### Output formats
+
+`--format` is global and defaults to `table`.
+
+| Format | Behavior |
+|---|---|
+| `table` | Human-readable aligned columns (buffered; metadata commands render pretty JSON) |
+| `json` | One JSON array of row objects; explicit nulls; empty result is `[]` |
+| `jsonl` | One compact JSON object per row per line |
+| `csv` | With header row; empty result still emits the header |
+| `arrow` | Arrow IPC stream on stdout — lossless, pipe into other tools |
+
+### Errors and exit codes
+
+Errors are a single JSON envelope on **stderr**:
+
+```json
+{"code": "version_conflict", "message": "…", "retryable": true, "hint": "…"}
+```
+
+Exit codes are stable and branchable:
+
+| Code | Meaning |
+|---|---|
+| `0` | Success (including broken pipe from `… \| head`) |
+| `2` | User error — bad arguments, bad SQL, missing table |
+| `3` | Conflict — another writer moved the head; usually retryable |
+| `4` | Limit exceeded — `--max-rows`, `--max-bytes`, memory budget, timeout |
+| `5` | Internal error |
+
+Diagnostics volume is controlled with `RUST_LOG` (default `warn`).
+
+### Shared write flags
+
+Commands that commit a version (`ingest`, `restore`, `replace-range`,
+`delete-range`, `compact`) accept:
+
+| Flag | Meaning |
+|---|---|
+| `--expected-version <N>` | Require the table head to be exactly version N (optimistic guard); mismatch exits 3 |
+| `--note <text>` | Free-text note recorded in the version manifest |
+
+---
+
+## Database & tables
+
+### `h5i-db init`
+
+Create a new database directory.
+
+```console
+$ h5i-db init market.db
+```
+
+### `h5i-db create-table`
+
+Create a table. The schema comes from `--schema` JSON **or** `--like` a data
+file (exactly one required).
+
+```console
+$ h5i-db create-table market.db trades --like ticks.parquet --time-column ts
+$ h5i-db create-table market.db bars \
+    --schema '[{"name":"ts","type":"timestamp_us","nullable":false},
+               {"name":"symbol","type":"utf8"},{"name":"close","type":"float64"}]' \
+    --time-column ts --sort-key ts,symbol
+```
+
+| Flag | Meaning |
+|---|---|
+| `--schema <json>` | Explicit schema. Types: `int8..int64`, `uint8..uint64`, `float32/float64`, `utf8`, `bool`, `timestamp_s/ms/us/ns` (UTC), `date32`, `date64`. Aliases accepted: `int`→int32, `long`/`bigint`→int64, `float`→float32, `double`→float64, `string`/`str`/`text`→utf8, `boolean`→bool, `date`→date32, `timestamp`→timestamp_ns. `nullable` defaults to `true`. |
+| `--like <file>` | Infer the schema from a Parquet/CSV/Arrow file |
+| `--time-column <col>` | Time index column — strongly recommended for time-series tables; forced non-nullable |
+| `--sort-key <cols>` | Comma-separated sort key (defaults to the time column) |
+| `--target-segment-mb <N>` | Target segment size in MiB of in-memory data (default 128) |
+
+### `h5i-db tables`
+
+List tables with row counts and time ranges. Columns: `table`, `version`,
+`rows`, `bytes`, `segments`, `time_range`, `time_column`.
+
+### `h5i-db schema`
+
+Show a table's schema and options (`schema_revision`, `time_column`,
+`sort_key`, fields with types and nullability).
+
+### `h5i-db sample`
+
+Show the first rows of a table.
+
+| Flag | Meaning |
+|---|---|
+| `-n, --rows <N>` | Row count (default 10) |
+| `--version <N>` | Read at a specific version |
+
+### `h5i-db rename`
+
+Rename a table — a catalog edit, no data moves.
+
+```console
+$ h5i-db rename market.db trades trades_raw
+```
+
+### `h5i-db drop-table`
+
+Drop a table and its data. Refuses if the table is pinned by a snapshot, and
+requires `--yes`:
+
+```console
+$ h5i-db drop-table market.db scratch --yes
+```
+
+!!! danger "Irreversible"
+    `drop-table` permanently deletes data — it is the one command that
+    bypasses versioning. Snapshots protect tables from it; use them.
+
+---
+
+## Reading & querying
+
+### `h5i-db query`
+
+Run SQL. The query comes from the argument, or stdin when `-`.
+
+```console
+$ h5i-db query market.db "SELECT symbol, vwap(price, size) FROM trades GROUP BY symbol" \
+    --format json --max-rows 1000 --timeout 30s
+$ cat report.sql | h5i-db query market.db - --format csv > out.csv
+```
+
+| Flag | Meaning |
+|---|---|
+| `--max-rows <N>` | Abort after N produced rows |
+| `--max-bytes <N>` | Stop after N output bytes (checked at batch boundaries); truncation exits 4 with a `limit_exceeded` envelope |
+| `--timeout <dur>` | Query timeout, e.g. `30s`, `5m` |
+| `--memory-limit-mb <N>` | Memory budget in MiB; enables disk spilling under pressure |
+| `--spill-dir <path>` | Spill directory (with `--memory-limit-mb`) |
+| `--threads <N>` | Number of threads / partitions |
+| `--stats` | Print scan/pruning statistics to stderr after the query |
+| `--predicate-cache` | Read and build immutable predicate-cache sidecars |
+
+See the [SQL reference](sql.html) for `h5i()` time travel, `asof_join`, and
+the time-series function library.
+
+### `h5i-db versions`
+
+List a table's committed versions: `version`, `op`, `committed_at`, `rows`,
+`bytes`, `segments`, `note`.
+
+---
+
+## Writing data
+
+### `h5i-db ingest`
+
+Ingest Parquet/CSV/Arrow into a table — from a file, or stdin with `-`.
+
+```console
+$ h5i-db ingest market.db trades ticks.parquet
+$ curl -s https://…/ticks.csv | h5i-db ingest market.db trades - --input-format csv
+```
+
+| Flag | Meaning |
+|---|---|
+| `--input-format <fmt>` | `auto` (default) \| `parquet` \| `csv` \| `arrow`. Auto uses the file extension, or sniffs leading bytes on stdin |
+| `--mode <mode>` | `append` (default) — strict ordered append; `write` — replace table contents |
+| `--retries <N>` | Retry appends on version conflicts (default 5; safe for pure appends) |
+
+Plus the [shared write flags](#shared-write-flags). Input batches are
+schema-aligned against the table (purely representational casts like
+timezone-less CSV timestamps are applied automatically). CSV assumes a header
+row.
+
+!!! note "Arrow over stdin"
+    Pipe an Arrow IPC **stream**, not an IPC *file* — a file's random-access
+    footer can't be consumed from a pipe. h5i-db detects the difference and
+    tells you.
+
+### `h5i-db restore`
+
+Make a historical version current. History moves forward — restore commits a
+*new* version with the old contents.
+
+```console
+$ h5i-db restore market.db trades 42 --note "roll back bad load"
+```
+
+### `h5i-db replace-range`
+
+Replace all rows in `[start, end)` of the time column with the given input.
+
+```console
+$ h5i-db replace-range market.db trades \
+    --start 2026-07-01T09:30:00Z --end 2026-07-01T16:00:00Z \
+    --input corrected.parquet --plan
+```
+
+| Flag | Meaning |
+|---|---|
+| `--start <t>` | Range start, **inclusive** — RFC3339, or a raw integer in the column's unit |
+| `--end <t>` | Range end, **exclusive** |
+| `--input <file>` | Replacement data (or `-` for stdin); **omit to delete the range** |
+| `--input-format <fmt>` | As in `ingest` |
+| `--plan` | Stage a previewable plan instead of committing immediately |
+
+### `h5i-db delete-range`
+
+Delete all rows in `[start, end)` — shorthand for `replace-range` with no
+input. Same `--start`/`--end`/`--plan` flags.
+
+```console
+$ h5i-db delete-range market.db trades --start 09:30… --end 09:31… --plan
+{"plan_id": "5c41…", "summary": {"rows_affected": 12481, "segments_reused": 127}}
+```
+
+---
+
+## Plans, policy & snapshots
+
+### `h5i-db plan`
+
+Manage previewable-mutation plans (created by `--plan` above).
+
+| Subcommand | Meaning |
+|---|---|
+| `plan list <db> <table>` | Pending plans: `plan_id`, `op`, `base_version`, `created_at`, `expired`, summary |
+| `plan show <db> <table> <plan-id>` | Full plan JSON on stdout; before/after row samples on stderr |
+| `plan apply <db> <table> <plan-id>` | Publish the plan — fails with a conflict if the head moved |
+| `plan discard <db> <table> <plan-id>` | Drop the plan; staged segments become vacuumable |
+
+Plans expire after 7 days; see
+[plan hygiene](operations.html#mutation-plan-hygiene).
+
+### `h5i-db policy`
+
+The mutation policy decides which operations may commit **without** a
+reviewed plan.
+
+```console
+$ h5i-db policy show market.db
+$ h5i-db policy set market.db direct_delete=false direct_write=false
+```
+
+Keys: `direct_append`, `direct_write`, `direct_replace`, `direct_delete`,
+`direct_restore`, `direct_compact` — each `true`/`false`. The update is an
+atomic read-modify-write.
+
+### `h5i-db snapshot`
+
+Pin table versions under a name.
+
+| Subcommand | Meaning |
+|---|---|
+| `snapshot create <db> <name> [tables…]` | Pin current versions (all tables when omitted); `--note` supported |
+| `snapshot list <db>` | List snapshots |
+| `snapshot delete <db> <name>` | Delete a snapshot (the versions it pinned remain readable by number) |
+
+---
+
+## Maintenance & tools
+
+### `h5i-db compact`
+
+Rewrite small segments into target-sized ones, as a new version. Row count is
+verified preserved.
+
+| Flag | Meaning |
+|---|---|
+| `--target-mb <N>` | Override the target segment size (MiB of in-memory data) |
+
+### `h5i-db vacuum`
+
+Remove unreachable objects — dry run unless `--apply`.
+
+```console
+$ h5i-db vacuum market.db                    # inspect candidates
+$ h5i-db vacuum market.db --apply            # actually delete
+```
+
+| Flag | Meaning |
+|---|---|
+| `[table]` | Restrict to one table (optional positional) |
+| `--grace-seconds <N>` | Never touch objects newer than this (default 3600) |
+| `--apply` | Actually delete |
+
+Read [the cadence guidance](operations.html#vacuum) before scripting this.
+
+### `h5i-db verify`
+
+Check structural integrity: checksums, hash chain, object existence.
+
+```console
+$ h5i-db verify market.db trades --deep
+```
+
+`--deep` additionally re-reads every segment and verifies content checksums.
+Problems are reported in the chosen format and the command exits non-zero.
+
+### `h5i-db ui`
+
+Launch the local review UI — loopback only.
+
+| Flag | Meaning |
+|---|---|
+| `--port <N>` | Port (default 7351) |
+| `--allow-mutations` | Enable plan apply/discard from the UI (default: read-only) |
+
+The UI shows pending plans with previews, the version timeline with audit
+badges, version diffs, and an SQL scratchpad that reports pruning per query.
+
+
+
+---
+
+# SQL reference   (https://db.h5i.dev/manual/sql.html)
+
+h5i-db speaks full DataFusion SQL — joins, CTEs, window functions,
+`date_trunc`, `stddev`, `corr`, `approx_percentile_cont`, `INTERVAL`
+arithmetic — plus the time-series extensions documented here. String literals
+are single-quoted; identifiers are case-insensitive.
+
+The idiomatic OHLCV query exercises most of the library at once:
+
+```sql
+SELECT time_bucket('5m', ts) AS bar, symbol,
+       first_value(price ORDER BY ts) AS open,
+       max(price)                     AS high,
+       min(price)                     AS low,
+       last_value(price ORDER BY ts)  AS close,
+       sum(size)                      AS volume,
+       vwap(price, size)              AS vwap
+FROM trades
+GROUP BY bar, symbol
+ORDER BY bar;
+```
+
+!!! note "Raw time units"
+    Numeric time arguments — `gapfill` step, ASOF tolerance — are **raw
+    integers in the time column's unit**. For the common `timestamp[us]`
+    column: `5000000` is 5 seconds, `60000000` is one minute.
+
+## Reading tables & time travel
+
+### Plain names vs `h5i()`
+
+| Form | Resolves |
+|---|---|
+| `FROM trades` | Snapshot-bound when the session opens — every query in a session sees one consistent set of versions |
+| `FROM h5i('trades')` | Latest version, re-resolved at each query |
+| `FROM h5i('trades', 42)` | Exact version number |
+| `FROM h5i('trades', '2026-07-01T00:00:00Z')` | As-of: latest version whose **commit time** ≤ the RFC3339 timestamp |
+| `FROM h5i('trades', 'eod-2026-07-18')` | Version pinned by a named snapshot |
+
+`h5i()` is a standard table function — no special grammar — so it composes
+with everything:
+
+```sql
+-- diff two versions
+SELECT count(*) FROM h5i('trades', 2) b
+JOIN h5i('trades', 1) a ON a.ts = b.ts;
+```
+
+Any string second argument that does not parse as RFC3339 is treated as a
+snapshot name — so avoid naming snapshots like timestamps.
+
+## Table functions
+
+### `asof_join`
+
+```sql
+asof_join('left', 'right', 'left_on', 'right_on'
+          [, 'by_cols' [, 'backward'|'forward' [, tolerance]]])
+```
+
+For each left row, find the most recent right row at or before it
+(`'backward'`, the default) or the first at or after it (`'forward'`),
+optionally matching equality keys — the canonical trades-vs-quotes join:
+
+```sql
+SELECT * FROM asof_join('trades', 'quotes', 'ts', 'ts', 'symbol');
+SELECT * FROM asof_join('trades', 'quotes', 'ts', 'ts', 'symbol', 'backward', 5000000);
+```
+
+- `by_cols` is comma-separated; each entry is `'col'` (same name both sides)
+  or `'lcol=rcol'`.
+- `tolerance` is an integer in raw time units: the maximum allowed
+  `|left.ts − right.ts|`.
+- The join is always **LEFT and 1:1 with the left side** — unmatched left rows
+  keep NULLs. A useful invariant to assert: `len(output) == len(left)`.
+- Right-side columns that collide with left names get a `_right` suffix.
+- The right side is buffered in memory (charged to the query memory budget);
+  the left side streams. Left-only filters and `LIMIT` push down into the
+  left scan.
+- Both tables are read at **latest**; to ASOF-join historical versions, use
+  the keyword form over session-bound names, or materialize first.
+
+The keyword syntax is also supported (bare table names only, no aliases):
+
+```sql
+SELECT * FROM trades ASOF JOIN quotes
+  MATCH_CONDITION (trades.ts >= quotes.ts)     -- >= backward, <= forward
+  ON trades.symbol = quotes.symbol;
+```
+
+### `gapfill` / `resample`
+
+```sql
+gapfill('table', 'time_column', step [, 'null'|'locf'|'interpolate'])
+```
+
+Turn an irregular series into a regular grid from the first to the last
+observed timestamp, stepping by `step` raw time units. `resample(...)` is an
+exact alias.
+
+```sql
+SELECT ts, price FROM gapfill('bars_1m', 'ts', 60000000, 'locf') ORDER BY ts;
+```
+
+Fill modes for synthesized instants:
+
+| Mode | Behavior |
+|---|---|
+| `'null'` (default) | Non-time columns are NULL |
+| `'locf'` | Last observation carried forward (NULL before the first) |
+| `'interpolate'` | Linear interpolation for numeric columns (ints rounded); non-numeric falls back to previous value |
+
+!!! warning "gapfill is per-table, not per-key"
+    There is **no per-key grouping**: on a multi-symbol table, `locf` carries
+    whichever symbol last ticked. Gapfill single-instrument tables, or filter
+    to one key first. Also note: observations that don't land exactly on the
+    grid are dropped from the output; duplicate timestamps collapse to the
+    last row; at most 1,000,000 rows are generated (`limit_exceeded` beyond).
+
+### `tail`
+
+```sql
+tail('table' [, after_version [, poll_ms]])
+```
+
+Stream rows appended after a version — a message-log view of an append-only
+table. With no version it starts after the current head (future appends
+only). `poll_ms` defaults to 250 (minimum 10).
+
+```sql
+SELECT ts, price FROM tail('trades', 812) LIMIT 500;
+```
+
+- The result is **unbounded** — always apply `LIMIT` (or cancel the query).
+  `tail` blocks until `LIMIT` rows arrive; pass a query timeout as a backstop.
+- Requires a **pure-append version chain** after `after_version`; any
+  delete/replace/restore/write in the range errors with a hint.
+- Size `LIMIT` from `versions` row deltas to fetch "exactly what's new since
+  version N" — no timestamp-cursor guesswork.
+
+## Scalar, aggregate & window functions
+
+### `time_bucket`
+
+```sql
+time_bucket(interval, ts)
+time_bucket(interval, ts, origin_or_timezone)
+time_bucket(interval, ts, origin, timezone)
+```
+
+Floor timestamps into fixed buckets — DuckDB/TimescaleDB semantics. The
+interval is a literal: an SQL `INTERVAL` or a string like `'30s'`, `'5m'`,
+`'1.5h'`, `'1d'`, `'1w'`, `'1mo'`, `'1y'`. Fixed widths align to the origin
+`2000-01-03T00:00:00Z` (a Monday, so weeks start Monday); month/year widths
+use calendar bucketing.
+
+```sql
+SELECT time_bucket('5m', ts) AS bar, … GROUP BY bar;
+SELECT time_bucket('1d', ts, 'America/New_York') AS session_day, …   -- local-time days
+```
+
+The third argument is a timezone when it parses as an IANA name (or contains
+`/`), otherwise an origin timestamp; use the 4-argument form to pass both.
+With a timezone, bucketing happens in local wall time and handles DST
+(ambiguous → earliest, gap → first valid instant). Out-of-range inputs yield
+NULL buckets rather than errors.
+
+### `vwap` / `wavg`
+
+```sql
+vwap(price, size)     -- value first, weight second
+wavg(size, price)     -- kdb argument order: weight first
+```
+
+Weighted mean as a streaming, mergeable aggregate — the same computation with
+two argument conventions. Returns `Float64`; NULL when the group is empty or
+the weight sum is zero; rows with a NULL in either argument are skipped.
+Supports retraction, so sliding-window use is O(n):
+
+```sql
+SELECT vwap(price, size) OVER (ORDER BY ts ROWS BETWEEN 99 PRECEDING AND CURRENT ROW)
+FROM trades;
+```
+
+### `ewma`
+
+```sql
+ewma(value, alpha) OVER (PARTITION BY … ORDER BY ts)
+```
+
+Exponentially weighted moving average, one ordered pass per partition:
+`y₀ = x₀; yᵢ = α·xᵢ + (1−α)·yᵢ₋₁`. `alpha` must be a constant in `[0, 1]`.
+NULL inputs carry the previous smoothed value forward. Matches
+`pandas.ewm(alpha=…, adjust=False)`.
+
+```sql
+SELECT ewma(price, 0.06) OVER (PARTITION BY symbol ORDER BY ts) AS px_smooth
+FROM trades;
+```
+
+### `rolling_avg` / `rolling_sum` / `rolling_min` / `rolling_max`
+
+```sql
+rolling_avg(value, order_by, rows)
+```
+
+Convenience sugar, expanded before parsing into the standard window frame
+`AVG(value) OVER (ORDER BY order_by ROWS BETWEEN rows−1 PRECEDING AND
+CURRENT ROW)`. `rows` must be an integer literal in 1…1,000,000.
+
+!!! warning "Not partitioned"
+    The sugar has **no `PARTITION BY`** — it is a trailing n-row window in
+    global order and will mix symbols on a multi-symbol table. Use it on
+    single-key subsets, or write the explicit window:
+    `AVG(x) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN n−1 PRECEDING
+    AND CURRENT ROW)`. It also cannot take its own `OVER` clause.
+
+### `first_value` / `last_value`
+
+Stock DataFusion, but worth knowing the idiom: `last_value(x ORDER BY ts)`
+inside a `GROUP BY` is how you take "closing" values without a self-join —
+see the OHLCV query at the top of this page.
+
+## Sessions, pruning & performance
+
+- Narrow time-range predicates prune segments via manifest statistics before
+  any I/O — verify with `h5i-db query … --stats` or the UI's SQL scratchpad.
+- Select only the columns you need; Parquet projection pushdown is
+  column-granular.
+- Memory budgets (`--memory-limit-mb` / `sql(memory_limit=…)`) enable disk
+  spilling instead of OOM; `--max-rows` and timeouts turn runaway queries
+  into clean, typed errors.
+- `information_schema` is available for introspection
+  (`SELECT * FROM information_schema.tables`).
+
+For a guided tour with real data, see the cookbook:
+[A SQL tour for quants](../cookbook/00_fundamentals/04_sql_tour_for_quants.html)
+and [Performance tuning](../cookbook/03_risk_and_production/10_performance_tuning.html).
+
+
+
+---
+
+# Agents & automation   (https://db.h5i.dev/manual/agents.html)
+
+h5i-db needs no MCP server or custom protocol to be driven by AI agents,
+schedulers, or CI: agents use the same CLI and Python API as everyone else.
+What makes that safe is a deliberate machine contract — structured output,
+structured errors, hard resource limits, and a write path that policy can
+gate behind human review.
+
+```console
+$ h5i-db query market.db "SELECT symbol, vwap(price, size) FROM trades GROUP BY symbol" \
+    --format json --max-rows 1000 --timeout 30s        # machine formats + hard limits
+
+$ h5i-db delete-range market.db trades --start 09:30… --end 09:31… --plan
+{"plan_id": "5c41…", "summary": {"rows_affected": 12481, "segments_reused": 127}}
+
+$ h5i-db policy set market.db direct_delete=false      # agents must preview; humans can too
+```
+
+## Machine-readable everything
+
+- **Output**: `--format json | jsonl | csv | arrow` on every command
+  ([formats](cli.html#output-formats)). `jsonl` is the natural choice for
+  streaming consumers.
+- **Errors**: a single JSON envelope on stderr —
+  `{"code", "message", "retryable", "hint"}`. `code` is a stable identifier
+  (`version_conflict`, `table_not_found`, `limit_exceeded`, …), `retryable`
+  says whether backing off and retrying can help, and `hint` is written to be
+  actionable.
+- **Exit codes** are stable and branchable: `0` ok, `2` user error,
+  `3` conflict, `4` limit exceeded, `5` internal
+  ([details](cli.html#errors-and-exit-codes)).
+
+In Python the same envelope arrives as a
+[typed exception hierarchy](../api/exceptions.html): every `H5iError` carries
+`.code`, `.hint`, and `.retryable`.
+
+```python
+try:
+    db.append("trades", batch)
+except h5i_db.ConflictError:
+    ...                      # retryable: another writer won; re-read and retry
+except h5i_db.InvalidInputError as e:
+    print(e.hint)            # not retryable: fix the call
+```
+
+## Resource limits as flags
+
+A supervisor can hard-cap any call without touching the database:
+
+| CLI | Python | Effect |
+|---|---|---|
+| `--max-rows N` | `sql(max_rows=N)` | Stop as soon as the result exceeds N rows — a clean `limit_exceeded` error, never silent truncation |
+| `--timeout 30s` | `sql(timeout=30)` | Deadline; cancels execution on expiry |
+| `--memory-limit-mb N` | `sql(memory_limit=N)` | Memory budget with disk spilling under pressure |
+| `--max-bytes N` | — | Cap output bytes at batch boundaries |
+| (open read-only) | `Database(path, read_only=True)` | Reject every write at the handle level |
+
+## Policy-gated review
+
+The [mutation policy](concepts.html#the-mutation-policy) forces chosen
+operations through the previewable plan/apply flow:
+
+```console
+$ h5i-db policy set market.db direct_delete=false direct_write=false direct_replace=false
+```
+
+An agent that then tries a direct delete gets a `policy_violation` error whose
+hint points at `--plan`. The staged plan carries exact affected-row counts and
+before/after samples; a human reviews it in the
+[UI](cli.html#h5i-db-ui) (`h5i-db ui market.db`) or via `plan show`, and
+applies or discards it. Every committed manifest records its
+`execution_mode` and plan hash, so the audit trail distinguishes reviewed
+from direct writes forever.
+
+## Patterns that work
+
+- **Idempotent retries.** Appends racing another writer raise
+  `version_conflict` (exit 3 / `ConflictError`, `retryable: true`). The CLI
+  retries pure appends itself (`ingest --retries`, default 5); in Python,
+  `append()` retries internally as well. For read-modify-write flows, pass
+  `--expected-version` and re-derive on conflict rather than blindly retrying.
+- **Pin what you read.** Have agents record the version they computed from
+  (`versions`, or read via `h5i('t', v)`), so every downstream artifact is
+  attributable to an exact input state — see the cookbook's
+  [reproducible backtests](../cookbook/03_risk_and_production/02_reproducible_backtests.html)
+  and [paper-trading loop](../cookbook/03_risk_and_production/05_live_paper_trading_loop.html).
+- **Notes are for provenance.** `--note` / `note=` lands in the version
+  manifest; make agents write *why* ("re-mark after vendor restatement,
+  ticket DX-142"), and `versions` becomes your change log.
+- **Incremental consumers use `tail`.** Strictly ordered commits mean
+  "give me exactly the rows since version N" is
+  [`tail('t', N)`](sql.html#tail) — no timestamp cursors.
+
+
+
+---
+
+# Operations guide   (https://db.h5i.dev/manual/operations.html)
+
+How to run an h5i-db database in production: backup and restore, vacuum and
+compaction cadence, plan hygiene, disk-usage math, filesystem caveats, and
+the torn-HEAD recovery runbook.
+
+Everything below refers to the on-disk layout (see `crates/h5i-db-core/src/layout.rs`):
+
+```text
+<root>/
+  FORMAT                              # format + minimum reader version
+  catalog/tables/<hash-of-name>.json  # table name -> table UUID
+  snapshots/<hash-of-name>.json       # snapshot name -> {table uuid: version}
+  tables/<table-uuid>/
+    HEAD                              # the ONLY mutable object per table
+    spec/<revision>.json              # schema revisions
+    manifests/<seq>.json              # one immutable manifest per version
+    segments/<segment-uuid>.parquet   # immutable data
+```
+
+Two properties make operations simple:
+
+- **Everything except `HEAD` is immutable.** Segments, manifests, specs,
+  catalog entries, and snapshots are write-once. Only `HEAD` (one small JSON
+  file per table) ever changes, and it changes by atomic rename.
+- **History is a hash chain.** Each manifest records the blake3 checksum of
+  its parent's bytes, and `HEAD` records the checksum of the manifest it
+  points at, so any prefix of history is self-verifying
+  (`h5i-db verify <db> <table> [--deep]`).
+
+---
+
+## Backup
+
+Immutable objects mean a plain file copy is a correct backup **if you copy in
+the right order and don't run destructive maintenance concurrently**.
+
+### Procedure
+
+1. **Don't run `vacuum --apply` (or `drop-table`) during the backup window.**
+   Vacuum is the only thing that deletes objects; a copy that races it can
+   miss files it already indexed. Plain writers are safe to leave running.
+2. Copy in this order (older references first, `HEAD` before the objects it
+   references is the one order that is *wrong* — copy `HEAD` **first**, per
+   table, then its immutable objects):
+
+   ```bash
+   DB=/data/market.db BK=/backup/market.db-$(date +%F)
+   mkdir -p "$BK"
+   cp "$DB/FORMAT" "$BK/"
+   cp -r "$DB/catalog" "$DB/snapshots" "$BK/" 2>/dev/null || true
+   for t in "$DB"/tables/*/; do
+     b="$BK/tables/$(basename "$t")"; mkdir -p "$b"
+     cp "$t/HEAD" "$b/"                        # 1. pin the version to back up
+     cp -r "$t/spec" "$t/manifests" "$b/"      # 2. immutable metadata
+     cp -r "$t/segments" "$b/"                 # 3. immutable data
+   done
+   ```
+
+   Why this order works: the copied `HEAD` names some sequence *S*. Every
+   manifest `0..=S` and every segment they reference already existed when
+   `HEAD` was copied, and (with vacuum paused) nothing deletes them — so all
+   of them are present in the later copy steps. Commits that land *during*
+   the backup produce manifests `> S`; they may be half-copied, which is
+   harmless: they are unreachable from the copied `HEAD` and are exactly what
+   `vacuum` classifies as debris.
+3. Skip transient files if you meet them: `HEAD.lock`, `HEAD.tmp.*`.
+4. Validate the backup before trusting it:
+
+   ```bash
+   h5i-db tables "$BK"
+   h5i-db verify "$BK" <table> --deep   # re-reads every segment checksum
+   ```
+
+Filesystem/LVM/ZFS snapshots are also fine (crash-consistent is enough: the
+commit protocol fsyncs data before `HEAD` moves, so any point-in-time image
+is a valid database).
+
+### Restore
+
+A backup **is** a database. Point the CLI at it, or copy it back into place
+and run `h5i-db verify` per table. There is no replay/WAL step.
+
+Note that restoring an old backup rewinds *all* tables to the backup time;
+to rewind a single table inside a live database, prefer
+`h5i-db restore <db> <table> <version>` — that is what versioning is for.
+
+---
+
+## Vacuum
+
+`h5i-db vacuum <db> [table] [--grace-seconds N] [--apply]` removes
+unreachable objects: segments referenced by no committed manifest and no
+live mutation plan, manifests above `HEAD` (crashed-writer leftovers), and
+`*.lock` / `HEAD.tmp.*` debris. Without `--apply` it is a dry run.
+
+Guidance:
+
+- **Always review a dry run first** in scripted maintenance
+  (`vacuum` then `vacuum --apply` on the same candidate list you inspected).
+- **Grace period** (default 3600 s): objects younger than this are never
+  touched. Set it comfortably above your *longest* ingest or plan-prepare
+  duration — staged segments exist on disk before the commit that references
+  them, and a grace period shorter than a slow bulk load can delete a
+  commit-in-progress out from under it.
+- **Cadence**: daily or weekly is plenty. Debris accrues only from crashed
+  or conflicted writers and discarded/expired plans; a healthy append-only
+  workload generates almost none.
+- **Never run two `vacuum --apply` concurrently**, and don't run it during
+  backups (above).
+
+## Compaction
+
+Frequent small appends produce many small segments; queries then pay
+per-segment open/prune cost. `h5i-db compact <db> <table>` rewrites them
+into target-sized segments as a new version (row count is verified to be
+preserved; the commit aborts otherwise).
+
+- Compact when a table accumulates hundreds of small segments, or when
+  `versions` shows the segment count growing much faster than data volume.
+- Compaction does **not** free disk: the pre-compaction segments remain
+  pinned by historical versions (see disk math below). It is a *query
+  performance* tool, not a space reclaimer.
+
+## Mutation-plan hygiene
+
+Plans (`--plan` on `delete-range` / `replace-range`) stage their segments at
+plan time and protect them from vacuum until applied, discarded, or expired
+(TTL: **7 days**, `PLAN_TTL_SECONDS`).
+
+- List pending plans per table: `h5i-db plan list <db> <table>`.
+- Discard plans you won't apply (`plan discard`) — an applied-or-discarded
+  plan's staged segments become vacuum candidates immediately; an abandoned
+  plan holds its staged bytes for the full 7 days.
+- Applying a plan after the table head moved fails with a conflict (409 from
+  the UI); re-plan instead of retrying.
+
+## Disk-usage math
+
+Nothing is ever deleted except by vacuum, and vacuum only deletes
+*unreachable* objects — every committed version pins its segments forever
+(version retention/GC is roadmap work). Practical consequences:
+
+- **Append-only tables**: disk ≈ total data ever appended, plus one manifest
+  per commit. The manifest lists every live segment, so manifest overhead is
+  O(segments) per commit — another reason to compact and to batch appends.
+- **`replace-range` / `delete-range` / `compact` / `write`**: each rewrites
+  or re-references segments; the *old* segments stay pinned by history. A
+  daily full `write` of a 1 GiB table costs ~365 GiB/year until retention
+  exists.
+- Quick audit: `du -sh <db>/tables/*/segments` vs.
+  `h5i-db tables <db>` row counts shows how much is history vs. head.
+
+## Filesystem caveats
+
+- **Local ext4/xfs/apfs/NTFS**: the supported case. Durability relies on
+  fsync-before-`HEAD`-swap plus atomic rename — standard semantics on all of
+  these.
+- **NFS and other network filesystems**: not recommended for multi-host
+  access. Writer exclusion uses an OS-level `flock` on an open descriptor;
+  its cross-host semantics depend on the NFS version and lock-daemon setup
+  (NFSv3 needs a working `lockd`; some mounts silently downgrade locks to
+  local-only). Close-to-open cache consistency can also delay another host's
+  view of a renamed `HEAD`. Single-host access to an NFS mount works but
+  still trusts the server's fsync honesty.
+- **WSL2**: keep databases on the Linux filesystem (e.g. `~/data/…`,
+  ext4). On `/mnt/c` (drvfs/9p) fsync and rename atomicity are not
+  faithfully passed through to Windows, which voids the crash-safety
+  guarantees. (This repository's own benchmarks are run from the ext4 side
+  for the same reason.)
+- **Containers**: overlayfs upper layers are fine; bind-mount the database
+  directory to a real volume for anything you care about.
+
+---
+
+## Runbook: torn or corrupt HEAD
+
+**Should not happen** on a supported filesystem — `HEAD` is replaced by
+write-temp → fsync → rename → directory-fsync — so treat an occurrence as a
+signal of filesystem misbehavior (see caveats above), not routine wear.
+
+### Symptoms
+
+- Any command fails with `Corruption { object: ".../HEAD", ... }`
+  ("HEAD parse error"), or
+- `HEAD` parses but `verify` reports `manifest missing` /
+  `checksum mismatch` at the head sequence, or readers fail opening the
+  manifest `HEAD` points at.
+
+### Diagnosis
+
+```bash
+h5i-db verify <db> <table>        # walks the checksum chain from HEAD back
+cat <db>/tables/<uuid>/HEAD       # {"format":1,"table_id":"…","sequence":N,
+                                  #  "manifest_checksum":"<blake3-hex>"}
+ls <db>/tables/<uuid>/manifests/  # zero-padded sequence-numbered JSON
+```
+
+Find the table's UUID via the catalog: `h5i-db tables <db>` then match, or
+`grep -l '<name>' <db>/catalog/tables/*.json`.
+
+### Recovery
+
+1. **Stop writers** for the affected table.
+2. **Find the newest intact manifest.** Starting from the highest file in
+   `manifests/`, compute each candidate's checksum and walk its parent
+   chain:
+
+   ```bash
+   b3sum <db>/tables/<uuid>/manifests/<seq>.json   # blake3 of file bytes
+   ```
+
+   A manifest is a good recovery point if it parses, its `parent_checksum`
+   matches the blake3 of the parent file, and every segment `path` it lists
+   exists with the recorded byte size. (This is exactly the check `verify`
+   runs from `HEAD`; you are doing it from a candidate sequence instead.)
+3. **Rewrite HEAD** to point at that manifest — `HEAD` is four fields of
+   JSON; `manifest_checksum` must be the blake3 hex of the chosen manifest's
+   exact bytes:
+
+   ```bash
+   SEQ=…; UUID=…; DB=…
+   SUM=$(b3sum --no-names "$DB/tables/$UUID/manifests/$(printf %012d $SEQ).json")
+   printf '{"format":1,"table_id":"%s","sequence":%d,"manifest_checksum":"%s"}' \
+       "$UUID" "$SEQ" "$SUM" > /tmp/HEAD.new
+   mv /tmp/HEAD.new "$DB/tables/$UUID/HEAD"
+   ```
+
+4. **Re-verify**: `h5i-db verify <db> <table> --deep` must be clean.
+5. **Clean up**: manifests above the recovered sequence and any
+   `HEAD.tmp.*` / `HEAD.lock` files are debris; a later
+   `vacuum` (dry-run first) removes them. Do **not** delete them by hand
+   before verify is clean.
+
+If no manifest verifies, restore the table from backup (above). Rolling
+`HEAD` back this way discards the commits after the recovery point — check
+`committed_at_ns` / `note` in the recovered manifest to know exactly where
+the table now stands.
+
+
+
+---
+
+# Overview   (https://db.h5i.dev/api/index.html)
+
+The <code>h5i_db</code> package is an ergonomic wrapper over the
+native Rust engine. All tabular data crosses the boundary as Arrow, so it plugs
+directly into pyarrow, pandas, and Polars.
+
+<div class="doc-divider"></div>
+
+```console
+$ pip install h5i-db
+```
+
+The only required dependency is `pyarrow >= 14`. `to_pandas()` /
+`to_polars()` activate when pandas / Polars are installed.
+
+## The five-minute tour
+
+```python
+import pyarrow as pa
+import h5i_db
+
+db = h5i_db.Database("market.db", create=True)
+
+schema = pa.schema([
+    pa.field("ts", pa.timestamp("us", tz="UTC"), nullable=False),
+    pa.field("symbol", pa.string()),
+    pa.field("price", pa.float64()),
+    pa.field("size", pa.int64()),
+])
+db.create_table("trades", schema, time_column="ts")
+
+db.append("trades", table)                    # pyarrow Table / RecordBatch(es)
+df = db.sql("SELECT * FROM trades").to_pandas()
+
+old = db.read("trades", version=3)            # time travel
+plan = db.plan_delete_range("trades", t0_us, t1_us)   # previewable mutation
+plan.apply()                                  # or plan.discard()
+
+db.close()                                    # or use `with h5i_db.Database(...) as db:`
+```
+
+## The pieces
+
+## Data in, data out
+
+Everything tabular is Arrow:
+
+- **In**: `write()` / `append()` accept a `pyarrow.Table`, a `RecordBatch`,
+  or a sequence of batches (`TableLike`). Coming from pandas or Polars:
+  `pa.Table.from_pandas(df)` / `pl_df.to_arrow()`.
+- **Out**: `read()` returns a `pyarrow.Table`; `sql()` returns a
+  [`QueryResult`](results-and-plans.html#queryresult) with `.to_arrow()`,
+  `.to_pandas()`, `.to_polars()`.
+
+Because the interchange is Arrow IPC, there is no per-row conversion cost and
+no type fidelity loss.
+
+## Error handling
+
+Every failure raises a subclass of `h5i_db.H5iError` carrying the same
+structured envelope the CLI prints: `.code` (stable string), `.hint`
+(actionable), `.retryable` (worth retrying?).
+
+```python
+try:
+    db.sql("SELECT * FROM h5i('trades')", timeout=30, max_rows=1_000_000)
+except h5i_db.TimeoutError:
+    ...                                   # raise the timeout or narrow the query
+except h5i_db.LimitError as e:
+    print(e.code)                         # "limit_exceeded"
+except h5i_db.ConflictError:
+    ...                                   # retryable — another writer won the race
+```
+
+See [Exceptions](exceptions.html) for the full hierarchy and code table.
+
+## Versioning note
+
+`h5i_db.__version__` reports the installed engine version. The pure-Python
+wrapper (`Database`, `QueryResult`, `MutationPlan`) sits on the private
+native module `h5i_db._native`; treat everything not exported from `h5i_db`
+itself as internal.
+
+
+
+---
+
+# Database   (https://db.h5i.dev/api/database.html)
+
+An h5i-db database directory — the top-level handle everything hangs off. A
+database is a plain directory on disk; there is no server. The handle is a
+context manager, so the idiomatic form is:
+
+```python
+import h5i_db
+
+with h5i_db.Database("market.db", create=True) as db:
+    ...
+```
+
+Many methods return plain `dict`s decoded from the engine — commit results
+carry keys like `version`, `rows`, `bytes`, `segments`; they are made to be
+logged.
+
+## Constructor
+
+### `h5i_db.Database`
+
+```python
+Database(path, create=False, read_only=False)
+```
+
+Open (or create) a database directory.
+
+**Parameters**
+
+`path` (`str`)
+:   Filesystem path to the database directory.
+
+`create` (`bool`, default `False`)
+:   Open-or-create — create the directory if it does not exist.
+
+`read_only` (`bool`, default `False`)
+:   Reject every write at the handle level; write calls raise
+    [`PolicyError`](exceptions.html).
+
+**Raises**
+
+`NotFoundError`
+:   The directory does not exist and `create` is `False`.
+
+## Lifecycle
+
+### `Database.close`
+
+```python
+close() -> None
+```
+
+Release the native handle. Idempotent, and also called by `__exit__`.
+In-flight operations on other threads finish normally; later calls on this
+object raise `H5iError` with `code == "closed"`.
+
+### `Database.closed`
+
+```python
+closed -> bool
+```
+
+Property — whether the handle has been closed.
+
+### `Database.path`
+
+```python
+path -> str
+```
+
+The directory this handle was opened on.
+
+## Tables
+
+### `Database.create_table`
+
+```python
+create_table(name, schema, time_column=None, sort_key=None) -> dict
+```
+
+Create a table from an Arrow schema.
+
+**Parameters**
+
+`name` (`str`)
+:   Table name, unique within the database.
+
+`schema` (`pyarrow.Schema`)
+:   The Arrow schema. Field order is preserved.
+
+`time_column` (`str`, optional)
+:   The time-axis column — strongly recommended for time-series tables. It
+    enables segment pruning, ASOF joins, range plans, and `tail`, and is
+    forced non-nullable.
+
+`sort_key` (`Iterable[str]`, optional)
+:   Columns the table is sorted by on disk. Defaults to `[time_column]`.
+
+**Returns**
+
+`dict` — creation metadata (table id, schema revision).
+
+```python
+db.create_table("trades", schema, time_column="ts", sort_key=["ts", "symbol"])
+```
+
+### `Database.tables`
+
+```python
+tables() -> list[str]
+```
+
+Names of all tables in the database.
+
+### `Database.schema`
+
+```python
+schema(name, version=None, as_of=None, snapshot=None) -> pyarrow.Schema
+```
+
+Schema of a table at a read point (latest by default).
+
+**Parameters**
+
+`name` (`str`)
+:   Table name.
+
+`version` (`int`, optional)
+:   Read the schema as of this exact version.
+
+`as_of` (`str`, optional)
+:   RFC3339 timestamp — the schema as of the latest commit at or before it.
+
+`snapshot` (`str`, optional)
+:   Named snapshot to resolve the version from.
+
+!!! note "One read point"
+    Pass at most one of `version` / `as_of` / `snapshot`; more than one raises
+    [`InvalidInputError`](exceptions.html). This rule holds for every
+    read-point method below.
+
+### `Database.versions`
+
+```python
+versions(name) -> list[dict]
+```
+
+Committed versions, oldest first — one dict per version with the version
+number, operation, commit time, and row / byte / segment counts, plus any
+`note`.
+
+### `Database.drop_table`
+
+```python
+drop_table(name) -> None
+```
+
+Permanently drop the table and its data.
+
+**Raises**
+
+`ConflictError`
+:   A snapshot pins the table — delete the snapshot first.
+
+## Writing
+
+Every write is one atomic, durable commit that produces a new version.
+
+### `Database.append`
+
+```python
+append(name, data, *, expected_version=None, note=None) -> dict
+```
+
+Strict ordered append.
+
+**Parameters**
+
+`name` (`str`)
+:   Table name.
+
+`data` (`TableLike`)
+:   A `pyarrow.Table`, `RecordBatch`, or sequence of batches. Rows must
+    respect the table's sort order.
+
+`expected_version` (`int`, optional)
+:   Optimistic guard — commit only if the head is exactly this version, else
+    [`ConflictError`](exceptions.html). Use it when the append depends on
+    what you last read.
+
+`note` (`str`, optional)
+:   Free-text note recorded in the version manifest.
+
+**Returns**
+
+`dict` — commit metadata (`version`, `rows`, `bytes`, `segments`).
+
+**Raises**
+
+`InvalidInputError`
+:   `sort_order_violation` if rows are out of order, or `schema_mismatch`.
+
+`ConflictError`
+:   Another writer moved the head; retryable. Pure appends are retried
+    internally (up to 5 times) before this surfaces.
+
+### `Database.write`
+
+```python
+write(name, data, *, expected_version=None, note=None) -> dict
+```
+
+Replace the table's contents in one commit — a restatement, not an
+overwrite: the previous state stays readable as its version. Parameters match
+[`append`](#databaseappend).
+
+### `Database.restore`
+
+```python
+restore(name, version) -> dict
+```
+
+Make a historical version current by committing a new version with its
+contents. History only moves forward — nothing is erased.
+
+**Parameters**
+
+`name` (`str`)
+:   Table name.
+
+`version` (`int`)
+:   The version to restore.
+
+## Reading & SQL
+
+### `Database.sql`
+
+```python
+sql(query, memory_limit=None, timeout=None, max_rows=None) -> QueryResult
+```
+
+Run SQL — full DataFusion plus the [h5i extensions](../manual/sql.html).
+Returns a [`QueryResult`](results-and-plans.html#queryresult).
+
+**Parameters**
+
+`query` (`str`)
+:   The SQL text.
+
+`memory_limit` (`int`, optional)
+:   Query memory budget in **bytes**; enables disk spilling under pressure.
+
+`timeout` (`float`, optional)
+:   Deadline in seconds. On expiry, raises
+    [`TimeoutError`](exceptions.html) and cancels execution.
+
+`max_rows` (`int`, optional)
+:   Raise [`LimitError`](exceptions.html) as soon as the result exceeds this —
+    execution stops early rather than truncating silently.
+
+**Returns**
+
+`QueryResult` — with `.to_arrow()`, `.to_pandas()`, `.to_polars()`, `len()`.
+
+```python
+df = db.sql(
+    "SELECT * FROM h5i('trades', 42)", timeout=30, max_rows=1_000_000
+).to_pandas()
+```
+
+### `Database.read`
+
+```python
+read(name, version=None, as_of=None, snapshot=None, columns=None,
+     time_start=None, time_end=None, limit=None, timeout=None) -> pyarrow.Table
+```
+
+Direct scan of one table version — no SQL layer, minimal overhead.
+
+**Parameters**
+
+`name` (`str`)
+:   Table name.
+
+`version` / `as_of` / `snapshot`
+:   Read point (latest by default); at most one. `as_of` is an RFC3339 string.
+
+`columns` (`list[str]`, optional)
+:   Project to these columns.
+
+`time_start` (`int`, optional)
+:   Inclusive lower time bound, in **raw time units** (µs for `timestamp[us]`).
+    Prunes segments before I/O.
+
+`time_end` (`int`, optional)
+:   Exclusive upper time bound, same units.
+
+`limit` (`int`, optional)
+:   Stop after this many rows.
+
+`timeout` (`float`, optional)
+:   Deadline in seconds.
+
+**Returns**
+
+`pyarrow.Table`
+
+```python
+window = db.read("trades", columns=["ts", "price"],
+                 time_start=t0_us, time_end=t1_us)
+```
+
+## Snapshots
+
+### `Database.snapshot`
+
+```python
+snapshot(name, tables=None, note=None) -> dict
+```
+
+Pin current table versions under a name. Address it later from SQL as
+`h5i('t', 'name')` or `read(snapshot=…)`.
+
+**Parameters**
+
+`name` (`str`)
+:   Snapshot name.
+
+`tables` (`list[str]`, optional)
+:   Tables to pin. Defaults to **all** tables.
+
+`note` (`str`, optional)
+:   Free-text note.
+
+## Mutation plans
+
+The previewable plan/apply flow. These return a
+[`MutationPlan`](results-and-plans.html#mutationplan) — the staged segments
+already exist on disk; publishing is a metadata-only swap.
+
+### `Database.plan_replace_range`
+
+```python
+plan_replace_range(name, start, end, data=None, note=None) -> MutationPlan
+```
+
+Stage a previewable replacement of the half-open time range `[start, end)`.
+
+**Parameters**
+
+`name` (`str`)
+:   Table name.
+
+`start` (`int`)
+:   Inclusive range start, in **raw time units** (µs for `timestamp[us]`).
+
+`end` (`int`)
+:   Exclusive range end, same units.
+
+`data` (`TableLike`, optional)
+:   Replacement rows. Omit (or `None`) to **delete** the range.
+
+`note` (`str`, optional)
+:   Free-text note carried onto the resulting version.
+
+**Returns**
+
+`MutationPlan` — inspect `.summary` / `.before_sample`, then `.apply()`.
+
+### `Database.plan_delete_range`
+
+```python
+plan_delete_range(name, start, end, note=None) -> MutationPlan
+```
+
+Sugar for `plan_replace_range(name, start, end, None, note)` — stage a
+range deletion.
+
+### `Database.list_plans`
+
+```python
+list_plans(name) -> list[MutationPlan]
+```
+
+Pending (not yet applied or discarded) plans for a table.
+
+## Policy
+
+### `Database.policy`
+
+```python
+policy() -> dict
+```
+
+The [mutation policy](../manual/concepts.html#the-mutation-policy) as a dict
+of boolean flags: `direct_append`, `direct_write`, `direct_replace`,
+`direct_delete`, `direct_restore`, `direct_compact`.
+
+### `Database.set_policy`
+
+```python
+set_policy(policy=None, **flags) -> dict
+```
+
+Update the mutation policy; unspecified flags keep their value. The merge is
+atomic (read-modify-write under the metadata lock).
+
+**Parameters**
+
+`policy` (`dict`, optional)
+:   Flags to set, as a dict.
+
+`**flags` (`bool`)
+:   Flags to set, as keyword arguments — `db.set_policy(direct_delete=False)`.
+
+**Returns**
+
+`dict` — the merged policy that was stored.
+
+**Raises**
+
+`InvalidInputError`
+:   An unknown flag name.
+
+## Maintenance
+
+### `Database.compact`
+
+```python
+compact(name, note=None) -> dict
+```
+
+Rewrite small segments into target-sized ones as a new version — a query-speed
+tool; old segments stay pinned by history.
+
+### `Database.vacuum`
+
+```python
+vacuum(table=None, grace_seconds=3600, apply=False) -> dict
+```
+
+Remove unreachable objects (crashed-writer debris, discarded plans). Committed
+history is never touched.
+
+**Parameters**
+
+`table` (`str`, optional)
+:   Restrict to one table. Defaults to the whole database.
+
+`grace_seconds` (`int`, default `3600`)
+:   Never touch objects newer than this — keep it above your longest ingest.
+
+`apply` (`bool`, default `False`)
+:   Actually delete. The default is a dry run.
+
+**Returns**
+
+`dict` — the candidate (or deleted) object list.
+
+### `Database.verify`
+
+```python
+verify(name, deep=False) -> dict
+```
+
+Structural integrity check: checksum chain and object existence.
+
+**Parameters**
+
+`name` (`str`)
+:   Table name.
+
+`deep` (`bool`, default `False`)
+:   Also re-read every segment and verify content checksums.
+
+**Returns**
+
+`dict` — a report; problems are listed in it rather than raised.
+
+
+
+---
+
+# QueryResult & MutationPlan   (https://db.h5i.dev/api/results-and-plans.html)
+
+Two small result objects returned by [`Database`](database.html): the lazy
+holder a query produces, and the staged handle a mutation plan produces.
+
+## QueryResult
+
+Returned by [`Database.sql()`](database.html#databasesql). A lazy holder of an
+Arrow result with convenience converters — data stays in Arrow until you ask
+for a specific frame type.
+
+```python
+res = db.sql("SELECT symbol, vwap(price, size) AS v FROM trades GROUP BY symbol")
+res.to_pandas()     # -> pandas.DataFrame
+len(res)            # -> row count
+```
+
+### `QueryResult.to_arrow`
+
+```python
+to_arrow() -> pyarrow.Table
+```
+
+The underlying Arrow table, types preserved exactly (timestamps keep unit and
+timezone). Zero-copy.
+
+### `QueryResult.to_pandas`
+
+```python
+to_pandas() -> pandas.DataFrame
+```
+
+Convert to a pandas DataFrame.
+
+### `QueryResult.to_polars`
+
+```python
+to_polars() -> polars.DataFrame
+```
+
+Convert to a Polars DataFrame.
+
+**Raises**
+
+`ImportError`
+:   Polars is not installed (it is an optional dependency).
+
+### Dunder methods
+
+```python
+len(res)     # row count
+repr(res)    # repr of the underlying Arrow table
+```
+
+## MutationPlan
+
+A previewable, not-yet-published mutation — returned by
+[`plan_replace_range` / `plan_delete_range`](database.html#databaseplan_replace_range)
+and [`list_plans`](database.html#databaselist_plans). The staged segments
+already exist on disk; publishing is a metadata-only atomic swap.
+
+```python
+plan = db.plan_delete_range("trades", t0_us, t1_us, note="strip bad ticks")
+
+plan.summary            # {"rows_affected": 12481, "segments_reused": 127, …}
+plan.before_sample      # pyarrow.Table — rows as they are now
+plan.after_sample       # pyarrow.Table — rows as they would become
+
+plan.apply()            # publish — or plan.discard()
+```
+
+### Attributes
+
+`table` (`str`)
+:   Table the plan targets.
+
+`plan_id` (`str`)
+:   UUID — also usable from the CLI (`h5i-db plan apply …`) and the review UI.
+
+`summary` (`dict`)
+:   Machine-readable impact: affected rows, segments rewritten vs. reused.
+
+`raw` (`dict`)
+:   The full plan document as stored.
+
+### `MutationPlan.before_sample`
+
+```python
+before_sample -> pyarrow.Table | None
+```
+
+Property — a sample of the affected rows **before** the mutation, or `None`
+when the plan carries no sample.
+
+### `MutationPlan.after_sample`
+
+```python
+after_sample -> pyarrow.Table | None
+```
+
+Property — the same rows **after** the mutation would apply.
+
+### `MutationPlan.apply`
+
+```python
+apply() -> dict
+```
+
+Publish the plan as a new version.
+
+**Returns**
+
+`dict` — commit metadata for the new version.
+
+**Raises**
+
+`ConflictError`
+:   The table head moved since the plan was made. **Re-plan instead of
+    retrying** — the plan was computed against a base version that no longer
+    reflects reality.
+
+### `MutationPlan.discard`
+
+```python
+discard() -> None
+```
+
+Drop the plan; its staged segments become vacuum candidates immediately.
+Abandoned plans (neither applied nor discarded) expire after 7 days — see
+[plan hygiene](../manual/operations.html#mutation-plan-hygiene).
+
+!!! tip "Policy interaction"
+    With the [mutation policy](../manual/concepts.html#the-mutation-policy)
+    gating direct deletes/writes, the plan flow is the *only* way to mutate —
+    which is the point: every destructive change gets a previewed, auditable
+    checkpoint.
+
+
+
+---
+
+# Exceptions   (https://db.h5i.dev/api/exceptions.html)
+
+Every h5i-db failure raises a subclass of `h5i_db.H5iError`, and every
+instance carries the same structured envelope the CLI prints on stderr:
+
+```python
+try:
+    db.read("nope")
+except h5i_db.NotFoundError as e:
+    e.code        # "table_not_found"   — stable, branchable identifier
+    e.hint        # actionable suggestion (e.g. how to list tables)
+    e.retryable   # False               — retrying without change won't help
+```
+
+Messages are formatted `"[{code}] {message} (hint: {hint})"`.
+
+## Hierarchy
+
+Everything subclasses `H5iError`, which subclasses `Exception`:
+
+| Exception | Meaning | Typical codes |
+|---|---|---|
+| `H5iError` | Base class for all h5i-db errors (attributes: `code`, `hint`, `retryable`) | `closed`, `query` |
+| `NotFoundError` | Database, table, version or snapshot does not exist | `database_not_found`, `table_not_found`, `version_not_found`, `snapshot_not_found` |
+| `ConflictError` | Concurrent-writer conflict or already-exists collision; usually retryable | `version_conflict`, `table_exists`, `database_exists`, `lock_timeout` |
+| `InvalidInputError` | Bad argument, schema mismatch, sort-order violation or unsupported operation | `invalid_input`, `schema_mismatch`, `sort_order_violation`, `unsupported` |
+| `PolicyError` | Operation forbidden by the mutation policy or a read-only handle | `policy_violation`, `read_only` |
+| `CorruptionError` | Checksum/format verification failed; data may be damaged or written by a newer h5i-db | `corruption`, `format_too_new` |
+| `LimitError` | A configured limit (memory, max_rows, segment count) was exceeded | `limit_exceeded` |
+| `TimeoutError` | The operation exceeded its deadline | `timeout` |
+| `StorageError` | Underlying storage / IO / encoding failure | `storage`, `io`, `arrow`, `parquet`, `metadata` |
+
+!!! note "`h5i_db.TimeoutError` shadows the builtin"
+    It subclasses `H5iError`, **not** Python's builtin `TimeoutError` — catch
+    `h5i_db.TimeoutError` (or `H5iError`) specifically.
+
+## Patterns
+
+**Branch on type for control flow, on `.code` for precision:**
+
+```python
+try:
+    db.append("trades", batch, expected_version=v)
+except h5i_db.ConflictError:
+    v = db.versions("trades")[-1]["version"]     # re-read, re-derive, retry
+except h5i_db.InvalidInputError as e:
+    if e.code == "sort_order_violation":
+        batch = batch.sort_by("ts")              # fix and retry once
+    else:
+        raise
+```
+
+**Respect `retryable`:** it encodes whether backing off can help.
+`ConflictError` and `TimeoutError` generally can be retried;
+`InvalidInputError` and `PolicyError` cannot — fix the call (or get the plan
+reviewed) instead.
+
+**Surface `hint`:** hints are written to be shown — to a user, a log, or an
+LLM agent deciding its next step. Don't swallow them.
+
+**Catch-all:** `except h5i_db.H5iError` catches every h5i-db failure while
+letting genuine bugs (`TypeError`, …) propagate. A closed handle raises
+`H5iError` with `code == "closed"`.
