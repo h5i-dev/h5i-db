@@ -657,7 +657,6 @@
         <tr><td>time-range scan 0.01% (48/50 segments pruned)</td><td>10.0 ms</td><td>28.1 ms</td><td>45.5 ms</td><td>23.9 ms</td><td>22.8 ms</td><td><b>4.2 ms</b>²</td></tr>
         <tr><td>time-range scan 1%</td><td>12.8 ms</td><td>29.9 ms</td><td>40.9 ms</td><td>25.6 ms</td><td>24.0 ms</td><td><b>5.6 ms</b>²</td></tr>
         <tr><td>1-minute OHLCV + VWAP rollup</td><td><b>1 558 ms</b></td><td>7 309 ms</td><td>7 237 ms</td><td>5 115 ms</td><td>7 121 ms</td><td>3 504 ms</td></tr>
-        <tr><td>… re-run on unchanged data (warm aggregate states)</td><td><b>21.7 ms</b></td><td>recompute</td><td>recompute</td><td>recompute</td><td>recompute</td><td>recompute</td></tr>
         <tr><td>ASOF join trades × quotes (by symbol)</td><td>1 548 ms</td><td><b>1 485 ms</b></td><td>11 566 ms</td><td>6 624 ms</td><td>n/a¹</td><td>7 008 ms</td></tr>
         <tr><td>full aggregation (group by symbol)</td><td>353 ms</td><td>370 ms</td><td><b>228 ms</b></td><td>2 578 ms</td><td>553 ms</td><td>886 ms</td></tr>
         <tr><td>ingest (50 durable versioned commits)</td><td><b>1.9 M rows/s</b></td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td><td>n/a</td></tr>

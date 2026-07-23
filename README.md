@@ -40,7 +40,6 @@ h5i-db ui market.db                                                # review surf
 | Concurrent writers | MVCC | n/a | n/a | n/a | unsafe³ | CAS + explicit conflict |
 | 20M-row narrow time-range scan | 45.5 ms | 28.1 ms | 23.9 ms | 22.8 ms | **4.2 ms**⁵ | 10.0 ms |
 | 20M-row 1-min OHLCV+VWAP | 7237 ms | 7309 ms | 5115 ms | 7121 ms | 3504 ms | **1558 ms** |
-| … re-run on unchanged data | recompute | recompute | recompute | recompute | recompute | **21.7 ms**⁶ |
 | 20M-row ASOF join (by symbol) | 11566 ms | **1485 ms** | 6624 ms | ✗² | 7008 ms | 1548 ms |
 
 ¹ `AT (VERSION …)` syntax exists but native storage rejects it.
@@ -50,8 +49,6 @@ h5i-db ui market.db                                                # review surf
   table function (SQL and Python).
 ⁵ ArcticDB's native time index wins narrow point reads from its own LMDB
   store; h5i-db's manifest pruning is second and beats every general engine.
-⁶ Version-aware aggregate states: immutable per-segment OHLCV/VWAP states are
-  reused when the manifest hasn't changed; the others re-run the full rollup.
 
 All engines measured back-to-back in one session (Intel Xeon @ 2.20 GHz,
 31 GB RAM, Ubuntu 22.04.5, 2026-07-23): Parquet-reading engines over the
