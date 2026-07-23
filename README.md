@@ -10,8 +10,7 @@ append-only streaming tails. Mutations can be previewed before they commit and
 gated by policy. Crash-safe by construction and proven by tests that kill the
 writer at every commit step.
 
-📖 **[Documentation](https://h5i-dev.github.io/h5i-db/)** ·
-[Design document](DESIGN.md) · [Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) ·
+📖 **[Documentation](https://h5i-dev.github.io/h5i-db/)** · [Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) ·
 [Operations guide](docs/OPERATIONS.md) · [SKILL](SKILL.md)
 
 ---
