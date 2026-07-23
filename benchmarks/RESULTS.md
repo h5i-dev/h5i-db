@@ -167,6 +167,39 @@ engines on generic shapes, structurally faster on time-series shapes* — plus
 the things none of these baselines do at all: time travel, snapshots,
 previewable mutations, crash-safe atomic commits.
 
+## 2026-07-23 cloud-VM run: ArcticDB added (x86_64, 20 M rows)
+
+First run including the ArcticDB baseline (no Linux aarch64 wheels, so it
+cannot run on the WSL2 dev machine). Environment: shared x86_64 cloud CPU VM —
+absolute times are roughly 5–10× slower than the bare-metal numbers above and
+are **not comparable across sections**; within-session ratios are the signal.
+All six engines measured back-to-back in one session, `--repeat 5`.
+ArcticDB 6.19 reads from its own LMDB store (populated once from the same
+data — one-time ingest 9.7 s); its OHLCV/ASOF compute is pandas over store
+reads, its idiomatic usage.
+
+| Workload | h5i-db | Polars 1.35 | DuckDB 1.3 | pandas 2.3 | PyArrow 24 | ArcticDB 6.19 |
+|---|---:|---:|---:|---:|---:|---:|
+| Full aggregation | 353 ms | 370 ms | **228 ms** | 2 578 ms | 553 ms | 886 ms |
+| Time-range scan 0.01 % | 10.0 ms | 28.1 ms | 45.5 ms | 23.9 ms | 22.8 ms | **4.2 ms** |
+| Time-range scan 1 % | 12.8 ms | 29.9 ms | 40.9 ms | 25.6 ms | 24.0 ms | **5.6 ms** |
+| 1-min OHLCV + VWAP | **1 558 ms** | 7 309 ms | 7 237 ms | 5 115 ms | 7 121 ms | 3 504 ms |
+| … re-run, unchanged data | **21.7 ms**³ | recompute | recompute | recompute | recompute | recompute |
+| ASOF join (by symbol) | 1 548 ms | **1 485 ms** | 11 566 ms | 6 624 ms | n/a² | 7 008 ms |
+| Ingest | 1.92 M rows/s (50 durable commits) | n/a | n/a | n/a | n/a | 25 M rows in 9.7 s (one-time load) |
+
+³ Version-aware aggregate states: warm `finance_rollup` reused all 50
+per-segment states (cold build 5 508 ms on this VM). The other engines have
+no equivalent — re-running the query costs the full rollup again.
+
+The pattern holds from the earlier section — OHLCV 2.2–4.7× faster than every
+engine, ASOF tied with Polars and 4–7× faster than the rest, cross-sectional
+within 1.5× of DuckDB — with one honest new loss: **ArcticDB's native time
+index wins narrow time-range point reads** (4.2 vs 10.0 ms) against h5i-db's
+manifest pruning (48/50 segments pruned), both far ahead of the
+footer-scanning general engines. That gap is the P2 predicate-cache /
+finer-time-index territory in `ROADMAP.md` Part II.
+
 ## Performance changes discovered while benchmarking
 
 1. **Parquet footer-metadata cache** wired into the provider

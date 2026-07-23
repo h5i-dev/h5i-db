@@ -38,17 +38,26 @@ h5i-db ui market.db                                                # review surf
 | ASOF join | ✓ | ✓ | ✓ | ✗² | ✗ | ✓⁴ (sort-free on sorted storage) |
 | Previewable mutations (plan/apply) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓, policy-enforceable |
 | Concurrent writers | MVCC | n/a | n/a | n/a | unsafe³ | CAS + explicit conflict |
-| 20M-row narrow time-range scan | 17.0 ms | 15.0 ms | 13.5 ms | 10.1 ms | — | **7.3 ms** |
-| 20M-row 1-min OHLCV+VWAP | 774 ms | 2 392 ms | 4 242 ms | 2 369 ms | — | **164 ms** |
+| 20M-row narrow time-range scan | 45.5 ms | 28.1 ms | 23.9 ms | 22.8 ms | **4.2 ms**⁵ | 10.0 ms |
+| 20M-row 1-min OHLCV+VWAP | 7 237 ms | 7 309 ms | 5 115 ms | 7 121 ms | 3 504 ms | **1 558 ms** |
+| … re-run on unchanged data | recompute | recompute | recompute | recompute | recompute | **21.7 ms**⁶ |
+| 20M-row ASOF join (by symbol) | 11 566 ms | **1 485 ms** | 6 624 ms | ✗² | 7 008 ms | 1 548 ms |
 
 ¹ `AT (VERSION …)` syntax exists but native storage rejects it.
 ² Experimental `join_asof` exists but is ~1000× slower — impractical at this scale.
 ³ Documented single-writer-per-symbol assumption.
-⁴ Via the `asof_join(...)` table function in SQL (and Python) — not the
-  `ASOF JOIN` keyword syntax DuckDB uses.
+⁴ Native `ASOF JOIN … MATCH_CONDITION` SQL syntax and an `asof_join(...)`
+  table function (SQL and Python).
+⁵ ArcticDB's native time index wins narrow point reads from its own LMDB
+  store; h5i-db's manifest pruning is second and beats every general engine.
+⁶ Version-aware aggregate states: immutable per-segment OHLCV/VWAP states are
+  reused when the manifest hasn't changed — the others re-run the full rollup.
 
-All engines disk-backed over identical Parquet segments, measured in one
-session; full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+All engines measured back-to-back in one session (x86_64 cloud VM,
+2026-07-23) — Parquet-reading engines over the identical h5i-db segment
+files, ArcticDB over its own LMDB store loaded with the same data. Absolute
+times scale with hardware; the ratios are the story. Full methodology in
+[benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Why it's fast
 
@@ -63,6 +72,9 @@ The speed comes from the *versioning*, not from custom kernels:
   first (every baseline pays that sort), and the ASOF join is sort-free.
 - **Immutable segments.** Footer metadata is cached unconditionally — sound
   because segments never change — cutting ~40% off warm scans.
+- **Version-aware aggregate states.** OHLCV/VWAP rollups persist one mergeable
+  state per immutable segment; re-querying an unchanged version merges states
+  (milliseconds) instead of recomputing, and appends only scan new segments.
 - **No kernel heroics.** Generic scans and aggregations run on stock
   DataFusion and tie the best engines; h5i-db only adds structure where
   time-series shape makes it structurally faster.
