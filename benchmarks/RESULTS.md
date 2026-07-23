@@ -75,7 +75,9 @@ The case the cache exists for is demonstrated by
 episodic symbol trading only inside a narrow window of time-ordered segments,
 named so per-column min/max statistics cannot prune it. At the default
 4 M rows, warm hits scan **75% fewer physical bytes** (38.2 MB → 9.7 MB,
-3.69 M → 0.93 M rows) with identical results; the reduction tracks the
+3.69 M → 0.93 M rows) with identical results — reproduced byte-identically
+on both aarch64 (WSL2) and x86_64 (cloud VM, 2026-07-23), since the seeded
+dataset is deterministic; the reduction tracks the
 clustering ratio and row-group granularity, and translates to proportionally
 fewer range GETs once segments live on remote object storage. Wall time
 barely moves against a warm local page cache — physical bytes, not local
@@ -171,9 +173,11 @@ previewable mutations, crash-safe atomic commits.
 
 First run including the ArcticDB baseline (no Linux aarch64 wheels, so it
 cannot run on the WSL2 dev machine). Environment: shared cloud CPU VM —
-Intel(R) Xeon(R) CPU @ 2.20 GHz, 31 GB RAM, Ubuntu 22.04.5 LTS. Absolute
-times are roughly 5–10× slower than the bare-metal numbers above and are
-**not comparable across sections**; within-session ratios are the signal.
+Intel(R) Xeon(R) CPU @ 2.20 GHz, 31 GB RAM, Ubuntu 22.04.5 LTS; h5i-db
+binaries built with the `bench-fast` profile (no LTO, codegen-units 16 —
+typically within a few % of full release). Absolute times are roughly 5–10×
+slower than the bare-metal numbers above and are **not comparable across
+sections**; within-session ratios are the signal.
 All six engines measured back-to-back in one session, `--repeat 5`.
 ArcticDB 6.19 reads from its own LMDB store (populated once from the same
 data — one-time ingest 9.7 s); its OHLCV/ASOF compute is pandas over store
