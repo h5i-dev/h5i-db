@@ -8,6 +8,7 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [Overview](https://db.h5i.dev/manual/index.html): What h5i-db is, what it is for, and how the documentation is organized.
 - [Installation](https://db.h5i.dev/manual/installation.html): Install the h5i-db CLI and Python library, or build both from source.
 - [Quickstart](https://db.h5i.dev/manual/quickstart.html): From nothing to a queried, versioned market database in five commands — CLI and Python.
+- [Migrating from DuckDB](https://db.h5i.dev/manual/migrating-from-duckdb.html): Move tables from a .duckdb file into a versioned h5i-db store using DuckDB's own Parquet export, plus a SQL dialect and workflow checklist for what changes.
 - [Core concepts](https://db.h5i.dev/manual/concepts.html): Versions, segments, manifests, snapshots, previewable mutation plans, and the mutation policy — the mental model behind h5i-db.
 - [CLI reference](https://db.h5i.dev/manual/cli.html): Every command, flag, output format, and exit code of the h5i-db command-line tool.
 - [SQL reference](https://db.h5i.dev/manual/sql.html): h5i-db's SQL surface beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill/resample, tail, time_bucket, vwap, ewma, and rolling window sugar.
