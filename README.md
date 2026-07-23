@@ -18,7 +18,7 @@ writer at every commit step.
 
 ```bash
 cargo install --path crates/h5i-db-cli
-# Python: pip install h5i-db  (first PyPI release pending — until then:
+# Python: pip install h5i-db  (first PyPI release pending; until then:
 #   maturin build --release -m crates/h5i-db-python/Cargo.toml)
 
 h5i-db init market.db
@@ -39,22 +39,22 @@ h5i-db ui market.db                                                # review surf
 | Previewable mutations (plan/apply) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓, policy-enforceable |
 | Concurrent writers | MVCC | n/a | n/a | n/a | unsafe³ | CAS + explicit conflict |
 | 20M-row narrow time-range scan | 45.5 ms | 28.1 ms | 23.9 ms | 22.8 ms | **4.2 ms**⁵ | 10.0 ms |
-| 20M-row 1-min OHLCV+VWAP | 7 237 ms | 7 309 ms | 5 115 ms | 7 121 ms | 3 504 ms | **1 558 ms** |
+| 20M-row 1-min OHLCV+VWAP | 7237 ms | 7309 ms | 5115 ms | 7121 ms | 3504 ms | **1558 ms** |
 | … re-run on unchanged data | recompute | recompute | recompute | recompute | recompute | **21.7 ms**⁶ |
-| 20M-row ASOF join (by symbol) | 11 566 ms | **1 485 ms** | 6 624 ms | ✗² | 7 008 ms | 1 548 ms |
+| 20M-row ASOF join (by symbol) | 11566 ms | **1485 ms** | 6624 ms | ✗² | 7008 ms | 1548 ms |
 
 ¹ `AT (VERSION …)` syntax exists but native storage rejects it.
-² Experimental `join_asof` exists but is ~1000× slower — impractical at this scale.
+² Experimental `join_asof` exists but is ~1000× slower, impractical at this scale.
 ³ Documented single-writer-per-symbol assumption.
 ⁴ Native `ASOF JOIN … MATCH_CONDITION` SQL syntax and an `asof_join(...)`
   table function (SQL and Python).
 ⁵ ArcticDB's native time index wins narrow point reads from its own LMDB
   store; h5i-db's manifest pruning is second and beats every general engine.
 ⁶ Version-aware aggregate states: immutable per-segment OHLCV/VWAP states are
-  reused when the manifest hasn't changed — the others re-run the full rollup.
+  reused when the manifest hasn't changed; the others re-run the full rollup.
 
 All engines measured back-to-back in one session (Intel Xeon @ 2.20 GHz,
-31 GB RAM, Ubuntu 22.04.5, 2026-07-23) — Parquet-reading engines over the
+31 GB RAM, Ubuntu 22.04.5, 2026-07-23): Parquet-reading engines over the
 identical h5i-db segment files, ArcticDB over its own LMDB store loaded with
 the same data. Absolute times scale with hardware; the ratios are the story.
 Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
@@ -65,13 +65,13 @@ The speed comes from the *versioning*, not from custom kernels:
 
 - **Manifest pruning.** Every version's manifest carries per-segment time
   ranges and column min/max. Narrow queries prune whole segments before a
-  single file is opened — the baselines must at least touch the footers of
+  single file is opened; the baselines must at least touch the footers of
   all 50 files in the glob.
 - **Declared sort order.** Segments are stored time-sorted and the query
   layer tells DataFusion so. OHLCV rollups stream instead of sorting 20M rows
   first (every baseline pays that sort), and the ASOF join is sort-free.
-- **Immutable segments.** Footer metadata is cached unconditionally — sound
-  because segments never change — cutting ~40% off warm scans.
+- **Immutable segments.** Footer metadata is cached unconditionally (sound
+  because segments never change), cutting ~40% off warm scans.
 - **Version-aware aggregate states.** OHLCV/VWAP rollups persist one mergeable
   state per immutable segment; re-querying an unchanged version merges states
   (milliseconds) instead of recomputing, and appends only scan new segments.
@@ -83,13 +83,13 @@ The speed comes from the *versioning*, not from custom kernels:
 
 An agent's failure modes are exactly what the storage model removes:
 
-- **Every write is an atomic, immutable commit** — a bad ingest or mutation
+- **Every write is an atomic, immutable commit**: a bad ingest or mutation
   is one `restore` away from undone, and old versions read in O(1).
 - **Previewable mutations.** `plan` shows exactly what a `DELETE`/`UPDATE`
-  will touch before `apply`, and policy can require that gate — the agent
+  will touch before `apply`, and policy can require that gate: the agent
   proposes, the human (or a rule) approves.
 - **Crash-safe by construction.** fsync-before-swap, checksums, a manifest
-  hash chain — proven by tests that kill the writer at every commit step. An
+  hash chain, proven by tests that kill the writer at every commit step. An
   agent killed mid-write cannot corrupt the store.
 - **An auditable trail.** Version history records what changed and when;
   the review UI gives humans a diff-and-approve surface over it.
