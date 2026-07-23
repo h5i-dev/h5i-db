@@ -435,7 +435,9 @@ article.doc .api-member > h3::before {
   content: ''; position: absolute; left: 0; top: 0; bottom: 0;
   width: 3px; background: var(--red);
 }
-.api-member > h3 .api-qual { color: var(--text-dim); font-weight: 400; }
+/* qualifier + method share the red hue — the method is brighter/bolder so it
+   pops, but the whole thing reads as one identifier */
+.api-member > h3 .api-qual { color: var(--red-text); opacity: 0.55; font-weight: 400; }
 .api-member > h3 .api-name { color: var(--red-text); }
 .api-member > h3 .headerlink { font-family: var(--sans); }
 .api-member > h3 code {
