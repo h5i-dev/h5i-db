@@ -316,6 +316,57 @@ window = db.read("trades", columns=["ts", "price"],
                  time_start=t0_us, time_end=t1_us)
 ```
 
+### `Database.leakage_check`
+
+```python
+leakage_check(query, version=None, as_of=None, snapshot=None,
+              tolerance=None) -> dict
+```
+
+Look-ahead-bias diagnostic (the Python surface of the CLI
+[`leakage-check`](../manual/cli.html#h5i-db-leakage-check)). Runs `query` twice
+— against the current head (*leaking*: every commit, including rows that only
+became available after the decision instant) and against a decision read point
+(*non-leaking*) — and returns the delta between the two results.
+
+**Parameters**
+
+`query` (`str`)
+:   The SQL to evaluate under both read points.
+
+`version` / `as_of` / `snapshot`
+:   The decision point; **exactly one is required**. `as_of` is an RFC3339
+    string matched by commit *availability* time.
+
+`tolerance` (`float`, optional)
+:   Per-cell numeric noise floor below which a difference is ignored
+    (default `1e-9`).
+
+**Returns**
+
+`dict` — the leakage report: `leakage_detected`, per-column
+`head → asof (delta)`, `max_abs_delta`, `row_count_differs`, and
+`withheld_versions` (per table, the head-vs-as-of version gap).
+
+**Raises**
+
+`InvalidInputError`
+:   No decision point was given, or more than one.
+
+```python
+report = db.leakage_check(
+    "SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol",
+    as_of="2026-07-01T16:00:00Z",
+)
+if report["leakage_detected"]:
+    print("alpha that evaporates:", report["max_abs_delta"])
+```
+
+!!! note "Scope"
+    A non-zero delta proves *availability* leakage (late-arriving or restated
+    rows across commits). A zero delta does not prove its absence, and this
+    does not detect look-ahead *inside* a single snapshot.
+
 ## Snapshots
 
 ### `Database.snapshot`
@@ -427,6 +478,62 @@ atomic (read-modify-write under the metadata lock).
 
 `InvalidInputError`
 :   An unknown flag name.
+
+## Data-safety policy
+
+Where the [mutation policy](#databasepolicy) gates *who* may write directly, a
+per-table **data policy** gates *what data* may be written — typed constraints
+checked fail-closed on every write and at plan time
+([CLI reference](../manual/cli.html#h5i-db-data-policy)). A table with no policy
+is unconstrained and pays no read-path cost.
+
+### `Database.data_policy`
+
+```python
+data_policy(table) -> dict | None
+```
+
+The table's data-safety policy as a dict, or `None` when unset.
+
+### `Database.set_data_policy`
+
+```python
+set_data_policy(table, policy) -> dict
+```
+
+Install (overwrite) a table's data-safety policy. Returns the stored policy.
+
+**Parameters**
+
+`table` (`str`)
+:   Table name.
+
+`policy` (`dict`)
+:   A typed policy document. Predicates compose `not_null`, `compare`, and
+    `in_set` with `and` / `or` / `not`; each constraint's `on_fail` is
+    `"reject"` (fail the write) or `"warn"`.
+
+```python
+db.set_data_policy("trades", {"constraints": [
+    {"name": "positive_price",
+     "predicate": {"compare": {"column": "price", "op": "gt",
+                               "value": {"float": 0.0}}},
+     "on_fail": "reject"}]})
+```
+
+**Raises**
+
+`InvalidInputError`
+:   A malformed policy document, or — when a later write breaks a constraint —
+    a `data_policy_violation` (the write is refused before it lands).
+
+### `Database.clear_data_policy`
+
+```python
+clear_data_policy(table) -> None
+```
+
+Remove a table's data-safety policy (writes become unconstrained).
 
 ## Maintenance
 

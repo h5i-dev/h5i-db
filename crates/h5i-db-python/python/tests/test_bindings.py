@@ -125,11 +125,119 @@ def test_new_methods():
         assert plan.plan_id in [p.plan_id for p in listed]
         plan.discard()
         assert plan.plan_id not in [p.plan_id for p in db.list_plans("trades")]
-        # Compact + drop_table.
-        db.append("trades", _sample())
+        # Compact + drop_table. Append a second, strictly-later batch (ordered
+        # append requires min ts >= the table's current max) to give compaction
+        # more than one segment to merge.
+        db.append(
+            "trades",
+            pa.table(
+                {
+                    "ts": pa.array(range(5, 10), type=pa.timestamp("ns")),
+                    "symbol": ["A", "B", "A", "B", "A"],
+                    "px": [float(i) for i in range(5, 10)],
+                },
+                schema=SCHEMA,
+            ),
+        )
         db.compact("trades")
         db.drop_table("trades")
         assert "trades" not in db.tables()
+
+
+def test_leakage_check_detects_withheld_rows():
+    with tempfile.TemporaryDirectory() as tmp, _open_db(tmp) as db:
+        db.append("trades", _sample(3))  # version 1: 3 rows
+        # Append two later rows as version 2 (ts strictly increasing).
+        later = pa.table(
+            {
+                "ts": pa.array(range(3, 5), type=pa.timestamp("ns")),
+                "symbol": ["B", "A"],
+                "px": [3.0, 4.0],
+            },
+            schema=SCHEMA,
+        )
+        db.append("trades", later)
+
+        report = db.leakage_check(
+            "SELECT count(*) AS c FROM trades", version=1
+        )
+        assert report["comparable"] is True
+        assert report["leakage_detected"] is True
+        col = report["columns"][0]
+        assert col["name"] == "c"
+        assert col["head"] == 5.0 and col["asof"] == 3.0 and col["delta"] == 2.0
+        assert report["withheld_versions"][0]["table"] == "trades"
+
+        # A decision point is required.
+        try:
+            db.leakage_check("SELECT count(*) FROM trades")
+            raise AssertionError("expected InvalidInputError")
+        except h5i_db.InvalidInputError:
+            pass
+
+
+def test_data_policy_round_trip_and_enforcement():
+    with tempfile.TemporaryDirectory() as tmp, _open_db(tmp) as db:
+        assert db.data_policy("trades") is None  # unset by default
+
+        policy = {
+            "constraints": [
+                {
+                    "name": "positive_px",
+                    "predicate": {
+                        "compare": {
+                            "column": "px",
+                            "op": "gt",
+                            "value": {"float": 0.0},
+                        }
+                    },
+                    "on_fail": "reject",
+                }
+            ]
+        }
+        stored = db.set_data_policy("trades", policy)
+        assert stored["constraints"][0]["name"] == "positive_px"
+        assert db.data_policy("trades")["constraints"][0]["name"] == "positive_px"
+
+        # A row with px <= 0 is rejected fail-closed.
+        bad = pa.table(
+            {
+                "ts": pa.array([0], type=pa.timestamp("ns")),
+                "symbol": ["A"],
+                "px": [-1.0],
+            },
+            schema=SCHEMA,
+        )
+        try:
+            db.append("trades", bad)
+            raise AssertionError("expected the data policy to reject px=-1")
+        except h5i_db.InvalidInputError as e:
+            assert e.code == "data_policy_violation"
+
+        # A conforming batch (all px > 0) is accepted.
+        good = pa.table(
+            {
+                "ts": pa.array([0, 1, 2], type=pa.timestamp("ns")),
+                "symbol": ["A", "B", "A"],
+                "px": [1.0, 2.0, 3.0],
+            },
+            schema=SCHEMA,
+        )
+        db.append("trades", good)
+
+        # Clearing removes the constraint entirely: a negative-px row (later
+        # timestamp, to satisfy ordered append) now writes without error.
+        db.clear_data_policy("trades")
+        assert db.data_policy("trades") is None
+        bad_later = pa.table(
+            {
+                "ts": pa.array([10], type=pa.timestamp("ns")),
+                "symbol": ["A"],
+                "px": [-1.0],
+            },
+            schema=SCHEMA,
+        )
+        db.append("trades", bad_later)
 
 
 if __name__ == "__main__":

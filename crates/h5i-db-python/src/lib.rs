@@ -23,9 +23,9 @@ use futures::StreamExt;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use h5i_db_core::{Database, Error, ReadAt, ScanOptions, TableOptions, WriteOptions};
+use h5i_db_core::{DataPolicy, Database, Error, ReadAt, ScanOptions, TableOptions, WriteOptions};
 use h5i_db_query::datafusion::error::DataFusionError;
-use h5i_db_query::{H5iSession, SessionOptions};
+use h5i_db_query::{check_leakage, H5iSession, SessionOptions, DEFAULT_TOLERANCE};
 
 // -- exceptions -------------------------------------------------------------
 //
@@ -117,9 +117,11 @@ fn to_py_err(e: Error) -> PyErr {
         "database_exists" | "table_exists" | "version_conflict" | "lock_timeout" => {
             ConflictError::new_err(msg)
         }
-        "invalid_input" | "unsupported" | "schema_mismatch" | "sort_order_violation" => {
-            InvalidInputError::new_err(msg)
-        }
+        "invalid_input"
+        | "unsupported"
+        | "schema_mismatch"
+        | "sort_order_violation"
+        | "data_policy_violation" => InvalidInputError::new_err(msg),
         "read_only" | "policy_violation" => PolicyError::new_err(msg),
         "corruption" | "format_too_new" => CorruptionError::new_err(msg),
         "limit_exceeded" => LimitError::new_err(msg),
@@ -784,6 +786,74 @@ impl NativeDatabase {
             move |db| async move { db.verify(&name, deep).await },
         )?;
         to_json(&report)
+    }
+
+    /// Look-ahead-bias check (V-A1): run `query` against head and against the
+    /// decision read point, and return the leakage-delta report as JSON.
+    /// Exactly one of `version` / `as_of` / `snapshot` must pin the decision
+    /// point; `tolerance` defaults to the crate default.
+    #[pyo3(signature = (query, version = None, as_of = None, snapshot = None, tolerance = None))]
+    fn leakage_check(
+        &self,
+        py: Python<'_>,
+        query: &str,
+        version: Option<u64>,
+        as_of: Option<&str>,
+        snapshot: Option<&str>,
+        tolerance: Option<f64>,
+    ) -> PyResult<String> {
+        if version.is_none() && as_of.is_none() && snapshot.is_none() {
+            return Err(invalid(
+                "leakage_check needs a decision point: one of version, as_of, snapshot",
+            ));
+        }
+        let at = parse_read_at(version, as_of, snapshot)?;
+        let tol = tolerance.unwrap_or(DEFAULT_TOLERANCE);
+        if !tol.is_finite() || tol < 0.0 {
+            return Err(invalid("tolerance must be a non-negative, finite number"));
+        }
+        let inner = self.inner()?;
+        let query = query.to_string();
+        let report = py
+            .detach(move || {
+                inner
+                    .runtime
+                    .block_on(async move { check_leakage(inner.db.clone(), &query, at, tol).await })
+            })
+            .map_err(df_err)?;
+        to_json(&report)
+    }
+
+    /// A table's data-safety policy as JSON (`null` when unset).
+    fn get_data_policy(&self, py: Python<'_>, table: &str) -> PyResult<String> {
+        let table = table.to_string();
+        let policy = self.block(
+            py,
+            None,
+            move |db| async move { db.data_policy(&table).await },
+        )?;
+        to_json(&policy)
+    }
+
+    /// Install (overwrite) a table's data-safety policy from a typed JSON
+    /// document; returns the stored policy as JSON.
+    fn set_data_policy(&self, py: Python<'_>, table: &str, policy_json: &str) -> PyResult<String> {
+        let policy: DataPolicy = serde_json::from_str(policy_json)
+            .map_err(|e| invalid(format!("bad data-policy JSON: {e}")))?;
+        let stored = policy.clone();
+        let table = table.to_string();
+        self.block(py, None, move |db| async move {
+            db.set_data_policy(&table, &policy).await
+        })?;
+        to_json(&stored)
+    }
+
+    /// Remove a table's data-safety policy (writes become unconstrained).
+    fn clear_data_policy(&self, py: Python<'_>, table: &str) -> PyResult<()> {
+        let table = table.to_string();
+        self.block(py, None, move |db| async move {
+            db.clear_data_policy(&table).await
+        })
     }
 }
 
