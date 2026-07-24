@@ -88,7 +88,12 @@ impl LatestEntry {
 
     /// Verify keys + checksum and decode the mini-batch, or `None` if anything
     /// is off (→ rebuild). Never returns a wrong batch.
-    fn verified(&self, segment: &SegmentMeta, by_column: &str, schema: &SchemaRef) -> Option<RecordBatch> {
+    fn verified(
+        &self,
+        segment: &SegmentMeta,
+        by_column: &str,
+        schema: &SchemaRef,
+    ) -> Option<RecordBatch> {
         if self.format != FORMAT
             || self.segment_checksum != segment.checksum
             || self.schema_revision != segment.schema_revision
@@ -125,7 +130,8 @@ fn encode_batch_ipc(batch: &RecordBatch) -> h5i_db_core::Result<String> {
 
 fn decode_batch_ipc(b64: &str, schema: &SchemaRef) -> Option<RecordBatch> {
     let bytes = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-    let mut reader = arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None).ok()?;
+    let mut reader =
+        arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None).ok()?;
     let batch = reader.next()?.ok()?;
     // The cached schema must match the current table schema (guarded already by
     // schema_revision, but defend in depth).
@@ -153,7 +159,9 @@ fn last_row_per_group(
     let group = group
         .as_any()
         .downcast_ref::<StringArray>()
-        .ok_or_else(|| DataFusionError::Execution("latest_on: group column is not string-like".into()))?;
+        .ok_or_else(|| {
+            DataFusionError::Execution("latest_on: group column is not string-like".into())
+        })?;
 
     let mut best: HashMap<&str, (i64, usize)> = HashMap::new();
     for row in 0..batch.num_rows() {
@@ -232,7 +240,8 @@ impl LatestByStore {
         for segment in &resolved.manifest.segments {
             let path = latest_path(segment, by_column);
             let cached = if self.mode != LatestByMode::Disabled {
-                self.load(&path, segment, by_column, &schema, &mut metrics).await
+                self.load(&path, segment, by_column, &schema, &mut metrics)
+                    .await
             } else {
                 None
             };
@@ -322,13 +331,10 @@ impl LatestByStore {
                     .put_if_absent(path, Bytes::from(bytes))
                     .await
                 {
-                    metrics.evictions += crate::sidecar::enforce_budget(
-                        self.db.backend(),
-                        PREFIX,
-                        MAX_CACHE_BYTES,
-                    )
-                    .await
-                    .unwrap_or(0);
+                    metrics.evictions +=
+                        crate::sidecar::enforce_budget(self.db.backend(), PREFIX, MAX_CACHE_BYTES)
+                            .await
+                            .unwrap_or(0);
                 }
             }
         }

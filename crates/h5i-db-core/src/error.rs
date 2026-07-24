@@ -258,19 +258,13 @@ mod tests {
                 expected: 1,
                 actual: 2,
             },
-            Error::SchemaMismatch {
-                detail: "d".into(),
+            Error::SchemaMismatch { detail: "d".into() },
+            Error::SortOrderViolation { detail: "d".into() },
+            Error::InvalidInput { detail: "d".into() },
+            Error::Unsupported { detail: "d".into() },
+            Error::ReadOnly {
+                op: "append".into(),
             },
-            Error::SortOrderViolation {
-                detail: "d".into(),
-            },
-            Error::InvalidInput {
-                detail: "d".into(),
-            },
-            Error::Unsupported {
-                detail: "d".into(),
-            },
-            Error::ReadOnly { op: "append".into() },
             Error::PolicyViolation { op: "write".into() },
             Error::Corruption {
                 object: "o".into(),
@@ -280,9 +274,7 @@ mod tests {
                 found: 2,
                 supported: 1,
             },
-            Error::LimitExceeded {
-                detail: "d".into(),
-            },
+            Error::LimitExceeded { detail: "d".into() },
             Error::Timeout { seconds: 5 },
             Error::LockTimeout {
                 table: "t".into(),
@@ -296,9 +288,7 @@ mod tests {
             Error::Arrow(arrow::error::ArrowError::ComputeError("c".into())),
             Error::Parquet(parquet::errors::ParquetError::General("g".into())),
             Error::Serde(serde_json::from_str::<i32>("nope").unwrap_err()),
-            Error::Internal {
-                detail: "d".into(),
-            },
+            Error::Internal { detail: "d".into() },
         ]
     }
 
@@ -380,15 +370,9 @@ mod tests {
             Error::corruption("o", "d").exit_category(),
             ExitCategory::Internal
         );
-        assert_eq!(
-            Error::internal("d").exit_category(),
-            ExitCategory::Internal
-        );
+        assert_eq!(Error::internal("d").exit_category(), ExitCategory::Internal);
         // Plain user errors default to UserError.
-        assert_eq!(
-            Error::invalid("d").exit_category(),
-            ExitCategory::UserError
-        );
+        assert_eq!(Error::invalid("d").exit_category(), ExitCategory::UserError);
         assert_eq!(
             Error::TableNotFound { name: "t".into() }.exit_category(),
             ExitCategory::UserError
@@ -406,7 +390,9 @@ mod tests {
         .hint()
         .is_some());
         assert!(Error::TableNotFound { name: "t".into() }.hint().is_some());
-        assert!(Error::SnapshotNotFound { name: "s".into() }.hint().is_some());
+        assert!(Error::SnapshotNotFound { name: "s".into() }
+            .hint()
+            .is_some());
         assert!(Error::SortOrderViolation { detail: "d".into() }
             .hint()
             .is_some());
@@ -416,13 +402,21 @@ mod tests {
         }
         .hint()
         .is_some());
-        assert!(Error::ReadOnly { op: "append".into() }.hint().is_some());
-        let ph = Error::PolicyViolation { op: "write".into() }.hint().unwrap();
+        assert!(Error::ReadOnly {
+            op: "append".into()
+        }
+        .hint()
+        .is_some());
+        let ph = Error::PolicyViolation { op: "write".into() }
+            .hint()
+            .unwrap();
         assert!(ph.contains("write"), "policy hint should name the op: {ph}");
 
         // A generic internal error offers no hint.
         assert!(Error::internal("boom").hint().is_none());
-        assert!(Error::SchemaMismatch { detail: "d".into() }.hint().is_none());
+        assert!(Error::SchemaMismatch { detail: "d".into() }
+            .hint()
+            .is_none());
     }
 
     #[test]

@@ -243,10 +243,7 @@ mod tests {
         // JSON null is never a usable stat.
         assert_eq!(json_stat_to_scalar(&json!(null), &DataType::Int64), None);
         // Unsupported target type.
-        assert_eq!(
-            json_stat_to_scalar(&json!(1), &DataType::Binary),
-            None
-        );
+        assert_eq!(json_stat_to_scalar(&json!(1), &DataType::Binary), None);
     }
 
     #[test]

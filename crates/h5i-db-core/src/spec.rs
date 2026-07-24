@@ -219,7 +219,8 @@ mod tests {
     #[test]
     fn new_defaults_sort_key_to_time_column() {
         let schema = base_schema();
-        let spec = TableSpec::new(Uuid::new_v4(), "trades", &schema, &opts_with_time("ts")).unwrap();
+        let spec =
+            TableSpec::new(Uuid::new_v4(), "trades", &schema, &opts_with_time("ts")).unwrap();
         assert_eq!(spec.sort_key, vec!["ts".to_string()]);
         assert_eq!(spec.schema_revision, 1);
         assert_eq!(spec.name, "trades");
@@ -230,8 +231,13 @@ mod tests {
 
     #[test]
     fn new_without_time_column_leaves_sort_key_empty() {
-        let spec =
-            TableSpec::new(Uuid::new_v4(), "t", &base_schema(), &TableOptions::default()).unwrap();
+        let spec = TableSpec::new(
+            Uuid::new_v4(),
+            "t",
+            &base_schema(),
+            &TableOptions::default(),
+        )
+        .unwrap();
         assert!(spec.time_column.is_none());
         assert!(spec.sort_key.is_empty());
     }
@@ -257,9 +263,13 @@ mod tests {
     #[test]
     fn time_column_must_be_a_temporal_or_integer_type() {
         // "symbol" is Utf8 — not a valid time index.
-        let err =
-            TableSpec::new(Uuid::new_v4(), "t", &base_schema(), &opts_with_time("symbol"))
-                .unwrap_err();
+        let err = TableSpec::new(
+            Uuid::new_v4(),
+            "t",
+            &base_schema(),
+            &opts_with_time("symbol"),
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::InvalidInput { .. }));
     }
 
@@ -269,8 +279,7 @@ mod tests {
             ts_field(true), // nullable time column
             Field::new("symbol", DataType::Utf8, false),
         ]));
-        let err =
-            TableSpec::new(Uuid::new_v4(), "t", &schema, &opts_with_time("ts")).unwrap_err();
+        let err = TableSpec::new(Uuid::new_v4(), "t", &schema, &opts_with_time("ts")).unwrap_err();
         assert!(matches!(err, Error::InvalidInput { .. }));
     }
 

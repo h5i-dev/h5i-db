@@ -204,7 +204,9 @@ impl Accumulator for WeightedAvgAccumulator {
         if self.count == 0 || sum_w == 0.0 {
             Ok(ScalarValue::Float64(None))
         } else {
-            Ok(ScalarValue::Float64(Some((self.sum_vw + self.c_vw) / sum_w)))
+            Ok(ScalarValue::Float64(Some(
+                (self.sum_vw + self.c_vw) / sum_w,
+            )))
         }
     }
 

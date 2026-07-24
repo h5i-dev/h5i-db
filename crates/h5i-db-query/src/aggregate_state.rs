@@ -152,8 +152,13 @@ impl GroupState {
         self.high = self.high.max(price);
         self.low = self.low.min(price);
         crate::finance::neumaier_add(&mut self.volume, &mut self.c_volume, volume);
-        crate::finance::neumaier_add(&mut self.price_volume, &mut self.c_price_volume, price * volume);
-        (self.volume + self.c_volume).is_finite() && (self.price_volume + self.c_price_volume).is_finite()
+        crate::finance::neumaier_add(
+            &mut self.price_volume,
+            &mut self.c_price_volume,
+            price * volume,
+        );
+        (self.volume + self.c_volume).is_finite()
+            && (self.price_volume + self.c_price_volume).is_finite()
     }
 
     fn merge(&mut self, other: GroupState) -> bool {
@@ -178,7 +183,8 @@ impl GroupState {
             &mut self.c_price_volume,
             other.price_volume + other.c_price_volume,
         );
-        (self.volume + self.c_volume).is_finite() && (self.price_volume + self.c_price_volume).is_finite()
+        (self.volume + self.c_volume).is_finite()
+            && (self.price_volume + self.c_price_volume).is_finite()
     }
 
     /// Fold the compensation terms into the totals and zero them. Called before

@@ -304,7 +304,10 @@ mod tests {
             interpolate(&a, &b, 0.5),
             Some(ScalarValue::Float64(Some(5.0)))
         );
-        assert_eq!(interpolate(&a, &b, 0.0), Some(ScalarValue::Float64(Some(0.0))));
+        assert_eq!(
+            interpolate(&a, &b, 0.0),
+            Some(ScalarValue::Float64(Some(0.0)))
+        );
         assert_eq!(
             interpolate(&a, &b, 1.0),
             Some(ScalarValue::Float64(Some(10.0)))
@@ -325,11 +328,7 @@ mod tests {
     fn interpolate_rejects_nulls_and_type_mismatches() {
         // A null endpoint yields no interpolation.
         assert_eq!(
-            interpolate(
-                &ScalarValue::Int64(None),
-                &ScalarValue::Int64(Some(4)),
-                0.5
-            ),
+            interpolate(&ScalarValue::Int64(None), &ScalarValue::Int64(Some(4)), 0.5),
             None
         );
         // Mismatched variants yield None (never a silently coerced value).

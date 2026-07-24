@@ -110,7 +110,10 @@ fn tables_schema_sample_and_versions_report_the_contract() {
     assert_eq!(sample.as_array().unwrap().len(), 2);
 
     // versions -> at least the create + the append, newest listing the append op.
-    let versions = ok_json(&run(&["versions", "m.db", "trades", "--format", "json"], cwd));
+    let versions = ok_json(&run(
+        &["versions", "m.db", "trades", "--format", "json"],
+        cwd,
+    ));
     let vs = versions.as_array().unwrap();
     assert!(vs.len() >= 2, "expected >=2 versions, got {}", vs.len());
     let ops: Vec<&str> = vs.iter().map(|v| v["op"].as_str().unwrap()).collect();
@@ -126,7 +129,13 @@ fn snapshot_create_list_restore_and_delete() {
     // Pin the current state.
     let snap = ok_json(&run(
         &[
-            "snapshot", "create", "m.db", "before-append", "trades", "--format", "json",
+            "snapshot",
+            "create",
+            "m.db",
+            "before-append",
+            "trades",
+            "--format",
+            "json",
         ],
         cwd,
     ));
@@ -147,10 +156,21 @@ fn snapshot_create_list_restore_and_delete() {
         &["ingest", "m.db", "trades", "v2.csv", "--format", "json"],
         cwd,
     ));
-    let versions = ok_json(&run(&["versions", "m.db", "trades", "--format", "json"], cwd));
+    let versions = ok_json(&run(
+        &["versions", "m.db", "trades", "--format", "json"],
+        cwd,
+    ));
     let vs = versions.as_array().unwrap();
-    let earliest = vs.iter().map(|v| v["version"].as_u64().unwrap()).min().unwrap();
-    let latest = vs.iter().map(|v| v["version"].as_u64().unwrap()).max().unwrap();
+    let earliest = vs
+        .iter()
+        .map(|v| v["version"].as_u64().unwrap())
+        .min()
+        .unwrap();
+    let latest = vs
+        .iter()
+        .map(|v| v["version"].as_u64().unwrap())
+        .max()
+        .unwrap();
 
     let restored = ok_json(&run(
         &[
@@ -172,7 +192,14 @@ fn snapshot_create_list_restore_and_delete() {
 
     // The snapshot can be deleted.
     let deleted = ok_json(&run(
-        &["snapshot", "delete", "m.db", "before-append", "--format", "json"],
+        &[
+            "snapshot",
+            "delete",
+            "m.db",
+            "before-append",
+            "--format",
+            "json",
+        ],
         cwd,
     ));
     assert_eq!(deleted["deleted"], "before-append");
@@ -185,22 +212,33 @@ fn drop_table_needs_confirmation_and_respects_snapshot_pins() {
     bootstrap(cwd);
 
     // Without --yes: refused as a user error.
-    let env = err_envelope(&run(&["drop-table", "m.db", "trades", "--format", "json"], cwd));
+    let env = err_envelope(&run(
+        &["drop-table", "m.db", "trades", "--format", "json"],
+        cwd,
+    ));
     assert_eq!(env["code"], "invalid_input");
 
     // Pin it, then drop --yes must refuse while the snapshot exists.
     ok_json(&run(
-        &["snapshot", "create", "m.db", "pin", "trades", "--format", "json"],
+        &[
+            "snapshot", "create", "m.db", "pin", "trades", "--format", "json",
+        ],
         cwd,
     ));
-    let pinned = run(&["drop-table", "m.db", "trades", "--yes", "--format", "json"], cwd);
+    let pinned = run(
+        &["drop-table", "m.db", "trades", "--yes", "--format", "json"],
+        cwd,
+    );
     assert!(
         !pinned.status.success(),
         "drop should be refused while a snapshot pins the table"
     );
 
     // Remove the pin, then the drop succeeds and the table is gone.
-    ok_json(&run(&["snapshot", "delete", "m.db", "pin", "--format", "json"], cwd));
+    ok_json(&run(
+        &["snapshot", "delete", "m.db", "pin", "--format", "json"],
+        cwd,
+    ));
     let dropped = ok_json(&run(
         &["drop-table", "m.db", "trades", "--yes", "--format", "json"],
         cwd,
@@ -279,13 +317,19 @@ fn compact_and_vacuum_dry_run_then_apply() {
     ));
 
     // compact -> a data-identical rewrite, recorded as a compact version.
-    let compacted = ok_json(&run(&["compact", "m.db", "trades", "--format", "json"], cwd));
+    let compacted = ok_json(&run(
+        &["compact", "m.db", "trades", "--format", "json"],
+        cwd,
+    ));
     assert_eq!(compacted["op"], "compact");
     // Row total is preserved by compaction.
     assert_eq!(compacted["rows_total"], 5);
 
     // vacuum dry run: reports candidates without deleting.
-    let dry = ok_json(&run(&["vacuum", "m.db", "--grace-seconds", "0", "--format", "json"], cwd));
+    let dry = ok_json(&run(
+        &["vacuum", "m.db", "--grace-seconds", "0", "--format", "json"],
+        cwd,
+    ));
     assert_eq!(dry["dry_run"], true);
     assert_eq!(dry["deleted"], 0);
 

@@ -580,8 +580,7 @@ fn writer_properties(
     // read by default (`bloom_filter_on_read`), so `col = 'X'` prunes row
     // groups min/max cannot.
     for col in &spec.storage.bloom_filter_columns {
-        builder =
-            builder.set_column_bloom_filter_enabled(ColumnPath::new(vec![col.clone()]), true);
+        builder = builder.set_column_bloom_filter_enabled(ColumnPath::new(vec![col.clone()]), true);
     }
     builder.build()
 }

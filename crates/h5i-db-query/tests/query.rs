@@ -883,7 +883,11 @@ async fn asof_absent_symbol_short_circuits() {
     // "Z" trades have no quotes at all; "A" does.
     db.write(
         "trades",
-        vec![trades_batch(&[5, 6, 15], &["Z", "Z", "A"], &[1.0, 2.0, 101.0])],
+        vec![trades_batch(
+            &[5, 6, 15],
+            &["Z", "Z", "A"],
+            &[1.0, 2.0, 101.0],
+        )],
         WriteOptions::default(),
     )
     .await
@@ -913,7 +917,10 @@ async fn asof_absent_symbol_short_circuits() {
     .unwrap();
     let batches = joined.collect().await.unwrap();
     let total: usize = batches.iter().map(|b| b.num_rows()).sum();
-    assert_eq!(total, 3, "left join keeps every trade, including absent-symbol Z");
+    assert_eq!(
+        total, 3,
+        "left join keeps every trade, including absent-symbol Z"
+    );
     let bid_idx = batches[0].schema().index_of("bid").unwrap();
     let null_bids: usize = batches.iter().map(|b| b.column(bid_idx).null_count()).sum();
     assert_eq!(null_bids, 2, "both Z trades have no matching quote");
@@ -938,5 +945,8 @@ async fn asof_absent_symbol_short_circuits() {
         .iter()
         .map(|b| b.num_rows())
         .sum();
-    assert_eq!(n, 1, "only the matched A trade survives; Z is short-circuited");
+    assert_eq!(
+        n, 1,
+        "only the matched A trade survives; Z is short-circuited"
+    );
 }

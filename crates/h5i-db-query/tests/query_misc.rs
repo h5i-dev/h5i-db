@@ -1300,7 +1300,12 @@ async fn latest_on_returns_most_recent_row_per_symbol() {
         .as_any()
         .downcast_ref::<Float64Array>()
         .unwrap();
-    assert_eq!((0..symbol.len()).map(|i| symbol.value(i)).collect::<Vec<_>>(), vec!["A", "B"]);
+    assert_eq!(
+        (0..symbol.len())
+            .map(|i| symbol.value(i))
+            .collect::<Vec<_>>(),
+        vec!["A", "B"]
+    );
     assert_eq!(price.values(), &[105.0, 104.0]);
 }
 
