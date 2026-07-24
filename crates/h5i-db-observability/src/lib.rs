@@ -208,4 +208,35 @@ mod tests {
         buffer.record(report(Uuid::new_v4(), "SELECT 1"));
         assert!(buffer.snapshot().is_empty());
     }
+
+    #[test]
+    fn eviction_keeps_the_newest_n_in_insertion_order() {
+        let buffer = WorkloadTelemetryBuffer::new(2);
+        let ids: Vec<Uuid> = (0..3).map(|_| Uuid::new_v4()).collect();
+        for id in &ids {
+            buffer.record(report(*id, "SELECT 1"));
+        }
+        let kept: Vec<Uuid> = buffer.snapshot().iter().map(|r| r.query_id).collect();
+        // The first insert is evicted; the survivors stay oldest-to-newest.
+        assert_eq!(kept, vec![ids[1], ids[2]]);
+    }
+
+    #[test]
+    fn different_queries_have_different_fingerprints() {
+        assert_ne!(
+            query_fingerprint("SELECT * FROM a"),
+            query_fingerprint("SELECT * FROM b")
+        );
+    }
+
+    #[test]
+    fn clones_share_the_same_underlying_buffer() {
+        let a = WorkloadTelemetryBuffer::new(4);
+        let b = a.clone();
+        a.record(report(Uuid::new_v4(), "SELECT 1"));
+        // Recording through one handle is visible through the clone.
+        assert_eq!(b.snapshot().len(), 1);
+        b.clear();
+        assert!(a.snapshot().is_empty());
+    }
 }
