@@ -106,15 +106,13 @@ pub struct LeakageReport {
 }
 
 /// Always-present scope caveat: what a zero delta does and does not prove.
-const NOTE_ZERO_IS_NOT_INNOCENCE: &str =
-    "a zero delta does not prove the absence of look-ahead bias: this check only sees \
+const NOTE_ZERO_IS_NOT_INNOCENCE: &str = "a zero delta does not prove the absence of look-ahead bias: this check only sees \
      data-availability (arrival-axis) leakage across commits, not look-ahead inside a single \
      snapshot (a window overrunning into future rows, a join reading later timestamps), which \
      needs an event-time cutoff";
 
 /// Added when the comparison had nothing to withhold.
-const NOTE_VACUOUS: &str =
-    "VACUOUS: the as-of point resolved to the same version as head for every table, so both runs \
+const NOTE_VACUOUS: &str = "VACUOUS: the as-of point resolved to the same version as head for every table, so both runs \
      read identical data and the delta below is necessarily zero. This database has no arrival \
      history to check against (typically a single bulk ingest). Ingest continuously, or \
      reconstruct arrival history from the vendor's publication timestamps, before trusting an \
