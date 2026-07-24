@@ -118,6 +118,12 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
   agent killed mid-write cannot corrupt the store.
 - **An auditable trail.** Version history records what changed and when;
   the review UI gives humans a diff-and-approve surface over it.
+- **Data-safety guardrails.** An opt-in per-table `data-policy` enforces typed
+  constraints (`not_null`/`compare`/`in_set`) fail-closed on every write and at
+  plan time, so an agent can't quietly commit malformed rows.
+- **Look-ahead-bias checks.** `leakage-check` re-runs a query as of the
+  decision instant and reports how much of the result leaked from
+  later-arriving data — catching alpha that would evaporate in production.
 
 ---
 
