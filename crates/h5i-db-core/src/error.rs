@@ -284,7 +284,7 @@ mod tests {
                 path: "p".into(),
                 source: "x".into(),
             }),
-            Error::io("/p", std::io::Error::new(std::io::ErrorKind::Other, "boom")),
+            Error::io("/p", std::io::Error::other("boom")),
             Error::Arrow(arrow::error::ArrowError::ComputeError("c".into())),
             Error::Parquet(parquet::errors::ParquetError::General("g".into())),
             Error::Serde(serde_json::from_str::<i32>("nope").unwrap_err()),
@@ -330,7 +330,7 @@ mod tests {
         }
         .retryable());
         assert!(Error::Timeout { seconds: 1 }.retryable());
-        assert!(Error::io("/p", std::io::Error::new(std::io::ErrorKind::Other, "x")).retryable());
+        assert!(Error::io("/p", std::io::Error::other("x")).retryable());
 
         // Deterministic user/logic errors are not.
         assert!(!Error::invalid("x").retryable());
