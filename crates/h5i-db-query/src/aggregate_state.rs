@@ -108,6 +108,17 @@ struct GroupState {
     close: f64,
     volume: f64,
     price_volume: f64,
+    /// Neumaier compensation for `volume` / `price_volume`. In-memory only
+    /// (`serde(skip)`): `settle()` folds it into the totals before the entry is
+    /// sealed or finished, so the persisted payload, its checksum, and the
+    /// merge across segments all stay bit-for-bit what they were — this only
+    /// makes the *within-segment* sum over up to ~120k ticks accurate, keeping
+    /// the warm (cached) rollup equal to the cold recompute. See
+    /// [`crate::finance::neumaier_add`].
+    #[serde(skip, default)]
+    c_volume: f64,
+    #[serde(skip, default)]
+    c_price_volume: f64,
 }
 
 impl GroupState {
@@ -123,6 +134,8 @@ impl GroupState {
             close: price,
             volume,
             price_volume: price * volume,
+            c_volume: 0.0,
+            c_price_volume: 0.0,
         }
     }
 
@@ -138,9 +151,14 @@ impl GroupState {
         }
         self.high = self.high.max(price);
         self.low = self.low.min(price);
-        self.volume += volume;
-        self.price_volume += price * volume;
-        self.volume.is_finite() && self.price_volume.is_finite()
+        crate::finance::neumaier_add(&mut self.volume, &mut self.c_volume, volume);
+        crate::finance::neumaier_add(
+            &mut self.price_volume,
+            &mut self.c_price_volume,
+            price * volume,
+        );
+        (self.volume + self.c_volume).is_finite()
+            && (self.price_volume + self.c_price_volume).is_finite()
     }
 
     fn merge(&mut self, other: GroupState) -> bool {
@@ -155,12 +173,33 @@ impl GroupState {
         }
         self.high = self.high.max(other.high);
         self.low = self.low.min(other.low);
-        self.volume += other.volume;
-        self.price_volume += other.price_volume;
-        self.volume.is_finite() && self.price_volume.is_finite()
+        crate::finance::neumaier_add(
+            &mut self.volume,
+            &mut self.c_volume,
+            other.volume + other.c_volume,
+        );
+        crate::finance::neumaier_add(
+            &mut self.price_volume,
+            &mut self.c_price_volume,
+            other.price_volume + other.c_price_volume,
+        );
+        (self.volume + self.c_volume).is_finite()
+            && (self.price_volume + self.c_price_volume).is_finite()
     }
 
-    fn finish(self) -> FinanceAggregate {
+    /// Fold the compensation terms into the totals and zero them. Called before
+    /// an entry is sealed/serialized so the persisted `volume`/`price_volume`
+    /// carry the corrected value and the wire format never sees the comp
+    /// fields.
+    fn settle(&mut self) {
+        self.volume += self.c_volume;
+        self.c_volume = 0.0;
+        self.price_volume += self.c_price_volume;
+        self.c_price_volume = 0.0;
+    }
+
+    fn finish(mut self) -> FinanceAggregate {
+        self.settle();
         FinanceAggregate {
             group: self.group,
             rows: self.rows,
@@ -190,6 +229,11 @@ struct AggregateStateEntry {
 
 impl AggregateStateEntry {
     fn seal(&mut self) -> h5i_db_core::Result<()> {
+        // Fold Neumaier compensation into the stored totals before checksumming
+        // so the persisted payload is the corrected, comp-free value.
+        for group in &mut self.groups {
+            group.settle();
+        }
         self.checksum.clear();
         self.checksum = h5i_db_core::util::checksum_hex(&serde_json::to_vec(self)?);
         Ok(())
@@ -596,6 +640,8 @@ mod tests {
                 close: price,
                 volume,
                 price_volume: price * volume,
+                c_volume: 0.0,
+                c_price_volume: 0.0,
             });
         }
         let mut entry = AggregateStateEntry {

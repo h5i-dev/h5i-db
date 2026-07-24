@@ -21,6 +21,27 @@ use datafusion::logical_expr::{
     WindowUDF, WindowUDFImpl,
 };
 
+/// Neumaier-compensated summation step: adds `value` into the running
+/// `sum` while accumulating the low-order bits lost to rounding in `c`. The
+/// corrected total is `sum + c`. This is the Kahan–Babuška–Neumaier variant,
+/// which stays accurate even when `value` is larger in magnitude than the
+/// running `sum` (the case plain Kahan mishandles). Valid for negative
+/// addends too, so sliding-window retraction is just `neumaier_add(-x)`.
+///
+/// Used by both the streaming `vwap`/`wavg` accumulator here and the
+/// version-aware finance aggregate-state store, so warm (cached) and cold
+/// (recomputed) rollups agree to the last representable bit.
+#[inline]
+pub(crate) fn neumaier_add(sum: &mut f64, c: &mut f64, value: f64) {
+    let t = *sum + value;
+    if sum.abs() >= value.abs() {
+        *c += (*sum - t) + value;
+    } else {
+        *c += (value - t) + *sum;
+    }
+    *sum = t;
+}
+
 // ---------------------------------------------------------------------------
 // vwap / wavg: weighted average aggregate
 // ---------------------------------------------------------------------------
@@ -84,6 +105,8 @@ impl AggregateUDFImpl for WeightedAvgUdaf {
         Ok(Box::new(WeightedAvgAccumulator {
             sum_vw: 0.0,
             sum_w: 0.0,
+            c_vw: 0.0,
+            c_w: 0.0,
             count: 0,
             weight_first: self.weight_first,
         }))
@@ -112,6 +135,12 @@ impl AggregateUDFImpl for WeightedAvgUdaf {
 struct WeightedAvgAccumulator {
     sum_vw: f64,
     sum_w: f64,
+    /// Neumaier compensation terms for `sum_vw` / `sum_w`; the accurate totals
+    /// are `sum_vw + c_vw` and `sum_w + c_w`. Kept in-memory only — emitted
+    /// state folds them into the two f64 totals, so the on-wire/merge state
+    /// format is unchanged.
+    c_vw: f64,
+    c_w: f64,
     /// Live (update − retract) contribution count: makes "window is empty"
     /// exact under retraction, where float cancellation can leave `sum_w`
     /// slightly off zero.
@@ -134,8 +163,8 @@ impl Accumulator for WeightedAvgAccumulator {
         let w = to_f64_array(&values[w_idx])?;
         for i in 0..v.len() {
             if v.is_valid(i) && w.is_valid(i) {
-                self.sum_vw += v.value(i) * w.value(i);
-                self.sum_w += w.value(i);
+                neumaier_add(&mut self.sum_vw, &mut self.c_vw, v.value(i) * w.value(i));
+                neumaier_add(&mut self.sum_w, &mut self.c_w, w.value(i));
                 self.count += 1;
             }
         }
@@ -143,15 +172,16 @@ impl Accumulator for WeightedAvgAccumulator {
     }
 
     /// Sliding-window support: remove rows leaving the frame so rolling
-    /// `vwap`/`wavg` are O(n) instead of re-accumulating O(n·w).
+    /// `vwap`/`wavg` are O(n) instead of re-accumulating O(n·w). Retraction is
+    /// a compensated addition of the negated contribution.
     fn retract_batch(&mut self, values: &[ArrayRef]) -> DfResult<()> {
         let (v_idx, w_idx) = if self.weight_first { (1, 0) } else { (0, 1) };
         let v = to_f64_array(&values[v_idx])?;
         let w = to_f64_array(&values[w_idx])?;
         for i in 0..v.len() {
             if v.is_valid(i) && w.is_valid(i) {
-                self.sum_vw -= v.value(i) * w.value(i);
-                self.sum_w -= w.value(i);
+                neumaier_add(&mut self.sum_vw, &mut self.c_vw, -(v.value(i) * w.value(i)));
+                neumaier_add(&mut self.sum_w, &mut self.c_w, -w.value(i));
                 self.count = self.count.saturating_sub(1);
             }
         }
@@ -159,6 +189,8 @@ impl Accumulator for WeightedAvgAccumulator {
             // Empty frame: snap accumulated float error back to exact zero.
             self.sum_vw = 0.0;
             self.sum_w = 0.0;
+            self.c_vw = 0.0;
+            self.c_w = 0.0;
         }
         Ok(())
     }
@@ -168,10 +200,13 @@ impl Accumulator for WeightedAvgAccumulator {
     }
 
     fn evaluate(&mut self) -> DfResult<ScalarValue> {
-        if self.count == 0 || self.sum_w == 0.0 {
+        let sum_w = self.sum_w + self.c_w;
+        if self.count == 0 || sum_w == 0.0 {
             Ok(ScalarValue::Float64(None))
         } else {
-            Ok(ScalarValue::Float64(Some(self.sum_vw / self.sum_w)))
+            Ok(ScalarValue::Float64(Some(
+                (self.sum_vw + self.c_vw) / sum_w,
+            )))
         }
     }
 
@@ -180,9 +215,11 @@ impl Accumulator for WeightedAvgAccumulator {
     }
 
     fn state(&mut self) -> DfResult<Vec<ScalarValue>> {
+        // Fold the compensation into each total so the partial-aggregate state
+        // stays two f64 (format unchanged) while carrying the corrected value.
         Ok(vec![
-            ScalarValue::Float64(Some(self.sum_vw)),
-            ScalarValue::Float64(Some(self.sum_w)),
+            ScalarValue::Float64(Some(self.sum_vw + self.c_vw)),
+            ScalarValue::Float64(Some(self.sum_w + self.c_w)),
         ])
     }
 
@@ -191,11 +228,11 @@ impl Accumulator for WeightedAvgAccumulator {
         let w = to_f64_array(&states[1])?;
         for i in 0..vw.len() {
             if vw.is_valid(i) {
-                self.sum_vw += vw.value(i);
+                neumaier_add(&mut self.sum_vw, &mut self.c_vw, vw.value(i));
                 self.count += 1;
             }
             if w.is_valid(i) {
-                self.sum_w += w.value(i);
+                neumaier_add(&mut self.sum_w, &mut self.c_w, w.value(i));
             }
         }
         Ok(())
@@ -305,4 +342,96 @@ impl PartitionEvaluator for EwmaEvaluator {
 
 pub fn ewma_udwf() -> WindowUDF {
     WindowUDF::new_from_impl(EwmaUdwf::default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Float64Array;
+
+    fn vwap_acc() -> WeightedAvgAccumulator {
+        WeightedAvgAccumulator {
+            sum_vw: 0.0,
+            sum_w: 0.0,
+            c_vw: 0.0,
+            c_w: 0.0,
+            count: 0,
+            weight_first: false,
+        }
+    }
+
+    /// Control + proof: a big value followed by many ones stalls a naive f64
+    /// sum at `big` (each `+= 1.0` rounds away), while Neumaier recovers every
+    /// one. This is the drift `vwap`/`wavg` and the aggregate-state store would
+    /// otherwise accumulate over millions of ticks.
+    #[test]
+    fn neumaier_add_recovers_bits_lost_by_naive_sum() {
+        let big = 1e16_f64;
+        let n_ones = 1_000_000usize;
+        let mut naive = big;
+        let (mut sum, mut c) = (big, 0.0);
+        for _ in 0..n_ones {
+            naive += 1.0;
+            neumaier_add(&mut sum, &mut c, 1.0);
+        }
+        assert_eq!(naive, big, "control: naive sum must have lost the ones");
+        assert_eq!(
+            sum + c,
+            big + n_ones as f64,
+            "neumaier recovers every lost one"
+        );
+    }
+
+    /// `vwap` over a full-mantissa dataset matches the high-precision reference;
+    /// a naive accumulator would be off by ~1.0 here.
+    #[test]
+    fn vwap_long_sum_matches_high_precision_reference() {
+        let big = 1e16_f64;
+        let n_ones = 1_000_000usize;
+        let mut prices = Vec::with_capacity(n_ones + 1);
+        prices.push(big);
+        prices.extend(std::iter::repeat_n(1.0_f64, n_ones));
+        let weights = vec![1.0_f64; n_ones + 1];
+        let pv: ArrayRef = Arc::new(Float64Array::from(prices));
+        let wv: ArrayRef = Arc::new(Float64Array::from(weights));
+
+        let mut acc = vwap_acc();
+        acc.update_batch(&[pv, wv]).unwrap();
+        let got = match acc.evaluate().unwrap() {
+            ScalarValue::Float64(Some(x)) => x,
+            other => panic!("expected f64, got {other:?}"),
+        };
+
+        // Weights are all 1, so vwap == mean(price) = (big + n_ones)/(n_ones+1).
+        let reference = (big + n_ones as f64) / (n_ones as f64 + 1.0);
+        let naive_would_be = big / (n_ones as f64 + 1.0);
+        assert!(
+            (got - reference).abs() <= 1e-3,
+            "vwap {got} vs reference {reference}"
+        );
+        assert!(
+            (got - naive_would_be).abs() > 0.5,
+            "result must differ from the naive-sum answer"
+        );
+    }
+
+    /// Sliding-window retraction (compensated) equals a fresh accumulation over
+    /// the surviving rows.
+    #[test]
+    fn retract_matches_fresh_accumulation() {
+        let prices: ArrayRef = Arc::new(Float64Array::from(vec![10.0, 20.0, 30.0, 40.0]));
+        let weights: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0]));
+        let mut acc = vwap_acc();
+        acc.update_batch(&[prices, weights]).unwrap();
+        // Retract the first two rows.
+        let r_p: ArrayRef = Arc::new(Float64Array::from(vec![10.0, 20.0]));
+        let r_w: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0]));
+        acc.retract_batch(&[r_p, r_w]).unwrap();
+        let got = match acc.evaluate().unwrap() {
+            ScalarValue::Float64(Some(x)) => x,
+            other => panic!("expected f64, got {other:?}"),
+        };
+        // Surviving rows (30,3),(40,4): (30*3 + 40*4)/(3+4) = 250/7.
+        assert!((got - 250.0 / 7.0).abs() <= 1e-12, "got {got}");
+    }
 }

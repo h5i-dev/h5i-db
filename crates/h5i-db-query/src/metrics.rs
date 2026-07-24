@@ -314,6 +314,23 @@ fn collect_operator_metrics(
     }
 }
 
+/// Read a metric's scalar value as `u64`.
+///
+/// DataFusion 54 moved row-group / page pruning onto the `PruningMetrics`
+/// metric type, whose `as_usize()` is intentionally `0` (it holds separate
+/// pruned/matched counters). A plain `as_usize()` therefore silently reports
+/// `0` for every `row_groups_pruned_*` / `page_index_*` pruning metric — so we
+/// special-case it and read the `pruned` count, which is what these fields mean.
+fn metric_scalar(value: &datafusion::physical_plan::metrics::MetricValue) -> u64 {
+    use datafusion::physical_plan::metrics::MetricValue;
+    match value {
+        MetricValue::PruningMetrics {
+            pruning_metrics, ..
+        } => pruning_metrics.pruned() as u64,
+        other => other.as_usize() as u64,
+    }
+}
+
 fn metric_from_set(
     metrics: Option<&datafusion::physical_plan::metrics::MetricsSet>,
     name: &str,
@@ -322,7 +339,7 @@ fn metric_from_set(
         .into_iter()
         .flat_map(|set| set.iter())
         .filter(|metric| metric.value().name() == name)
-        .map(|metric| metric.value().as_usize() as u64)
+        .map(|metric| metric_scalar(metric.value()))
         .sum()
 }
 
@@ -341,7 +358,7 @@ fn sum_plan_metric_prefix(plan: &Arc<dyn ExecutionPlan>, prefix: &str) -> u64 {
         .into_iter()
         .flat_map(|set| set.iter().cloned().collect::<Vec<_>>())
         .filter(|metric| metric.value().name().starts_with(prefix))
-        .map(|metric| metric.value().as_usize() as u64)
+        .map(|metric| metric_scalar(metric.value()))
         .sum::<u64>();
     own.saturating_add(
         plan.children()

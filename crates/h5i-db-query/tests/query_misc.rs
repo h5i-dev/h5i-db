@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+    UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::common::stats::Precision;
@@ -993,4 +994,381 @@ async fn aggregate_states_reuse_unchanged_segments_and_match_full_recomputation(
     assert_eq!(compacted.groups, compacted_forced.groups);
     assert_eq!(compacted.metrics.states_reused, 0);
     assert_eq!(compacted.metrics.states_built, 1);
+}
+
+/// End-to-end proof of A2: a bloom filter on a high-cardinality entity column
+/// prunes row groups that min/max statistics structurally cannot. The early row
+/// groups alternate only "AAA"/"ZZZ" (min/max span = [AAA, ZZZ]), while the
+/// queried "MMM" lives solely in the final row group — so statistics keep every
+/// group, but the bloom excludes the MMM-free ones. A no-bloom control proves
+/// min/max alone prunes nothing here.
+#[tokio::test]
+async fn bloom_filter_prunes_row_groups_min_max_cannot() {
+    // 3 floored 8K row groups in a single segment.
+    const ROWS: usize = 24_576;
+
+    async fn row_groups_pruned(bloom: bool) -> (i64, u64) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+        db.create_table(
+            "trades",
+            trades_schema(),
+            TableOptions {
+                storage: StorageOptions {
+                    target_segment_bytes: 16 * 1024 * 1024,
+                    target_row_group_bytes: 4 * 1024, // floored up to 8K rows/group
+                    bloom_filter_columns: if bloom {
+                        vec!["symbol".to_string()]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let timestamps: Vec<i64> = (0..ROWS as i64).collect();
+        let symbols: Vec<&str> = (0..ROWS)
+            .map(|i| {
+                if i >= ROWS - 8192 {
+                    "MMM" // only the last row group holds the queried symbol
+                } else if i % 2 == 0 {
+                    "AAA"
+                } else {
+                    "ZZZ"
+                }
+            })
+            .collect();
+        let prices = vec![1.0_f64; ROWS];
+        let sizes = vec![1_i64; ROWS];
+        db.append(
+            "trades",
+            vec![trades_batch(&timestamps, &symbols, &prices, &sizes)],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        let session = H5iSession::new(db.clone(), SessionOptions::default())
+            .await
+            .unwrap();
+        let (batches, report) = session
+            .sql_reported("SELECT count(*) FROM trades WHERE symbol = 'MMM'")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let count = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
+        (count, report.row_groups_pruned)
+    }
+
+    let (bloom_count, bloom_pruned) = row_groups_pruned(true).await;
+    let (control_count, control_pruned) = row_groups_pruned(false).await;
+
+    // Correctness is identical regardless of pruning.
+    assert_eq!(bloom_count, 8192);
+    assert_eq!(control_count, 8192);
+    // Min/max cannot exclude any group for this layout.
+    assert_eq!(
+        control_pruned, 0,
+        "control: statistics must prune no row groups"
+    );
+    // The bloom excludes both MMM-free groups.
+    assert!(
+        bloom_pruned >= 2,
+        "bloom should prune the two MMM-free row groups, pruned {bloom_pruned}"
+    );
+}
+
+/// C3: approximate distinct-count (HyperLogLog) and parallel top-K are provided
+/// by DataFusion built-ins (`approx_distinct`, and `ORDER BY … LIMIT` planned as
+/// a TopK) — registered through the session's default features. This verifies
+/// they are reachable via h5i SQL and return correct results, so we consume them
+/// rather than reimplement (matching the "don't rebuild DataFusion" principle).
+#[tokio::test]
+async fn approx_distinct_and_topk_are_available_and_correct() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+
+    // 300 rows across 3 symbols with distinct total volume ordering A > B > C.
+    let n = 300usize;
+    let timestamps: Vec<i64> = (0..n as i64).collect();
+    let symbols: Vec<&str> = (0..n)
+        .map(|i| match i % 3 {
+            0 => "AAA",
+            1 => "BBB",
+            _ => "CCC",
+        })
+        .collect();
+    let prices = vec![1.0_f64; n];
+    // Weight volumes so AAA > BBB > CCC deterministically.
+    let sizes: Vec<i64> = (0..n)
+        .map(|i| match i % 3 {
+            0 => 100,
+            1 => 10,
+            _ => 1,
+        })
+        .collect();
+    db.append(
+        "trades",
+        vec![trades_batch(&timestamps, &symbols, &prices, &sizes)],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let session = H5iSession::new(db.clone(), SessionOptions::default())
+        .await
+        .unwrap();
+
+    // approx_distinct (HyperLogLog) — exact for a tiny cardinality of 3.
+    let (b, _) = session
+        .sql_reported("SELECT approx_distinct(symbol) AS d FROM trades")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let distinct = b[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(distinct, 3, "approx_distinct should count 3 symbols");
+
+    // Parallel top-K: top-2 symbols by total volume.
+    let (b, _) = session
+        .sql_reported(
+            "SELECT symbol FROM trades GROUP BY symbol \
+             ORDER BY sum(size) DESC LIMIT 2",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let col = b[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let top: Vec<&str> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(top, vec!["AAA", "BBB"], "top-2 by volume");
+}
+
+/// B3: constant `value` fill (QuestDB `FILL(x)`) and the `prev`/`linear`
+/// aliases for `locf`/`interpolate`. A missing bar gets the constant in numeric
+/// columns and null in non-numeric ones.
+#[tokio::test]
+async fn gapfill_value_fill_and_aliases() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[0, 20], &["A", "A"], &[0.0, 20.0], &[1, 3])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+
+    // Constant fill 7: the missing ts=10 bar gets price 7.0 and size 7.
+    let filled = s
+        .sql("SELECT price, size, symbol FROM gapfill('trades', 'ts', 10, 'value', 7) ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let price = filled[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    let size = filled[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let symbol = filled[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(price.values(), &[0.0, 7.0, 20.0]);
+    assert_eq!(size.values(), &[1, 7, 3]);
+    // Non-numeric column is null for the synthesized bar.
+    assert!(symbol.is_valid(0) && !symbol.is_valid(1) && symbol.is_valid(2));
+
+    // `prev` == locf, `linear` == interpolate.
+    let prev = s
+        .sql("SELECT price FROM gapfill('trades', 'ts', 10, 'prev') ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        prev[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .values(),
+        &[0.0, 0.0, 20.0]
+    );
+    let linear = s
+        .sql("SELECT price FROM gapfill('trades', 'ts', 10, 'linear') ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        linear[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .values(),
+        &[0.0, 10.0, 20.0]
+    );
+
+    // Misuse: 'value' without a constant, and a constant without 'value'.
+    assert!(s
+        .sql("SELECT * FROM gapfill('trades', 'ts', 10, 'value')")
+        .await
+        .is_err());
+    assert!(s
+        .sql("SELECT * FROM gapfill('trades', 'ts', 10, 'locf', 7)")
+        .await
+        .is_err());
+}
+
+/// A3: `latest_on('table','symbol')` returns the most recent row per group.
+#[tokio::test]
+async fn latest_on_returns_most_recent_row_per_symbol() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    // A: ts 1,3,5 → latest price 105; B: ts 2,4 → latest 104.
+    db.append(
+        "trades",
+        vec![trades_batch(
+            &[1, 2, 3, 4, 5],
+            &["A", "B", "A", "B", "A"],
+            &[101.0, 102.0, 103.0, 104.0, 105.0],
+            &[1, 1, 1, 1, 1],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+    let batches = s
+        .sql("SELECT symbol, price FROM latest_on('trades', 'symbol') ORDER BY symbol")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let symbol = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let price = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    assert_eq!(
+        (0..symbol.len())
+            .map(|i| symbol.value(i))
+            .collect::<Vec<_>>(),
+        vec!["A", "B"]
+    );
+    assert_eq!(price.values(), &[105.0, 104.0]);
+}
+
+/// A3: the per-segment cache is reused across append-only versions — a new
+/// append scans only the newly added segment, prior segments come from cache.
+#[tokio::test]
+async fn latest_by_store_reuses_cached_segments_across_appends() {
+    use h5i_db_query::latest::{LatestByMode, LatestByStore};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[1, 2], &["A", "B"], &[101.0, 102.0], &[1, 1])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let store = LatestByStore::new(db.clone(), LatestByMode::ReadWrite);
+
+    // Cold: build the single segment's state.
+    let (r1, m1) = store
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    assert_eq!(m1.segments_total, 1);
+    assert_eq!(m1.states_built, 1);
+    assert_eq!(m1.states_reused, 0);
+    assert_eq!(r1.num_rows(), 2);
+
+    // Warm: reuse the cached state, scan zero rows.
+    let (_r2, m2) = store
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    assert_eq!(m2.states_reused, 1);
+    assert_eq!(m2.states_built, 0);
+    assert_eq!(m2.rows_scanned, 0);
+
+    // Append a second segment with a newer A row.
+    db.append(
+        "trades",
+        vec![trades_batch(&[6], &["A"], &[999.0], &[1])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let (r3, m3) = store
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    assert_eq!(m3.segments_total, 2);
+    assert_eq!(m3.states_reused, 1, "segment 1 reused from cache");
+    assert_eq!(m3.states_built, 1, "only the new segment is scanned");
+    // Rows are ordered by symbol: A then B. Latest A is now 999, B stays 102.
+    let price = r3
+        .column(2)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    assert_eq!(price.values(), &[999.0, 102.0]);
 }

@@ -123,4 +123,66 @@ mod tests {
         assert!(p0.as_ref() < p10.as_ref());
         assert!(p10.as_ref() < p9999.as_ref());
     }
+
+    #[test]
+    fn manifest_sequence_rejects_non_manifest_paths() {
+        // A segment path is not a manifest sequence.
+        let seg = segment_path(Uuid::new_v4(), Uuid::new_v4());
+        assert_eq!(manifest_sequence_from_path(&seg), None);
+        // Non-numeric stem.
+        let junk = ObjPath::from("tables/x/manifests/HEAD.json");
+        assert_eq!(manifest_sequence_from_path(&junk), None);
+        // Missing .json suffix.
+        let no_ext = ObjPath::from("tables/x/manifests/000000000001");
+        assert_eq!(manifest_sequence_from_path(&no_ext), None);
+    }
+
+    #[test]
+    fn hashing_is_deterministic_and_name_sensitive() {
+        assert_eq!(hash_name("trades"), hash_name("trades"));
+        assert_ne!(hash_name("trades"), hash_name("quotes"));
+        // Same name -> same catalog path (lookups are stable across runs).
+        assert_eq!(catalog_entry_path("trades"), catalog_entry_path("trades"));
+    }
+
+    #[test]
+    fn per_table_paths_are_nested_under_the_table_prefix() {
+        let id = Uuid::new_v4();
+        let prefix = table_prefix(id).as_ref().to_string();
+        for p in [
+            head_path(id),
+            spec_path(id, 1),
+            manifest_prefix(id),
+            manifest_path(id, 1),
+            segment_prefix(id),
+            segment_path(id, Uuid::new_v4()),
+            staging_prefix(id),
+            staging_lease_path(id, Uuid::new_v4()),
+        ] {
+            assert!(
+                p.as_ref().starts_with(&prefix),
+                "{} should be under {prefix}",
+                p.as_ref()
+            );
+        }
+    }
+
+    #[test]
+    fn spec_revision_is_zero_padded() {
+        let id = Uuid::new_v4();
+        assert!(spec_path(id, 1).as_ref().ends_with("/spec/00000001.json"));
+        // Padding preserves lexicographic == numeric ordering.
+        assert!(spec_path(id, 2).as_ref() < spec_path(id, 10).as_ref());
+    }
+
+    #[test]
+    fn segment_and_staging_paths_have_expected_extensions() {
+        let id = Uuid::new_v4();
+        assert!(segment_path(id, Uuid::new_v4())
+            .as_ref()
+            .ends_with(".parquet"));
+        assert!(staging_lease_path(id, Uuid::new_v4())
+            .as_ref()
+            .ends_with(".json"));
+    }
 }

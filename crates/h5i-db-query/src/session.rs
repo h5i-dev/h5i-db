@@ -24,6 +24,7 @@ use crate::asof::{AsOfJoinFunc, AsOfQueryPlanner};
 use crate::finance::{ewma_udwf, vwap_udaf, wavg_udaf};
 use crate::functions::time_bucket_udf;
 use crate::gapfill::GapFillFunc;
+use crate::latest::LatestByFunc;
 use crate::metrics::{
     QueryPerformanceReport, ReportedDataFrame, ScanMetrics, ScanMetricsCollector,
     WorkloadTelemetryEnvelope,
@@ -174,6 +175,7 @@ impl H5iSession {
         ctx.register_udtf("gapfill", Arc::new(GapFillFunc::new(db.clone())));
         ctx.register_udtf("resample", Arc::new(GapFillFunc::new(db.clone())));
         ctx.register_udtf("tail", Arc::new(TailFunc::new(db.clone())));
+        ctx.register_udtf("latest_on", Arc::new(LatestByFunc::new(db.clone())));
         ctx.register_udf(time_bucket_udf());
         ctx.register_udaf(vwap_udaf());
         ctx.register_udaf(wavg_udaf());

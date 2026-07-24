@@ -233,3 +233,208 @@ impl Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One representative value of every `Error` variant. Kept exhaustive so
+    /// that adding a variant without extending the classification tables here
+    /// makes the coverage assertions below fail loudly.
+    fn all_variants() -> Vec<Error> {
+        vec![
+            Error::DatabaseNotFound { path: "/db".into() },
+            Error::DatabaseExists { path: "/db".into() },
+            Error::TableNotFound { name: "t".into() },
+            Error::TableExists { name: "t".into() },
+            Error::VersionNotFound {
+                table: "t".into(),
+                requested: "9".into(),
+                hint: "max is 3".into(),
+            },
+            Error::SnapshotNotFound { name: "s".into() },
+            Error::VersionConflict {
+                table: "t".into(),
+                expected: 1,
+                actual: 2,
+            },
+            Error::SchemaMismatch { detail: "d".into() },
+            Error::SortOrderViolation { detail: "d".into() },
+            Error::InvalidInput { detail: "d".into() },
+            Error::Unsupported { detail: "d".into() },
+            Error::ReadOnly {
+                op: "append".into(),
+            },
+            Error::PolicyViolation { op: "write".into() },
+            Error::Corruption {
+                object: "o".into(),
+                detail: "d".into(),
+            },
+            Error::FormatTooNew {
+                found: 2,
+                supported: 1,
+            },
+            Error::LimitExceeded { detail: "d".into() },
+            Error::Timeout { seconds: 5 },
+            Error::LockTimeout {
+                table: "t".into(),
+                waited_ms: 100,
+            },
+            Error::ObjectStore(object_store::Error::NotFound {
+                path: "p".into(),
+                source: "x".into(),
+            }),
+            Error::io("/p", std::io::Error::other("boom")),
+            Error::Arrow(arrow::error::ArrowError::ComputeError("c".into())),
+            Error::Parquet(parquet::errors::ParquetError::General("g".into())),
+            Error::Serde(serde_json::from_str::<i32>("nope").unwrap_err()),
+            Error::Internal { detail: "d".into() },
+        ]
+    }
+
+    #[test]
+    fn every_variant_has_a_stable_nonempty_code() {
+        for e in all_variants() {
+            let code = e.code();
+            assert!(!code.is_empty(), "empty code for {e:?}");
+            assert_eq!(code, code.trim(), "code has whitespace for {e:?}");
+        }
+    }
+
+    #[test]
+    fn codes_are_unique_per_variant() {
+        let variants = all_variants();
+        let mut codes: Vec<&str> = variants.iter().map(|e| e.code()).collect();
+        codes.sort_unstable();
+        let unique = codes.len();
+        codes.dedup();
+        assert_eq!(
+            codes.len(),
+            unique,
+            "two Error variants share the same code string"
+        );
+    }
+
+    #[test]
+    fn retryable_classification_matches_contract() {
+        // Only transient / racy conditions are retryable.
+        assert!(Error::VersionConflict {
+            table: "t".into(),
+            expected: 1,
+            actual: 2,
+        }
+        .retryable());
+        assert!(Error::LockTimeout {
+            table: "t".into(),
+            waited_ms: 1,
+        }
+        .retryable());
+        assert!(Error::Timeout { seconds: 1 }.retryable());
+        assert!(Error::io("/p", std::io::Error::other("x")).retryable());
+
+        // Deterministic user/logic errors are not.
+        assert!(!Error::invalid("x").retryable());
+        assert!(!Error::SchemaMismatch { detail: "x".into() }.retryable());
+        assert!(!Error::corruption("o", "d").retryable());
+        assert!(!Error::TableNotFound { name: "t".into() }.retryable());
+    }
+
+    #[test]
+    fn exit_category_maps_conflict_limit_and_internal() {
+        assert_eq!(
+            Error::VersionConflict {
+                table: "t".into(),
+                expected: 1,
+                actual: 2,
+            }
+            .exit_category(),
+            ExitCategory::Conflict
+        );
+        assert_eq!(
+            Error::LockTimeout {
+                table: "t".into(),
+                waited_ms: 1,
+            }
+            .exit_category(),
+            ExitCategory::Conflict
+        );
+        assert_eq!(
+            Error::LimitExceeded { detail: "d".into() }.exit_category(),
+            ExitCategory::Limit
+        );
+        assert_eq!(
+            Error::Timeout { seconds: 1 }.exit_category(),
+            ExitCategory::Limit
+        );
+        assert_eq!(
+            Error::corruption("o", "d").exit_category(),
+            ExitCategory::Internal
+        );
+        assert_eq!(Error::internal("d").exit_category(), ExitCategory::Internal);
+        // Plain user errors default to UserError.
+        assert_eq!(Error::invalid("d").exit_category(), ExitCategory::UserError);
+        assert_eq!(
+            Error::TableNotFound { name: "t".into() }.exit_category(),
+            ExitCategory::UserError
+        );
+    }
+
+    #[test]
+    fn hints_present_only_for_actionable_variants() {
+        // These variants must carry an actionable hint.
+        assert!(Error::VersionConflict {
+            table: "t".into(),
+            expected: 1,
+            actual: 2,
+        }
+        .hint()
+        .is_some());
+        assert!(Error::TableNotFound { name: "t".into() }.hint().is_some());
+        assert!(Error::SnapshotNotFound { name: "s".into() }
+            .hint()
+            .is_some());
+        assert!(Error::SortOrderViolation { detail: "d".into() }
+            .hint()
+            .is_some());
+        assert!(Error::FormatTooNew {
+            found: 2,
+            supported: 1,
+        }
+        .hint()
+        .is_some());
+        assert!(Error::ReadOnly {
+            op: "append".into()
+        }
+        .hint()
+        .is_some());
+        let ph = Error::PolicyViolation { op: "write".into() }
+            .hint()
+            .unwrap();
+        assert!(ph.contains("write"), "policy hint should name the op: {ph}");
+
+        // A generic internal error offers no hint.
+        assert!(Error::internal("boom").hint().is_none());
+        assert!(Error::SchemaMismatch { detail: "d".into() }
+            .hint()
+            .is_none());
+    }
+
+    #[test]
+    fn constructor_helpers_populate_fields() {
+        match Error::corruption("seg-1", "bad crc") {
+            Error::Corruption { object, detail } => {
+                assert_eq!(object, "seg-1");
+                assert_eq!(detail, "bad crc");
+            }
+            other => panic!("expected Corruption, got {other:?}"),
+        }
+        // Display renders the fields.
+        let msg = Error::VersionConflict {
+            table: "trades".into(),
+            expected: 4,
+            actual: 5,
+        }
+        .to_string();
+        assert!(msg.contains("trades") && msg.contains('4') && msg.contains('5'));
+    }
+}
