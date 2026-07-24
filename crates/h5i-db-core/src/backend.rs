@@ -146,7 +146,7 @@ impl FsLock {
 
     /// One non-blocking lock attempt. `None` = currently held elsewhere.
     fn try_acquire(path: &Path) -> Result<Option<FsLock>> {
-        use fs4::{FileExt, TryLockError};
+        use std::fs::TryLockError;
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -154,12 +154,11 @@ impl FsLock {
             .truncate(false)
             .open(path)
             .map_err(|e| Error::io(path.display(), e))?;
-        // fs4 1.0 renamed the exclusive non-blocking attempt to `try_lock` and
-        // moved contention out of the Ok channel, mirroring `std::fs::File`.
-        // Called through the trait explicitly: std stabilized an inherent
-        // `File::try_lock` in 1.89, which would otherwise shadow this and
-        // silently raise our declared MSRV of 1.88.
-        match FileExt::try_lock(&file) {
+        // std's `try_lock` (stable since 1.89) is the same syscall the fs4
+        // crate used to issue for us: `flock(LOCK_EX | LOCK_NB)` on unix,
+        // `LockFileEx(LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY)`
+        // on Windows. Same semantics, one less dependency.
+        match file.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => return Ok(None),
             Err(TryLockError::Error(e)) => return Err(Error::io(path.display(), e)),

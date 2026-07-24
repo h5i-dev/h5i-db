@@ -25,7 +25,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/h5i-dev/h5i-db"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [workspace.dependencies]
 # version alongside path so `cargo publish` can rewrite these for crates.io.
@@ -87,7 +87,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 
 blake3 = "1"
-fs4 = { version = "1.1", features = ["sync"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = [
     "clock",

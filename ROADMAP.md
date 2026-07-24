@@ -48,7 +48,7 @@ PyPI trusted publishing in release.yml (3.1) · tracing init in CLI and UI
 (3.3) · staging leases protecting in-flight commits from vacuum (3.4) ·
 catalog CAS via create-if-absent (3.5) · UI query timeout/limits (3.7) ·
 Python GIL release via `py.detach` (3.8) · schema-only empty results (3.9) ·
-`docs/OPERATIONS.md` (3.10) · CI: Windows job, MSRV (1.88), supply-chain
+`docs/OPERATIONS.md` (3.10) · CI: Windows job, MSRV (1.89), supply-chain
 audit, perf-trend, bench-smoke (3.11) · broken-pipe quiet exit, `--max-bytes`
 (3.12).
 
