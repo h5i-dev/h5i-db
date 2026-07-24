@@ -1,13 +1,16 @@
 # h5i-db Roadmap
 
 Living roadmap. Last full update 2026-07-22 (branch `improve-performance`);
-Parts III–IV added 2026-07-23 (branch `improve-tests`).
+Parts III–IV added 2026-07-23 (branch `improve-tests`); Part V (agent-facing
+surfaces, from a 2024–26 AI-agent×DB paper survey) added 2026-07-23.
 
 This document merges the former `ROADMAP_PERFORMANCE.md` into the
 production-readiness roadmap; the separate file is gone. Part I tracks
 production readiness, Part II the structural performance program, Part III a
-fresh production-grade gap analysis against DuckDB, and Part IV a
-QuestDB-inspired performance program. Statuses in the 2026-07-22 update were
+fresh production-grade gap analysis against DuckDB, Part IV a
+QuestDB-inspired performance program, and Part V the agent-facing surface layer
+(no-RAG/no-vector/no-local-model features mined from 2024–26 top-conference
+papers, with per-item paper attribution). Statuses in the 2026-07-22 update were
 re-verified against the source (grep/tests/benchmarks), not carried forward
 from earlier revisions; Parts III–IV were sourced from a source-level study of
 `~/Ref/duckdb` and `~/Ref/questdb` cross-checked against a full inventory of
@@ -415,3 +418,181 @@ format, or ingest path; each is sequenced as focused, instrumented work so it
 can be verified without regressing the benchmarked paths. C1 in particular was
 implemented far enough to confirm its win cannot be realized additively — it
 belongs with the read-path/format tier, not as a tail-of-session change.
+
+---
+
+# Part V — Agent-facing surfaces (2026-07-23)
+
+Sourced from a survey of 2024–2026 top-conference papers on **AI-agent × database /
+data-analysis** (VLDB, SIGMOD, CIDR, ICLR, NeurIPS, EuroSys, and preprints),
+filtered by two hard constraints:
+
+1. **No RAG, no vector search / embeddings, no local open-weight models.** A
+   hosted API model (Claude) is allowed; every item below is embedding-free.
+   Papers whose value depends on vector similarity (semantic search / sim-join /
+   dedup, embedding schema-linking) or a local SLM are **excluded** — see *Do NOT
+   borrow*.
+2. **`DESIGN.md §8–§9`: agent features live in the CLI / Python / SKILL / sidecar
+   layer, never the storage engine** ("anything agent-flavored must land in
+   CLI/docs/skill"). Vector search is already a §9 non-goal, so the survey
+   constraint and the project's own philosophy coincide.
+
+**Framing — why this Part exists.** Parts I–IV harden the *engine*. Part V is the
+orthogonal axis: the "for AI agents" layer the README already claims. The survey's
+headline finding is convergence — four separate communities (text-to-SQL,
+semantic-operator DBs, agent-systems infra, data-analysis agents) independently
+concluded in 2024–26 that an agent-first data system needs **cheap branching,
+rollback, provenance, point-in-time reads, and structured (non-vector) memory** as
+baseline primitives (CIDR 2026, *Supporting Our AI Overlords*, Berkeley —
+arXiv 2509.00997). **h5i-db already ships the storage half of all of them**:
+immutable versioning = agent memory + rollback; O(1) time-travel = point-in-time
+correctness; plan/apply = staged-then-commit transactions; the audit/diff UI =
+provenance. The work below is thin agent-facing *surfaces* over primitives we
+already own — not new engine machinery.
+
+**The keystone substrate (build once, most tiers fall out).** Tiers A, C, and D
+all reduce to one capability: **deterministic execution against a pinned immutable
+version, with results cached/diffed by `(commit, query)`**. The engine is already
+deterministic on a pinned version and already checksums segments; the missing piece
+is a query-layer result cache keyed on `(version SHA, normalized query)` and a
+CLI/Python surface to run "the same query across N pinned versions." Ship that
+first; it is the common denominator.
+
+**Provenance caveat.** Some finance / agent-systems items below are recent
+preprints whose arXiv IDs the survey could not fully verify (several carried
+implausible future-dated IDs). Those are marked `⚠`. The *mechanism* is what we
+adopt; treat the citation as indicative, and re-verify venue/ID before citing
+externally (same rule as Part II §Research basis). Venue-anchored citations are
+marked `✓`.
+
+## Tier V-A — Point-in-time / look-ahead-bias-free execution (flagship)
+
+The single most differentiated surface, and the one that exploits our most
+under-used primitive (time-travel). No other embedded DB markets time-travel for
+look-ahead-bias control, which is *the* correctness bug in quant backtests. All
+three items are quant-specific, embedding-free, and reuse existing snapshots +
+query-local stats. **Scope honesty (state it in docs):** this addresses
+*data-access* leakage, which a versioned store can prove; it does **not** address
+the LLM's *pretraining* leakage, which no data layer can fix.
+
+| # | Item | Source paper(s) | Acceptance criteria |
+|---|------|-----------------|---------------------|
+| V-A1 | **`leakage-delta` report** (lowest effort, highest demo value). Run any agent backtest twice — against `HEAD` and against `h5i('table', asof=decision_time)` — and diff. The "alpha that evaporates" quantifies decision-time data leakage; surface it as a new query-local stat next to scan-bytes/pruning. | ⚠ *When Alpha Disappears: A One-Switch Benchmark for Decision-Time Leakage* (preprint, 2026) — the leaking/non-leaking toggle. | A CLI/Python `backtest --leakage-check` runs both configurations via O(1) time-travel and reports a leakage-delta metric; a golden case with a deliberately-leaking feature shows non-zero delta and a clean feature shows ~0; the second run reuses cached states (no full recompute). |
+| V-A2 | **`asof(t)`-scoped session mode.** Every scan in the session is provably bounded by an availability stamp; harden `ASOF JOIN` and `time_bucket` for availability-monotonicity + causal alignment, and add a static checker that flags any query whose data-availability effect exceeds its declared decision epoch. | ⚠ *Look-Ahead-Freedom as Temporal Non-Interference* (formal-methods preprint, 2026) — type-and-effect system, linear-time-checkable on the timestamp-only fragment (our case). | A session opened `--asof <t>` refuses (or flags in the audit trail) any scan reading data with availability `> t`; the checker is linear-time on timestamp-derived availability; differential-tested (T0.1) that `asof(t)` results equal a physically-truncated dataset at `t`. |
+| V-A3 | **Point-in-time universe / fold snapshots** as addressable, reusable commit objects an agent references when building features (e.g. "tradable universe as-of date D"). | ⚠ *Standardized Benchmark of Look-Ahead Bias in Point-in-Time LLMs for Finance* (preprint, 2026) — point-in-time universes / data folds. | An agent can name and re-read a universe/fold by `(table, asof)` in O(1); reconstructing a past universe never reads post-`t` segments (verified against manifest pruning). |
+
+## Tier V-B — Provenance-based data-safety policy
+
+Upgrades the existing policy-gated plan/apply from a *procedural* gate into a
+*provable* data-safety guarantee. DB-native, cheap, and directly validated as a
+baseline agent-DB primitive by CIDR 2026.
+
+| # | Item | Source paper(s) | Acceptance criteria |
+|---|------|-----------------|---------------------|
+| V-B1 | **Data Flow Control (DFC) policy over provenance.** A deterministic policy language — `SOURCE <t> SINK <t> / CONSTRAINT <bool expr> / ON FAIL {REMOVE \| KILL}` — enforced by **query rewriting** that carries source→sink lineage inline and evaluates the constraint during execution (not a separate provenance pass). `REQUIRED` forces every sink row to derive from a real source row (**anti-hallucination by construction**). Evaluate it in the **plan** phase; refuse **apply** on violation. | ✓ *Data Flow Control: Data Safety Guarantees for Agents* (Columbia DAPLab, CIDR 2026) — ~0.11% TPC-H overhead by piggybacking on execution; shows LLM-based guardrails hit only ~50% ("a non-starter"). | A DFC policy attached to a table causes `plan` to reject a mutation whose sink rows do not all derive from approved sources; the rewrite adds < a few % overhead on the benchmark workload; the rejection reason (which constraint, which rows) lands in the audit/diff UI; policy is deterministic and fail-closed (Part II invariant style). |
+| V-B2 | **Partition / lineage type-tags** on datasets so a transformation that fits a transformer across a train/test or time boundary is rejected *before* it runs (leakage type-check as a plan-time policy). | ⚠ *A Grammar of Machine Learning Workflows: Rejecting Data Leakage at Call Time* (PL/ML preprint, 2026) — types encode train/val/test provenance. | Datasets carry partition/lineage tags; a preprocessing-before-split or temporal-order-violating mutation is rejected at `plan` with a precise message; clean pipelines pass unchanged; tested with a fit-across-split counterexample. |
+
+## Tier V-C — Execution-guided SQL trust
+
+Turns "an agent wrote SQL" into "SQL the DB validated." These text-to-SQL systems
+hack around the *lack* of a deterministic sandbox with voting/replay — **h5i-db has
+the sandbox for free** (a pinned immutable version). Surfaces live in the CLI/skill
+layer and reuse plan/apply; the keystone `(commit, query)` cache makes candidate
+execution cheap.
+
+| # | Item | Source paper(s) | Acceptance criteria |
+|---|------|-----------------|---------------------|
+| V-C1 | **Execution-guided candidate selection.** Generate N candidate SQLs, execute each against a pinned snapshot, select by result-overlap (Minimum Bayes Risk over execution outputs); where execution is costly, approximate by comparing DataFusion `EXPLAIN` logical plans. | ⚠ *Query and Conquer: Execution-Guided SQL Generation* (preprint 2025) — MBR over execution outputs, `EXPLAIN`-plan approximation. ✓ *CHASE-SQL* (Google, ICLR 2025) — multi-candidate + selection (use a **hosted** pairwise judge, not the fine-tuned comparator). | A `query --candidates N` mode executes candidates against a pinned version deterministically and returns the MBR-selected result plus which candidates ran against which SHA (auditable); selection reduces error vs single-shot on a golden text-to-SQL set; no candidate mutates state (read-only against the snapshot). |
+| V-C2 | **Query-fixer repair loop wired into plan/apply preview.** Run candidate → capture DataFusion error / empty-result → repair → re-preview; accept only on a result-shape/value assertion, not exact SQL match. | ✓ *CHASE-SQL* (ICLR 2025) — execution-error-driven fixer. ✓ *SWE-SQL / BIRD-CRITIC* (NeurIPS 2025) — reproduce→diagnose→fix→validate-against-tests. | A malformed agent query is repaired against a pinned version and only applied after passing a declared result assertion; the reproduce/fix/validate trace is recorded in the version-diff UI; differential-tested for equivalence to a hand-written correct query. |
+| V-C3 | **Static constraint-verification pre-apply gate.** Cheap check of a generated query against declared schema / integrity constraints before execution; stacks in front of V-C1/V-C2. | ✓ *The Power of Constraints in NL-to-SQL Translation* (PVLDB Vol. 18, 2025). | A query violating a declared constraint is flagged/rejected at plan with the specific violation; false-positive rate measured on a golden set; composes with the execution gate (static → execute). |
+| V-C4 | **Data-probing schema linking** for wide tick tables: discover relevant columns via bounded `SELECT DISTINCT … LIMIT` probes against a pinned snapshot instead of feeding the whole schema — embedding-free, cacheable per version. | ✓ *ReFoRCE* (Spider 2.0 agent, 2025) — column exploration by data-probing. ✓ *CHESS* (2024) — LSH entity matching (adopt the **non-vector** part; **drop** its column-description vector store). | On a wide table, an agent resolves the right columns from bounded probes (row/byte-capped) run against a pinned version; probe results cached by `(SHA, probe)`; no embeddings anywhere in the path. |
+
+## Tier V-D — Reproducibility & statistical-validity guardrails
+
+Monetizes O(1) time-travel + the keystone result cache: re-running an analysis many
+times over data variants is cheap for us and expensive for everyone else.
+
+| # | Item | Source paper(s) | Acceptance criteria |
+|---|------|-----------------|---------------------|
+| V-D1 | **Stability sweep (PCS sanity checks).** Materialize perturbed inputs as lightweight child commits, re-run the agent's full analysis on each, and report the *distribution* of conclusions to flag p-hacking / noise-chasing. | ⚠ *Sanity Checks for Agentic Data Science* (preprint 2026) — PCS perturbation checks; found 6/11 agentic conclusions unsupported despite a confident single run. | A `stability-sweep` primitive runs the analysis across K perturbations via child commits + cached sub-results and reports conclusion stability; shared sub-computations are deduped by `(commit, query)`; a known-unstable analysis is flagged, a robust one is not. |
+| V-D2 | **Claim → re-computation verifier.** Decompose agent prose ("VWAP rose 3.2%") into atomic facts and re-derive each from the underlying commit via SQL; flag mismatches. Prefer code-based numeric verification over LLM-as-judge. | ⚠ *ChartFI: Faithfulness of Chart Descriptions* (preprint 2026) — atomic-fact code-based verification. ✓ *DABStep* (NeurIPS 2025 D&B) — deterministic auto-scorer (numeric tolerance, list-normalize) as the accept pattern. | Given an agent narrative + the source commit, the verifier re-derives each numeric claim from SQL and reports pass/fail with tolerance; a deliberately-wrong number is caught; scoring is deterministic, not LLM-judged. |
+
+## Tier V-E — Agent memory & workspace surfaces
+
+Mostly vocabulary + a thin API over primitives we already have; validates the "for
+agents" positioning without engine changes.
+
+| # | Item | Source paper(s) | Acceptance criteria |
+|---|------|-----------------|---------------------|
+| V-E1 | **Structured / temporal "memory-as-a-table"** over the versioned store: `revise` = versioned write, `temporal query` = time-travel read, `provenance recall` = commit-lineage walk, `graded forgetting` = retention policy. The explicitly **non-vector** agent-memory design. | ⚠ *Is Agent Memory a Database? (GEM / MemState)* (preprint 2026) — structured/temporal memory with per-field value histories + provenance, no vectors. | An agent stores/updates/recalls memory as a table where recall returns current values by default and prior values + provenance on temporal query; forgetting is a retention policy over old commits; zero embeddings. |
+| V-E2 | **`fork → explore → commit/abort` + first-commit-wins** vocabulary on existing branches; Cordon-style multi-step agent transaction using a scratch branch, with the review UI as the verification gate. | ⚠ *Fork, Explore, Commit* (preprint 2026) — branch lifecycle + first-commit-wins; ⚠ *Cordon: Semantic Transactions for Tool-Using Agents* (EuroSys preprint) — stage-then-verify-then-commit-or-rollback. Validate churn against ⚠ *BranchBench* / *Branchable Databases Aren't Ready for Agentic Workloads* (Columbia DAPLab). | An agent forks a workspace branch per hypothesis, explores, and the first branch to pass review commits while siblings auto-invalidate; a multi-step trajectory commits atomically or rolls back via O(1) restore; documented as a CLI/skill workflow, not an engine concept. |
+
+## Tier V-F — Semantic LLM operators (out-of-core, evidence-gated)
+
+Interesting but in the most tension with our constraints: LLM UDFs sit near the
+engine (against §9), and the no-vector rule bites hardest here (every
+semantic-*join/dedup* speedup in the literature is embedding-powered). **Do not put
+this in core.** If a concrete workload ever demands it, ship a **separate optional
+`h5i-db-llm` package** (the way a hypothetical `h5i-db-mcp` was scoped), and only
+the embedding-free subset.
+
+| # | Item | Source paper(s) | Acceptance criteria |
+|---|------|-----------------|---------------------|
+| V-F1 | **`llm_filter` / `llm_map` / `llm_reduce` as DataFusion UDF/UDAF**, with **versioned `MODEL` / `PROMPT` objects** so a commit records which prompt+model produced a column (novel: nobody versions LLM outputs today). Cache keyed on `(segment hash, prompt ver, model ver)`. | ✓ *FlockMTL / Beyond Quacking* (VLDB 2025 demo) — LLM scalar/aggregate UDFs + `PROMPT`/`MODEL` as DDL objects (adopt; **drop** its RAG/hybrid-search half). | Lives in `h5i-db-llm`, off by default; LLM-op output is cached per immutable segment and reproducible given the pinned model/prompt version; provenance answers "which prompt+model produced this column at commit X." |
+| V-F2 | **Predicate pushdown before LLM ops + model cascade.** Push cheap SQL/time/`time_bucket`/ASOF predicates ahead of any `llm_*` op so it sees far fewer rows; wrap ops in a Haiku→Sonnet→Opus confidence-escalation cascade. | ⚠ *PLOP: Placement of Semantic Operators* (preprint 2026) — cost-based LLM-op placement. ✓ *FrugalGPT* / model-cascade lineage (2024) — escalate on low confidence (here across hosted tiers only). | An `llm_*` query on a large table evaluates deterministic predicates first (measured row reduction before the LLM op); the cascade routes easy rows to the cheap tier and escalates uncertain ones; both are pure plan-rule/policy, no new operator semantics. |
+| V-F3 | **Accuracy-guarantee sampling as an auditable quality annotation**; **`sem_join` via LLM key-extraction → native hash join** (the only no-vector join). | ✓ *LOTUS* (VLDB 2025) — proxy/gold operators with statistical accuracy bounds (adopt the bound-as-annotation; **skip** its embedding-accelerated join/search/dedup). ⚠ *Trummer, Implementing Semantic Joins Efficiently* (2025) — batching / LLM-blocking / key-extraction-to-equijoin. | A semantic column can carry a "computed by proxy, ≤ε error at 95% confidence vs gold" annotation in the version diff (sold as *statistical*, not correctness); `sem_join` runs as O(n) cacheable key-extraction + DataFusion hash join, never O(n²) vector similarity. |
+
+## Do NOT borrow (forbidden technique or §9 non-goal)
+
+- **Vector/embedding schema-linking** — CHESS's column-description vector store;
+  use its LSH entity-matching + data-probing (V-C4) instead.
+- **Semantic search / sim-join / dedup** — LOTUS `sem_search`/`sem_sim_join`/
+  `sem_dedup`, and any "AI memory layer" with vector recall — embedding-native, no
+  LLM-only variant. GEM/MemState (V-E1) is the clean structured alternative.
+- **ELEET** (VLDB 2024) — its whole mechanism is a **local** pretrained SLM;
+  forbidden. Its structured-extraction idea survives only as a hosted-model
+  extraction UDF (= V-F3 key-extraction).
+- **CrackSQL's cross-dialect embedding matcher** — if dialect translation is ever
+  wanted (DuckDB/Postgres→DataFusion), use the rule-based *RISE* reduction with a
+  hosted-LLM fallback, not embeddings.
+- **Aryn/Sycamore's local DETR document parser**, distributed/Ray execution —
+  clashes with the embedded single-node model; document data ≠ tick data.
+
+## Cross-references (Part V ⇄ existing parts)
+
+- **Keystone `(commit, query)` result cache** ⇄ Part II P2 predicate-cache / P3
+  aggregate-state cache machinery — same "checksum-keyed, fail-open, corruption →
+  miss" discipline (Part II invariants 2–3); build V's cache on that pattern.
+- **V-C differential validation** ⇄ **T0.1** `sqllogictest-rs` harness — the same
+  crate; the execution-guided gates ride on the differential-correctness substrate.
+- **V-B1 DFC provenance** ⇄ existing **plan/apply + policy** (`policy.rs`,
+  `plan.rs`) — DFC is the policy *language*; plan/apply is the enforcement point.
+- **V-A time-travel hardening** ⇄ Part IV **B1 keyed-run ASOF** and `time_bucket`
+  — the operators to make availability-monotonic.
+- **V-D re-run economics** ⇄ Part I **O(1) version reads / restore** — the primitive
+  that makes stability sweeps cheap.
+
+## Evaluation targets (measure against, do not build)
+
+Publishing fodder to prove the wins above, not features to implement:
+- ✓ **DABStep** (NeurIPS 2025 D&B) — financial-analytics multi-step tasks; show a
+  Claude agent on h5i beats raw-CSV baselines because `time_bucket`/ASOF/group-by are
+  native (attacks the "non-idiomatic loop" failure mode).
+- ✓ **CORE-Bench** (2024) — computational reproducibility; show `restore(sha)`
+  replaces Docker+pinning archaeology.
+- ✓ **Spider 2.0** (ICLR 2025) — wide-schema, multi-dialect realism yardstick for
+  the V-C text-to-SQL layer.
+- **KramaBench / InsightBench** — positioning only (multi-source data lakes, out of
+  embedded scope); cite for the "agents produce plausible-but-broken pipelines"
+  finding that motivates previewable, policy-gated mutations.
+
+## Suggested build order
+
+1. **Keystone substrate** — `(commit, query)` result cache + "run query across N
+   pinned versions" CLI/Python surface (unblocks A/C/D).
+2. **V-A1 `leakage-delta`** and **V-B1 DFC policy** — most differentiated, cleanest
+   fit, lowest effort-to-impact, and exactly what a quant audience pays for.
+3. **V-C1/V-C2** execution-guided selection + repair — turns agent SQL trustworthy.
+4. **V-D1/V-D2** stability sweep + claim verifier — reproducibility moat.
+5. **V-E1/V-E2** memory + fork/explore/commit vocabulary — mostly docs/skill/API.
+6. **V-F** only if a real workload demands it, and only in a separate package.
