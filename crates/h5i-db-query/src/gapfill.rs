@@ -1,7 +1,13 @@
 //! Gap filling for regular time-series grids.
 //!
 //! SQL entry point:
-//! `gapfill('table', 'time_column', step [, 'null'|'locf'|'interpolate'])`.
+//! `gapfill('table', 'time_column', step [, 'null'|'locf'|'interpolate'|'value', <const>])`.
+//!
+//! Fill modes mirror QuestDB's `SAMPLE BY … FILL(...)`: `null` (`FILL(NULL)`),
+//! `locf`/`prev` (`FILL(PREV)`), `interpolate`/`linear` (`FILL(LINEAR)`), and
+//! `value` (`FILL(x)`) — a numeric constant applied to numeric columns (a
+//! missing bar's volume becomes 0, etc.), null elsewhere. First/last per bucket
+//! are DataFusion's `first_value`/`last_value` aggregates over `time_bucket`.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -17,11 +23,14 @@ use h5i_db_core::{Database, ReadAt, ScanOptions};
 
 use crate::udtf::block_on;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum FillMode {
     Null,
     Locf,
     Interpolate,
+    /// Constant fill: numeric columns get this value (cast to their type),
+    /// non-numeric columns get null.
+    Value(ScalarValue),
 }
 
 #[derive(Debug)]
@@ -46,6 +55,10 @@ fn string_arg(args: &[Expr], i: usize, what: &str) -> DfResult<String> {
 
 fn null_scalar(dt: &DataType) -> ScalarValue {
     ScalarValue::try_from(dt).unwrap_or(ScalarValue::Null)
+}
+
+fn is_numeric_scalar(sv: &ScalarValue) -> bool {
+    sv.data_type().is_numeric()
 }
 
 fn time_scalar(dt: &DataType, value: i64) -> DfResult<ScalarValue> {
@@ -151,8 +164,16 @@ fn build_gapfilled(
                 out.push(time_scalar(field.data_type(), time)?);
                 continue;
             }
-            let value = match mode {
+            let value = match &mode {
                 FillMode::Null => null_scalar(field.data_type()),
+                FillMode::Value(c) => {
+                    if field.data_type().is_numeric() {
+                        c.cast_to(field.data_type())
+                            .unwrap_or_else(|_| null_scalar(field.data_type()))
+                    } else {
+                        null_scalar(field.data_type())
+                    }
+                }
                 FillMode::Locf => prev
                     .map(|r| ScalarValue::try_from_array(combined.column(col), r))
                     .transpose()?
@@ -181,9 +202,11 @@ fn build_gapfilled(
 impl TableFunctionImpl for GapFillFunc {
     fn call_with_args(&self, args: TableFunctionArgs) -> DfResult<Arc<dyn TableProvider>> {
         let args = args.exprs();
-        if !(3..=4).contains(&args.len()) {
+        if !(3..=5).contains(&args.len()) {
             return Err(DataFusionError::Plan(
-                "gapfill('table', 'time_column', step [, 'null'|'locf'|'interpolate'])".into(),
+                "gapfill('table', 'time_column', step \
+                 [, 'null'|'locf'|'prev'|'interpolate'|'linear'|'value', <const>])"
+                    .into(),
             ));
         }
         let table = string_arg(args, 0, "the table name")?;
@@ -200,8 +223,21 @@ impl TableFunctionImpl for GapFillFunc {
             None => FillMode::Null,
             Some(_) => match string_arg(args, 3, "a fill mode")?.as_str() {
                 "null" => FillMode::Null,
-                "locf" => FillMode::Locf,
-                "interpolate" => FillMode::Interpolate,
+                "locf" | "prev" => FillMode::Locf,
+                "interpolate" | "linear" => FillMode::Interpolate,
+                "value" => {
+                    let c = match args.get(4) {
+                        Some(Expr::Literal(sv, _)) if is_numeric_scalar(sv) => sv.clone(),
+                        _ => {
+                            return Err(DataFusionError::Plan(
+                                "gapfill: 'value' fill needs a numeric constant, \
+                                 e.g. gapfill('t', 'ts', step, 'value', 0)"
+                                    .into(),
+                            ))
+                        }
+                    };
+                    FillMode::Value(c)
+                }
                 other => {
                     return Err(DataFusionError::Plan(format!(
                         "gapfill: unknown fill mode {other:?}"
@@ -209,6 +245,12 @@ impl TableFunctionImpl for GapFillFunc {
                 }
             },
         };
+        if !matches!(mode, FillMode::Value(_)) && args.len() == 5 {
+            return Err(DataFusionError::Plan(
+                "gapfill: a 5th argument (constant) is only valid with the 'value' fill mode"
+                    .into(),
+            ));
+        }
         let (resolved, batches) = block_on(async {
             let resolved = self.db.resolve(&table, ReadAt::Latest).await?;
             let (batches, _) = self

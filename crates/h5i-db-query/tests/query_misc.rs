@@ -1168,3 +1168,95 @@ async fn approx_distinct_and_topk_are_available_and_correct() {
     let top: Vec<&str> = (0..col.len()).map(|i| col.value(i)).collect();
     assert_eq!(top, vec!["AAA", "BBB"], "top-2 by volume");
 }
+
+/// B3: constant `value` fill (QuestDB `FILL(x)`) and the `prev`/`linear`
+/// aliases for `locf`/`interpolate`. A missing bar gets the constant in numeric
+/// columns and null in non-numeric ones.
+#[tokio::test]
+async fn gapfill_value_fill_and_aliases() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[0, 20], &["A", "A"], &[0.0, 20.0], &[1, 3])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+
+    // Constant fill 7: the missing ts=10 bar gets price 7.0 and size 7.
+    let filled = s
+        .sql("SELECT price, size, symbol FROM gapfill('trades', 'ts', 10, 'value', 7) ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let price = filled[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    let size = filled[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let symbol = filled[0]
+        .column(2)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    assert_eq!(price.values(), &[0.0, 7.0, 20.0]);
+    assert_eq!(size.values(), &[1, 7, 3]);
+    // Non-numeric column is null for the synthesized bar.
+    assert!(symbol.is_valid(0) && !symbol.is_valid(1) && symbol.is_valid(2));
+
+    // `prev` == locf, `linear` == interpolate.
+    let prev = s
+        .sql("SELECT price FROM gapfill('trades', 'ts', 10, 'prev') ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        prev[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .values(),
+        &[0.0, 0.0, 20.0]
+    );
+    let linear = s
+        .sql("SELECT price FROM gapfill('trades', 'ts', 10, 'linear') ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        linear[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap()
+            .values(),
+        &[0.0, 10.0, 20.0]
+    );
+
+    // Misuse: 'value' without a constant, and a constant without 'value'.
+    assert!(s
+        .sql("SELECT * FROM gapfill('trades', 'ts', 10, 'value')")
+        .await
+        .is_err());
+    assert!(s
+        .sql("SELECT * FROM gapfill('trades', 'ts', 10, 'locf', 7)")
+        .await
+        .is_err());
+}
