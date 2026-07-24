@@ -312,6 +312,41 @@ the time-series function library.</p>
 </div></section><section class="api-member"><h3 id="h5i-db-versions"><code><span class="api-qual">h5i-db </span><span class="api-name">versions</span></code><a class="headerlink" href="#h5i-db-versions" title="Permanent link">#</a></h3><div class="api-body">
 <p>List a table's committed versions: <code>version</code>, <code>op</code>, <code>committed_at</code>, <code>rows</code>,
 <code>bytes</code>, <code>segments</code>, <code>note</code>.</p>
+</div></section><section class="api-member"><h3 id="h5i-db-leakage-check"><code><span class="api-qual">h5i-db </span><span class="api-name">leakage-check</span></code><a class="headerlink" href="#h5i-db-leakage-check" title="Permanent link">#</a></h3><div class="api-body">
+<p>Look-ahead-bias diagnostic: run one query against the current head (<strong>leaking</strong>
+— every commit, including data that only arrived after the decision instant)
+and against an as-of read point (<strong>non-leaking</strong> — only data available as of
+that instant), and report the delta between the two results.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>leakage-check<span class="w"> </span>market.db<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="s2">&quot;SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--as-of<span class="w"> </span><span class="m">2026</span>-07-01T16:00:00Z<span class="w"> </span>--format<span class="w"> </span>json
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--as-of &lt;at&gt;</code></td>
+<td>The decision point: an integer <strong>version</strong>, an RFC3339 <strong>timestamp</strong> (matched by commit <em>availability</em> time, like <code>h5i()</code>), or a <strong>snapshot</strong> name</td>
+</tr>
+<tr>
+<td><code>--tolerance &lt;f&gt;</code></td>
+<td>Absolute per-cell delta below which a difference is treated as noise (default <code>1e-9</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The report carries <code>leakage_detected</code>, per-column <code>head → asof (delta)</code> for the
+common single-row-metric case, <code>max_abs_delta</code>, <code>row_count_differs</code>, and
+<code>withheld_versions</code> (per table, the head-vs-as-of version gap). A non-zero
+delta proves <em>availability</em> leakage (late-arriving or restated rows across
+commits); a zero delta does not prove its absence, and this does not detect
+look-ahead <em>inside</em> a single snapshot. Pairs naturally with the
+<a href="#h5i-db-versions">reproducible-backtest</a> pin-what-you-read pattern.</p>
 <hr />
 </div></section><h2 id="writing-data">Writing data<a class="headerlink" href="#writing-data" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="h5i-db-ingest"><code><span class="api-qual">h5i-db </span><span class="api-name">ingest</span></code><a class="headerlink" href="#h5i-db-ingest" title="Permanent link">#</a></h3><div class="api-body">
@@ -444,6 +479,45 @@ reviewed plan.</p>
 <p>Keys: <code>direct_append</code>, <code>direct_write</code>, <code>direct_replace</code>, <code>direct_delete</code>,
 <code>direct_restore</code>, <code>direct_compact</code> — each <code>true</code>/<code>false</code>. The update is an
 atomic read-modify-write.</p>
+<p>The mutation policy gates <em>who may write directly</em>; the <strong>data policy</strong> below
+gates <em>what data may be written at all</em>.</p>
+</div></section><section class="api-member"><h3 id="h5i-db-data-policy"><code><span class="api-qual">h5i-db </span><span class="api-name">data-policy</span></code><a class="headerlink" href="#h5i-db-data-policy" title="Permanent link">#</a></h3><div class="api-body">
+<p>Opt-in, per-table data-safety constraints checked on every write (and at plan
+time), so a violating mutation is refused before it can be applied. A table
+with no policy is unconstrained and pays only one metadata lookup on the write
+path; reads are never touched.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data-policy get &lt;db&gt; &lt;table&gt;</code></td>
+<td>Show the table's policy (empty when unset)</td>
+</tr>
+<tr>
+<td><code>data-policy set &lt;db&gt; &lt;table&gt; &lt;policy&gt;</code></td>
+<td>Install a typed JSON policy — inline JSON, <code>@path</code> to read a file, or <code>-</code> for stdin</td>
+</tr>
+<tr>
+<td><code>data-policy clear &lt;db&gt; &lt;table&gt;</code></td>
+<td>Remove the policy (writes become unconstrained)</td>
+</tr>
+</tbody>
+</table></div>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>data-policy<span class="w"> </span><span class="nb">set</span><span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span><span class="err">&#39;</span><span class="o">{</span><span class="s2">&quot;constraints&quot;</span>:<span class="o">[</span>
+<span class="go">    {&quot;name&quot;:&quot;positive_price&quot;,</span>
+<span class="go">     &quot;predicate&quot;:{&quot;compare&quot;:{&quot;column&quot;:&quot;price&quot;,&quot;op&quot;:&quot;gt&quot;,&quot;value&quot;:{&quot;float&quot;:0.0}}},</span>
+<span class="go">     &quot;on_fail&quot;:&quot;reject&quot;}]}&#39;</span>
+</code></pre></div>
+
+<p>Predicates compose <code>not_null</code>, <code>compare</code>, and <code>in_set</code> with <code>and</code>/<code>or</code>/<code>not</code>;
+<code>on_fail</code> is <code>reject</code> (fail the write) or <code>warn</code>. Evaluation is fail-closed — a
+<code>NULL</code> never satisfies a comparison. A violation raises <code>data_policy_violation</code>
+(exit <code>2</code>, not retryable).</p>
 </div></section><section class="api-member"><h3 id="h5i-db-snapshot"><code><span class="api-qual">h5i-db </span><span class="api-name">snapshot</span></code><a class="headerlink" href="#h5i-db-snapshot" title="Permanent link">#</a></h3><div class="api-body">
 <p>Pin table versions under a name.</p>
 <div class="table-wrap"><table>
@@ -548,7 +622,7 @@ badges, version diffs, and an SQL scratchpad that reports pruning per query.</p>
     <nav class="page-nav"><a class="prev" href="../manual/concepts.html"><span class="dir">← Previous</span><span class="pn-title">Core concepts</span></a><a class="next" href="../manual/sql.html"><span class="dir">Next →</span><span class="pn-title">SQL reference</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li><li><a href="#h5i-db-leakage-check">h5i-db leakage-check</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-data-policy">h5i-db data-policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">
