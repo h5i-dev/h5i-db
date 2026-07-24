@@ -712,21 +712,39 @@ touch the storage engine. Ordered by effort-to-impact.
 | VI-A6 | **`plan apply --wait-for-approval --timeout <dur>`.** Park instead of fail: poll the staged plan until a human applies/discards via CLI or UI, then exit accordingly. | Turns policy violations from dead-ends into blocked-agent states a human can unblock from the UI; herdr's "blocked" concept transplanted. Rides existing plan storage + UI apply/discard routes unchanged. | Waiting process exits 0 on apply, distinct codes on discard/timeout/TTL-expiry; no busy-loop (bounded poll interval); e2e test covers apply-while-waiting. |
 | VI-A7 | **Skill packaging & drift check.** `skill install --claude --codex` placing SKILL fragments, plus `skill check` warning on doc/binary version mismatch. | Commoditized (see findings) — hygiene, not differentiation. Do after VI-A4 gives the docs a tested core. | Installed skill references only CI-tested snippets; `skill check` flags a version mismatch; uninstall is clean. |
 
-## research-mode: elevate V-A2 to a named flagship surface
+## research-mode: elevate V-A2 to a named flagship surface — **dual-axis**
 
 The survey confirms V-A2 is the differentiator, and the codebase check
-confirms it is nearly free: `ReadAt::{Version, AsOf, Snapshot}` exists, and
-`leakage-check` already builds the exact primitive (`H5iSession::new_at`
-pinning *every* table at a point). What is missing is only the surface:
-`query --as-of <t>` (all tables pinned), a session/env pin so every
-subsequent command in a shell inherits it, and `--embargo <dur>` layered on
-top as an event-time filter (`time_column ≤ t − embargo`) over the
-arrival-time pinning. Bitemporality note: per-commit `committed_at_ns` is the
-availability axis and is sufficient — restatements arrive as new versions and
-are correctly excluded; per-row arrival time is not required. Keep V-A2's
-scope-honesty line (data-access leakage only, not LLM pretraining leakage).
-Market it as one sentence: *the only database that can show an agent the past
-and nothing else.*
+confirms the arrival half is nearly free: `ReadAt::{Version, AsOf, Snapshot}`
+exists, and `leakage-check` already builds the exact primitive
+(`H5iSession::new_at` pinning *every* table at a point).
+
+**Design correction (2026-07-24, second pass): the arrival pin alone is not
+enough.** Two blind spots make a version-pin-only research-mode overstate the
+claim. First, the most common quant look-ahead bugs are *event-time* bugs
+(windows overrunning into future rows, joins reading `T+1` data, full-sample
+normalization) — rows that were always in the table, invisible on the arrival
+axis. Second, on bulk-ingested history (one commit for ten years — the
+typical cold start) every as-of resolves to the same version, so the arrival
+jail is empty on day one. Therefore research-mode enforces **both axes**:
+
+- **Arrival axis:** every table pinned at availability `t`
+  (`ReadAt::AsOf` over `committed_at_ns`; per-commit granularity is
+  sufficient — restatements arrive as new versions and are correctly
+  excluded). Only *populated* under continuous ingestion or arrival replay
+  (VI-B1).
+- **Event-time axis:** an enforced predicate `time_column ≤ t − embargo`
+  injected into every scan in the session — works from day one on bulk
+  data and structurally blocks the window-overrun / future-join class the
+  arrival axis cannot see.
+
+Surface: `query --as-of <t> [--embargo <dur>]` plus a session/env pin so
+every subsequent command inherits it. Backtests run **walk-forward** — one
+pinned session per decision date — which is exactly the shape the keystone
+`(commit, query)` cache makes cheap (same decision date re-runs warm). Keep
+V-A2's scope-honesty line (data-access leakage only, not LLM pretraining
+leakage). The one-sentence claim — *the only database that can show an agent
+the past and nothing else* — is honest only with both axes shipped.
 
 ## Run ledger: concretize the keystone
 
@@ -739,6 +757,34 @@ lakeFS/Nessie (data only) can make. **Design this together with the Part V
 keystone `(commit, query)` result cache**: they share the substrate, and the
 same cache that makes 40 nightly backtests re-read warm (perf) makes their
 runs attributable (reproducibility). Design-first — schema before code.
+
+## Tier VI-B — the arrival axis: replay, online ingestion, honesty (2026-07-24)
+
+The arrival-axis features (leakage-check, restatement attribution, the run
+ledger's data-vs-code answer) are only meaningful when the commit history
+mirrors real data availability. There are two ways to get there — run the DB
+as a continuous system-of-record (online), or *reconstruct* the history from
+vendor publication timestamps (replay) — plus honesty tooling so a vacuous
+zero-delta is never misread as a clean bill of health.
+
+**Priority elevation:** T1.1 (small-write amplification) and B2 (out-of-order
+merge) are hereby *prerequisites of the arrival-axis flag*, not just perf
+items. If the claim is "the DB that remembers when data arrived", appending
+every minute must be cheap (T1.1) and a late tick must not force a full-table
+rewrite (B2). Implementation order unchanged; the justification is upgraded.
+
+| # | Item | Rationale | Acceptance criteria |
+|---|------|-----------|---------------------|
+| VI-B1 | **Arrival replay: `ingest --arrival-column <col>`.** Split the input into commits ordered by a per-row publication/arrival timestamp, reconstructing the arrival history from a vendor point-in-time dataset in one bulk load. Requires a logical `available_at` on the manifest — back-dating `committed_at_ns` would break its wall-clock-monotonic invariant — with `ReadAt::AsOf` resolving against `available_at` and falling back to `committed_at_ns` when absent. | Kills the cold-start problem: converts every bulk-ingest user to the dual-axis story on day one. Survey: no engine ingests publication-stamped PIT data into a queryable commit chain. **Format-change tier** — sequence with A1/B2, not as a quick add. | Bulk-ingesting a PIT dataset with an arrival column yields N commits whose as-of reads reproduce each historical availability state; tables without `available_at` behave exactly as today (golden fixture); a restated row is visible at HEAD and absent at a pre-restatement as-of (e2e); `committed_at_ns` monotonicity untouched. |
+| VI-B2 | **leakage-check hardening (3 fixes).** (1) Key-based row alignment (`--key <cols>`), or require a deterministic `ORDER BY` for multi-row results — comparison today is positional over the `min(rows)` overlap (`leakage.rs:247`), so one inserted row turns every subsequent per-row mismatch into noise. (2) Print "a zero delta does not prove absence of leakage" in the CLI/Python output — the doc comment says it; the output does not. (3) Vacuity detection: when `withheld_versions` is empty for every table, say so explicitly ("the arrival-axis check is vacuous on this database") and point at VI-B1. | The first bulk-ingest user who sees a silent zero-delta concludes the feature is broken; (3) prevents that structurally (the herdr move: the tool explains its own blind spot). (1) makes multi-row reports usable at all. | Multi-row diffs align on declared key columns; both notices asserted by CLI e2e; a single-commit DB produces the vacuity notice, and the same DB after arrival replay does not. |
+| VI-B3 | **Data freshness in `context`** (extends VI-A1). Per-table last-commit age, lag against a declared expected cadence, and event-time gaps. | "Is this DB alive" is the rollup that matters most under continuous ingestion — for agents and for the humans supervising them. | `context` shows per-table freshness; a table past its declared cadence is flagged; zero cost when no cadence is declared. |
+| VI-B4 | **`maintain` one-shot command.** compact + vacuum + verify under a time/space budget, policy-gated like today's `compact`. | The daemonless answer to "who does housekeeping during continuous ingestion": a cron entry or an agent runs one command. Daemon mode stays a §9 non-goal. | Bounded runtime honoring the budget; no-op cheap on an already-tidy DB; exit code distinguishes "done" from "budget exhausted, more remains". |
+| VI-B5 | **Documented online-ingest loop pattern** (docs/SKILL, not code). Per-source watermarks, idempotency keys (VI-A5), writer-lock wait/retry etiquette. No `--follow` resident mode — that is daemonization by stealth. | The ingest loop is the product surface online users live in; an official pattern beats every user reinventing it wrong. | A docs-as-tests (VI-A4) covered walkthrough runs an idempotent, watermark-tracked loop end-to-end, including a simulated retry after an ambiguous failure. |
+
+**Cadence honesty (scope):** the online story is minute-bar / EOD / vendor-file
+cadence on a single writer — not sub-µs tick capture, which stays on the
+"when NOT to use h5i-db" list. Blurring this invites a losing comparison with
+kdb+; stating it buys trust.
 
 ## Do-not list (2026-07-24)
 
@@ -762,22 +808,31 @@ runs attributable (reproducibility). Design-first — schema before code.
   section (multi-TB distributed, OLTP, sub-µs capture) — also stops agents
   from mis-recommending it.
 
-## Build order (supersedes Part V's)
+## Build order (supersedes Part V's; revised for dual-axis + VI-B)
 
-1. **VI-A1 `context` + VI-A3 `next_actions` + VI-A2 agent profile** — small,
-   single-site changes with the largest per-line UX effect; VI-A2 is also a
-   category first.
-2. **research-mode** (surface over `new_at`) + **VI-A5 idempotency-key** —
-   the flagship claim, plus the retry-safety agents need before being given
-   write access.
+1. **VI-A1 `context` (incl. VI-B3 freshness) + VI-A3 `next_actions` + VI-A2
+   agent profile** — small, single-site changes with the largest per-line UX
+   effect; VI-A2 is also a category first.
+2. **Dual-axis research-mode + VI-B2 leakage-check hardening + VI-A5
+   idempotency-key** — the flagship claim (honest only with both axes), its
+   audit tool made unmisreadable, and the retry-safety agents need before
+   being given write access.
 3. **VI-A4 `demo` + docs-as-tests** — locks the trust layer before the
-   surface grows further.
+   surface grows further. The demo's leakage act must be scripted as a
+   **restatement scenario** (a mid-history vendor correction commit): an
+   event-time-style planted leak would show a zero delta and falsify the
+   pitch.
 4. **Keystone `(commit, query)` result cache designed jointly with the run
    ledger** — one substrate, two headline features (warm re-reads +
-   attribution); do the schema design first.
-5. **V-C1/V-C2, then V-D** — as in Part V.
-6. **VI-A6 wait-for-approval, VI-A7 skill packaging, data-policy time-series
-   extensions** — opportunistic, after the above.
+   attribution); do the schema design first. Walk-forward research-mode
+   sessions are its first consumer.
+5. **Format-change tier: VI-B1 arrival replay, sequenced with A1 (and the
+   T1.1/B2 ingest work it elevates)** — populates the arrival axis for
+   bulk-ingest users; the prerequisites of selling that axis.
+6. **V-C1/V-C2, then V-D** — as in Part V.
+7. **VI-A6 wait-for-approval, VI-A7 skill packaging, VI-B4 `maintain`,
+   VI-B5 ingest-loop pattern, data-policy time-series extensions** —
+   opportunistic, after the above.
 
 Tier 0 (Part III) remains the standing precondition: every Part VI surface
 multiplies trust already earned by the correctness harness, not the other way
