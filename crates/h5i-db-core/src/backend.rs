@@ -27,10 +27,10 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use futures::TryStreamExt;
+use futures::future::BoxFuture;
 use object_store::{
-    local::LocalFileSystem, path::Path as ObjPath, ObjectStore, ObjectStoreExt, PutPayload,
+    ObjectStore, ObjectStoreExt, PutPayload, local::LocalFileSystem, path::Path as ObjPath,
 };
 use url::Url;
 use uuid::Uuid;
@@ -146,7 +146,7 @@ impl FsLock {
 
     /// One non-blocking lock attempt. `None` = currently held elsewhere.
     fn try_acquire(path: &Path) -> Result<Option<FsLock>> {
-        use fs4::fs_std::FileExt;
+        use std::fs::TryLockError;
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -154,10 +154,14 @@ impl FsLock {
             .truncate(false)
             .open(path)
             .map_err(|e| Error::io(path.display(), e))?;
-        match file.try_lock_exclusive() {
-            Ok(true) => {}
-            Ok(false) => return Ok(None),
-            Err(e) => return Err(Error::io(path.display(), e)),
+        // std's `try_lock` (stable since 1.89) is the same syscall the fs4
+        // crate used to issue for us: `flock(LOCK_EX | LOCK_NB)` on unix,
+        // `LockFileEx(LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY)`
+        // on Windows. Same semantics, one less dependency.
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Error(e)) => return Err(Error::io(path.display(), e)),
         }
         // Best-effort debug info for operators inspecting a held lock.
         use std::io::{Seek, Write};

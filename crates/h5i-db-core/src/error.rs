@@ -331,17 +331,21 @@ mod tests {
     #[test]
     fn retryable_classification_matches_contract() {
         // Only transient / racy conditions are retryable.
-        assert!(Error::VersionConflict {
-            table: "t".into(),
-            expected: 1,
-            actual: 2,
-        }
-        .retryable());
-        assert!(Error::LockTimeout {
-            table: "t".into(),
-            waited_ms: 1,
-        }
-        .retryable());
+        assert!(
+            Error::VersionConflict {
+                table: "t".into(),
+                expected: 1,
+                actual: 2,
+            }
+            .retryable()
+        );
+        assert!(
+            Error::LockTimeout {
+                table: "t".into(),
+                waited_ms: 1,
+            }
+            .retryable()
+        );
         assert!(Error::Timeout { seconds: 1 }.retryable());
         assert!(Error::io("/p", std::io::Error::other("x")).retryable());
 
@@ -395,31 +399,41 @@ mod tests {
     #[test]
     fn hints_present_only_for_actionable_variants() {
         // These variants must carry an actionable hint.
-        assert!(Error::VersionConflict {
-            table: "t".into(),
-            expected: 1,
-            actual: 2,
-        }
-        .hint()
-        .is_some());
+        assert!(
+            Error::VersionConflict {
+                table: "t".into(),
+                expected: 1,
+                actual: 2,
+            }
+            .hint()
+            .is_some()
+        );
         assert!(Error::TableNotFound { name: "t".into() }.hint().is_some());
-        assert!(Error::SnapshotNotFound { name: "s".into() }
+        assert!(
+            Error::SnapshotNotFound { name: "s".into() }
+                .hint()
+                .is_some()
+        );
+        assert!(
+            Error::SortOrderViolation { detail: "d".into() }
+                .hint()
+                .is_some()
+        );
+        assert!(
+            Error::FormatTooNew {
+                found: 2,
+                supported: 1,
+            }
             .hint()
-            .is_some());
-        assert!(Error::SortOrderViolation { detail: "d".into() }
+            .is_some()
+        );
+        assert!(
+            Error::ReadOnly {
+                op: "append".into()
+            }
             .hint()
-            .is_some());
-        assert!(Error::FormatTooNew {
-            found: 2,
-            supported: 1,
-        }
-        .hint()
-        .is_some());
-        assert!(Error::ReadOnly {
-            op: "append".into()
-        }
-        .hint()
-        .is_some());
+            .is_some()
+        );
         let ph = Error::PolicyViolation { op: "write".into() }
             .hint()
             .unwrap();
@@ -427,9 +441,11 @@ mod tests {
 
         // A generic internal error offers no hint.
         assert!(Error::internal("boom").hint().is_none());
-        assert!(Error::SchemaMismatch { detail: "d".into() }
-            .hint()
-            .is_none());
+        assert!(
+            Error::SchemaMismatch { detail: "d".into() }
+                .hint()
+                .is_none()
+        );
     }
 
     #[test]

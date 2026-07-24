@@ -532,29 +532,35 @@ mod tests {
     fn rejects_ineligible_shapes() {
         let s = schema();
         // Float64 term: outside the typed contract.
-        assert!(eligible_predicate(
-            &s,
-            &[col("symbol").eq(lit("A")), col("price").gt(lit(1.0_f64))]
-        )
-        .is_none());
+        assert!(
+            eligible_predicate(
+                &s,
+                &[col("symbol").eq(lit("A")), col("price").gt(lit(1.0_f64))]
+            )
+            .is_none()
+        );
         // Range-only conjunction: an equality term is required.
         assert!(
             eligible_predicate(&s, &[col("ts").gt_eq(ts_lit(1)), col("ts").lt(ts_lit(2))])
                 .is_none()
         );
         // Disjunctions are not fingerprintable.
-        assert!(eligible_predicate(
-            &s,
-            &[col("symbol").eq(lit("A")).or(col("symbol").eq(lit("B")))]
-        )
-        .is_none());
+        assert!(
+            eligible_predicate(
+                &s,
+                &[col("symbol").eq(lit("A")).or(col("symbol").eq(lit("B")))]
+            )
+            .is_none()
+        );
         // Null semantics are rejected, both as predicate and literal.
         assert!(eligible_predicate(&s, &[col("symbol").is_null()]).is_none());
-        assert!(eligible_predicate(
-            &s,
-            &[col("symbol").eq(Expr::Literal(ScalarValue::Utf8(None), None))]
-        )
-        .is_none());
+        assert!(
+            eligible_predicate(
+                &s,
+                &[col("symbol").eq(Expr::Literal(ScalarValue::Utf8(None), None))]
+            )
+            .is_none()
+        );
         // Unknown column.
         assert!(eligible_predicate(&s, &[col("venue").eq(lit("X"))]).is_none());
         // No filters at all.

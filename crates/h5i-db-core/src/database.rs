@@ -8,7 +8,7 @@ use std::sync::Arc;
 use arrow::array::RecordBatch;
 use arrow::datatypes::SchemaRef;
 use futures::stream::{self, StreamExt, TryStreamExt};
-use object_store::{path::Path as ObjPath, ObjectStoreExt};
+use object_store::{ObjectStoreExt, path::Path as ObjPath};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -18,10 +18,10 @@ use crate::error::{Error, Result};
 use crate::layout;
 use crate::manifest::{Head, OpKind, SegmentMeta, VersionManifest};
 use crate::segment::{
-    batch_is_sorted, read_segment, sort_batches, time_values_i64, SegmentWriter, MERGE_CHUNK_ROWS,
+    MERGE_CHUNK_ROWS, SegmentWriter, batch_is_sorted, read_segment, sort_batches, time_values_i64,
 };
 use crate::snapshot::{self, Snapshot, SnapshotEntry};
-use crate::spec::{TableOptions, TableSpec, SEGMENT_COUNT_WARN};
+use crate::spec::{SEGMENT_COUNT_WARN, TableOptions, TableSpec};
 
 /// Which version of a table to read.
 #[derive(Debug, Clone, PartialEq)]
@@ -606,7 +606,7 @@ impl Database {
                             table: name.into(),
                             requested: format!("as_of {ts}"),
                             hint: "timestamp precedes the oldest retained commit".into(),
-                        })
+                        });
                     }
                 }
             }
@@ -936,14 +936,14 @@ impl Database {
         crate::policy::load(&self.backend).await?.check_direct(op)?;
         let entry = self.entry(name).await?;
         let head = self.head(name, entry.table_id).await?;
-        if let Some(expected) = opts.expected_version {
-            if head.head.sequence != expected {
-                return Err(Error::VersionConflict {
-                    table: name.into(),
-                    expected,
-                    actual: head.head.sequence,
-                });
-            }
+        if let Some(expected) = opts.expected_version
+            && head.head.sequence != expected
+        {
+            return Err(Error::VersionConflict {
+                table: name.into(),
+                expected,
+                actual: head.head.sequence,
+            });
         }
         let manifest = self.manifest_at(entry.table_id, head.head.sequence).await?;
         let spec = self.spec(entry.table_id, manifest.schema_revision).await?;
@@ -1157,12 +1157,12 @@ impl Database {
                 if let Some(tc) = &spec.time_column {
                     // Batch is sorted, so min/max are first/last.
                     if let Some((bmin, bmax)) = crate::segment::time_min_max(b, tc)? {
-                        if let Some(prev) = prev_last {
-                            if bmin < prev {
-                                return Err(Error::SortOrderViolation {
-                                    detail: "append input batches are not mutually ordered".into(),
-                                });
-                            }
+                        if let Some(prev) = prev_last
+                            && bmin < prev
+                        {
+                            return Err(Error::SortOrderViolation {
+                                detail: "append input batches are not mutually ordered".into(),
+                            });
                         }
                         prev_last = Some(bmax);
                     }
@@ -1179,15 +1179,15 @@ impl Database {
                     .next()
                     .transpose()?
                     .flatten();
-                if let Some(min) = input_min {
-                    if min < table_max {
-                        return Err(Error::SortOrderViolation {
-                            detail: format!(
-                                "append input starts at {min} but the table already contains \
+                if let Some(min) = input_min
+                    && min < table_max
+                {
+                    return Err(Error::SortOrderViolation {
+                        detail: format!(
+                            "append input starts at {min} but the table already contains \
                                  rows up to {table_max}; use replace_range or write"
-                            ),
-                        });
-                    }
+                        ),
+                    });
                 }
             }
         }
@@ -1639,11 +1639,10 @@ impl Database {
             &mut effective_projection,
             &spec.time_column,
             time_filter_requested,
-        ) {
-            if !proj.contains(tc) {
-                proj.push(tc.clone());
-                drop_time_col = true;
-            }
+        ) && !proj.contains(tc)
+        {
+            proj.push(tc.clone());
+            drop_time_col = true;
         }
 
         let tc = spec.time_column.clone();
@@ -2127,13 +2126,13 @@ impl Database {
             };
             report.manifests_checked += 1;
             let actual = crate::util::checksum_hex(&bytes);
-            if let Some(exp) = &expected_checksum {
-                if &actual != exp {
-                    report.problems.push(format!(
-                        "{}: checksum mismatch (chain expected {exp}, got {actual})",
-                        path.as_ref()
-                    ));
-                }
+            if let Some(exp) = &expected_checksum
+                && &actual != exp
+            {
+                report.problems.push(format!(
+                    "{}: checksum mismatch (chain expected {exp}, got {actual})",
+                    path.as_ref()
+                ));
             }
             let manifest = VersionManifest::from_bytes(&bytes, path.as_ref())?;
             expected_checksum = manifest.parent_checksum.clone();
@@ -2286,11 +2285,12 @@ pub(crate) async fn dedup_segments(
     let mut deduped = 0;
     let mut redundant: Vec<String> = Vec::new();
     for seg in new_segments.iter_mut() {
-        if let Some(existing) = by_hash.get(seg.checksum.as_str()) {
-            if existing.bytes == seg.bytes && existing.rows == seg.rows {
-                redundant.push(std::mem::replace(seg, (*existing).clone()).path);
-                deduped += 1;
-            }
+        if let Some(existing) = by_hash.get(seg.checksum.as_str())
+            && existing.bytes == seg.bytes
+            && existing.rows == seg.rows
+        {
+            redundant.push(std::mem::replace(seg, (*existing).clone()).path);
+            deduped += 1;
         }
     }
     for path in redundant {

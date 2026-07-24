@@ -18,10 +18,10 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
+use crate::Backend;
 use crate::error::{Error, Result};
 use crate::manifest::{ColumnStats, SegmentMeta};
 use crate::spec::{Codec, TableSpec};
-use crate::Backend;
 
 /// Truncate string statistics to keep manifests small; a truncated max is
 /// still a valid upper bound only if we extend it, so we mark truncated
@@ -84,15 +84,15 @@ impl ColumnAcc {
         if self.stats_dropped {
             return;
         }
-        if let Some(m) = min {
-            if self.min.as_ref().is_none_or(|cur| m.less_than(cur)) {
-                self.min = Some(m);
-            }
+        if let Some(m) = min
+            && self.min.as_ref().is_none_or(|cur| m.less_than(cur))
+        {
+            self.min = Some(m);
         }
-        if let Some(m) = max {
-            if self.max.as_ref().is_none_or(|cur| cur.less_than(&m)) {
-                self.max = Some(m);
-            }
+        if let Some(m) = max
+            && self.max.as_ref().is_none_or(|cur| cur.less_than(&m))
+        {
+            self.max = Some(m);
         }
     }
 
@@ -702,10 +702,10 @@ impl<'a> SegmentWriter<'a> {
             }
             if self.input_sorted {
                 let first = sort_row_scalars(&batch, 0, &self.spec.sort_key)?;
-                if let Some(last) = &self.last_sort_row {
-                    if row_less_than(&first, last) {
-                        self.input_sorted = false;
-                    }
+                if let Some(last) = &self.last_sort_row
+                    && row_less_than(&first, last)
+                {
+                    self.input_sorted = false;
                 }
                 self.last_sort_row = Some(sort_row_scalars(
                     &batch,
@@ -767,11 +767,7 @@ impl<'a> SegmentWriter<'a> {
                         mx = mx.max(bmx);
                     }
                 }
-                if mn <= mx {
-                    Some((mn, mx))
-                } else {
-                    None
-                }
+                if mn <= mx { Some((mn, mx)) } else { None }
             }
             None => None,
         };
@@ -897,10 +893,10 @@ pub async fn read_segment_verified(
     let mut batches: Vec<RecordBatch> = reader
         .collect::<std::result::Result<_, _>>()
         .map_err(Error::Arrow)?;
-    if let Some((time_col, start, end)) = time_filter {
-        if start.is_some() || end.is_some() {
-            batches = filter_batches_by_time(batches, time_col, start, end)?;
-        }
+    if let Some((time_col, start, end)) = time_filter
+        && (start.is_some() || end.is_some())
+    {
+        batches = filter_batches_by_time(batches, time_col, start, end)?;
     }
     Ok(batches)
 }
@@ -971,10 +967,10 @@ pub async fn read_segment(
     let mut batches: Vec<RecordBatch> = stream.try_collect().await.map_err(Error::Parquet)?;
 
     // Exact row-level time filter.
-    if let Some((time_col, start, end)) = time_filter {
-        if start.is_some() || end.is_some() {
-            batches = filter_batches_by_time(batches, time_col, start, end)?;
-        }
+    if let Some((time_col, start, end)) = time_filter
+        && (start.is_some() || end.is_some())
+    {
+        batches = filter_batches_by_time(batches, time_col, start, end)?;
     }
     Ok(batches)
 }
@@ -1007,7 +1003,7 @@ pub fn filter_batches_by_time(
             Err(_) => {
                 return Err(Error::internal(
                     "time filter requested but time column not present in projection",
-                ))
+                ));
             }
         };
         let col = batch.column(idx);

@@ -7,8 +7,8 @@
 //! a schema-only IPC stream, `csv` a header line, `json` an empty array.
 
 use std::io::{IsTerminal, StdoutLock, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use arrow::array::RecordBatch;
@@ -162,11 +162,11 @@ impl BatchWriter {
         let pipe = self.broken_pipe.clone();
         // A schema-only result must still identify itself: header for csv,
         // `[]` handled by the json writer, schema message by the IPC writer.
-        if !self.wrote_any {
-            if let Sink::Csv(w) = &mut self.sink {
-                w.write(&RecordBatch::new_empty(self.schema.clone()))
-                    .map_err(|e| map_write_err(&pipe, e))?;
-            }
+        if !self.wrote_any
+            && let Sink::Csv(w) = &mut self.sink
+        {
+            w.write(&RecordBatch::new_empty(self.schema.clone()))
+                .map_err(|e| map_write_err(&pipe, e))?;
         }
         match self.sink {
             Sink::Table(batches) => {

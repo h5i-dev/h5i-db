@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arrow::record_batch::RecordBatch;
-use futures::{stream, Stream};
+use futures::{Stream, stream};
 
 use crate::database::{Database, ScanOptions};
 use crate::error::{Error, Result};
@@ -53,10 +53,10 @@ impl Database {
             let entry = crate::catalog::load_entry(self.backend(), name)
                 .await?
                 .ok_or_else(|| Error::TableNotFound { name: name.into() })?;
-            if let Some(state) = self.backend().heads.read(entry.table_id).await? {
-                if state.head.sequence > after {
-                    return Ok(TailEvent::Advanced(state.head.sequence));
-                }
+            if let Some(state) = self.backend().heads.read(entry.table_id).await?
+                && state.head.sequence > after
+            {
+                return Ok(TailEvent::Advanced(state.head.sequence));
             }
             if start.elapsed() >= timeout {
                 return Ok(TailEvent::TimedOut);

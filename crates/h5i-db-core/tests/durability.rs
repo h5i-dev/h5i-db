@@ -134,12 +134,13 @@ async fn create_rename_drop_are_race_safe_and_precise() {
         .unwrap();
     let err = db.rename_table("u", "t").await.unwrap_err();
     assert!(matches!(err, Error::TableExists { .. }));
-    assert!(db
-        .list_tables()
-        .await
-        .unwrap()
-        .iter()
-        .any(|e| e.name == "u"));
+    assert!(
+        db.list_tables()
+            .await
+            .unwrap()
+            .iter()
+            .any(|e| e.name == "u")
+    );
 
     // Rename then drop.
     db.rename_table("u", "v").await.unwrap();

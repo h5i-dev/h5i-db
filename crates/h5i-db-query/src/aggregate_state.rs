@@ -344,23 +344,22 @@ impl AggregateStateStore {
                     metrics.segments_scanned += 1;
                     metrics.rows_scanned += segment.rows;
                     metrics.bytes_scheduled += segment.bytes;
-                    if self.mode == AggregateStateMode::ReadWrite && state.seal().is_ok() {
-                        if let Ok(bytes) = serde_json::to_vec(&state) {
-                            if let Ok(true) = self
-                                .db
-                                .backend()
-                                .put_if_absent(&path, bytes::Bytes::from(bytes))
-                                .await
-                            {
-                                metrics.evictions += crate::sidecar::enforce_budget(
-                                    self.db.backend(),
-                                    PREFIX,
-                                    MAX_CACHE_BYTES,
-                                )
-                                .await
-                                .unwrap_or(0)
-                            }
-                        }
+                    if self.mode == AggregateStateMode::ReadWrite
+                        && state.seal().is_ok()
+                        && let Ok(bytes) = serde_json::to_vec(&state)
+                        && let Ok(true) = self
+                            .db
+                            .backend()
+                            .put_if_absent(&path, bytes::Bytes::from(bytes))
+                            .await
+                    {
+                        metrics.evictions += crate::sidecar::enforce_budget(
+                            self.db.backend(),
+                            PREFIX,
+                            MAX_CACHE_BYTES,
+                        )
+                        .await
+                        .unwrap_or(0)
                     }
                     state
                 }
@@ -396,10 +395,10 @@ impl AggregateStateStore {
         metrics: &mut AggregateStateMetrics,
     ) -> Option<AggregateStateEntry> {
         let bytes = self.db.backend().get_opt(path).await.ok()??;
-        if let Ok(entry) = serde_json::from_slice::<AggregateStateEntry>(&bytes) {
-            if entry.verify(segment, plan_hash).is_ok() {
-                return Some(entry);
-            }
+        if let Ok(entry) = serde_json::from_slice::<AggregateStateEntry>(&bytes)
+            && entry.verify(segment, plan_hash).is_ok()
+        {
+            return Some(entry);
         }
         metrics.corrupt_entries += 1;
         if self.mode == AggregateStateMode::ReadWrite {

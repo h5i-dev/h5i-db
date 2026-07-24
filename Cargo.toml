@@ -1,5 +1,9 @@
 [workspace]
-resolver = "2"
+# Resolver 3 (edition 2024's default) is resolver 2 plus MSRV-aware version
+# selection: it refuses to pick a dependency whose `rust-version` exceeds the
+# `rust-version` below. Without it a routine `cargo update` silently pulls in
+# crates that only build on newer rustc and breaks the MSRV CI job.
+resolver = "3"
 members = [
     "crates/h5i-db-observability",
     "crates/h5i-db-core",
@@ -18,10 +22,10 @@ default-members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/h5i-dev/h5i-db"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [workspace.dependencies]
 # version alongside path so `cargo publish` can rewrite these for crates.io.
@@ -83,7 +87,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 
 blake3 = "1"
-fs4 = { version = "0.13", features = ["sync"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = [
     "clock",
@@ -94,9 +97,17 @@ url = "2"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Held at 0.22 to stay unified with the six crates in our core stack that
+# depend on it (arrow-cast, datafusion-functions, hyper-util, object_store,
+# parquet, reqwest). We only encode/decode Arrow IPC bytes, an API unchanged
+# since 0.21, so 0.23 would buy a second copy and nothing else.
 base64 = "0.22"
 
 tempfile = "3"
+# Held at 0.9 so the bench keeps generating the dataset that benchmarks/
+# RESULTS.md was measured against. Both 0.9 and 0.10 are in the graph either
+# way (datafusion-datasource and object_store pull one each), so moving up
+# would cost seed reproducibility and save nothing.
 rand = "0.9"
 clap = { version = "4", features = ["derive", "env"] }
 comfy-table = "7"

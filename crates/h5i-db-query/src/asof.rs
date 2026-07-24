@@ -17,7 +17,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
-use arrow::array::{new_null_array, Array, ArrayRef, RecordBatch};
+use arrow::array::{Array, ArrayRef, RecordBatch, new_null_array};
 use arrow::buffer::ScalarBuffer;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
@@ -33,18 +33,18 @@ use datafusion::execution::context::{QueryPlanner, SessionState};
 use datafusion::execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::logical_expr::{
-    lit, BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown,
-    TableType, UserDefinedLogicalNode, UserDefinedLogicalNodeCore,
+    BinaryExpr, Expr, Extension, LogicalPlan, Operator, TableProviderFilterPushDown, TableType,
+    UserDefinedLogicalNode, UserDefinedLogicalNodeCore, lit,
 };
 use datafusion::physical_expr::{
-    expressions, EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalSortExpr,
+    EquivalenceProperties, LexOrdering, OrderingRequirements, PhysicalSortExpr, expressions,
 };
+use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
-use datafusion::physical_plan::Distribution;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties,
@@ -730,10 +730,10 @@ impl RightRuns {
                     return None;
                 }
                 let i = pos - 1;
-                if let Some(tol) = options.tolerance {
-                    if t - run.times[i] > tol {
-                        return None;
-                    }
+                if let Some(tol) = options.tolerance
+                    && t - run.times[i] > tol
+                {
+                    return None;
                 }
                 Some(run.locs[i])
             }
@@ -743,10 +743,10 @@ impl RightRuns {
                 if pos >= run.times.len() {
                     return None;
                 }
-                if let Some(tol) = options.tolerance {
-                    if run.times[pos] - t > tol {
-                        return None;
-                    }
+                if let Some(tol) = options.tolerance
+                    && run.times[pos] - t > tol
+                {
+                    return None;
                 }
                 Some(run.locs[pos])
             }
@@ -946,7 +946,7 @@ impl TableFunctionImpl for AsOfJoinFunc {
                 other => {
                     return Err(DataFusionError::Plan(format!(
                         "asof_join: direction must be 'backward' or 'forward', got {other:?}"
-                    )))
+                    )));
                 }
             },
         };
@@ -956,7 +956,7 @@ impl TableFunctionImpl for AsOfJoinFunc {
             Some(_) => {
                 return Err(DataFusionError::Plan(
                     "asof_join: tolerance must be an integer (raw time units)".into(),
-                ))
+                ));
             }
         };
 

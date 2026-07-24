@@ -107,7 +107,7 @@ impl TableSpec {
                 other => {
                     return Err(Error::invalid(format!(
                         "time column {tc:?} must be a timestamp, date, or integer type, got {other}"
-                    )))
+                    )));
                 }
             }
             if field.is_nullable() {
@@ -117,10 +117,10 @@ impl TableSpec {
             }
         }
         let mut sort_key = options.sort_key.clone();
-        if sort_key.is_empty() {
-            if let Some(tc) = &time_column {
-                sort_key = vec![tc.clone()];
-            }
+        if sort_key.is_empty()
+            && let Some(tc) = &time_column
+        {
+            sort_key = vec![tc.clone()];
         }
         for col in &sort_key {
             schema.field_with_name(col).map_err(|_| {
@@ -129,13 +129,13 @@ impl TableSpec {
                 ))
             })?;
         }
-        if let (Some(tc), Some(first)) = (&time_column, sort_key.first()) {
-            if first != tc {
-                return Err(Error::invalid(format!(
-                    "when a time column is declared it must be the first sort key \
+        if let (Some(tc), Some(first)) = (&time_column, sort_key.first())
+            && first != tc
+        {
+            return Err(Error::invalid(format!(
+                "when a time column is declared it must be the first sort key \
                      (time column {tc:?}, sort key starts with {first:?})"
-                )));
-            }
+            )));
         }
         for col in &options.storage.bloom_filter_columns {
             schema.field_with_name(col).map_err(|_| {

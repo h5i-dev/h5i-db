@@ -6,9 +6,9 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::Backend;
 use crate::error::{Error, Result};
 use crate::layout;
-use crate::Backend;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogEntry {

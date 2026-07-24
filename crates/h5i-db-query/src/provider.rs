@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub use crate::metrics::{ScanMetrics, ScanMetricsCollector};
 use crate::predicate_cache::{
-    eligible_predicate, PredicateCache, PredicateCacheMode, PredicateCacheStats,
+    PredicateCache, PredicateCacheMode, PredicateCacheStats, eligible_predicate,
 };
 use crate::pruning::ManifestPruningStats;
 use arrow::datatypes::{DataType, SchemaRef};
@@ -25,7 +25,7 @@ use datafusion::error::{DataFusionError, Result as DfResult};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown};
-use datafusion::physical_expr::{expressions, LexOrdering, PhysicalSortExpr};
+use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_pruning::PruningPredicate;
 use h5i_db_core::{ResolvedTable, SegmentMeta};
@@ -102,16 +102,16 @@ fn manifest_statistics(schema: &SchemaRef, segments: &[&SegmentMeta]) -> Statist
                             .and_then(|v| json_stat_to_scalar(v, &stat_type))
                     })
                     .collect();
-                if let Some(mins) = mins {
-                    if let Some(min) = mins.into_iter().reduce(|a, b| {
+                if let Some(mins) = mins
+                    && let Some(min) = mins.into_iter().reduce(|a, b| {
                         if b.partial_cmp(&a) == Some(std::cmp::Ordering::Less) {
                             b
                         } else {
                             a
                         }
-                    }) {
-                        stats.min_value = Precision::Exact(min);
-                    }
+                    })
+                {
+                    stats.min_value = Precision::Exact(min);
                 }
                 let maxs: Option<Vec<ScalarValue>> = cols
                     .iter()
@@ -121,16 +121,16 @@ fn manifest_statistics(schema: &SchemaRef, segments: &[&SegmentMeta]) -> Statist
                             .and_then(|v| json_stat_to_scalar(v, &stat_type))
                     })
                     .collect();
-                if let Some(maxs) = maxs {
-                    if let Some(max) = maxs.into_iter().reduce(|a, b| {
+                if let Some(maxs) = maxs
+                    && let Some(max) = maxs.into_iter().reduce(|a, b| {
                         if b.partial_cmp(&a) == Some(std::cmp::Ordering::Greater) {
                             b
                         } else {
                             a
                         }
-                    }) {
-                        stats.max_value = Precision::Exact(max);
-                    }
+                    })
+                {
+                    stats.max_value = Precision::Exact(max);
                 }
             }
             stats

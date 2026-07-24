@@ -226,7 +226,7 @@ impl LatestByStore {
             other => {
                 return Err(h5i_db_core::Error::invalid(format!(
                     "latest_on: group column {by_column:?} must be string-like, got {other}"
-                )))
+                )));
             }
         }
 
@@ -287,10 +287,10 @@ impl LatestByStore {
         metrics: &mut LatestByMetrics,
     ) -> Option<RecordBatch> {
         let bytes = self.db.backend().get_opt(path).await.ok()??;
-        if let Ok(entry) = serde_json::from_slice::<LatestEntry>(&bytes) {
-            if let Some(batch) = entry.verified(segment, by_column, schema) {
-                return Some(batch);
-            }
+        if let Ok(entry) = serde_json::from_slice::<LatestEntry>(&bytes)
+            && let Some(batch) = entry.verified(segment, by_column, schema)
+        {
+            return Some(batch);
         }
         metrics.corrupt_entries += 1;
         None
@@ -323,20 +323,18 @@ impl LatestByStore {
     ) {
         // Best-effort: a read-only backend (or a race) simply leaves the cache
         // un-warmed; correctness never depends on it.
-        if let Ok(entry) = LatestEntry::sealed(segment, by_column, mini) {
-            if let Ok(bytes) = serde_json::to_vec(&entry) {
-                if let Ok(true) = self
-                    .db
-                    .backend()
-                    .put_if_absent(path, Bytes::from(bytes))
+        if let Ok(entry) = LatestEntry::sealed(segment, by_column, mini)
+            && let Ok(bytes) = serde_json::to_vec(&entry)
+            && let Ok(true) = self
+                .db
+                .backend()
+                .put_if_absent(path, Bytes::from(bytes))
+                .await
+        {
+            metrics.evictions +=
+                crate::sidecar::enforce_budget(self.db.backend(), PREFIX, MAX_CACHE_BYTES)
                     .await
-                {
-                    metrics.evictions +=
-                        crate::sidecar::enforce_budget(self.db.backend(), PREFIX, MAX_CACHE_BYTES)
-                            .await
-                            .unwrap_or(0);
-                }
-            }
+                    .unwrap_or(0);
         }
     }
 }

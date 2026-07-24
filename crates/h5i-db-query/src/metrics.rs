@@ -11,14 +11,14 @@ use arrow::record_batch::RecordBatch;
 use datafusion::dataframe::DataFrame;
 use datafusion::error::Result as DfResult;
 use datafusion::physical_plan::{
-    execute_stream, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+    ExecutionPlan, RecordBatchStream, SendableRecordBatchStream, execute_stream,
 };
 use futures::{Stream, StreamExt};
-use h5i_db_observability::{query_fingerprint, WorkloadTelemetryBuffer};
 pub use h5i_db_observability::{
     OperatorPerformanceMetrics, QueryPerformanceReport, QueryStatus, ScanMetrics,
     WorkloadTelemetryEnvelope,
 };
+use h5i_db_observability::{WorkloadTelemetryBuffer, query_fingerprint};
 use uuid::Uuid;
 
 tokio::task_local! {

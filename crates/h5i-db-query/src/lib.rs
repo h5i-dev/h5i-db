@@ -25,9 +25,9 @@ pub use aggregate_state::{
     AggregateStateMetrics, AggregateStateMode, AggregateStateStore, FinanceAggregate,
     FinanceAggregateResult, FinanceAggregateSpec,
 };
-pub use asof::{asof_join, AsOfDirection, AsOfJoinExec, AsOfJoinNode, AsOfOptions};
+pub use asof::{AsOfDirection, AsOfJoinExec, AsOfJoinNode, AsOfOptions, asof_join};
 pub use leakage::{
-    check_leakage, ColumnDelta, LeakageReport, TableVersionDelta, DEFAULT_TOLERANCE,
+    ColumnDelta, DEFAULT_TOLERANCE, LeakageReport, TableVersionDelta, check_leakage,
 };
 pub use metrics::{
     OperatorPerformanceMetrics, QueryPerformanceReport, QueryStatus, ReportedDataFrame,

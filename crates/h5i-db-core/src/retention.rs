@@ -182,14 +182,14 @@ impl Database {
 
         // Snapshot pins win over retention: refuse to expire pinned versions.
         for snap in snapshot::list(self.backend()).await? {
-            if let Some(se) = snap.entries.get(&table_id) {
-                if se.sequence < target {
-                    return Err(Error::invalid(format!(
-                        "snapshot {:?} pins version {} of table {name:?}, below the requested \
+            if let Some(se) = snap.entries.get(&table_id)
+                && se.sequence < target
+            {
+                return Err(Error::invalid(format!(
+                    "snapshot {:?} pins version {} of table {name:?}, below the requested \
                          floor {target}; delete the snapshot first",
-                        snap.name, se.sequence
-                    )));
-                }
+                    snap.name, se.sequence
+                )));
             }
         }
 
