@@ -431,7 +431,7 @@ fn leakage_check_reports_delta_across_a_withheld_version() {
     let tmp = tempfile::tempdir().unwrap();
     let cwd = tmp.path();
     bootstrap(cwd); // create-table + ingest v1 (3 rows) -> version 1
-                    // Append two later rows as version 2.
+    // Append two later rows as version 2.
     ok_json(&run(
         &["ingest", "m.db", "trades", "v2.csv", "--format", "json"],
         cwd,

@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{Path as AxPath, Query, Request, State};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -94,7 +94,9 @@ pub async fn serve(
     })?;
     eprintln!("h5i-db review UI");
     eprintln!("  open   http://127.0.0.1:{port}/?token={token}");
-    eprintln!("         (the URL carries this session's access token — the API refuses requests without it)");
+    eprintln!(
+        "         (the URL carries this session's access token — the API refuses requests without it)"
+    );
     eprintln!(
         "  mode   {}",
         if allow_mutations {
@@ -585,7 +587,7 @@ async fn run_query(State(st): State<UiState>, Json(body): Json<QueryBody>) -> Ap
                     st.query_timeout
                 ),
                 hint: "narrow the query, or run it via the CLI which has no interactive timeout",
-            })
+            });
         }
         Ok(r) => r?,
     };

@@ -20,9 +20,9 @@ use h5i_db_core::{
 };
 use h5i_db_query::{H5iSession, PredicateCacheMode, SessionOptions};
 
-use ingest::{align_batch, open_input, InputFormat};
+use ingest::{InputFormat, align_batch, open_input};
 use output::{
-    is_broken_pipe, write_batches, write_error, write_value, BatchWriter, Format, Progress,
+    BatchWriter, Format, Progress, is_broken_pipe, write_batches, write_error, write_value,
 };
 
 #[derive(Parser)]
@@ -687,8 +687,8 @@ async fn run(cli: Cli) -> Result<()> {
             // the full result first. Returns whether output was truncated.
             async fn drain(
                 mut stream: impl futures::Stream<
-                        Item = datafusion::error::Result<arrow::record_batch::RecordBatch>,
-                    > + Unpin,
+                    Item = datafusion::error::Result<arrow::record_batch::RecordBatch>,
+                > + Unpin,
                 writer: &mut BatchWriter,
             ) -> Result<bool> {
                 while let Some(batch) = stream.next().await {
@@ -748,10 +748,8 @@ async fn run(cli: Cli) -> Result<()> {
                     })??,
                 None => work.await?,
             };
-            if stats {
-                if let Some(report) = report {
-                    eprintln!("{}", serde_json::to_string(&report)?);
-                }
+            if stats && let Some(report) = report {
+                eprintln!("{}", serde_json::to_string(&report)?);
             }
             Ok(())
         }
@@ -1148,7 +1146,7 @@ fn parse_time_bound(resolved: &h5i_db_core::ResolvedTable, s: &str) -> Result<i6
         other => {
             return Err(Error::invalid(format!(
                 "time column {tc:?} has integer type {other}; pass raw integer bounds"
-            )))
+            )));
         }
     };
     Ok(ns / divisor)
@@ -1213,7 +1211,7 @@ fn parse_schema_json(json: &str) -> Result<SchemaRef> {
                          uint8..uint64, float32/float64, utf8, bool, date32/date64, \
                          timestamp_s/ms/us/ns",
                         f.name
-                    )))
+                    )));
                 }
             };
             Ok(Field::new(&f.name, dt, f.nullable))

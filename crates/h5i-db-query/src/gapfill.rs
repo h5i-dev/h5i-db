@@ -79,7 +79,7 @@ fn time_scalar(dt: &DataType, value: i64) -> DfResult<ScalarValue> {
         other => {
             return Err(DataFusionError::Plan(format!(
                 "gapfill: time column must be Int64 or Timestamp, got {other}"
-            )))
+            )));
         }
     })
 }
@@ -216,7 +216,7 @@ impl TableFunctionImpl for GapFillFunc {
             _ => {
                 return Err(DataFusionError::Plan(
                     "gapfill: step must be a positive Int64 literal".into(),
-                ))
+                ));
             }
         };
         let mode = match args.get(3) {
@@ -233,7 +233,7 @@ impl TableFunctionImpl for GapFillFunc {
                                 "gapfill: 'value' fill needs a numeric constant, \
                                  e.g. gapfill('t', 'ts', step, 'value', 0)"
                                     .into(),
-                            ))
+                            ));
                         }
                     };
                     FillMode::Value(c)
@@ -241,7 +241,7 @@ impl TableFunctionImpl for GapFillFunc {
                 other => {
                     return Err(DataFusionError::Plan(format!(
                         "gapfill: unknown fill mode {other:?}"
-                    )))
+                    )));
                 }
             },
         };

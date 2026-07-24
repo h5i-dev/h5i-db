@@ -17,9 +17,10 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use h5i_db_core::{Database, ReadAt, ResolvedTable};
 use h5i_db_observability::WorkloadTelemetryBuffer;
-use object_store::{path::Path as ObjectPath, ObjectStoreExt};
+use object_store::{ObjectStoreExt, path::Path as ObjectPath};
 use uuid::Uuid;
 
+use crate::PredicateCacheMode;
 use crate::asof::{AsOfJoinFunc, AsOfQueryPlanner};
 use crate::finance::{ewma_udwf, vwap_udaf, wavg_udaf};
 use crate::functions::time_bucket_udf;
@@ -32,7 +33,6 @@ use crate::metrics::{
 use crate::provider::H5iTableProvider;
 use crate::tail::TailFunc;
 use crate::udtf::TimeTravelFunc;
-use crate::PredicateCacheMode;
 
 /// Resource and execution options for a session.
 #[derive(Debug, Clone, Default)]
@@ -88,7 +88,7 @@ impl H5iSession {
             let disk = match &options.spill_dir {
                 Some(dir) => DiskManagerBuilder::default().with_mode(
                     datafusion::execution::disk_manager::DiskManagerMode::Directories(vec![
-                        dir.clone()
+                        dir.clone(),
                     ]),
                 ),
                 None => DiskManagerBuilder::default(),
@@ -569,7 +569,7 @@ fn rewrite_asof_join(query: &str) -> DfResult<String> {
             _ => {
                 return Err(datafusion::error::DataFusionError::Plan(
                     "ASOF MATCH_CONDITION must use >=, >, <=, or <".into(),
-                ))
+                ));
             }
         }
     } else {

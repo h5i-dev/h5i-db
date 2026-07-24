@@ -16,7 +16,7 @@ use h5i_db_query::{
     AggregateStateMode, AggregateStateStore, FinanceAggregateSpec, H5iSession, PredicateCacheMode,
     QueryStatus, SessionOptions, WorkloadTelemetryEnvelope,
 };
-use object_store::{path::Path as ObjectPath, ObjectStoreExt};
+use object_store::{ObjectStoreExt, path::Path as ObjectPath};
 
 fn trades_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -1251,14 +1251,16 @@ async fn gapfill_value_fill_and_aliases() {
     );
 
     // Misuse: 'value' without a constant, and a constant without 'value'.
-    assert!(s
-        .sql("SELECT * FROM gapfill('trades', 'ts', 10, 'value')")
-        .await
-        .is_err());
-    assert!(s
-        .sql("SELECT * FROM gapfill('trades', 'ts', 10, 'locf', 7)")
-        .await
-        .is_err());
+    assert!(
+        s.sql("SELECT * FROM gapfill('trades', 'ts', 10, 'value')")
+            .await
+            .is_err()
+    );
+    assert!(
+        s.sql("SELECT * FROM gapfill('trades', 'ts', 10, 'locf', 7)")
+            .await
+            .is_err()
+    );
 }
 
 /// A3: `latest_on('table','symbol')` returns the most recent row per group.

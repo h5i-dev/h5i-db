@@ -25,7 +25,7 @@
 //! `restore` of a pre-evolution version restores the old schema revision
 //! with it.
 
-use arrow::array::{new_null_array, ArrayRef, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use crate::error::{Error, Result};

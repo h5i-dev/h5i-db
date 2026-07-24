@@ -36,8 +36,8 @@ use arrow::array::{Array, RecordBatch};
 use arrow::datatypes::DataType;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{Error, Result};
 use crate::Backend;
+use crate::error::{Error, Result};
 
 /// Current on-disk format for the per-table policy sidecar.
 pub const FORMAT: u32 = 1;
@@ -364,7 +364,7 @@ fn cell_at(array: &dyn Array, i: usize) -> Result<Cell> {
         other => {
             return Err(Error::invalid(format!(
                 "data policy: unsupported column type {other:?} for comparison"
-            )))
+            )));
         }
     };
     Ok(cell)
@@ -393,7 +393,7 @@ fn compare_cell(cell: &Cell, op: CmpOp, lit: &ScalarLit, column: &str) -> Result
         _ => {
             return Err(Error::invalid(format!(
                 "data policy: type mismatch comparing column {column:?} against literal {lit:?}"
-            )))
+            )));
         }
     };
     Ok(op.eval_ordering(ordering))

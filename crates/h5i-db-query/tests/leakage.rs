@@ -7,7 +7,7 @@ use std::sync::Arc;
 use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use h5i_db_core::{Database, ReadAt, TableOptions, WriteOptions};
-use h5i_db_query::{check_leakage, DEFAULT_TOLERANCE};
+use h5i_db_query::{DEFAULT_TOLERANCE, check_leakage};
 
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![

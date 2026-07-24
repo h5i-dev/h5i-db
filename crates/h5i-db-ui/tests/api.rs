@@ -9,7 +9,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use h5i_db_core::{Database, StorageOptions, TableOptions, WriteOptions};
-use h5i_db_ui::{build_router, UiState};
+use h5i_db_ui::{UiState, build_router};
 use http_body_util::BodyExt;
 use tower::util::ServiceExt;
 
@@ -178,10 +178,12 @@ async fn plan_flow_via_ui_respects_read_only_and_applies() {
     let (status, detail) =
         get_json(&ro_router, &format!("/api/plan/trades/{}", plan.plan_id)).await;
     assert_eq!(status, StatusCode::OK);
-    assert!(!detail["before_sample"]["rows"]
-        .as_array()
-        .unwrap()
-        .is_empty());
+    assert!(
+        !detail["before_sample"]["rows"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 
     // Read-only UI refuses to apply.
     let (status, err) = post_json(

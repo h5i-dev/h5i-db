@@ -265,12 +265,12 @@ async fn main() {
     // 1. ingest
     // ------------------------------------------------------------------
     let start_ns = 1_750_000_000_000_000_000i64; // ~2025-06 in ns
-    let mut gen = TickGen::new(args.seed, args.symbols, start_ns);
+    let mut tick_gen = TickGen::new(args.seed, args.symbols, start_ns);
     let per_commit = (args.trades / args.commits).max(1) as usize;
 
     let (r, _) = timed("ingest trades (append commits)", Some(args.trades), async {
         for _ in 0..args.commits {
-            let batch = gen.trades_batch(per_commit);
+            let batch = tick_gen.trades_batch(per_commit);
             db.append("trades", vec![batch], WriteOptions::default())
                 .await
                 .unwrap();

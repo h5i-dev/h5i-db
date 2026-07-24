@@ -270,7 +270,7 @@ impl ScalarUDFImpl for TimeBucketUdf {
             ColumnarValue::Array(_) => {
                 return Err(DataFusionError::Plan(
                     "time_bucket: interval must be a literal, not a column".into(),
-                ))
+                ));
             }
         };
         let third_is_timezone = args.len() == 3
@@ -305,7 +305,7 @@ impl ScalarUDFImpl for TimeBucketUdf {
             Some(ColumnarValue::Array(_)) => {
                 return Err(DataFusionError::Plan(
                     "time_bucket: origin must be a literal".into(),
-                ))
+                ));
             }
         };
 
@@ -420,7 +420,7 @@ fn scalar_ts_to_ns(s: &ScalarValue) -> DfResult<i64> {
         other => {
             return Err(DataFusionError::Plan(format!(
                 "time_bucket: unsupported origin {other:?}"
-            )))
+            )));
         }
     };
     v.checked_mul(factor).ok_or_else(|| {

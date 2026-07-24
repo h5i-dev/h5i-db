@@ -200,10 +200,10 @@ fn sniff_format(bytes: &[u8]) -> Result<InputFormat> {
         }
         Err(_) => None,
     };
-    if let Some(s) = text_prefix {
-        if s.contains(',') || s.contains('\n') {
-            return Ok(InputFormat::Csv);
-        }
+    if let Some(s) = text_prefix
+        && (s.contains(',') || s.contains('\n'))
+    {
+        return Ok(InputFormat::Csv);
     }
     Err(Error::invalid(
         "cannot auto-detect the stdin input format; pass --input-format parquet|csv|arrow",

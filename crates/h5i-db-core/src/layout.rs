@@ -178,11 +178,15 @@ mod tests {
     #[test]
     fn segment_and_staging_paths_have_expected_extensions() {
         let id = Uuid::new_v4();
-        assert!(segment_path(id, Uuid::new_v4())
-            .as_ref()
-            .ends_with(".parquet"));
-        assert!(staging_lease_path(id, Uuid::new_v4())
-            .as_ref()
-            .ends_with(".json"));
+        assert!(
+            segment_path(id, Uuid::new_v4())
+                .as_ref()
+                .ends_with(".parquet")
+        );
+        assert!(
+            staging_lease_path(id, Uuid::new_v4())
+                .as_ref()
+                .ends_with(".json")
+        );
     }
 }

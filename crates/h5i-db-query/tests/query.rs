@@ -7,7 +7,7 @@ use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray, Timestamp
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::assert_batches_eq;
 use h5i_db_core::{Database, ReadAt, StorageOptions, TableOptions, WriteOptions};
-use h5i_db_query::{asof_join, AsOfDirection, AsOfOptions, H5iSession, SessionOptions};
+use h5i_db_query::{AsOfDirection, AsOfOptions, H5iSession, SessionOptions, asof_join};
 
 fn trades_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -579,7 +579,9 @@ async fn finance_functions_vwap_wavg_ewma() {
         .await
         .unwrap();
     assert_batches_eq!(
-        ["+------+", "| e    |", "+------+", "| 10.0 |", "| 15.0 |", "+------+",],
+        [
+            "+------+", "| e    |", "+------+", "| 10.0 |", "| 15.0 |", "+------+",
+        ],
         &batches
     );
 }

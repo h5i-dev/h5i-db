@@ -27,10 +27,10 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use futures::TryStreamExt;
+use futures::future::BoxFuture;
 use object_store::{
-    local::LocalFileSystem, path::Path as ObjPath, ObjectStore, ObjectStoreExt, PutPayload,
+    ObjectStore, ObjectStoreExt, PutPayload, local::LocalFileSystem, path::Path as ObjPath,
 };
 use url::Url;
 use uuid::Uuid;

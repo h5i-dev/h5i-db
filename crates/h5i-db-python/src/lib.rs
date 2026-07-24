@@ -25,7 +25,7 @@ use pyo3::types::PyBytes;
 
 use h5i_db_core::{DataPolicy, Database, Error, ReadAt, ScanOptions, TableOptions, WriteOptions};
 use h5i_db_query::datafusion::error::DataFusionError;
-use h5i_db_query::{check_leakage, H5iSession, SessionOptions, DEFAULT_TOLERANCE};
+use h5i_db_query::{DEFAULT_TOLERANCE, H5iSession, SessionOptions, check_leakage};
 
 // -- exceptions -------------------------------------------------------------
 //
@@ -144,7 +144,7 @@ fn df_err(e: DataFusionError) -> PyErr {
                     None,
                     false,
                 ),
-            }
+            };
         }
         DataFusionError::Context(_, inner) => return df_err(*inner),
         other => other,
@@ -232,10 +232,10 @@ fn parse_read_at(
 }
 
 fn check_timeout(timeout: Option<f64>) -> PyResult<()> {
-    if let Some(secs) = timeout {
-        if !secs.is_finite() || secs <= 0.0 {
-            return Err(invalid("timeout must be a positive number of seconds"));
-        }
+    if let Some(secs) = timeout
+        && (!secs.is_finite() || secs <= 0.0)
+    {
+        return Err(invalid("timeout must be a positive number of seconds"));
     }
     Ok(())
 }
@@ -475,7 +475,7 @@ impl NativeDatabase {
             other => {
                 return Err(invalid(format!(
                     "mode must be 'write' or 'append', got {other:?}"
-                )))
+                )));
             }
         };
         to_json(&result)
@@ -519,12 +519,12 @@ impl NativeDatabase {
                     while let Some(batch) = stream.next().await {
                         let batch = batch?;
                         rows += batch.num_rows();
-                        if let Some(cap) = max_rows {
-                            if rows > cap {
-                                return Err(DataFusionError::ResourcesExhausted(format!(
-                                    "result exceeded max_rows = {cap}; add a LIMIT or raise max_rows"
-                                )));
-                            }
+                        if let Some(cap) = max_rows
+                            && rows > cap
+                        {
+                            return Err(DataFusionError::ResourcesExhausted(format!(
+                                "result exceeded max_rows = {cap}; add a LIMIT or raise max_rows"
+                            )));
                         }
                         batches.push(batch);
                     }

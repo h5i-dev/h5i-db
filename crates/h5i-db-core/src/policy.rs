@@ -9,9 +9,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::Backend;
 use crate::error::{Error, Result};
 use crate::manifest::OpKind;
-use crate::Backend;
 
 const POLICY_FILE: &str = "POLICY";
 
@@ -76,7 +76,7 @@ impl MutationPolicy {
                 return Err(Error::invalid(format!(
                     "unknown policy key {other:?}; keys: direct_append, direct_write, \
                      direct_replace, direct_delete, direct_restore, direct_compact"
-                )))
+                )));
             }
         }
         Ok(())

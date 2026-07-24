@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, BooleanArray, UInt64Array};
 use arrow::datatypes::{DataType, SchemaRef};
-use datafusion::common::pruning::PruningStatistics;
 use datafusion::common::Column;
+use datafusion::common::pruning::PruningStatistics;
 use datafusion::scalar::ScalarValue;
 use h5i_db_core::SegmentMeta;
 
