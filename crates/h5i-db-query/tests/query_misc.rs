@@ -1260,3 +1260,110 @@ async fn gapfill_value_fill_and_aliases() {
         .await
         .is_err());
 }
+
+/// A3: `latest_on('table','symbol')` returns the most recent row per group.
+#[tokio::test]
+async fn latest_on_returns_most_recent_row_per_symbol() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    // A: ts 1,3,5 → latest price 105; B: ts 2,4 → latest 104.
+    db.append(
+        "trades",
+        vec![trades_batch(
+            &[1, 2, 3, 4, 5],
+            &["A", "B", "A", "B", "A"],
+            &[101.0, 102.0, 103.0, 104.0, 105.0],
+            &[1, 1, 1, 1, 1],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+    let batches = s
+        .sql("SELECT symbol, price FROM latest_on('trades', 'symbol') ORDER BY symbol")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let symbol = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let price = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    assert_eq!((0..symbol.len()).map(|i| symbol.value(i)).collect::<Vec<_>>(), vec!["A", "B"]);
+    assert_eq!(price.values(), &[105.0, 104.0]);
+}
+
+/// A3: the per-segment cache is reused across append-only versions — a new
+/// append scans only the newly added segment, prior segments come from cache.
+#[tokio::test]
+async fn latest_by_store_reuses_cached_segments_across_appends() {
+    use h5i_db_query::latest::{LatestByMode, LatestByStore};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[1, 2], &["A", "B"], &[101.0, 102.0], &[1, 1])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let store = LatestByStore::new(db.clone(), LatestByMode::ReadWrite);
+
+    // Cold: build the single segment's state.
+    let (r1, m1) = store
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    assert_eq!(m1.segments_total, 1);
+    assert_eq!(m1.states_built, 1);
+    assert_eq!(m1.states_reused, 0);
+    assert_eq!(r1.num_rows(), 2);
+
+    // Warm: reuse the cached state, scan zero rows.
+    let (_r2, m2) = store
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    assert_eq!(m2.states_reused, 1);
+    assert_eq!(m2.states_built, 0);
+    assert_eq!(m2.rows_scanned, 0);
+
+    // Append a second segment with a newer A row.
+    db.append(
+        "trades",
+        vec![trades_batch(&[6], &["A"], &[999.0], &[1])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let (r3, m3) = store
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    assert_eq!(m3.segments_total, 2);
+    assert_eq!(m3.states_reused, 1, "segment 1 reused from cache");
+    assert_eq!(m3.states_built, 1, "only the new segment is scanned");
+    // Rows are ordered by symbol: A then B. Latest A is now 999, B stays 102.
+    let price = r3
+        .column(2)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    assert_eq!(price.values(), &[999.0, 102.0]);
+}

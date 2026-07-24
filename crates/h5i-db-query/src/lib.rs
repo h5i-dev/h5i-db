@@ -10,6 +10,7 @@ pub mod asof;
 pub mod finance;
 pub mod functions;
 pub mod gapfill;
+pub mod latest;
 pub mod metrics;
 mod predicate_cache;
 pub mod provider;

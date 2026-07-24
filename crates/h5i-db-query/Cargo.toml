@@ -12,6 +12,7 @@ h5i-db-core = { workspace = true }
 h5i-db-observability = { workspace = true }
 arrow = { workspace = true }
 blake3 = { workspace = true }
+base64 = { workspace = true }
 bytes = { workspace = true }
 parquet = { workspace = true }
 object_store = { workspace = true }
