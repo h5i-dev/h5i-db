@@ -510,7 +510,8 @@ Contract, enforced from the first release:
   because schema discovery is the first thing every agent does.
 - **Distribution**: single static binary + `pip install h5i-db`.
 - A `SKILL.md` teaching agents the CLI (schema discovery → query → limits →
-  error handling) ships in-repo; that, not a protocol server, is the
+  error handling) ships in-repo at `skills/h5i-db/` (installable via
+  `npx skills add h5i-dev/h5i-db`); that, not a protocol server, is the
   integration story. Multi-agent isolation = one database directory per agent;
   nothing in the engine knows what an agent is.
 

@@ -8,7 +8,7 @@
 - **Rich Time-Series SQL**: Full SQL via DataFusion with native operators (SQL ASOF join, timezone-aware `time_bucket`, gapfill/resample, rolling windows, `vwap`, `ewma`).
 
 📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
-[Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) · [SKILL](SKILL.md)
+[Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) · [Agent skill](skills/h5i-db/SKILL.md)
 
 ---
 
@@ -58,6 +58,17 @@ plan = db.plan_delete_range("trades", 1_700_0_000_000)
 print(plan.summary)                               # preview the mutation before it lands
 plan.apply()
 ```
+
+**Agent skill** (Claude Code, Codex, Cursor, …)
+
+```bash
+npx skills add h5i-dev/h5i-db        # installs the h5i-db skill from skills/h5i-db/
+```
+
+The skill teaches an agent the safe driving pattern — discover → query with
+limits → plan/apply for mutations — and ships in-repo at
+[`skills/h5i-db/`](skills/h5i-db/SKILL.md) so it always matches this
+repository's CLI.
 
 ---
 
