@@ -3,6 +3,11 @@
 Living roadmap. Last full update 2026-07-22 (branch `improve-performance`);
 Parts III–IV added 2026-07-23 (branch `improve-tests`); Part V (agent-facing
 surfaces, from a 2024–26 AI-agent×DB paper survey) added 2026-07-23.
+Part IV addendum + Part VI (agent ergonomics & competitive positioning) added
+2026-07-24 (branch `agentic-features`) from a codebase-grounded agent-UX
+review, a three-track web survey of the 2025–26 "agentic database" landscape,
+and an external cross-check of the performance program against production
+engines and recent papers. Part VI's build order supersedes Part V's.
 
 This document merges the former `ROADMAP_PERFORMANCE.md` into the
 production-readiness roadmap; the separate file is gone. Part I tracks
@@ -419,6 +424,41 @@ can be verified without regressing the benchmarked paths. C1 in particular was
 implemented far enough to confirm its win cannot be realized additively — it
 belongs with the read-path/format tier, not as a tail-of-session change.
 
+## Part IV addendum — external cross-check (2026-07-24)
+
+A web survey of production engines (QuestDB 2025–26 releases, ClickHouse
+24.7+, DuckDB 2025 blogs, InfluxDB 3, kdb+) and 2023–26 papers, checked
+against this codebase, **confirmed the program's direction** — several of the
+industry's "top wins" are already shipped here: sorted-merge ASOF that skips
+the sort DuckDB's planner cannot elide, streaming OHLCV over declared
+`output_ordering`, the `latest_on` sidecar (same shape as InfluxDB 3's Last
+Value Cache), and mergeable aggregate states (same shape as ClickHouse
+projections). The measured losses map onto existing items: the ASOF
+single-partition gap → **T2.1**; the ~2.3× time-range-scan gap vs ArcticDB →
+**P4 layout + A1/A2** (the kdb+ sym-grouped, time-sorted-within-sym layout is
+the 30-year-old validation of P4's direction); the ~1.5× full-aggregation gap
+vs DuckDB and ~20% vs raw DataFusion → **T2.4**.
+
+New items the cross-check surfaced (cheapest first; all subject to
+invariant 7 — measure in `h5i-db-bench` before/after, never trust vendor
+multipliers):
+
+| # | Item | Source | Notes |
+|---|------|--------|-------|
+| D1 | **Verify/enable DataFusion TopK dynamic filters.** | DF 49–50 dynamic-filter work ("25×" on `ORDER BY ts LIMIT k`) | Possibly config-only on DF 54. Directly hits latest-style queries; compare against the A3 sidecar path. |
+| D2 | **ASOF `tolerance` as an early-exit bound.** | QuestDB `TOLERANCE` clause | The API already accepts a tolerance; confirm `AsOfJoinExec` uses it to bound the backward probe (early termination), not merely to filter matches after the fact. Few-line fix if not. |
+| D3 | **Sort pushdown** (DataFusion `PushDownSort`, PR #17337). | DataFusion | `ORDER BY time` should never re-sort — segments are already time-sorted and ordering is declared; receive the preferred sort in the provider. |
+| D4 | **`BYTE_STREAM_SPLIT` encoding for float price columns.** | arrow-rs (supported today) | One benchmark decides adoption; upstream notes the decode path is "largely unoptimized", so measure both ratio and scan speed. |
+| D5 | **HORIZON JOIN** (asof at multiple future offsets = backtest label generation). | QuestDB 9.3.3 | More feature than perf: a natural `AsOfJoinExec` extension, and pairs with Tier V-A (agents generating labels inside the leakage-checked session). |
+| D6 | **Rolling-window workload in the bench + segment-tree/streaming window evaluation.** | DuckDB "Flying Through Windows" (~4× via vectorized segment trees); FlatFIT / SlideSide papers | `rolling_*` is SQL sugar over a generic window plan today. Add the workload to `h5i-db-bench` and `compare_baselines.py` first; build a custom operator only if a loss is measured. |
+
+**Compression watch (not build):** ALP (SIGMOD 2024) beats
+Chimp/Gorilla/zstd on ratio *and* speed and is being standardized as a
+Parquet encoding, but arrow-rs does not ship it — adopt when it lands
+upstream. Pcodec is Rust-native but non-standard; breaking Parquet
+compatibility is not worth it (§P5 evidence gate applies). No new as-of-join
+algorithm papers appeared in 2024–26; production engines lead this area.
+
 ---
 
 # Part V — Agent-facing surfaces (2026-07-23)
@@ -586,7 +626,7 @@ Publishing fodder to prove the wins above, not features to implement:
   embedded scope); cite for the "agents produce plausible-but-broken pipelines"
   finding that motivates previewable, policy-gated mutations.
 
-## Suggested build order
+## Suggested build order (superseded by Part VI §build order, 2026-07-24)
 
 1. **Keystone substrate** — `(commit, query)` result cache + "run query across N
    pinned versions" CLI/Python surface (unblocks A/C/D).
@@ -606,3 +646,139 @@ Publishing fodder to prove the wins above, not features to implement:
 
 Delivered (additive, opt-in, tested, fmt + clippy `-D warnings` clean): **V-A1, V-B1**,
 the two highest-ROI Part V items. Neither changes the default read path.
+
+---
+
+# Part VI — Agent ergonomics & competitive positioning (2026-07-24)
+
+Sourced from three inputs, each grounded against the actual codebase rather
+than taken at face value: (1) a herdr-inspired review of the agent-facing CLI
+surface ("don't add AI to the DB; rebuild the DB's surface assuming the agent
+is outside"); (2) a three-track web survey of the 2025–26 agentic-database
+landscape (dev-side fork DBs, data-side git-for-data/quant, OLAP+MCP and
+agent-native startups); (3) the perf cross-check folded into the Part IV
+addendum. Part V is *capabilities* mined from papers; Part VI is *ergonomics*
+and *positioning* — the friction an agent actually hits between those
+capabilities, and where the market leaves room to stand.
+
+## Competitive findings (2026-07-24 survey; re-verify dates before citing)
+
+**Whitespace — confirmed unshipped by any product:**
+
+1. **Enforced point-in-time sessions.** Every engine with as-of reads
+   (ArcticDB, Dolt, Neon PITR) offers it opt-in per read; none can *jail* an
+   agent session so it provably cannot read past a cutoff. The concept now has
+   academic formalization (*Look-Ahead-Freedom as Temporal Non-Interference*,
+   arXiv 2607.04958 — the same family as V-A2) but no implementation.
+2. **Run ledger** — data version × code × metrics in one queryable link.
+   Nearest misses: Bauplan run IDs, lakeFS commit-pinned reproducibility;
+   neither reaches metrics.
+3. **Token-aware output budgets in the engine.** The "MCP result came back as
+   50K tokens" problem is widely acknowledged and solved only by middleware
+   (token-budget proxies, spill-to-file patterns). No engine ships it
+   first-party.
+
+**Commoditized — do for hygiene, never as the flag:** MCP servers,
+NL-to-SQL, skills distribution (MotherDuck, Tinybird, Supabase, QuestDB, and
+Bauplan Skills 2026-02 all ship SKILL/skills packages), and
+branch/fork-for-agents (Tiger Fluid Storage 2025-10, Neon/Databricks, Turso
+ms-level branching, AgentDB's UUID-is-a-database).
+
+**Watch list:** Dolt has gone all-in on "the database for AI agents" (MCP
+2025-08, Agent Mode 2026-02, BranchBench 2026-06) — whoever defines the
+benchmark defines the category; consider a quant-workload answer to
+BranchBench. Turso and LanceDB are the nearest *embedded* competitors
+(LanceDB already has versioning + time travel); neither is time-series/quant.
+ArcticDB confirmed: BSL 1.1, commercial license required for any business
+use, and **no agent surface at all** (no MCP, no skills).
+
+**Positioning conclusion:** "agent-friendly analytics DB" as a banner is
+taken. "**Embedded + versioned + time-series/quant + Apache-2.0**, where the
+agent provably cannot see the future" remains unoccupied — and items 1–3
+above are exactly V-A2, the keystone/run-ledger, and VI-A2 below.
+
+## Tier VI-A — CLI ergonomics for agents
+
+All items live in the CLI/skill/sidecar layer per `DESIGN.md §8–§9`; none
+touch the storage engine. Ordered by effort-to-impact.
+
+| # | Item | Rationale | Acceptance criteria |
+|---|------|-----------|---------------------|
+| VI-A1 | **`context` command — one-shot situational awareness.** All tables' schema, time range, row count, latest version + recent version note, active mutation/data policies, staged plans, in one deterministic call with `--budget <tokens>` truncation priorities. Everything needed is already in manifests + plan/policy sidecars. | Today an agent's first 30 seconds burn on a tables → schema → sample → versions walk, O(tables) round-trips. herdr's "zero-config rollup" translated to a DB. `--format json` also feeds any external fleet view (see do-not list). | One command returns the full picture within the budget; output is deterministic for a fixed DB state (cacheable in AGENTS.md); SKILL.md names it as the mandatory first move; e2e test parses it. |
+| VI-A2 | **Output budgets via profile, not TTY sniffing.** `H5I_DB_PROFILE=agent` (env or per-DB config) defaults `--max-rows`/`--max-bytes`, head/tail + summary rendering, always-explicit `"truncated": true, "total_rows": N`, and spill of the full result to Parquet with a `full_result_path`. | Asking agents to remember `--max-rows` fails; one forgotten flag destroys the context window. Survey: no engine ships this — middleware-only today (a genuine first). Content must never change on non-TTY detection: pipes and CI must see identical bytes (git changes only *color* on non-TTY, for the same determinism reason). | With the profile set, no query can exceed the budget and the full result is recoverable from the spill path; without it, behavior is byte-identical to today; `limit_exceeded` envelope unchanged; documented as SKILL.md line 1. |
+| VI-A3 | **`next_actions` + `did_you_mean` in the error envelope.** Extend `{code, message, retryable, hint}` with machine-executable `next_actions: [{cmd, why}]`, `did_you_mean` on identifier typos, and the referenced table's schema on SQL binder errors. | Hints are prose; agents want commands. All 25 variants live in one place (`error.rs`), so this is a single-site change that cuts 1–2 recovery round-trips per failure. | Envelope schema versioned; every mutation-ordering error (e.g. out-of-order append) carries at least one runnable `next_actions` entry (`replace-range --plan`, `ingest --mode write --plan`); CLI e2e tests parse and execute a suggested action; `hint` stays human-readable. |
+| VI-A4 | **`demo` command + docs-as-tests.** `h5i-db demo` materializes a small synthetic tick dataset and prints a 30-second init→ingest→query→plan→apply→leakage-check tour. CI extracts and executes every code snippet in SKILL.md / `docs-src/` (extend `tools/build_docs.py`, which already parses them). | Agents execute documentation literally; one stale example flips them into guess-mode. Doc/binary drift is the top agent-trust bug class, and no snippet runs in CI today. | `demo` completes in <30 s on the reference machine; a CI job fails on any snippet whose command errors or whose output shape drifts; SKILL.md split into a ~400-token core + on-demand reference files. |
+| VI-A5 | **`--idempotency-key` on mutations.** Key recorded in `VersionManifest.user_meta`; a retried mutation with the same key returns the original commit (no-op success) instead of double-appending. | Agents retry on ambiguous failures (timeout after commit); duplicated ticks are silent poison. Plans have CAS; direct appends have nothing. | Same-key retry after a successful commit returns the original version id and writes nothing; different key proceeds; property-tested (T0.2 style) under crash-mid-commit injection; documented in SKILL.md's retry guidance. |
+| VI-A6 | **`plan apply --wait-for-approval --timeout <dur>`.** Park instead of fail: poll the staged plan until a human applies/discards via CLI or UI, then exit accordingly. | Turns policy violations from dead-ends into blocked-agent states a human can unblock from the UI; herdr's "blocked" concept transplanted. Rides existing plan storage + UI apply/discard routes unchanged. | Waiting process exits 0 on apply, distinct codes on discard/timeout/TTL-expiry; no busy-loop (bounded poll interval); e2e test covers apply-while-waiting. |
+| VI-A7 | **Skill packaging & drift check.** `skill install --claude --codex` placing SKILL fragments, plus `skill check` warning on doc/binary version mismatch. | Commoditized (see findings) — hygiene, not differentiation. Do after VI-A4 gives the docs a tested core. | Installed skill references only CI-tested snippets; `skill check` flags a version mismatch; uninstall is clean. |
+
+## research-mode: elevate V-A2 to a named flagship surface
+
+The survey confirms V-A2 is the differentiator, and the codebase check
+confirms it is nearly free: `ReadAt::{Version, AsOf, Snapshot}` exists, and
+`leakage-check` already builds the exact primitive (`H5iSession::new_at`
+pinning *every* table at a point). What is missing is only the surface:
+`query --as-of <t>` (all tables pinned), a session/env pin so every
+subsequent command in a shell inherits it, and `--embargo <dur>` layered on
+top as an event-time filter (`time_column ≤ t − embargo`) over the
+arrival-time pinning. Bitemporality note: per-commit `committed_at_ns` is the
+availability axis and is sufficient — restatements arrive as new versions and
+are correctly excluded; per-row arrival time is not required. Keep V-A2's
+scope-honesty line (data-access leakage only, not LLM pretraining leakage).
+Market it as one sentence: *the only database that can show an agent the past
+and nothing else.*
+
+## Run ledger: concretize the keystone
+
+`h5i-db run -- <cmd>` records, per run: every `(table, resolved version)`
+read (all reads already resolve through `ReadAt`), git SHA, parameters, and
+declared output metrics; `runs list` / `run diff A B` then answer "same code,
+Sharpe 1.82 → 0.91, because `trades` v42→v43 restated 12,481 rows" — the
+data-vs-code attribution no MLflow/W&B (code+metrics only) or
+lakeFS/Nessie (data only) can make. **Design this together with the Part V
+keystone `(commit, query)` result cache**: they share the substrate, and the
+same cache that makes 40 nightly backtests re-read warm (perf) makes their
+runs attributable (reproducibility). Design-first — schema before code.
+
+## Do-not list (2026-07-24)
+
+- **No TUI/fleet-view rewrite in core.** The axum UI (loopback + token +
+  plan review) stays; VI-A1's `--format json` lets herdr or any external
+  dashboard render fleet state. The DB's job is emitting legible state.
+- **No TTY-based content switching** (VI-A2 rationale). Profiles and flags
+  only.
+- **No NL-to-SQL in the DB; MCP stays out of core** (§9 reaffirmed; the
+  survey shows MCP is table stakes, not a moat — if ever shipped, a thin
+  separate package for shell-less clients with correct
+  readOnly/destructive hints).
+- **Trading calendars / adjustments / symbol identity: staged, not now.**
+  Only the cheap `DataPolicy` extensions land near-term —
+  `monotonic(time)`, `no_gaps(max_gap)`, `outlier(z)` on the existing
+  NotNull/Compare/InSet machinery. Calendar-aware bucketing
+  (`XNYS`, half-days) means maintaining an external dataset forever;
+  defer until a real workload demands it. Symbol *identity over time*
+  relates to A1 (global symbol dictionary) — revisit when A1 lands.
+- **README addition (cheap, trust-buying):** a "when NOT to use h5i-db"
+  section (multi-TB distributed, OLTP, sub-µs capture) — also stops agents
+  from mis-recommending it.
+
+## Build order (supersedes Part V's)
+
+1. **VI-A1 `context` + VI-A3 `next_actions` + VI-A2 agent profile** — small,
+   single-site changes with the largest per-line UX effect; VI-A2 is also a
+   category first.
+2. **research-mode** (surface over `new_at`) + **VI-A5 idempotency-key** —
+   the flagship claim, plus the retry-safety agents need before being given
+   write access.
+3. **VI-A4 `demo` + docs-as-tests** — locks the trust layer before the
+   surface grows further.
+4. **Keystone `(commit, query)` result cache designed jointly with the run
+   ledger** — one substrate, two headline features (warm re-reads +
+   attribution); do the schema design first.
+5. **V-C1/V-C2, then V-D** — as in Part V.
+6. **VI-A6 wait-for-approval, VI-A7 skill packaging, data-policy time-series
+   extensions** — opportunistic, after the above.
+
+Tier 0 (Part III) remains the standing precondition: every Part VI surface
+multiplies trust already earned by the correctness harness, not the other way
+around.
