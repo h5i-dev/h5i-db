@@ -169,3 +169,92 @@ impl PruningStatistics for ManifestPruningStats<'_> {
             .then(|| BooleanArray::from(result))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::TimeUnit;
+    use serde_json::json;
+
+    #[test]
+    fn json_stat_maps_signed_and_unsigned_integers() {
+        assert_eq!(
+            json_stat_to_scalar(&json!(42), &DataType::Int64),
+            Some(ScalarValue::Int64(Some(42)))
+        );
+        assert_eq!(
+            json_stat_to_scalar(&json!(-1), &DataType::Int32),
+            Some(ScalarValue::Int32(Some(-1)))
+        );
+        assert_eq!(
+            json_stat_to_scalar(&json!(7), &DataType::UInt64),
+            Some(ScalarValue::UInt64(Some(7)))
+        );
+    }
+
+    #[test]
+    fn json_stat_maps_floats_bools_and_strings() {
+        assert_eq!(
+            json_stat_to_scalar(&json!(1.5), &DataType::Float64),
+            Some(ScalarValue::Float64(Some(1.5)))
+        );
+        assert_eq!(
+            json_stat_to_scalar(&json!(true), &DataType::Boolean),
+            Some(ScalarValue::Boolean(Some(true)))
+        );
+        assert_eq!(
+            json_stat_to_scalar(&json!("AAPL"), &DataType::Utf8),
+            Some(ScalarValue::Utf8(Some("AAPL".into())))
+        );
+    }
+
+    #[test]
+    fn json_stat_maps_timestamps_preserving_unit_and_tz() {
+        assert_eq!(
+            json_stat_to_scalar(
+                &json!(1_000),
+                &DataType::Timestamp(TimeUnit::Nanosecond, None)
+            ),
+            Some(ScalarValue::TimestampNanosecond(Some(1_000), None))
+        );
+        let tz: Arc<str> = Arc::from("UTC");
+        assert_eq!(
+            json_stat_to_scalar(
+                &json!(5),
+                &DataType::Timestamp(TimeUnit::Second, Some(tz.clone()))
+            ),
+            Some(ScalarValue::TimestampSecond(Some(5), Some(tz)))
+        );
+    }
+
+    #[test]
+    fn json_stat_maps_dictionary_of_utf8_to_its_values() {
+        let dict = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        assert_eq!(
+            json_stat_to_scalar(&json!("MSFT"), &dict),
+            Some(ScalarValue::Utf8(Some("MSFT".into())))
+        );
+    }
+
+    #[test]
+    fn json_stat_returns_none_on_type_mismatch_or_unsupported() {
+        // A string where an integer is expected: no coercion.
+        assert_eq!(json_stat_to_scalar(&json!("x"), &DataType::Int64), None);
+        // JSON null is never a usable stat.
+        assert_eq!(json_stat_to_scalar(&json!(null), &DataType::Int64), None);
+        // Unsupported target type.
+        assert_eq!(
+            json_stat_to_scalar(&json!(1), &DataType::Binary),
+            None
+        );
+    }
+
+    #[test]
+    fn empty_segment_set_has_no_containers() {
+        let schema: SchemaRef = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("v", DataType::Int64, true),
+        ]));
+        let stats = ManifestPruningStats::new(&[], schema);
+        assert_eq!(stats.num_containers(), 0);
+    }
+}

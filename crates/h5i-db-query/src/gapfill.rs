@@ -291,3 +291,113 @@ impl TableFunctionImpl for GapFillFunc {
         )?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interpolate_float64_is_linear() {
+        let a = ScalarValue::Float64(Some(0.0));
+        let b = ScalarValue::Float64(Some(10.0));
+        assert_eq!(
+            interpolate(&a, &b, 0.5),
+            Some(ScalarValue::Float64(Some(5.0)))
+        );
+        assert_eq!(interpolate(&a, &b, 0.0), Some(ScalarValue::Float64(Some(0.0))));
+        assert_eq!(
+            interpolate(&a, &b, 1.0),
+            Some(ScalarValue::Float64(Some(10.0)))
+        );
+    }
+
+    #[test]
+    fn interpolate_integers_round_to_nearest() {
+        let a = ScalarValue::Int64(Some(0));
+        let b = ScalarValue::Int64(Some(3));
+        // 0 + 3*0.5 = 1.5 -> rounds to 2
+        assert_eq!(interpolate(&a, &b, 0.5), Some(ScalarValue::Int64(Some(2))));
+        // 0 + 3*0.1 = 0.3 -> rounds to 0
+        assert_eq!(interpolate(&a, &b, 0.1), Some(ScalarValue::Int64(Some(0))));
+    }
+
+    #[test]
+    fn interpolate_rejects_nulls_and_type_mismatches() {
+        // A null endpoint yields no interpolation.
+        assert_eq!(
+            interpolate(
+                &ScalarValue::Int64(None),
+                &ScalarValue::Int64(Some(4)),
+                0.5
+            ),
+            None
+        );
+        // Mismatched variants yield None (never a silently coerced value).
+        assert_eq!(
+            interpolate(
+                &ScalarValue::Int64(Some(1)),
+                &ScalarValue::Float64(Some(2.0)),
+                0.5
+            ),
+            None
+        );
+        // Non-numeric scalars are not interpolatable.
+        assert_eq!(
+            interpolate(
+                &ScalarValue::Utf8(Some("a".into())),
+                &ScalarValue::Utf8(Some("b".into())),
+                0.5
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn time_scalar_maps_supported_types() {
+        assert_eq!(
+            time_scalar(&DataType::Int64, 7).unwrap(),
+            ScalarValue::Int64(Some(7))
+        );
+        assert_eq!(
+            time_scalar(&DataType::Timestamp(TimeUnit::Nanosecond, None), 100).unwrap(),
+            ScalarValue::TimestampNanosecond(Some(100), None)
+        );
+        let tz: Arc<str> = Arc::from("UTC");
+        assert_eq!(
+            time_scalar(&DataType::Timestamp(TimeUnit::Second, Some(tz.clone())), 5).unwrap(),
+            ScalarValue::TimestampSecond(Some(5), Some(tz))
+        );
+    }
+
+    #[test]
+    fn time_scalar_rejects_unsupported_type() {
+        let err = time_scalar(&DataType::Utf8, 1).unwrap_err();
+        assert!(matches!(err, DataFusionError::Plan(_)));
+    }
+
+    #[test]
+    fn is_numeric_scalar_discriminates() {
+        assert!(is_numeric_scalar(&ScalarValue::Int64(Some(1))));
+        assert!(is_numeric_scalar(&ScalarValue::Float64(Some(1.0))));
+        assert!(!is_numeric_scalar(&ScalarValue::Utf8(Some("x".into()))));
+        assert!(!is_numeric_scalar(&ScalarValue::Boolean(Some(true))));
+    }
+
+    #[test]
+    fn null_scalar_is_typed_and_null() {
+        let s = null_scalar(&DataType::Float64);
+        assert_eq!(s, ScalarValue::Float64(None));
+        assert!(s.is_null());
+    }
+
+    #[test]
+    fn string_arg_extracts_literal_and_rejects_others() {
+        let args = vec![Expr::Literal(ScalarValue::Utf8(Some("ts".into())), None)];
+        assert_eq!(string_arg(&args, 0, "time column").unwrap(), "ts");
+        // Out-of-range index is an error.
+        assert!(string_arg(&args, 5, "time column").is_err());
+        // Non-string literal is an error.
+        let bad = vec![Expr::Literal(ScalarValue::Int64(Some(3)), None)];
+        assert!(string_arg(&bad, 0, "time column").is_err());
+    }
+}

@@ -209,3 +209,59 @@ impl Database {
         Ok(floor)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn floor(seq: u64, note: Option<&str>) -> RetentionFloor {
+        RetentionFloor {
+            table_id: Uuid::nil(),
+            min_retained_sequence: seq,
+            set_at_ns: 42,
+            note: note.map(|s| s.to_string()),
+            checksum: String::new(),
+        }
+    }
+
+    #[test]
+    fn seal_then_verify_round_trips() {
+        let sealed = floor(3, Some("gdpr")).seal().unwrap();
+        assert!(!sealed.checksum.is_empty());
+        assert!(sealed.verify("RETENTION.json").is_ok());
+    }
+
+    #[test]
+    fn verify_detects_tampering() {
+        let mut sealed = floor(3, None).seal().unwrap();
+        sealed.min_retained_sequence = 4; // tamper after sealing
+        let err = sealed.verify("RETENTION.json").unwrap_err();
+        assert!(matches!(err, Error::Corruption { .. }));
+    }
+
+    #[test]
+    fn note_field_is_omitted_when_absent() {
+        let sealed = floor(1, None).seal().unwrap();
+        let json = serde_json::to_string(&sealed).unwrap();
+        assert!(!json.contains("note"), "json: {json}");
+    }
+
+    #[test]
+    fn checksum_covers_the_note_field() {
+        // Two floors identical except for the note must checksum differently,
+        // so a swapped note is caught as corruption.
+        let a = floor(2, Some("first")).seal().unwrap();
+        let b = floor(2, Some("second")).seal().unwrap();
+        assert_ne!(a.checksum, b.checksum);
+    }
+
+    #[test]
+    fn json_round_trip_preserves_and_verifies() {
+        let sealed = floor(7, Some("keep")).seal().unwrap();
+        let bytes = serde_json::to_vec(&sealed).unwrap();
+        let back: RetentionFloor = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(back.min_retained_sequence, 7);
+        assert_eq!(back.note.as_deref(), Some("keep"));
+        assert!(back.verify("RETENTION.json").is_ok());
+    }
+}
