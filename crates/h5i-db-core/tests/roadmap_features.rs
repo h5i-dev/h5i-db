@@ -245,3 +245,195 @@ async fn tail_stream_yields_the_next_append_without_hanging() {
         .unwrap();
     assert_eq!(batch.num_rows(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// V-B1: opt-in per-table data-safety policy
+// ---------------------------------------------------------------------------
+
+mod data_policy_v_b1 {
+    use super::*;
+    use h5i_db_core::{CmpOp, Constraint, DataPolicy, OnFail, Predicate, ScalarLit};
+
+    /// A `value >= min` reject constraint over the schema_v1 `value` column.
+    fn value_at_least(min: i64) -> DataPolicy {
+        DataPolicy::new(vec![Constraint {
+            name: "value_non_negative".into(),
+            predicate: Predicate::Compare {
+                column: "value".into(),
+                op: CmpOp::Ge,
+                value: ScalarLit::Int(min),
+            },
+            on_fail: OnFail::Reject,
+        }])
+    }
+
+    /// schema_v1 batch with explicit `value`s (batch_v1 hardcodes 10).
+    fn batch_vals(ts: &[i64], vals: &[i32]) -> RecordBatch {
+        RecordBatch::try_new(
+            schema_v1(),
+            vec![
+                Arc::new(Int64Array::from(ts.to_vec())),
+                Arc::new(StringArray::from(vec!["A"; ts.len()])),
+                Arc::new(Int32Array::from(vals.to_vec())),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_set_clear_round_trip() {
+        let (_dir, db) = local_db().await;
+        db.create_table("ticks", schema_v1(), options())
+            .await
+            .unwrap();
+        assert!(db.data_policy("ticks").await.unwrap().is_none());
+
+        let policy = value_at_least(0);
+        db.set_data_policy("ticks", &policy).await.unwrap();
+        assert_eq!(db.data_policy("ticks").await.unwrap(), Some(policy));
+
+        db.clear_data_policy("ticks").await.unwrap();
+        assert!(db.data_policy("ticks").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn absent_policy_is_a_no_op() {
+        let (_dir, db) = local_db().await;
+        db.create_table("ticks", schema_v1(), options())
+            .await
+            .unwrap();
+        // A negative value writes fine when no policy is set.
+        db.append(
+            "ticks",
+            vec![batch_vals(&[1], &[-5])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn append_rejects_violating_rows() {
+        let (_dir, db) = local_db().await;
+        db.create_table("ticks", schema_v1(), options())
+            .await
+            .unwrap();
+        db.set_data_policy("ticks", &value_at_least(0))
+            .await
+            .unwrap();
+
+        // A conforming append succeeds.
+        db.append(
+            "ticks",
+            vec![batch_vals(&[1, 2], &[3, 4])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        // A batch containing a negative value is rejected as a whole.
+        let err = db
+            .append(
+                "ticks",
+                vec![batch_vals(&[3, 4], &[5, -1])],
+                WriteOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        match err {
+            Error::DataPolicyViolation { constraint, .. } => {
+                assert_eq!(constraint, "value_non_negative");
+            }
+            other => panic!("expected DataPolicyViolation, got {other:?}"),
+        }
+        // The rejected append did not land: only the first two rows are present.
+        let (batches, _) = db
+            .scan("ticks", ReadAt::Latest, ScanOptions::default())
+            .await
+            .unwrap();
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(rows, 2, "the violating append must not have committed");
+    }
+
+    #[tokio::test]
+    async fn write_full_table_is_enforced() {
+        let (_dir, db) = local_db().await;
+        db.create_table("ticks", schema_v1(), options())
+            .await
+            .unwrap();
+        db.set_data_policy("ticks", &value_at_least(0))
+            .await
+            .unwrap();
+        let err = db
+            .write(
+                "ticks",
+                vec![batch_vals(&[1], &[-9])],
+                WriteOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::DataPolicyViolation { .. }));
+    }
+
+    #[tokio::test]
+    async fn policy_is_per_table() {
+        let (_dir, db) = local_db().await;
+        db.create_table("guarded", schema_v1(), options())
+            .await
+            .unwrap();
+        db.create_table("open", schema_v1(), options())
+            .await
+            .unwrap();
+        db.set_data_policy("guarded", &value_at_least(0))
+            .await
+            .unwrap();
+
+        // The unguarded table accepts the same negative row the guarded one rejects.
+        db.append(
+            "open",
+            vec![batch_vals(&[1], &[-1])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+        let err = db
+            .append(
+                "guarded",
+                vec![batch_vals(&[1], &[-1])],
+                WriteOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::DataPolicyViolation { .. }));
+    }
+
+    #[tokio::test]
+    async fn violation_surfaces_at_plan_time_not_apply() {
+        let (_dir, db) = local_db().await;
+        db.create_table("ticks", schema_v1(), options())
+            .await
+            .unwrap();
+        db.append(
+            "ticks",
+            vec![batch_vals(&[1], &[10])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+        db.set_data_policy("ticks", &value_at_least(0))
+            .await
+            .unwrap();
+
+        // Planning a violating full-table write is refused up front — there is
+        // nothing to apply.
+        let err = db
+            .plan_write(
+                "ticks",
+                vec![batch_vals(&[2], &[-3])],
+                WriteOptions::default(),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::DataPolicyViolation { .. }));
+    }
+}

@@ -362,3 +362,65 @@ fn compact_and_vacuum_dry_run_then_apply() {
     ));
     assert_eq!(count.as_array().unwrap()[0]["n"], 5);
 }
+
+// A price>0 data policy, enforced through the CLI on ingest (V-B1).
+const POLICY_JSON: &str = r#"{"constraints":[{"name":"positive_price","predicate":{"compare":{"column":"price","op":"gt","value":{"float":0.0}}},"on_fail":"reject"}]}"#;
+
+// A single strictly-later row with a negative price (violates the policy).
+const CSV_BAD: &str = "ts,symbol,price,size\n2026-07-01T09:30:05Z,AAPL,-1.0,10\n";
+
+#[test]
+fn data_policy_set_get_clear_and_enforce_on_ingest() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap(cwd);
+    std::fs::write(cwd.join("bad.csv"), CSV_BAD).unwrap();
+
+    // Unset → the policy reads back as JSON null.
+    let got = ok_json(&run(
+        &["data-policy", "get", "m.db", "trades", "--format", "json"],
+        cwd,
+    ));
+    assert!(got.is_null(), "unset policy should be null, got {got}");
+
+    // Set from inline JSON; the echoed policy carries the constraint.
+    let set = ok_json(&run(
+        &[
+            "data-policy",
+            "set",
+            "m.db",
+            "trades",
+            POLICY_JSON,
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(set["constraints"][0]["name"], "positive_price");
+
+    // get now returns the stored constraint.
+    let got = ok_json(&run(
+        &["data-policy", "get", "m.db", "trades", "--format", "json"],
+        cwd,
+    ));
+    assert_eq!(got["constraints"][0]["name"], "positive_price");
+
+    // Ingesting the violating row is refused with the typed error envelope.
+    let env = err_envelope(&run(
+        &["ingest", "m.db", "trades", "bad.csv", "--format", "json"],
+        cwd,
+    ));
+    assert_eq!(env["code"], "data_policy_violation");
+    // A data-safety violation is a deterministic user error (exit 2), not retryable.
+    assert_eq!(env["retryable"], false);
+
+    // After clearing, the very same ingest succeeds.
+    ok_json(&run(
+        &["data-policy", "clear", "m.db", "trades", "--format", "json"],
+        cwd,
+    ));
+    ok_json(&run(
+        &["ingest", "m.db", "trades", "bad.csv", "--format", "json"],
+        cwd,
+    ));
+}

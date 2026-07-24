@@ -233,6 +233,10 @@ enum Command {
     #[command(subcommand)]
     Policy(PolicyCmd),
 
+    /// Data-safety policy: opt-in, per-table row constraints on writes.
+    #[command(subcommand)]
+    DataPolicy(DataPolicyCmd),
+
     /// Rewrite small segments into target-sized ones.
     Compact {
         db: PathBuf,
@@ -314,6 +318,25 @@ enum PolicyCmd {
         #[arg(required = true)]
         entries: Vec<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum DataPolicyCmd {
+    /// Show a table's data-safety policy (empty when unset).
+    Get { db: PathBuf, table: String },
+    /// Install a table's data-safety policy from a typed JSON document.
+    ///
+    /// `policy` is inline JSON, `@path` to read a file, or `-` for stdin.
+    /// Shape: `{"constraints":[{"name":"positive_price",
+    /// "predicate":{"compare":{"column":"price","op":"gt",
+    /// "value":{"float":0.0}}},"on_fail":"reject"}]}`
+    Set {
+        db: PathBuf,
+        table: String,
+        policy: String,
+    },
+    /// Remove a table's data-safety policy (writes become unconstrained).
+    Clear { db: PathBuf, table: String },
 }
 
 #[derive(Subcommand)]
@@ -914,6 +937,39 @@ async fn run(cli: Cli) -> Result<()> {
                     })
                     .await?;
                 write_value(&policy, format)
+            }
+        },
+
+        Command::DataPolicy(cmd) => match cmd {
+            DataPolicyCmd::Get { db, table } => {
+                let db = Database::open_read_only(&db).await?;
+                // `null` when unset — a stable, machine-readable "no policy".
+                write_value(&db.data_policy(&table).await?, format)
+            }
+            DataPolicyCmd::Set { db, table, policy } => {
+                let text = match policy.as_str() {
+                    "-" => {
+                        let mut buf = String::new();
+                        std::io::stdin()
+                            .lock()
+                            .read_to_string(&mut buf)
+                            .map_err(|e| Error::io("stdin", e))?;
+                        buf
+                    }
+                    other if other.starts_with('@') => std::fs::read_to_string(&other[1..])
+                        .map_err(|e| Error::io(other[1..].to_string(), e))?,
+                    inline => inline.to_string(),
+                };
+                let parsed: h5i_db_core::DataPolicy = serde_json::from_str(&text)
+                    .map_err(|e| Error::invalid(format!("data-policy JSON: {e}")))?;
+                let db = Database::open(&db).await?;
+                db.set_data_policy(&table, &parsed).await?;
+                write_value(&parsed, format)
+            }
+            DataPolicyCmd::Clear { db, table } => {
+                let db = Database::open(&db).await?;
+                db.clear_data_policy(&table).await?;
+                write_value(&serde_json::json!({"cleared": table}), format)
             }
         },
 

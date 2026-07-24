@@ -339,6 +339,52 @@ impl Database {
         Ok(policy)
     }
 
+    // ------------------------------------------------------------------
+    // data-safety policy (opt-in, per-table — ROADMAP V-B1)
+    // ------------------------------------------------------------------
+
+    /// The table's data-safety policy, or `None` when unset (the default —
+    /// unset means no constraints and no write-path enforcement cost).
+    pub async fn data_policy(&self, table: &str) -> Result<Option<crate::data_policy::DataPolicy>> {
+        let entry = self.entry(table).await?;
+        crate::data_policy::load(&self.backend, entry.table_id).await
+    }
+
+    /// Install (overwrite) a table's data-safety policy.
+    pub async fn set_data_policy(
+        &self,
+        table: &str,
+        policy: &crate::data_policy::DataPolicy,
+    ) -> Result<()> {
+        self.ensure_writable("set_data_policy")?;
+        let entry = self.entry(table).await?;
+        let _meta = self.backend.meta_lock().await?;
+        crate::data_policy::store(&self.backend, entry.table_id, policy).await
+    }
+
+    /// Remove a table's data-safety policy (writes are unconstrained again).
+    pub async fn clear_data_policy(&self, table: &str) -> Result<()> {
+        self.ensure_writable("clear_data_policy")?;
+        let entry = self.entry(table).await?;
+        let _meta = self.backend.meta_lock().await?;
+        crate::data_policy::clear(&self.backend, entry.table_id).await
+    }
+
+    /// Enforce the table's data policy (if any) against the rows a mutation
+    /// would write. A no-op — a single metadata lookup — when no policy is set,
+    /// so tables without a policy pay effectively nothing and the read path is
+    /// never touched. Called from the write-path staging functions.
+    pub(crate) async fn enforce_data_policy(
+        &self,
+        table_id: Uuid,
+        batches: &[RecordBatch],
+    ) -> Result<()> {
+        if let Some(policy) = crate::data_policy::load(&self.backend, table_id).await? {
+            policy.enforce(batches)?;
+        }
+        Ok(())
+    }
+
     pub fn is_read_only(&self) -> bool {
         self.read_only
     }
@@ -984,6 +1030,9 @@ impl Database {
         let schema = spec.schema()?;
         validate_batches_schema(&schema, &batches)?;
         validate_time_column(&spec, &batches)?;
+        // Opt-in data-safety policy: reject the write if any row violates it
+        // (no-op when the table has no policy).
+        self.enforce_data_policy(entry.table_id, &batches).await?;
 
         let next_seq = head.head.sequence + 1;
         let mut writer = SegmentWriter::new(&self.backend, &spec, schema.clone(), next_seq);
@@ -1057,6 +1106,8 @@ impl Database {
         let schema = spec.schema()?;
         validate_batches_schema(&schema, &batches)?;
         validate_time_column(&spec, &batches)?;
+        // Opt-in data-safety policy (no-op when the table has no policy).
+        self.enforce_data_policy(entry.table_id, &batches).await?;
 
         // Segment budget (3.13): fail — or compact — *before* uploading
         // anything; the commit-time check would only fire after the new
@@ -1403,6 +1454,9 @@ impl Database {
         let schema = spec.schema()?;
         validate_batches_schema(&schema, &new_batches)?;
         validate_time_column(&spec, &new_batches)?;
+        // Opt-in data-safety policy on the replacement rows (no-op when unset).
+        self.enforce_data_policy(entry.table_id, &new_batches)
+            .await?;
         // New rows must fall inside the replaced range.
         for b in &new_batches {
             if b.num_rows() == 0 {
