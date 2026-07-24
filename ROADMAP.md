@@ -837,3 +837,52 @@ kdb+; stating it buys trust.
 Tier 0 (Part III) remains the standing precondition: every Part VI surface
 multiplies trust already earned by the correctness harness, not the other way
 around.
+
+## Execution backlog — the next 20 tasks (2026-07-24)
+
+The build order above sequences *phases*; this is the concrete pick list, in
+two batches of ten. Sizes: S ≈ half a day, M ≈ 1–2 days, L ≈ several days.
+
+**Batch 1 — surface & flag** (the minimal release bundle: items 1–5 of the
+suggested start order — #9, #6, #4, #3, #2 — total ≈ 3 days — already form a
+shippable story). Deliberately excluded: design-first items (run ledger,
+arrival replay) and the format-change tier.
+
+| # | Task | Size | Ref |
+|---|------|------|-----|
+| 1 | `context` command | M | VI-A1 |
+| 2 | `H5I_DB_PROFILE=agent` output profile | M | VI-A2 |
+| 3 | `next_actions` + `did_you_mean` in the error envelope | S–M | VI-A3 |
+| 4 | research-mode v1: `query --as-of` (version pin; expose `new_at`) | S | V-A2 / Part VI |
+| 5 | research-mode v2: `--embargo` event-time cutoff (scan-injected predicate; separate PR — the one-sentence claim is honest only after this lands) | M | V-A2 / Part VI |
+| 6 | leakage-check quick fixes: vacuity notice + zero-is-not-innocence output line | S | VI-B2 (2)(3) |
+| 7 | `--idempotency-key` on mutations | M | VI-A5 |
+| 8 | `demo` + docs-as-tests (demo scripted as a restatement scenario) | M–L | VI-A4 |
+| 9 | README rewrite: one-sentence "Why for agents" + "when NOT to use h5i-db" (incl. cadence honesty). Companion, same day: restructure SKILL.md — frontmatter, task-shaped core ≤60 lines (golden loop / decision rules / research loop), references/ split; thereafter every feature PR that obsoletes a workaround deletes its SKILL.md line | S (+S) | Part VI findings; VI-A7 prep |
+| 10 | Two half-day verifications: D2 (does the ASOF probe use `tolerance` for early exit?) + D1 (TopK dynamic-filter config on DF 54) | S+S | Part IV addendum |
+
+Suggested start order within batch 1: 9 → 6 → 4 → 3 → 2 → 1 → 10 → 5 → 7 → 8.
+
+**Batch 2 — trust & substrate** (repays the Tier 0 debt the flag stands on,
+and runs the two design tracks in parallel with it).
+
+| # | Task | Size | Ref |
+|---|------|------|-----|
+| 11 | Differential correctness harness vs DuckDB (`sqllogictest-rs`; start with the supported subset + golden `.slt` for ASOF / `time_bucket` / time-travel — it is also the V-A2 acceptance check that `asof(t)` ≡ physically truncated data) | L | T0.1 |
+| 12 | Re-enable fuzz smoke + harden the string SQL rewriters into a real parser (same PR series: the fuzz target hunts the mis-parses) | M | T0.3 + T0.4 |
+| 13 | `proptest` storage invariants (≥8: append→scan multiset, compact preservation, delete-range exactness, time-travel roundtrip, …) | M | T0.2 |
+| 14 | Run ledger × keystone `(commit, query)` cache: joint design doc, schema first (runs schema, cache key, metrics attachment; ledger implementation itself is batch 3+) | M | Part VI run ledger |
+| 15 | Keystone `(commit, query)` result cache implementation per #14, following the P2/P3 checksum-keyed / fail-open discipline | L | Part V keystone |
+| 16 | leakage-check key-based row alignment (`--key <cols>`) | M | VI-B2 (1) |
+| 17 | **Unified format-change RFC** (design only, no code): `available_at` (VI-B1) + manifest deltas (T1.1) + O3 merge (B2) in one document — three items touching the manifest format must break it once, not three times | M | VI-B1 / T1.1 / B2 |
+| 18 | Data-policy time-series extensions: `monotonic(time)` / `no_gaps(max_gap)` / `outlier(z)` — the one quant feature pulled forward; isomorphic extension of the existing DataPolicy machinery, no calendar swamp | M | Part VI do-not list carve-out |
+| 19 | ASOF by-key repartition + spillable right buffer (the codebase's only `TODO(perf)`) | L | T2.1 / B1 |
+| 20 | Online small bundle: freshness in `context` (if not in #1) + `maintain` one-shot | M | VI-B3 + VI-B4 |
+
+Suggested start order within batch 2: 14 → 17 (both design tracks first) →
+11 → 12 → 13 (trust repayment while designs settle) → 16 → 18 → 20 → 15 → 19.
+
+Explicitly *not* in these batches: implementations of arrival replay / A1 /
+T1.1 / B2 (blocked on RFC #17), V-C / V-D, HORIZON JOIN (D5), T2.4
+decoded-batch cache, VI-A6 / VI-A7 / VI-B5. Leading batch-3 candidates: T2.4
+and V-C1.
