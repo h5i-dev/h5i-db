@@ -866,3 +866,77 @@ async fn scalar_subqueries_over_different_versions_stay_distinct() {
         .unwrap();
     assert_batches_eq!(["+---+", "| n |", "+---+", "| 1 |", "+---+",], &batches);
 }
+
+/// B1: a left symbol entirely absent from the right is rejected by the keyed
+/// run index in O(1) (`map.get(key) -> None`) — the structural form of
+/// QuestDB's SymbolShortCircuit. Only the matching symbol's run is ever probed,
+/// so a sparse/absent key scans zero right rows. Verifies both join modes.
+#[tokio::test(flavor = "multi_thread")]
+async fn asof_absent_symbol_short_circuits() {
+    let (_dir, db) = setup().await;
+    db.create_table("trades", trades_schema(), time_options(false))
+        .await
+        .unwrap();
+    db.create_table("quotes", quotes_schema(), time_options(false))
+        .await
+        .unwrap();
+    // "Z" trades have no quotes at all; "A" does.
+    db.write(
+        "trades",
+        vec![trades_batch(&[5, 6, 15], &["Z", "Z", "A"], &[1.0, 2.0, 101.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    db.write(
+        "quotes",
+        vec![quotes_batch(&[0, 12], &["A", "A"], &[99.0, 100.5])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let session = H5iSession::new(db, SessionOptions::default())
+        .await
+        .unwrap();
+
+    // LEFT join keeps all three trades; the two Z rows have a null right side.
+    let trades = session.read_table("trades", ReadAt::Latest).await.unwrap();
+    let quotes = session.read_table("quotes", ReadAt::Latest).await.unwrap();
+    let joined = asof_join(
+        trades,
+        quotes,
+        AsOfOptions {
+            by: vec![("symbol".into(), "symbol".into())],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let batches = joined.collect().await.unwrap();
+    let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(total, 3, "left join keeps every trade, including absent-symbol Z");
+    let bid_idx = batches[0].schema().index_of("bid").unwrap();
+    let null_bids: usize = batches.iter().map(|b| b.column(bid_idx).null_count()).sum();
+    assert_eq!(null_bids, 2, "both Z trades have no matching quote");
+
+    // INNER join short-circuits the Z rows out; only the matched A survives.
+    let trades = session.read_table("trades", ReadAt::Latest).await.unwrap();
+    let quotes = session.read_table("quotes", ReadAt::Latest).await.unwrap();
+    let inner = asof_join(
+        trades,
+        quotes,
+        AsOfOptions {
+            by: vec![("symbol".into(), "symbol".into())],
+            inner: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let n: usize = inner
+        .collect()
+        .await
+        .unwrap()
+        .iter()
+        .map(|b| b.num_rows())
+        .sum();
+    assert_eq!(n, 1, "only the matched A trade survives; Z is short-circuited");
+}
