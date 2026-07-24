@@ -424,3 +424,38 @@ fn data_policy_set_get_clear_and_enforce_on_ingest() {
         cwd,
     ));
 }
+
+// leakage-check across a withheld append (V-A1).
+#[test]
+fn leakage_check_reports_delta_across_a_withheld_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap(cwd); // create-table + ingest v1 (3 rows) -> version 1
+                    // Append two later rows as version 2.
+    ok_json(&run(
+        &["ingest", "m.db", "trades", "v2.csv", "--format", "json"],
+        cwd,
+    ));
+
+    // COUNT(*) as-of version 1 sees 3 rows; head sees 5 -> delta 2.
+    let report = ok_json(&run(
+        &[
+            "leakage-check",
+            "m.db",
+            "SELECT count(*) AS c FROM trades",
+            "--as-of",
+            "1",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(report["comparable"], true);
+    assert_eq!(report["leakage_detected"], true);
+    assert_eq!(report["columns"][0]["name"], "c");
+    assert_eq!(report["columns"][0]["head"], 5.0);
+    assert_eq!(report["columns"][0]["asof"], 3.0);
+    assert_eq!(report["columns"][0]["delta"], 2.0);
+    // The withheld append is attributed to the trades table.
+    assert_eq!(report["withheld_versions"][0]["table"], "trades");
+}

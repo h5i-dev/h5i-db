@@ -175,6 +175,21 @@ enum Command {
     /// List a table's committed versions.
     Versions { db: PathBuf, table: String },
 
+    /// Look-ahead-bias check: run a query against the current head and against
+    /// an as-of read point, and report the "leakage delta" between them.
+    LeakageCheck {
+        db: PathBuf,
+        /// SQL text, or "-" for stdin.
+        sql: String,
+        /// Decision point: an RFC3339 timestamp (as-of commit availability), an
+        /// integer version, or a snapshot name.
+        #[arg(long)]
+        as_of: String,
+        /// Absolute per-cell tolerance below which a delta is treated as noise.
+        #[arg(long)]
+        tolerance: Option<f64>,
+    },
+
     /// Snapshot management.
     #[command(subcommand)]
     Snapshot(SnapshotCmd),
@@ -780,6 +795,46 @@ async fn run(cli: Cli) -> Result<()> {
                 })
                 .collect();
             write_value(&rows, format)
+        }
+
+        Command::LeakageCheck {
+            db,
+            sql,
+            as_of,
+            tolerance,
+        } => {
+            let sql = if sql == "-" {
+                let mut buf = String::new();
+                std::io::stdin()
+                    .lock()
+                    .read_to_string(&mut buf)
+                    .map_err(|e| Error::io("stdin", e))?;
+                buf
+            } else {
+                sql
+            };
+            // --as-of: integer version, RFC3339 timestamp (availability), or a
+            // snapshot name — mirroring the h5i() time-travel function.
+            let at = if let Ok(v) = as_of.parse::<u64>() {
+                ReadAt::Version(v)
+            } else if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&as_of) {
+                let ns = ts.timestamp_nanos_opt().ok_or_else(|| {
+                    Error::invalid(format!("--as-of timestamp {as_of:?} out of range"))
+                })?;
+                ReadAt::AsOf(ns)
+            } else {
+                ReadAt::Snapshot(as_of.clone())
+            };
+            let db = Arc::new(Database::open_read_only(&db).await?);
+            let report = h5i_db_query::check_leakage(
+                db,
+                &sql,
+                at,
+                tolerance.unwrap_or(h5i_db_query::DEFAULT_TOLERANCE),
+            )
+            .await
+            .map_err(classify_df_error)?;
+            write_value(&report, format)
         }
 
         Command::Snapshot(cmd) => match cmd {

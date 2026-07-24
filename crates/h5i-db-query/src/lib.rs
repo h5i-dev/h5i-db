@@ -11,6 +11,7 @@ pub mod finance;
 pub mod functions;
 pub mod gapfill;
 pub mod latest;
+pub mod leakage;
 pub mod metrics;
 mod predicate_cache;
 pub mod provider;
@@ -25,6 +26,9 @@ pub use aggregate_state::{
     FinanceAggregateResult, FinanceAggregateSpec,
 };
 pub use asof::{asof_join, AsOfDirection, AsOfJoinExec, AsOfJoinNode, AsOfOptions};
+pub use leakage::{
+    check_leakage, ColumnDelta, LeakageReport, TableVersionDelta, DEFAULT_TOLERANCE,
+};
 pub use metrics::{
     OperatorPerformanceMetrics, QueryPerformanceReport, QueryStatus, ReportedDataFrame,
     ReportedQueryStream, ScanMetrics, ScanMetricsCollector, WorkloadTelemetryEnvelope,
