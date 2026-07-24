@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+    UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::common::stats::Precision;
@@ -1086,4 +1087,84 @@ async fn bloom_filter_prunes_row_groups_min_max_cannot() {
         bloom_pruned >= 2,
         "bloom should prune the two MMM-free row groups, pruned {bloom_pruned}"
     );
+}
+
+/// C3: approximate distinct-count (HyperLogLog) and parallel top-K are provided
+/// by DataFusion built-ins (`approx_distinct`, and `ORDER BY … LIMIT` planned as
+/// a TopK) — registered through the session's default features. This verifies
+/// they are reachable via h5i SQL and return correct results, so we consume them
+/// rather than reimplement (matching the "don't rebuild DataFusion" principle).
+#[tokio::test]
+async fn approx_distinct_and_topk_are_available_and_correct() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+
+    // 300 rows across 3 symbols with distinct total volume ordering A > B > C.
+    let n = 300usize;
+    let timestamps: Vec<i64> = (0..n as i64).collect();
+    let symbols: Vec<&str> = (0..n)
+        .map(|i| match i % 3 {
+            0 => "AAA",
+            1 => "BBB",
+            _ => "CCC",
+        })
+        .collect();
+    let prices = vec![1.0_f64; n];
+    // Weight volumes so AAA > BBB > CCC deterministically.
+    let sizes: Vec<i64> = (0..n)
+        .map(|i| match i % 3 {
+            0 => 100,
+            1 => 10,
+            _ => 1,
+        })
+        .collect();
+    db.append(
+        "trades",
+        vec![trades_batch(&timestamps, &symbols, &prices, &sizes)],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let session = H5iSession::new(db.clone(), SessionOptions::default())
+        .await
+        .unwrap();
+
+    // approx_distinct (HyperLogLog) — exact for a tiny cardinality of 3.
+    let (b, _) = session
+        .sql_reported("SELECT approx_distinct(symbol) AS d FROM trades")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let distinct = b[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .unwrap()
+        .value(0);
+    assert_eq!(distinct, 3, "approx_distinct should count 3 symbols");
+
+    // Parallel top-K: top-2 symbols by total volume.
+    let (b, _) = session
+        .sql_reported(
+            "SELECT symbol FROM trades GROUP BY symbol \
+             ORDER BY sum(size) DESC LIMIT 2",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let col = b[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .unwrap();
+    let top: Vec<&str> = (0..col.len()).map(|i| col.value(i)).collect();
+    assert_eq!(top, vec!["AAA", "BBB"], "top-2 by volume");
 }
