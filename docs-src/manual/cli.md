@@ -167,9 +167,9 @@ List a table's committed versions: `version`, `op`, `committed_at`, `rows`,
 
 ### `h5i-db leakage-check`
 
-Look-ahead-bias diagnostic: run one query against the current head (**leaking**
-— every commit, including data that only arrived after the decision instant)
-and against an as-of read point (**non-leaking** — only data available as of
+Look-ahead-bias diagnostic: run one query against the current head (**leaking**:
+every commit, including data that only arrived after the decision instant)
+and against an as-of read point (**non-leaking**: only data available as of
 that instant), and report the delta between the two results.
 
 ```console
@@ -302,7 +302,7 @@ path; reads are never touched.
 | Subcommand | Meaning |
 |---|---|
 | `data-policy get <db> <table>` | Show the table's policy (empty when unset) |
-| `data-policy set <db> <table> <policy>` | Install a typed JSON policy — inline JSON, `@path` to read a file, or `-` for stdin |
+| `data-policy set <db> <table> <policy>` | Install a typed JSON policy (inline JSON, `@path` to read a file, or `-` for stdin) |
 | `data-policy clear <db> <table>` | Remove the policy (writes become unconstrained) |
 
 ```console
@@ -313,7 +313,7 @@ $ h5i-db data-policy set market.db trades '{"constraints":[
 ```
 
 Predicates compose `not_null`, `compare`, and `in_set` with `and`/`or`/`not`;
-`on_fail` is `reject` (fail the write) or `warn`. Evaluation is fail-closed — a
+`on_fail` is `reject` (fail the write) or `warn`. Evaluation is fail-closed: a
 `NULL` never satisfies a comparison. A violation raises `data_policy_violation`
 (exit `2`, not retryable).
 

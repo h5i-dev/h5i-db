@@ -1,9 +1,9 @@
 //! Leakage-delta report (ROADMAP Part V, item V-A1).
 //!
-//! Runs one query twice — against the current head (**leaking**: every commit,
+//! Runs one query twice: against the current head (**leaking**: every commit,
 //! including data that only became available after the decision instant) and
 //! against an as-of read point (**non-leaking**: only data available as of that
-//! instant) — and diffs the two results. The difference is the "alpha that
+//! instant), then diffs the two results. The difference is the "alpha that
 //! evaporates": the portion of a metric that came from decision-time data
 //! leakage rather than genuine signal (cf. the one-switch leaking/non-leaking
 //! backtest diagnostic).
@@ -11,13 +11,13 @@
 //! This exists *because* h5i-db already resolves an as-of read point by commit
 //! availability time (`ReadAt::AsOf`, `committed_at_ns`), so both runs are
 //! deterministic, reproducible, and cheap (O(1) time-travel + reused aggregate
-//! states). No new engine primitive is required — this is a thin surface over
+//! states). No new engine primitive is required; this is a thin surface over
 //! [`H5iSession::new_at`].
 //!
-//! **Scope (state it honestly).** This measures *data-availability* leakage —
-//! late-arriving or restated rows across commits. It does **not** detect
+//! **Scope (state it honestly).** This measures *data-availability* leakage,
+//! i.e. late-arriving or restated rows across commits. It does **not** detect
 //! look-ahead *inside* a single snapshot (a window overrunning into future
-//! rows — that needs an effect checker, V-A2), nor an LLM's pretraining
+//! rows, which needs an effect checker, V-A2), nor an LLM's pretraining
 //! leakage. A non-zero delta proves availability leakage; a zero delta does not
 //! prove its absence.
 
@@ -42,7 +42,7 @@ pub struct ColumnDelta {
     pub name: String,
     /// Whether the column was compared numerically (else by string equality).
     pub numeric: bool,
-    /// Scalar head/as-of values — only when both results are exactly one row
+    /// Scalar head/as-of values, only when both results are exactly one row
     /// (the common single-metric case), for a readable `head → asof (delta)`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub head: Option<f64>,
@@ -58,7 +58,7 @@ pub struct ColumnDelta {
     pub mismatches: u64,
 }
 
-/// A table whose as-of version differs from head — i.e. commits were withheld
+/// A table whose as-of version differs from head, i.e. commits were withheld
 /// from the non-leaking run. Empty means the as-of point saw the same data.
 #[derive(Debug, Clone, Serialize)]
 pub struct TableVersionDelta {
@@ -221,7 +221,7 @@ fn compare(
     let row_count_differs = head_rows != asof_rows;
 
     if !schemas_match(&head_schema, &asof_schema) {
-        // A shape change between the two runs — cannot align columns, but the
+        // A shape change between the two runs: cannot align columns, but the
         // change itself is a signal.
         return LeakageReport {
             decision,

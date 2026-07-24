@@ -79,7 +79,7 @@ applies or discards it. Every committed manifest records its
 from direct writes forever.
 
 Where the *mutation* policy gates who may write directly, a per-table
-[data policy](cli.html#h5i-db-data-policy) gates *what data may be written* —
+[data policy](cli.html#h5i-db-data-policy) gates *what data may be written*:
 typed constraints (`not_null`, `compare`, `in_set`, composed with
 `and`/`or`/`not`) checked fail-closed on every write and at plan time. A
 violating batch is refused with `data_policy_violation` before it can land, so

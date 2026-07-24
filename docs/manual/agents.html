@@ -160,7 +160,7 @@ applies or discards it. Every committed manifest records its
 <code>execution_mode</code> and plan hash, so the audit trail distinguishes reviewed
 from direct writes forever.</p>
 <p>Where the <em>mutation</em> policy gates who may write directly, a per-table
-<a href="cli.html#h5i-db-data-policy">data policy</a> gates <em>what data may be written</em> —
+<a href="cli.html#h5i-db-data-policy">data policy</a> gates <em>what data may be written</em>:
 typed constraints (<code>not_null</code>, <code>compare</code>, <code>in_set</code>, composed with
 <code>and</code>/<code>or</code>/<code>not</code>) checked fail-closed on every write and at plan time. A
 violating batch is refused with <code>data_policy_violation</code> before it can land, so

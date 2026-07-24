@@ -302,9 +302,9 @@ class Database:
     ) -> dict:
         """Look-ahead-bias diagnostic (see the CLI ``leakage-check``).
 
-        Runs ``query`` twice — against the current head (*leaking*: every
+        Runs ``query`` twice, against the current head (*leaking*: every
         commit, including rows that only arrived after the decision instant)
-        and against a decision read point (*non-leaking*) — and returns the
+        and against a decision read point (*non-leaking*), and returns the
         delta between the two results as a dict. Specify exactly one of
         ``version`` / ``as_of`` (RFC3339 availability timestamp) / ``snapshot``
         as the decision point; ``tolerance`` is the per-cell numeric noise

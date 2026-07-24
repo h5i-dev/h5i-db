@@ -144,7 +144,7 @@ async fn time_bounded_query_shows_no_leakage() {
         "a correctly-bounded query must show no leakage: {report:?}"
     );
     assert!((report.columns[0].delta.unwrap()).abs() < 1e-9);
-    // Data *was* withheld even though this query didn't depend on it — the
+    // Data *was* withheld even though this query didn't depend on it; the
     // report still records the version gap honestly.
     assert_eq!(report.withheld_versions.len(), 1);
 }

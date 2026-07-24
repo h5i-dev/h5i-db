@@ -287,10 +287,10 @@ Prunes segments before I/O.</dd>
 </code></pre></div><div class="api-body">
 
 <p>Look-ahead-bias diagnostic (the Python surface of the CLI
-<a href="../manual/cli.html#h5i-db-leakage-check"><code>leakage-check</code></a>). Runs <code>query</code> twice
-— against the current head (<em>leaking</em>: every commit, including rows that only
+<a href="../manual/cli.html#h5i-db-leakage-check"><code>leakage-check</code></a>). Runs <code>query</code> twice,
+against the current head (<em>leaking</em>: every commit, including rows that only
 became available after the decision instant) and against a decision read point
-(<em>non-leaking</em>) — and returns the delta between the two results.</p>
+(<em>non-leaking</em>), and returns the delta between the two results.</p>
 <p class="api-label">Parameters</p>
 <dl>
 <dt><code>query</code> (<code>str</code>)</dt>
@@ -303,7 +303,7 @@ string matched by commit <em>availability</em> time.</dd>
 (default <code>1e-9</code>).</dd>
 </dl>
 <p class="api-label">Returns</p>
-<p><code>dict</code> — the leakage report: <code>leakage_detected</code>, per-column
+<p><code>dict</code> with the leakage report: <code>leakage_detected</code>, per-column
 <code>head → asof (delta)</code>, <code>max_abs_delta</code>, <code>row_count_differs</code>, and
 <code>withheld_versions</code> (per table, the head-vs-as-of version gap).</p>
 <p class="api-label">Raises</p>
@@ -400,7 +400,7 @@ atomic (read-modify-write under the metadata lock).</p>
 </dl>
 </div></section><h2 id="data-safety-policy">Data-safety policy<a class="headerlink" href="#data-safety-policy" title="Permanent link">#</a></h2>
 <p>Where the <a href="#databasepolicy">mutation policy</a> gates <em>who</em> may write directly, a
-per-table <strong>data policy</strong> gates <em>what data</em> may be written — typed constraints
+per-table <strong>data policy</strong> gates <em>what data</em> may be written: typed constraints
 checked fail-closed on every write and at plan time
 (<a href="../manual/cli.html#h5i-db-data-policy">CLI reference</a>). A table with no policy
 is unconstrained and pays no read-path cost.</p>
@@ -431,7 +431,7 @@ is unconstrained and pays no read-path cost.</p>
 <p class="api-label">Raises</p>
 <dl>
 <dt><code>InvalidInputError</code></dt>
-<dd>A malformed policy document, or — when a later write breaks a constraint —
+<dd>A malformed policy document, or (when a later write breaks a constraint)
 a <code>data_policy_violation</code> (the write is refused before it lands).</dd>
 </dl>
 </div></section><section class="api-member"><h3 id="databaseclear_data_policy"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">clear_data_policy</span></code><a class="headerlink" href="#databaseclear_data_policy" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">clear_data_policy</span><span class="p">(</span><span class="n">table</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>

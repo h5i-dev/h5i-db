@@ -324,10 +324,10 @@ leakage_check(query, version=None, as_of=None, snapshot=None,
 ```
 
 Look-ahead-bias diagnostic (the Python surface of the CLI
-[`leakage-check`](../manual/cli.html#h5i-db-leakage-check)). Runs `query` twice
-— against the current head (*leaking*: every commit, including rows that only
+[`leakage-check`](../manual/cli.html#h5i-db-leakage-check)). Runs `query` twice,
+against the current head (*leaking*: every commit, including rows that only
 became available after the decision instant) and against a decision read point
-(*non-leaking*) — and returns the delta between the two results.
+(*non-leaking*), and returns the delta between the two results.
 
 **Parameters**
 
@@ -344,7 +344,7 @@ became available after the decision instant) and against a decision read point
 
 **Returns**
 
-`dict` — the leakage report: `leakage_detected`, per-column
+`dict` with the leakage report: `leakage_detected`, per-column
 `head → asof (delta)`, `max_abs_delta`, `row_count_differs`, and
 `withheld_versions` (per table, the head-vs-as-of version gap).
 
@@ -482,7 +482,7 @@ atomic (read-modify-write under the metadata lock).
 ## Data-safety policy
 
 Where the [mutation policy](#databasepolicy) gates *who* may write directly, a
-per-table **data policy** gates *what data* may be written — typed constraints
+per-table **data policy** gates *what data* may be written: typed constraints
 checked fail-closed on every write and at plan time
 ([CLI reference](../manual/cli.html#h5i-db-data-policy)). A table with no policy
 is unconstrained and pays no read-path cost.
@@ -524,7 +524,7 @@ db.set_data_policy("trades", {"constraints": [
 **Raises**
 
 `InvalidInputError`
-:   A malformed policy document, or — when a later write breaks a constraint —
+:   A malformed policy document, or (when a later write breaks a constraint)
     a `data_policy_violation` (the write is refused before it lands).
 
 ### `Database.clear_data_policy`

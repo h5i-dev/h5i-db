@@ -814,7 +814,7 @@ async fn run(cli: Cli) -> Result<()> {
                 sql
             };
             // --as-of: integer version, RFC3339 timestamp (availability), or a
-            // snapshot name — mirroring the h5i() time-travel function.
+            // snapshot name, mirroring the h5i() time-travel function.
             let at = if let Ok(v) = as_of.parse::<u64>() {
                 ReadAt::Version(v)
             } else if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&as_of) {

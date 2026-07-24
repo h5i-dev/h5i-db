@@ -123,7 +123,7 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
   plan time, so an agent can't quietly commit malformed rows.
 - **Look-ahead-bias checks.** `leakage-check` re-runs a query as of the
   decision instant and reports how much of the result leaked from
-  later-arriving data — catching alpha that would evaporate in production.
+  later-arriving data, catching alpha that would evaporate in production.
 
 ---
 
