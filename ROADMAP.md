@@ -391,3 +391,24 @@ A1 is the keystone: A2 and A3 (and B1) build on the global dictionary.
   scale-up effort.
 - T0.1's `sqllogictest-rs` is the same crate QuestDB uses (`qdb-sqllogictest`,
   63 `.test` files) and DataFusion uses — adopt, do not build.
+
+## Part IV implementation status (2026-07-23, branch `improve-tests`)
+
+Delivered incrementally, each additively (opt-in where it touches the hot path)
+with serial tests and no regression to existing suites:
+
+| Item | Status | Notes |
+|------|--------|-------|
+| C2 compensated summation | ✅ done | Neumaier in `vwap`/`wavg` + finance aggregate-state; state format/checksum unchanged (comp folded in at emit/seal). Full-mantissa test vs high-precision reference. |
+| A2 symbol bloom filters | ✅ done | Opt-in `StorageOptions.bloom_filter_columns`; empty omitted from spec (byte-identical format, golden fixture passes). End-to-end test: bloom prunes row groups min/max cannot. Also fixed a latent bug — DF54 `PruningMetrics.as_usize()==0` had silently zeroed the reported `row_groups_pruned`. |
+| C3 approx-distinct + top-K | ✅ done (DataFusion built-in) | `approx_distinct` (HLL) and `ORDER BY … LIMIT` TopK ship via default features; verified reachable + correct rather than reimplemented. |
+| B3 SAMPLE BY fills | ✅ done | Added `value` constant fill + `prev`/`linear` aliases to gapfill/resample; first/last per bucket are DataFusion `first_value`/`last_value` over `time_bucket`. |
+| B1 ASOF symbol short-circuit | ✅ done (structural) | Already realized by the keyed-run design (`RunIndex::Keyed` → O(1) probe miss for absent symbols), stronger than QuestDB's sorted-scan short-circuit; verified with an absent-symbol test. Parallel by-key repartition remains T2.1. |
+| A1 global symbol dictionary | ⏳ pending | Format-level change to the manifest; large and format-breaking. Staged as dedicated work to honor the no-regression constraint. |
+| A3 last-row-per-symbol precompute | ⏳ pending | Additive per-segment sidecar (mirrors the aggregate-state store); the highest-value remaining additive feature (delivers the `latest-per-key` rewrite). |
+| B2 out-of-order (O3) Parquet merge | ⏳ pending | Ingest-path change (append is currently strict); large and higher-risk. Staged as dedicated work. |
+| C1 column byte-range sidecar | ⏳ pending | Read-path change for S3 first-read latency; medium. Existing footer-metadata cache already covers warm reads. |
+
+The pending four are the large architectural items (two of them format/ingest
+breaking); they are sequenced separately so each can be built and verified
+without rushing changes that could regress the benchmarked write/read paths.
