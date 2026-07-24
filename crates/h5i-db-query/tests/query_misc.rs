@@ -994,3 +994,96 @@ async fn aggregate_states_reuse_unchanged_segments_and_match_full_recomputation(
     assert_eq!(compacted.metrics.states_reused, 0);
     assert_eq!(compacted.metrics.states_built, 1);
 }
+
+/// End-to-end proof of A2: a bloom filter on a high-cardinality entity column
+/// prunes row groups that min/max statistics structurally cannot. The early row
+/// groups alternate only "AAA"/"ZZZ" (min/max span = [AAA, ZZZ]), while the
+/// queried "MMM" lives solely in the final row group — so statistics keep every
+/// group, but the bloom excludes the MMM-free ones. A no-bloom control proves
+/// min/max alone prunes nothing here.
+#[tokio::test]
+async fn bloom_filter_prunes_row_groups_min_max_cannot() {
+    // 3 floored 8K row groups in a single segment.
+    const ROWS: usize = 24_576;
+
+    async fn row_groups_pruned(bloom: bool) -> (i64, u64) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+        db.create_table(
+            "trades",
+            trades_schema(),
+            TableOptions {
+                storage: StorageOptions {
+                    target_segment_bytes: 16 * 1024 * 1024,
+                    target_row_group_bytes: 4 * 1024, // floored up to 8K rows/group
+                    bloom_filter_columns: if bloom {
+                        vec!["symbol".to_string()]
+                    } else {
+                        vec![]
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let timestamps: Vec<i64> = (0..ROWS as i64).collect();
+        let symbols: Vec<&str> = (0..ROWS)
+            .map(|i| {
+                if i >= ROWS - 8192 {
+                    "MMM" // only the last row group holds the queried symbol
+                } else if i % 2 == 0 {
+                    "AAA"
+                } else {
+                    "ZZZ"
+                }
+            })
+            .collect();
+        let prices = vec![1.0_f64; ROWS];
+        let sizes = vec![1_i64; ROWS];
+        db.append(
+            "trades",
+            vec![trades_batch(&timestamps, &symbols, &prices, &sizes)],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+
+        let session = H5iSession::new(db.clone(), SessionOptions::default())
+            .await
+            .unwrap();
+        let (batches, report) = session
+            .sql_reported("SELECT count(*) FROM trades WHERE symbol = 'MMM'")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let count = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .value(0);
+        (count, report.row_groups_pruned)
+    }
+
+    let (bloom_count, bloom_pruned) = row_groups_pruned(true).await;
+    let (control_count, control_pruned) = row_groups_pruned(false).await;
+
+    // Correctness is identical regardless of pruning.
+    assert_eq!(bloom_count, 8192);
+    assert_eq!(control_count, 8192);
+    // Min/max cannot exclude any group for this layout.
+    assert_eq!(
+        control_pruned, 0,
+        "control: statistics must prune no row groups"
+    );
+    // The bloom excludes both MMM-free groups.
+    assert!(
+        bloom_pruned >= 2,
+        "bloom should prune the two MMM-free row groups, pruned {bloom_pruned}"
+    );
+}

@@ -27,6 +27,14 @@ pub struct StorageOptions {
     /// Target uncompressed bytes per Parquet row group.
     pub target_row_group_bytes: u64,
     pub codec: Codec,
+    /// Columns to write Parquet split-block bloom filters for (opt-in).
+    /// Aimed at high-cardinality entity columns (e.g. `symbol`) where the
+    /// exact ≤128-value distinct-set pruning does not apply: a bloom answers
+    /// `col = 'X'` at row-group granularity that min/max cannot. Empty by
+    /// default, and when empty it is omitted from the serialized spec, so
+    /// existing tables and their checksums are byte-for-byte unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bloom_filter_columns: Vec<String>,
 }
 
 impl Default for StorageOptions {
@@ -35,6 +43,7 @@ impl Default for StorageOptions {
             target_segment_bytes: 128 * 1024 * 1024,
             target_row_group_bytes: 32 * 1024 * 1024,
             codec: Codec::Zstd,
+            bloom_filter_columns: Vec::new(),
         }
     }
 }
@@ -127,6 +136,13 @@ impl TableSpec {
                      (time column {tc:?}, sort key starts with {first:?})"
                 )));
             }
+        }
+        for col in &options.storage.bloom_filter_columns {
+            schema.field_with_name(col).map_err(|_| {
+                Error::invalid(format!(
+                    "bloom filter column {col:?} does not exist in the schema"
+                ))
+            })?;
         }
         let mut spec = Self {
             table_id,

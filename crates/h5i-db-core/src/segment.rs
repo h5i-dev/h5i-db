@@ -15,6 +15,7 @@ use parquet::arrow::async_reader::ParquetObjectReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
+use parquet::schema::types::ColumnPath;
 use uuid::Uuid;
 
 use crate::error::{Error, Result};
@@ -569,12 +570,20 @@ fn writer_properties(
     let rows_per_group =
         (spec.storage.target_row_group_bytes as usize / row_width).clamp(8 * 1024, 4 * 1024 * 1024);
     let _ = schema;
-    WriterProperties::builder()
+    let mut builder = WriterProperties::builder()
         .set_compression(compression)
         .set_max_row_group_row_count(Some(rows_per_group))
         .set_statistics_enabled(EnabledStatistics::Page)
-        .set_column_index_truncate_length(Some(64))
-        .build()
+        .set_column_index_truncate_length(Some(64));
+    // Opt-in per-column split-block bloom filters (A2 / entity-column pruning).
+    // Only configured columns pay the write cost; DataFusion consults them on
+    // read by default (`bloom_filter_on_read`), so `col = 'X'` prunes row
+    // groups min/max cannot.
+    for col in &spec.storage.bloom_filter_columns {
+        builder =
+            builder.set_column_bloom_filter_enabled(ColumnPath::new(vec![col.clone()]), true);
+    }
+    builder.build()
 }
 
 /// Approximate in-memory Arrow size of a batch (drives segment splitting).
@@ -1027,4 +1036,85 @@ pub fn filter_batches_by_time(
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod bloom_tests {
+    use super::*;
+    use crate::spec::{StorageOptions, TableOptions, TableSpec};
+    use arrow::datatypes::{DataType, Field, Schema};
+    use parquet::schema::types::ColumnPath;
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    fn spec_with_bloom(cols: Vec<String>) -> TableSpec {
+        let schema: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new(
+                "ts",
+                DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+                false,
+            ),
+            Field::new("symbol", DataType::Utf8, true),
+            Field::new("price", DataType::Float64, true),
+        ]));
+        let options = TableOptions {
+            time_column: Some("ts".to_string()),
+            storage: StorageOptions {
+                bloom_filter_columns: cols,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        TableSpec::new(Uuid::nil(), "trades", &schema, &options).expect("spec")
+    }
+
+    fn col(name: &str) -> ColumnPath {
+        ColumnPath::new(vec![name.to_string()])
+    }
+
+    #[test]
+    fn bloom_filters_enabled_only_for_configured_columns() {
+        let spec = spec_with_bloom(vec!["symbol".to_string()]);
+        let props = writer_properties(&spec, &spec.schema().unwrap(), None);
+        assert!(
+            props.bloom_filter_properties(&col("symbol")).is_some(),
+            "configured column must get a bloom filter"
+        );
+        assert!(
+            props.bloom_filter_properties(&col("price")).is_none(),
+            "unconfigured column must not get a bloom filter"
+        );
+    }
+
+    #[test]
+    fn default_storage_writes_no_bloom_filters() {
+        // Regression guard: the current (default) write path is byte-identical —
+        // no column carries a bloom filter unless explicitly opted in.
+        let spec = spec_with_bloom(vec![]);
+        let props = writer_properties(&spec, &spec.schema().unwrap(), None);
+        for c in ["ts", "symbol", "price"] {
+            assert!(
+                props.bloom_filter_properties(&col(c)).is_none(),
+                "column {c} must have no bloom filter by default"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_bloom_column_is_rejected_at_table_creation() {
+        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(arrow::datatypes::TimeUnit::Nanosecond, None),
+            false,
+        )]));
+        let options = TableOptions {
+            time_column: Some("ts".to_string()),
+            storage: StorageOptions {
+                bloom_filter_columns: vec!["nope".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(TableSpec::new(Uuid::nil(), "t", &schema, &options).is_err());
+    }
 }
