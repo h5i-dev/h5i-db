@@ -20,7 +20,9 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 base64 = { workspace = true }
 tower = { version = "0.5", features = ["limit"] }
-tower-http = { version = "0.7", features = ["trace"] }
+# Held at 0.6 to stay unified with the copy reqwest pulls in; we use one
+# TraceLayer, so 0.7 would buy a second copy and nothing else.
+tower-http = { version = "0.6", features = ["trace"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

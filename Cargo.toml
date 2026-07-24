@@ -98,10 +98,18 @@ url = "2"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-base64 = "0.23"
+# Held at 0.22 to stay unified with the six crates in our core stack that
+# depend on it (arrow-cast, datafusion-functions, hyper-util, object_store,
+# parquet, reqwest). We only encode/decode Arrow IPC bytes, an API unchanged
+# since 0.21, so 0.23 would buy a second copy and nothing else.
+base64 = "0.22"
 
 tempfile = "3"
-rand = "0.10"
+# Held at 0.9 so the bench keeps generating the dataset that benchmarks/
+# RESULTS.md was measured against. Both 0.9 and 0.10 are in the graph either
+# way (datafusion-datasource and object_store pull one each), so moving up
+# would cost seed reproducibility and save nothing.
+rand = "0.9"
 clap = { version = "4", features = ["derive", "env"] }
 comfy-table = "7"
 anyhow = "1"

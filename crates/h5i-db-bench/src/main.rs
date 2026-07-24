@@ -26,7 +26,7 @@ use h5i_db_query::{
     AggregateStateMode, AggregateStateStore, FinanceAggregateSpec, H5iSession, SessionOptions,
 };
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use rand::{Rng, SeedableRng};
 use serde::Serialize;
 
 #[derive(Parser, Debug)]
