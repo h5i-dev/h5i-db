@@ -76,6 +76,9 @@ pub enum Error {
     )]
     PolicyViolation { op: String },
 
+    #[error("data policy violation ({constraint}): {detail}")]
+    DataPolicyViolation { constraint: String, detail: String },
+
     #[error("corruption detected in object {object}: {detail}")]
     Corruption { object: String, detail: String },
 
@@ -131,6 +134,7 @@ impl Error {
             Error::Unsupported { .. } => "unsupported",
             Error::ReadOnly { .. } => "read_only",
             Error::PolicyViolation { .. } => "policy_violation",
+            Error::DataPolicyViolation { .. } => "data_policy_violation",
             Error::Corruption { .. } => "corruption",
             Error::FormatTooNew { .. } => "format_too_new",
             Error::LimitExceeded { .. } => "limit_exceeded",
@@ -189,6 +193,11 @@ impl Error {
                 "run the {op} with --plan to preview it, review, then `h5i-db plan apply`; \
                  or relax the policy with `h5i-db policy set`"
             )),
+            Error::DataPolicyViolation { .. } => Some(
+                "the write breaks a data-safety constraint on this table; fix the offending \
+                 rows, or inspect/relax the policy with `h5i-db data-policy get`"
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -266,6 +275,10 @@ mod tests {
                 op: "append".into(),
             },
             Error::PolicyViolation { op: "write".into() },
+            Error::DataPolicyViolation {
+                constraint: "c".into(),
+                detail: "d".into(),
+            },
             Error::Corruption {
                 object: "o".into(),
                 detail: "d".into(),

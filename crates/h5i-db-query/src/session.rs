@@ -68,6 +68,20 @@ impl H5iSession {
     /// Build a session over a database. Table heads are resolved once, here:
     /// every query in this session sees the same immutable versions.
     pub async fn new(db: Arc<Database>, options: SessionOptions) -> DfResult<Self> {
+        let runtime = Self::build_runtime(&options)?;
+        Self::new_with_runtime(db, options, runtime).await
+    }
+
+    /// Build a session that pins **every** table at `at` (e.g.
+    /// `ReadAt::AsOf(ts)`) instead of its latest version. This is the basis of
+    /// the point-in-time / look-ahead-bias-free surface (ROADMAP V-A1): a query
+    /// run in such a session sees only data available as of `at`.
+    pub async fn new_at(db: Arc<Database>, options: SessionOptions, at: ReadAt) -> DfResult<Self> {
+        let runtime = Self::build_runtime(&options)?;
+        Self::new_with_runtime_at(db, options, runtime, at).await
+    }
+
+    fn build_runtime(options: &SessionOptions) -> DfResult<Arc<RuntimeEnv>> {
         let mut runtime = RuntimeEnvBuilder::new();
         if let Some(limit) = options.memory_limit {
             runtime = runtime.with_memory_pool(Arc::new(FairSpillPool::new(limit)));
@@ -81,8 +95,7 @@ impl H5iSession {
             };
             runtime = runtime.with_disk_manager_builder(disk);
         }
-        let runtime = Arc::new(runtime.build()?);
-        Self::new_with_runtime(db, options, runtime).await
+        Ok(Arc::new(runtime.build()?))
     }
 
     /// Like [`Self::new`], but reusing a caller-supplied [`RuntimeEnv`].
@@ -96,6 +109,17 @@ impl H5iSession {
         db: Arc<Database>,
         options: SessionOptions,
         runtime: Arc<RuntimeEnv>,
+    ) -> DfResult<Self> {
+        Self::new_with_runtime_at(db, options, runtime, ReadAt::Latest).await
+    }
+
+    /// Like [`Self::new_with_runtime`], but pins every table at `at` instead of
+    /// its latest version (ROADMAP V-A1). See [`Self::new_at`].
+    pub async fn new_with_runtime_at(
+        db: Arc<Database>,
+        options: SessionOptions,
+        runtime: Arc<RuntimeEnv>,
+        at: ReadAt,
     ) -> DfResult<Self> {
         let telemetry = WorkloadTelemetryBuffer::new(options.telemetry_capacity);
         let predicate_cache_mode = options.predicate_cache;
@@ -147,7 +171,7 @@ impl H5iSession {
         // resolved concurrently (serial resolution dominated multi-table
         // session startup).
         let mut registered = HashSet::new();
-        for resolved in resolve_all_latest(&db).await? {
+        for resolved in resolve_all_at(&db, at).await? {
             let name = resolved.entry.name.clone();
             ctx.register_table(
                 &name,
@@ -199,7 +223,7 @@ impl H5iSession {
     /// at planning time — this is for the plain `SELECT … FROM t` names that
     /// are otherwise snapshot-bound to session creation.
     pub async fn refresh(&self) -> DfResult<()> {
-        let resolved = resolve_all_latest(&self.db).await?;
+        let resolved = resolve_all_at(&self.db, ReadAt::Latest).await?;
         let fresh: HashSet<String> = resolved.iter().map(|r| r.entry.name.clone()).collect();
         let mut registered = self.registered.lock().unwrap();
         for stale in registered.difference(&fresh) {
@@ -603,8 +627,8 @@ fn rewrite_asof_join(query: &str) -> DfResult<String> {
     ))
 }
 
-/// Resolve every catalog table at its latest version, concurrently.
-async fn resolve_all_latest(db: &Arc<Database>) -> DfResult<Vec<ResolvedTable>> {
+/// Resolve every catalog table at read point `at`, concurrently.
+async fn resolve_all_at(db: &Arc<Database>, at: ReadAt) -> DfResult<Vec<ResolvedTable>> {
     let tables = db
         .list_tables()
         .await
@@ -612,7 +636,7 @@ async fn resolve_all_latest(db: &Arc<Database>) -> DfResult<Vec<ResolvedTable>> 
     futures::future::try_join_all(
         tables
             .iter()
-            .map(|entry| db.resolve(&entry.name, ReadAt::Latest)),
+            .map(|entry| db.resolve(&entry.name, at.clone())),
     )
     .await
     .map_err(|e| DataFusionError::External(Box::new(e)))

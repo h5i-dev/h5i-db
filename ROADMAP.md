@@ -596,3 +596,13 @@ Publishing fodder to prove the wins above, not features to implement:
 4. **V-D1/V-D2** stability sweep + claim verifier — reproducibility moat.
 5. **V-E1/V-E2** memory + fork/explore/commit vocabulary — mostly docs/skill/API.
 6. **V-F** only if a real workload demands it, and only in a separate package.
+
+## Part V implementation status (2026-07-23, branch `improve-tests`)
+
+| Item | Status | Notes |
+|------|--------|-------|
+| V-A1 `leakage-delta` | ✅ done | `H5iSession::new_at` pins every table at a `ReadAt` (generalizes the latest-only registration); `leakage::check_leakage` runs a query at head vs an as-of point and diffs (numeric columns cast to f64 for per-cell delta, others string-compared, plus per-table withheld-version deltas). CLI `leakage-check <db> <sql> --as-of <ts\|version> [--tolerance]`. **Additive & default-path-neutral**: a new opt-in surface; the normal query path is untouched. Tests: 4 query integration (restatement delta, time-bounded no-leak, as-of-timestamp ≡ version pin, row-count change) + 1 CLI e2e. Confirmed the required primitive already existed: `ReadAt::AsOf` resolves by `committed_at_ns` (availability), exactly the look-ahead-free axis. |
+| V-B1 DFC data-safety policy | ✅ done | Opt-in, per-table `DataPolicy` (sidecar `tables/<uuid>/DATA_POLICY.json`) with a small fuzz-safe typed grammar (NotNull / Compare / InSet + And/Or/Not, OnFail Reject\|Warn), evaluated over Arrow arrays in `core` (no DataFusion in the kernel). Enforced at every write path (`stage_write`/`stage_append`/`replace_range_impl`) **and at plan time** (`plan_write`/`plan_replace_range`); a violating mutation is refused before it can be applied. Fail-closed (NULL never satisfies a comparison; corrupt policy errors). `Error::DataPolicyViolation` (exit 2, not retryable). CLI `data-policy get\|set\|clear` (JSON docs). **Opt-in / read-path-neutral**: a table without a policy pays only one metadata lookup on the *write* path; reads are never touched. Tests: 11 unit + 6 core integration + 1 CLI e2e. Row-dropping (DFC `REMOVE`) deliberately deferred. Scoped projection of DFC onto the explicit-row write path; full cross-table lineage rewriting remains future work. |
+
+Delivered (additive, opt-in, tested, fmt + clippy `-D warnings` clean): **V-A1, V-B1**,
+the two highest-ROI Part V items. Neither changes the default read path.

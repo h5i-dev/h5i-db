@@ -780,6 +780,32 @@ the time-series function library.
 List a table's committed versions: `version`, `op`, `committed_at`, `rows`,
 `bytes`, `segments`, `note`.
 
+### `h5i-db leakage-check`
+
+Look-ahead-bias diagnostic: run one query against the current head (**leaking**:
+every commit, including data that only arrived after the decision instant)
+and against an as-of read point (**non-leaking**: only data available as of
+that instant), and report the delta between the two results.
+
+```console
+$ h5i-db leakage-check market.db \
+    "SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol" \
+    --as-of 2026-07-01T16:00:00Z --format json
+```
+
+| Flag | Meaning |
+|---|---|
+| `--as-of <at>` | The decision point: an integer **version**, an RFC3339 **timestamp** (matched by commit *availability* time, like `h5i()`), or a **snapshot** name |
+| `--tolerance <f>` | Absolute per-cell delta below which a difference is treated as noise (default `1e-9`) |
+
+The report carries `leakage_detected`, per-column `head → asof (delta)` for the
+common single-row-metric case, `max_abs_delta`, `row_count_differs`, and
+`withheld_versions` (per table, the head-vs-as-of version gap). A non-zero
+delta proves *availability* leakage (late-arriving or restated rows across
+commits); a zero delta does not prove its absence, and this does not detect
+look-ahead *inside* a single snapshot. Pairs naturally with the
+[reproducible-backtest](#h5i-db-versions) pin-what-you-read pattern.
+
 ---
 
 ## Writing data
@@ -877,6 +903,34 @@ $ h5i-db policy set market.db direct_delete=false direct_write=false
 Keys: `direct_append`, `direct_write`, `direct_replace`, `direct_delete`,
 `direct_restore`, `direct_compact` — each `true`/`false`. The update is an
 atomic read-modify-write.
+
+The mutation policy gates *who may write directly*; the **data policy** below
+gates *what data may be written at all*.
+
+### `h5i-db data-policy`
+
+Opt-in, per-table data-safety constraints checked on every write (and at plan
+time), so a violating mutation is refused before it can be applied. A table
+with no policy is unconstrained and pays only one metadata lookup on the write
+path; reads are never touched.
+
+| Subcommand | Meaning |
+|---|---|
+| `data-policy get <db> <table>` | Show the table's policy (empty when unset) |
+| `data-policy set <db> <table> <policy>` | Install a typed JSON policy (inline JSON, `@path` to read a file, or `-` for stdin) |
+| `data-policy clear <db> <table>` | Remove the policy (writes become unconstrained) |
+
+```console
+$ h5i-db data-policy set market.db trades '{"constraints":[
+    {"name":"positive_price",
+     "predicate":{"compare":{"column":"price","op":"gt","value":{"float":0.0}}},
+     "on_fail":"reject"}]}'
+```
+
+Predicates compose `not_null`, `compare`, and `in_set` with `and`/`or`/`not`;
+`on_fail` is `reject` (fail the write) or `warn`. Evaluation is fail-closed: a
+`NULL` never satisfies a comparison. A violation raises `data_policy_violation`
+(exit `2`, not retryable).
 
 ### `h5i-db snapshot`
 
@@ -1262,6 +1316,13 @@ applies or discards it. Every committed manifest records its
 `execution_mode` and plan hash, so the audit trail distinguishes reviewed
 from direct writes forever.
 
+Where the *mutation* policy gates who may write directly, a per-table
+[data policy](cli.html#h5i-db-data-policy) gates *what data may be written*:
+typed constraints (`not_null`, `compare`, `in_set`, composed with
+`and`/`or`/`not`) checked fail-closed on every write and at plan time. A
+violating batch is refused with `data_policy_violation` before it can land, so
+an agent can't quietly commit malformed rows.
+
 ## Patterns that work
 
 - **Idempotent retries.** Appends racing another writer raise
@@ -1274,6 +1335,11 @@ from direct writes forever.
   attributable to an exact input state — see the cookbook's
   [reproducible backtests](../cookbook/03_risk_and_production/02_reproducible_backtests.html)
   and [paper-trading loop](../cookbook/03_risk_and_production/05_live_paper_trading_loop.html).
+- **Check for look-ahead bias.** Before trusting a backtest metric, run it
+  through [`leakage-check … --as-of <decision-time>`](cli.html#h5i-db-leakage-check):
+  it re-runs the query as of the decision instant and reports how much of the
+  result came from data that only became available later. A non-zero delta is
+  alpha that evaporates in production.
 - **Notes are for provenance.** `--note` / `note=` lands in the version
   manifest; make agents write *why* ("re-mark after vendor restatement,
   ticket DX-142"), and `versions` becomes your change log.
@@ -1927,6 +1993,57 @@ window = db.read("trades", columns=["ts", "price"],
                  time_start=t0_us, time_end=t1_us)
 ```
 
+### `Database.leakage_check`
+
+```python
+leakage_check(query, version=None, as_of=None, snapshot=None,
+              tolerance=None) -> dict
+```
+
+Look-ahead-bias diagnostic (the Python surface of the CLI
+[`leakage-check`](../manual/cli.html#h5i-db-leakage-check)). Runs `query` twice,
+against the current head (*leaking*: every commit, including rows that only
+became available after the decision instant) and against a decision read point
+(*non-leaking*), and returns the delta between the two results.
+
+**Parameters**
+
+`query` (`str`)
+:   The SQL to evaluate under both read points.
+
+`version` / `as_of` / `snapshot`
+:   The decision point; **exactly one is required**. `as_of` is an RFC3339
+    string matched by commit *availability* time.
+
+`tolerance` (`float`, optional)
+:   Per-cell numeric noise floor below which a difference is ignored
+    (default `1e-9`).
+
+**Returns**
+
+`dict` with the leakage report: `leakage_detected`, per-column
+`head → asof (delta)`, `max_abs_delta`, `row_count_differs`, and
+`withheld_versions` (per table, the head-vs-as-of version gap).
+
+**Raises**
+
+`InvalidInputError`
+:   No decision point was given, or more than one.
+
+```python
+report = db.leakage_check(
+    "SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol",
+    as_of="2026-07-01T16:00:00Z",
+)
+if report["leakage_detected"]:
+    print("alpha that evaporates:", report["max_abs_delta"])
+```
+
+!!! note "Scope"
+    A non-zero delta proves *availability* leakage (late-arriving or restated
+    rows across commits). A zero delta does not prove its absence, and this
+    does not detect look-ahead *inside* a single snapshot.
+
 ## Snapshots
 
 ### `Database.snapshot`
@@ -2038,6 +2155,62 @@ atomic (read-modify-write under the metadata lock).
 
 `InvalidInputError`
 :   An unknown flag name.
+
+## Data-safety policy
+
+Where the [mutation policy](#databasepolicy) gates *who* may write directly, a
+per-table **data policy** gates *what data* may be written: typed constraints
+checked fail-closed on every write and at plan time
+([CLI reference](../manual/cli.html#h5i-db-data-policy)). A table with no policy
+is unconstrained and pays no read-path cost.
+
+### `Database.data_policy`
+
+```python
+data_policy(table) -> dict | None
+```
+
+The table's data-safety policy as a dict, or `None` when unset.
+
+### `Database.set_data_policy`
+
+```python
+set_data_policy(table, policy) -> dict
+```
+
+Install (overwrite) a table's data-safety policy. Returns the stored policy.
+
+**Parameters**
+
+`table` (`str`)
+:   Table name.
+
+`policy` (`dict`)
+:   A typed policy document. Predicates compose `not_null`, `compare`, and
+    `in_set` with `and` / `or` / `not`; each constraint's `on_fail` is
+    `"reject"` (fail the write) or `"warn"`.
+
+```python
+db.set_data_policy("trades", {"constraints": [
+    {"name": "positive_price",
+     "predicate": {"compare": {"column": "price", "op": "gt",
+                               "value": {"float": 0.0}}},
+     "on_fail": "reject"}]})
+```
+
+**Raises**
+
+`InvalidInputError`
+:   A malformed policy document, or (when a later write breaks a constraint)
+    a `data_policy_violation` (the write is refused before it lands).
+
+### `Database.clear_data_policy`
+
+```python
+clear_data_policy(table) -> None
+```
+
+Remove a table's data-safety policy (writes become unconstrained).
 
 ## Maintenance
 

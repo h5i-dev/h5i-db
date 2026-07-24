@@ -192,6 +192,10 @@ impl Database {
         })?;
         let schema = resolved.schema.clone();
         crate::database::validate_batches_schema(&schema, &new_batches)?;
+        // Opt-in data-safety policy: refuse to *plan* a mutation that would
+        // violate it — the violation surfaces at plan time, not apply time.
+        self.enforce_data_policy(resolved.entry.table_id, &new_batches)
+            .await?;
         for b in &new_batches {
             if b.num_rows() == 0 {
                 continue;
@@ -335,6 +339,9 @@ impl Database {
         let spec = &resolved.spec;
         let schema = resolved.schema.clone();
         crate::database::validate_batches_schema(&schema, &batches)?;
+        // Opt-in data-safety policy: refuse to plan a violating write.
+        self.enforce_data_policy(resolved.entry.table_id, &batches)
+            .await?;
 
         let (before_batches, _) = self
             .scan_resolved(

@@ -78,6 +78,13 @@ applies or discards it. Every committed manifest records its
 `execution_mode` and plan hash, so the audit trail distinguishes reviewed
 from direct writes forever.
 
+Where the *mutation* policy gates who may write directly, a per-table
+[data policy](cli.html#h5i-db-data-policy) gates *what data may be written*:
+typed constraints (`not_null`, `compare`, `in_set`, composed with
+`and`/`or`/`not`) checked fail-closed on every write and at plan time. A
+violating batch is refused with `data_policy_violation` before it can land, so
+an agent can't quietly commit malformed rows.
+
 ## Patterns that work
 
 - **Idempotent retries.** Appends racing another writer raise
@@ -90,6 +97,11 @@ from direct writes forever.
   attributable to an exact input state — see the cookbook's
   [reproducible backtests](../cookbook/03_risk_and_production/02_reproducible_backtests.html)
   and [paper-trading loop](../cookbook/03_risk_and_production/05_live_paper_trading_loop.html).
+- **Check for look-ahead bias.** Before trusting a backtest metric, run it
+  through [`leakage-check … --as-of <decision-time>`](cli.html#h5i-db-leakage-check):
+  it re-runs the query as of the decision instant and reports how much of the
+  result came from data that only became available later. A non-zero delta is
+  alpha that evaporates in production.
 - **Notes are for provenance.** `--note` / `note=` lands in the version
   manifest; make agents write *why* ("re-mark after vendor restatement,
   ticket DX-142"), and `versions` becomes your change log.

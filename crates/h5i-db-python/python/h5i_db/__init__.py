@@ -292,6 +292,33 @@ class Database:
             )
         )
 
+    def leakage_check(
+        self,
+        query: str,
+        version: Optional[int] = None,
+        as_of: Optional[str] = None,
+        snapshot: Optional[str] = None,
+        tolerance: Optional[float] = None,
+    ) -> dict:
+        """Look-ahead-bias diagnostic (see the CLI ``leakage-check``).
+
+        Runs ``query`` twice, against the current head (*leaking*: every
+        commit, including rows that only arrived after the decision instant)
+        and against a decision read point (*non-leaking*), and returns the
+        delta between the two results as a dict. Specify exactly one of
+        ``version`` / ``as_of`` (RFC3339 availability timestamp) / ``snapshot``
+        as the decision point; ``tolerance`` is the per-cell numeric noise
+        floor (default ``1e-9``).
+
+        A non-zero ``leakage_detected`` / ``max_abs_delta`` is *availability*
+        leakage (late-arriving or restated rows across commits); a zero delta
+        does not prove its absence, and this does not detect look-ahead *inside*
+        a single snapshot.
+        """
+        return json.loads(
+            self._native.leakage_check(query, version, as_of, snapshot, tolerance)
+        )
+
     # -- maintenance ----------------------------------------------------------
 
     def snapshot(self, name: str, tables: Optional[list[str]] = None, note: Optional[str] = None) -> dict:
@@ -322,6 +349,38 @@ class Database:
         updates = dict(policy or {})
         updates.update(flags)
         return json.loads(self._native.update_policy(json.dumps(updates)))
+
+    # -- data-safety policy --------------------------------------------------
+
+    def data_policy(self, table: str) -> Optional[dict]:
+        """A table's data-safety policy as a dict, or ``None`` when unset.
+
+        An unset policy is the default: writes are unconstrained and pay no
+        enforcement cost.
+        """
+        return json.loads(self._native.get_data_policy(table))
+
+    def set_data_policy(self, table: str, policy: dict) -> dict:
+        """Install (overwrite) a table's data-safety policy; returns it.
+
+        ``policy`` is a typed document, e.g.::
+
+            db.set_data_policy("trades", {"constraints": [
+                {"name": "positive_price",
+                 "predicate": {"compare": {"column": "price", "op": "gt",
+                                           "value": {"float": 0.0}}},
+                 "on_fail": "reject"}]})
+
+        Predicates compose ``not_null`` / ``compare`` / ``in_set`` with
+        ``and`` / ``or`` / ``not``; ``on_fail`` is ``"reject"`` or ``"warn"``.
+        Constraints are enforced fail-closed on every write and at plan time; a
+        violation raises :class:`InvalidInputError` (``data_policy_violation``).
+        """
+        return json.loads(self._native.set_data_policy(table, json.dumps(policy)))
+
+    def clear_data_policy(self, table: str) -> None:
+        """Remove a table's data-safety policy (writes become unconstrained)."""
+        self._native.clear_data_policy(table)
 
 
 __all__ = [

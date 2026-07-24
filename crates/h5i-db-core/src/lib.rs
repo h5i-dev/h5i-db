@@ -10,6 +10,7 @@
 pub mod backend;
 pub mod backend_object;
 pub mod catalog;
+pub mod data_policy;
 pub mod database;
 pub mod error;
 pub mod evolution;
@@ -28,6 +29,7 @@ pub mod util;
 
 pub use backend::{Backend, HeadState, HeadStore, HeadTag, MetaLockGuard};
 pub use backend_object::ObjectStoreHeadStore;
+pub use data_policy::{CmpOp, Constraint, DataPolicy, OnFail, Predicate, ScalarLit};
 pub use database::{
     CommitResult, Database, ReadAt, ResolvedTable, ScanOptions, ScanReport, VacuumReport,
     VerifyReport, VersionSummary, WriteOptions,

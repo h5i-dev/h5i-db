@@ -282,6 +282,49 @@ Prunes segments before I/O.</dd>
                  <span class="n">time_start</span><span class="o">=</span><span class="n">t0_us</span><span class="p">,</span> <span class="n">time_end</span><span class="o">=</span><span class="n">t1_us</span><span class="p">)</span>
 </code></pre></div>
 
+</div></section><section class="api-member"><h3 id="databaseleakage_check"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">leakage_check</span></code><a class="headerlink" href="#databaseleakage_check" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">leakage_check</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+              <span class="n">tolerance</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p>Look-ahead-bias diagnostic (the Python surface of the CLI
+<a href="../manual/cli.html#h5i-db-leakage-check"><code>leakage-check</code></a>). Runs <code>query</code> twice,
+against the current head (<em>leaking</em>: every commit, including rows that only
+became available after the decision instant) and against a decision read point
+(<em>non-leaking</em>), and returns the delta between the two results.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>query</code> (<code>str</code>)</dt>
+<dd>The SQL to evaluate under both read points.</dd>
+<dt><code>version</code> / <code>as_of</code> / <code>snapshot</code></dt>
+<dd>The decision point; <strong>exactly one is required</strong>. <code>as_of</code> is an RFC3339
+string matched by commit <em>availability</em> time.</dd>
+<dt><code>tolerance</code> (<code>float</code>, optional)</dt>
+<dd>Per-cell numeric noise floor below which a difference is ignored
+(default <code>1e-9</code>).</dd>
+</dl>
+<p class="api-label">Returns</p>
+<p><code>dict</code> with the leakage report: <code>leakage_detected</code>, per-column
+<code>head → asof (delta)</code>, <code>max_abs_delta</code>, <code>row_count_differs</code>, and
+<code>withheld_versions</code> (per table, the head-vs-as-of version gap).</p>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>InvalidInputError</code></dt>
+<dd>No decision point was given, or more than one.</dd>
+</dl>
+<div class="highlight"><pre><span></span><code><span class="n">report</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">leakage_check</span><span class="p">(</span>
+    <span class="s2">&quot;SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol&quot;</span><span class="p">,</span>
+    <span class="n">as_of</span><span class="o">=</span><span class="s2">&quot;2026-07-01T16:00:00Z&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">if</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;leakage_detected&quot;</span><span class="p">]:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;alpha that evaporates:&quot;</span><span class="p">,</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;max_abs_delta&quot;</span><span class="p">])</span>
+</code></pre></div>
+
+<div class="admonition note">
+<p class="admonition-title">Scope</p>
+<p>A non-zero delta proves <em>availability</em> leakage (late-arriving or restated
+rows across commits). A zero delta does not prove its absence, and this
+does not detect look-ahead <em>inside</em> a single snapshot.</p>
+</div>
 </div></section><h2 id="snapshots">Snapshots<a class="headerlink" href="#snapshots" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="databasesnapshot"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">snapshot</span></code><a class="headerlink" href="#databasesnapshot" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">snapshot</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
 </code></pre></div><div class="api-body">
@@ -355,6 +398,46 @@ atomic (read-modify-write under the metadata lock).</p>
 <dt><code>InvalidInputError</code></dt>
 <dd>An unknown flag name.</dd>
 </dl>
+</div></section><h2 id="data-safety-policy">Data-safety policy<a class="headerlink" href="#data-safety-policy" title="Permanent link">#</a></h2>
+<p>Where the <a href="#databasepolicy">mutation policy</a> gates <em>who</em> may write directly, a
+per-table <strong>data policy</strong> gates <em>what data</em> may be written: typed constraints
+checked fail-closed on every write and at plan time
+(<a href="../manual/cli.html#h5i-db-data-policy">CLI reference</a>). A table with no policy
+is unconstrained and pays no read-path cost.</p>
+<section class="api-member"><h3 id="databasedata_policy"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">data_policy</span></code><a class="headerlink" href="#databasedata_policy" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">data_policy</span><span class="p">(</span><span class="n">table</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
+
+<p>The table's data-safety policy as a dict, or <code>None</code> when unset.</p>
+</div></section><section class="api-member"><h3 id="databaseset_data_policy"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">set_data_policy</span></code><a class="headerlink" href="#databaseset_data_policy" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">set_data_policy</span><span class="p">(</span><span class="n">table</span><span class="p">,</span> <span class="n">policy</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p>Install (overwrite) a table's data-safety policy. Returns the stored policy.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>table</code> (<code>str</code>)</dt>
+<dd>Table name.</dd>
+<dt><code>policy</code> (<code>dict</code>)</dt>
+<dd>A typed policy document. Predicates compose <code>not_null</code>, <code>compare</code>, and
+<code>in_set</code> with <code>and</code> / <code>or</code> / <code>not</code>; each constraint's <code>on_fail</code> is
+<code>"reject"</code> (fail the write) or <code>"warn"</code>.</dd>
+</dl>
+<div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">set_data_policy</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;constraints&quot;</span><span class="p">:</span> <span class="p">[</span>
+    <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="s2">&quot;positive_price&quot;</span><span class="p">,</span>
+     <span class="s2">&quot;predicate&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;compare&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;column&quot;</span><span class="p">:</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;op&quot;</span><span class="p">:</span> <span class="s2">&quot;gt&quot;</span><span class="p">,</span>
+                               <span class="s2">&quot;value&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;float&quot;</span><span class="p">:</span> <span class="mf">0.0</span><span class="p">}}},</span>
+     <span class="s2">&quot;on_fail&quot;</span><span class="p">:</span> <span class="s2">&quot;reject&quot;</span><span class="p">}]})</span>
+</code></pre></div>
+
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>InvalidInputError</code></dt>
+<dd>A malformed policy document, or (when a later write breaks a constraint)
+a <code>data_policy_violation</code> (the write is refused before it lands).</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="databaseclear_data_policy"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">clear_data_policy</span></code><a class="headerlink" href="#databaseclear_data_policy" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">clear_data_policy</span><span class="p">(</span><span class="n">table</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
+
+<p>Remove a table's data-safety policy (writes become unconstrained).</p>
 </div></section><h2 id="maintenance">Maintenance<a class="headerlink" href="#maintenance" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="databasecompact"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">compact</span></code><a class="headerlink" href="#databasecompact" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">compact</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
 </code></pre></div><div class="api-body">
@@ -393,7 +476,7 @@ history is never touched.</p>
     <nav class="page-nav"><a class="prev" href="../api/index.html"><span class="dir">← Previous</span><span class="pn-title">Overview</span></a><a class="next" href="../api/results-and-plans.html"><span class="dir">Next →</span><span class="pn-title">QueryResult &amp; MutationPlan</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#constructor">Constructor</a><ul><li><a href="#h5i_dbdatabase">h5i_db.Database</a></li></ul></li><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#constructor">Constructor</a><ul><li><a href="#h5i_dbdatabase">h5i_db.Database</a></li></ul></li><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li><li><a href="#databaseleakage_check">Database.leakage_check</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#data-safety-policy">Data-safety policy</a><ul><li><a href="#databasedata_policy">Database.data_policy</a></li><li><a href="#databaseset_data_policy">Database.set_data_policy</a></li><li><a href="#databaseclear_data_policy">Database.clear_data_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

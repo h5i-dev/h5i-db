@@ -165,6 +165,32 @@ the time-series function library.
 List a table's committed versions: `version`, `op`, `committed_at`, `rows`,
 `bytes`, `segments`, `note`.
 
+### `h5i-db leakage-check`
+
+Look-ahead-bias diagnostic: run one query against the current head (**leaking**:
+every commit, including data that only arrived after the decision instant)
+and against an as-of read point (**non-leaking**: only data available as of
+that instant), and report the delta between the two results.
+
+```console
+$ h5i-db leakage-check market.db \
+    "SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol" \
+    --as-of 2026-07-01T16:00:00Z --format json
+```
+
+| Flag | Meaning |
+|---|---|
+| `--as-of <at>` | The decision point: an integer **version**, an RFC3339 **timestamp** (matched by commit *availability* time, like `h5i()`), or a **snapshot** name |
+| `--tolerance <f>` | Absolute per-cell delta below which a difference is treated as noise (default `1e-9`) |
+
+The report carries `leakage_detected`, per-column `head → asof (delta)` for the
+common single-row-metric case, `max_abs_delta`, `row_count_differs`, and
+`withheld_versions` (per table, the head-vs-as-of version gap). A non-zero
+delta proves *availability* leakage (late-arriving or restated rows across
+commits); a zero delta does not prove its absence, and this does not detect
+look-ahead *inside* a single snapshot. Pairs naturally with the
+[reproducible-backtest](#h5i-db-versions) pin-what-you-read pattern.
+
 ---
 
 ## Writing data
@@ -262,6 +288,34 @@ $ h5i-db policy set market.db direct_delete=false direct_write=false
 Keys: `direct_append`, `direct_write`, `direct_replace`, `direct_delete`,
 `direct_restore`, `direct_compact` — each `true`/`false`. The update is an
 atomic read-modify-write.
+
+The mutation policy gates *who may write directly*; the **data policy** below
+gates *what data may be written at all*.
+
+### `h5i-db data-policy`
+
+Opt-in, per-table data-safety constraints checked on every write (and at plan
+time), so a violating mutation is refused before it can be applied. A table
+with no policy is unconstrained and pays only one metadata lookup on the write
+path; reads are never touched.
+
+| Subcommand | Meaning |
+|---|---|
+| `data-policy get <db> <table>` | Show the table's policy (empty when unset) |
+| `data-policy set <db> <table> <policy>` | Install a typed JSON policy (inline JSON, `@path` to read a file, or `-` for stdin) |
+| `data-policy clear <db> <table>` | Remove the policy (writes become unconstrained) |
+
+```console
+$ h5i-db data-policy set market.db trades '{"constraints":[
+    {"name":"positive_price",
+     "predicate":{"compare":{"column":"price","op":"gt","value":{"float":0.0}}},
+     "on_fail":"reject"}]}'
+```
+
+Predicates compose `not_null`, `compare`, and `in_set` with `and`/`or`/`not`;
+`on_fail` is `reject` (fail the write) or `warn`. Evaluation is fail-closed: a
+`NULL` never satisfies a comparison. A violation raises `data_policy_violation`
+(exit `2`, not retryable).
 
 ### `h5i-db snapshot`
 

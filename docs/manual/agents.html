@@ -159,6 +159,12 @@ before/after samples; a human reviews it in the
 applies or discards it. Every committed manifest records its
 <code>execution_mode</code> and plan hash, so the audit trail distinguishes reviewed
 from direct writes forever.</p>
+<p>Where the <em>mutation</em> policy gates who may write directly, a per-table
+<a href="cli.html#h5i-db-data-policy">data policy</a> gates <em>what data may be written</em>:
+typed constraints (<code>not_null</code>, <code>compare</code>, <code>in_set</code>, composed with
+<code>and</code>/<code>or</code>/<code>not</code>) checked fail-closed on every write and at plan time. A
+violating batch is refused with <code>data_policy_violation</code> before it can land, so
+an agent can't quietly commit malformed rows.</p>
 <h2 id="patterns-that-work">Patterns that work<a class="headerlink" href="#patterns-that-work" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>Idempotent retries.</strong> Appends racing another writer raise
@@ -171,6 +177,11 @@ from direct writes forever.</p>
   attributable to an exact input state — see the cookbook's
   <a href="../cookbook/03_risk_and_production/02_reproducible_backtests.html">reproducible backtests</a>
   and <a href="../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">paper-trading loop</a>.</li>
+<li><strong>Check for look-ahead bias.</strong> Before trusting a backtest metric, run it
+  through <a href="cli.html#h5i-db-leakage-check"><code>leakage-check … --as-of &lt;decision-time&gt;</code></a>:
+  it re-runs the query as of the decision instant and reports how much of the
+  result came from data that only became available later. A non-zero delta is
+  alpha that evaporates in production.</li>
 <li><strong>Notes are for provenance.</strong> <code>--note</code> / <code>note=</code> lands in the version
   manifest; make agents write <em>why</em> ("re-mark after vendor restatement,
   ticket DX-142"), and <code>versions</code> becomes your change log.</li>
