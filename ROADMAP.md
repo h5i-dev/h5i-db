@@ -404,11 +404,14 @@ with serial tests and no regression to existing suites:
 | C3 approx-distinct + top-K | ✅ done (DataFusion built-in) | `approx_distinct` (HLL) and `ORDER BY … LIMIT` TopK ship via default features; verified reachable + correct rather than reimplemented. |
 | B3 SAMPLE BY fills | ✅ done | Added `value` constant fill + `prev`/`linear` aliases to gapfill/resample; first/last per bucket are DataFusion `first_value`/`last_value` over `time_bucket`. |
 | B1 ASOF symbol short-circuit | ✅ done (structural) | Already realized by the keyed-run design (`RunIndex::Keyed` → O(1) probe miss for absent symbols), stronger than QuestDB's sorted-scan short-circuit; verified with an absent-symbol test. Parallel by-key repartition remains T2.1. |
+| A3 last-row-per-symbol precompute | ✅ done | New `latest.rs` + `latest_on('t','by')` UDTF; per-segment "last row per group" cached as a checksummed Arrow-IPC sidecar (`cache/latest/v1`), merged in manifest order → O(segments × groups), append-only reuse. Additive (no existing path changed). Delivers the `latest-per-key` rewrite. |
+| C1 column byte-range / metadata sidecar | 🔬 analyzed — staged with the read-path work | Its acceptance ("cold S3 read issues no footer GET; byte-range GETs derived from the manifest") is inherently **read-path-invasive**: it requires either a custom `ParquetFileReaderFactory` that serves `get_metadata` from a sidecar instead of the footer, or metadata embedded in the manifest and consumed by a custom reader. Neither is a safe additive change; the existing footer-metadata cache already covers warm/in-process reads. Best done opt-in (default off) with instrumented GET-count tests, as a focused follow-up with A1 — not rushed. |
 | A1 global symbol dictionary | ⏳ pending | Format-level change to the manifest; large and format-breaking. Staged as dedicated work to honor the no-regression constraint. |
-| A3 last-row-per-symbol precompute | ⏳ pending | Additive per-segment sidecar (mirrors the aggregate-state store); the highest-value remaining additive feature (delivers the `latest-per-key` rewrite). |
 | B2 out-of-order (O3) Parquet merge | ⏳ pending | Ingest-path change (append is currently strict); large and higher-risk. Staged as dedicated work. |
-| C1 column byte-range sidecar | ⏳ pending | Read-path change for S3 first-read latency; medium. Existing footer-metadata cache already covers warm reads. |
 
-The pending four are the large architectural items (two of them format/ingest
-breaking); they are sequenced separately so each can be built and verified
-without rushing changes that could regress the benchmarked write/read paths.
+Delivered (safe/additive, tested, committed): C2, A2, C3, B3, B1, A3 — six of
+nine. The remaining three (C1, A1, B2) all change the read path, manifest
+format, or ingest path; each is sequenced as focused, instrumented work so it
+can be verified without regressing the benchmarked paths. C1 in particular was
+implemented far enough to confirm its win cannot be realized additively — it
+belongs with the read-path/format tier, not as a tail-of-session change.
