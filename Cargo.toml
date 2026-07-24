@@ -1,5 +1,9 @@
 [workspace]
-resolver = "2"
+# Resolver 3 (edition 2024's default) is resolver 2 plus MSRV-aware version
+# selection: it refuses to pick a dependency whose `rust-version` exceeds the
+# `rust-version` below. Without it a routine `cargo update` silently pulls in
+# crates that only build on newer rustc and breaks the MSRV CI job.
+resolver = "3"
 members = [
     "crates/h5i-db-observability",
     "crates/h5i-db-core",
