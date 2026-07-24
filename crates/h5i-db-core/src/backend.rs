@@ -146,7 +146,7 @@ impl FsLock {
 
     /// One non-blocking lock attempt. `None` = currently held elsewhere.
     fn try_acquire(path: &Path) -> Result<Option<FsLock>> {
-        use fs4::fs_std::FileExt;
+        use fs4::{FileExt, TryLockError};
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -154,10 +154,15 @@ impl FsLock {
             .truncate(false)
             .open(path)
             .map_err(|e| Error::io(path.display(), e))?;
-        match file.try_lock_exclusive() {
-            Ok(true) => {}
-            Ok(false) => return Ok(None),
-            Err(e) => return Err(Error::io(path.display(), e)),
+        // fs4 1.0 renamed the exclusive non-blocking attempt to `try_lock` and
+        // moved contention out of the Ok channel, mirroring `std::fs::File`.
+        // Called through the trait explicitly: std stabilized an inherent
+        // `File::try_lock` in 1.89, which would otherwise shadow this and
+        // silently raise our declared MSRV of 1.88.
+        match FileExt::try_lock(&file) {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Error(e)) => return Err(Error::io(path.display(), e)),
         }
         // Best-effort debug info for operators inspecting a held lock.
         use std::io::{Seek, Write};
