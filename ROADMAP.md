@@ -1318,7 +1318,7 @@ with it.
 | VIII-A4 | ✅ | `.join()` (inner/left/right/full/cross/semi/anti) with `l`/`r` as contract aliases; `.join_asof()` lowering to the `asof_join` UDTF. **It refuses a pinned or already-operated-on side** rather than silently reading latest — the table function's blind spot, surfaced instead of inherited. |
 | VIII-A5 | ✅ | `sql_expr()`; `docs-src/api/dataframe.md`; skill reference updated; the `QueryResult` "lazy" docstring corrected (it was never lazy). Base wheel gains no dependency — asserted by a test that AST-parses the module's imports. Mistyped operators raise at build time naming the nearest real method (`.groupby` → `.group_by`), the edit-distance approach the CLI envelope already uses. |
 
-**Verification.** 97 Python tests (`crates/h5i-db-python/python/tests/`),
+**Verification.** 113 Python tests (`crates/h5i-db-python/python/tests/`),
 at **100% line and branch coverage** of `dataframe.py`,
 run in CI for the first time — the job previously built the wheel and ran an
 inline smoke script, so `test_bindings.py` was never executed. Coverage:
@@ -1386,6 +1386,36 @@ API is not busywork: an unexercised method is one that may not lower to
 anything real, and only calling it finds out. And the fuzzer's reference
 must model the target's semantics, not Python's — the first draft used
 Python's flooring division and reported a false positive within seconds.
+
+**Then a vacuity audit, which is the finding worth carrying forward.**
+Asked whether the suite was actually comprehensive, the answer was no, and
+for a reason coverage cannot show: the fixture generated **one row per
+timestamp**, so every `PARTITION BY ts` bucket held a single row. On that
+data `cs_rank` is always 1.0, `cs_demean` always 0.0, `cs_zscore` always
+NULL and `cs_winsorize` an identity. The Tier VII-B2 operators had passing
+differential tests that would have passed against a badly broken
+implementation, because both sides computed the same degenerate answer.
+Ranking, tie-averaging, percentile normalisation and NULL exclusion were
+never observed at all. The same audit found **no NULL anywhere in any
+fixture**, leaving the documented NULL discipline of those operators
+untested.
+
+`test_dataframe_semantics.py` fixes both with a panel fixture (5
+timestamps × 6 symbols, including a tie, an outlier and a zero-variance
+bucket) and a nullable column whose NULL pattern ranges from none to all,
+with expectations from references written in plain Python **from the
+specification** rather than from the generated SQL. It pins one trap worth
+naming: SQL's three-valued logic means `filter(p)` and `filter(~p)` do not
+partition the rows, since `NOT NULL` is NULL — surprising in an API shaped
+like polars. Mutation-checked: making the cross-section global instead of
+per-bucket fails seven tests, five of them the new ones.
+
+The generalisation, for the next operator family: **a differential test on
+degenerate data proves only that both sides are degenerate.** Any operator
+defined over a group needs a fixture where the group has more than one
+member, and the fixture should assert its own non-degeneracy — which
+`test_the_panel_fixture_is_actually_a_cross_section` now does, so the
+guard cannot rot back into vacuity unnoticed.
 
 `test_docs_are_executable.py` closes a gap the Rust
 `docs_are_executable` test leaves: that test only runs lines starting
