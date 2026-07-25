@@ -107,6 +107,20 @@ def _did_you_mean(name: str, candidates: Iterable[str]) -> Optional[str]:
     return matches[0] if matches else None
 
 
+def _no_attribute(obj: Any, name: str) -> AttributeError:
+    """AttributeError that names the nearest real method.
+
+    A mistyped operator should fail while the query is being built, with a
+    pointer, rather than reaching the engine as an unresolvable function.
+    """
+    cls = type(obj)
+    suggestion = _did_you_mean(name, (n for n in dir(cls) if not n.startswith("_")))
+    message = f"{cls.__name__!r} object has no attribute {name!r}"
+    if suggestion:
+        message += f"; did you mean {suggestion!r}?"
+    return AttributeError(message)
+
+
 # ---------------------------------------------------------------------------
 # Quoting -- the single site where user text becomes SQL
 # ---------------------------------------------------------------------------
@@ -237,6 +251,9 @@ class Expr:
     def __repr__(self) -> str:
         suffix = f" AS {self._alias!r}" if self._alias else ""
         return f"<Expr {self._sql}{suffix}>"
+
+    def __getattr__(self, name: str):
+        raise _no_attribute(self, name)
 
     # -- naming ------------------------------------------------------------
 
@@ -1437,6 +1454,9 @@ class LazyFrame:
 
     def __repr__(self) -> str:
         return f"<LazyFrame>\n{self.sql()}"
+
+    def __getattr__(self, name: str):
+        raise _no_attribute(self, name)
 
 
 def _conflicts(exprs: Sequence[Expr], aliases: frozenset) -> bool:

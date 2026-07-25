@@ -1233,11 +1233,22 @@ def test_verbs_reject_empty_input():
     _raises(h5i_db.InvalidInputError, frame().with_columns, col("a") + 1)
 
 
-def test_unknown_operators_fail_at_build_time():
-    # Not an engine parse error at collect() time: a plain AttributeError,
-    # which is what makes autocomplete and type checkers useful here.
-    _raises(AttributeError, lambda: col("price").rolling_median)
-    _raises(AttributeError, lambda: frame().groupby)
+def test_unknown_operators_fail_at_build_time_with_a_suggestion():
+    # An engine parse error at collect() time would be far from the typo.
+    err = _raises(AttributeError, lambda: frame().groupby)
+    assert "did you mean 'group_by'?" in str(err), str(err)
+    err = _raises(AttributeError, lambda: col("price").cs_ranks)
+    assert "did you mean 'cs_rank'?" in str(err), str(err)
+    # Whatever it suggests for a near miss must be a method that exists.
+    for typo, owner in [("rolling_mien", col("price")), ("selec", frame())]:
+        err = _raises(AttributeError, lambda o=owner, t=typo: getattr(o, t))
+        suggested = str(err).split("did you mean '")[1].rstrip("'?")
+        assert hasattr(owner, suggested), (typo, suggested)
+    # Nothing close: still an AttributeError, just without a guess.
+    err = _raises(AttributeError, lambda: col("price").zzzzzzz)
+    assert "did you mean" not in str(err), str(err)
+    # hasattr and the copy/pickle protocol probes still behave.
+    assert not hasattr(col("price"), "nope")
 
 
 # ---------------------------------------------------------------------------
