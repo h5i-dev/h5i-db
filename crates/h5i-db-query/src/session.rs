@@ -200,7 +200,7 @@ impl H5iSession {
         // resolved concurrently (serial resolution dominated multi-table
         // session startup).
         let mut registered = HashSet::new();
-        for resolved in resolve_all_at(&db, at).await? {
+        for resolved in resolve_all_at(&db, at.clone()).await? {
             let name = resolved.entry.name.clone();
             let time_column = resolved.spec.time_column.clone();
             let schema = resolved.schema.clone();
@@ -230,23 +230,39 @@ impl H5iSession {
             registered.insert(name);
         }
 
-        // Time travel + time-series functions.
+        // Time travel + time-series functions. These resolve their tables
+        // themselves rather than through the catalog, so they are handed the
+        // session's pin explicitly; without it they would read past it (see
+        // `pin.rs`).
+        let pin = crate::pin::PinContext::new(at.clone(), event_time_cutoff_ns);
         ctx.register_udtf(
             "h5i",
-            Arc::new(TimeTravelFunc::new(
+            Arc::new(TimeTravelFunc::pinned(
                 db.clone(),
                 url.clone(),
                 metrics.clone(),
+                pin.clone(),
             )),
         );
         ctx.register_udtf(
             "asof_join",
-            Arc::new(AsOfJoinFunc::new(db.clone(), url.clone(), metrics.clone())),
+            Arc::new(AsOfJoinFunc::pinned(
+                db.clone(),
+                url.clone(),
+                metrics.clone(),
+                pin.clone(),
+            )),
         );
-        ctx.register_udtf("gapfill", Arc::new(GapFillFunc::new(db.clone())));
-        ctx.register_udtf("resample", Arc::new(GapFillFunc::new(db.clone())));
-        ctx.register_udtf("tail", Arc::new(TailFunc::new(db.clone())));
-        ctx.register_udtf("latest_on", Arc::new(LatestByFunc::new(db.clone())));
+        ctx.register_udtf(
+            "gapfill",
+            Arc::new(GapFillFunc::pinned(db.clone(), pin.clone())),
+        );
+        ctx.register_udtf(
+            "resample",
+            Arc::new(GapFillFunc::pinned(db.clone(), pin.clone())),
+        );
+        ctx.register_udtf("tail", Arc::new(TailFunc::pinned(db.clone(), pin.clone())));
+        ctx.register_udtf("latest_on", Arc::new(LatestByFunc::pinned(db.clone(), pin)));
         ctx.register_udf(time_bucket_udf());
         ctx.register_udaf(vwap_udaf());
         ctx.register_udaf(wavg_udaf());

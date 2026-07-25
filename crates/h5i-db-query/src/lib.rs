@@ -13,6 +13,7 @@ pub mod functions;
 pub mod gapfill;
 pub mod latest;
 pub mod metrics;
+mod pin;
 mod predicate_cache;
 pub mod provider;
 pub mod pruning;

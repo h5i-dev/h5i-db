@@ -25,10 +25,16 @@ embargo`. It is part of the table, not a filter you compose with, so a query
 that explicitly asks for later rows still gets none. Walk a backtest forward by
 re-running with successive decision times.
 
-Two refusals worth knowing, both deliberate: a table with no time column, and
-one whose time column is a bare integer carrying no unit, will refuse the
-session rather than be silently exempt. A jail with a hole in it is worse than
-none, because it looks like one.
+Three refusals worth knowing, all deliberate, all following the same rule: a
+bound that cannot be applied is an error, never a silent exemption.
+
+* A table with no time column, and one whose time column is a bare integer
+  carrying no unit, refuse the session outright.
+* The table functions (`h5i()`, `asof_join()`, `gapfill()`, `resample()`,
+  `tail()`, `latest_on()`) read their tables directly rather than through the
+  catalog, so the cutoff cannot be pushed into them. Under `--decision-time`
+  they refuse and tell you to reference the table by name, which is bounded.
+  Under `--as-of` alone they work normally, resolving at the pinned version.
 
 ## Arrival axis — `--as-of`
 
@@ -42,7 +48,9 @@ h5i-db query market.db "<sql>" --as-of 42                     # or a version
 h5i-db query market.db "<sql>" --as-of pre-experiment         # or a snapshot
 ```
 
-Every table is pinned, not just the one you name.
+Every table is pinned, not just the one you name, and the table functions
+resolve at the pin too. A pinned session picks the read point, so `h5i('t', 42)`
+inside one is refused rather than quietly honoured.
 
 The two axes are independent because they are measured on different clocks. On
 a database built from one bulk load, ten years of history has a first commit of
