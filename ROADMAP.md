@@ -1175,3 +1175,279 @@ Tier 0 (Part III) remains the standing precondition, and the Part VI
 positioning correction applies to how this Part is marketed: these are
 features of a versioned time-series database for quant research, not
 components of a leakage-proof pipeline.
+
+---
+
+# Part VIII — Lazy DataFrame builder for the Python API (2026-07-25)
+
+**Decision.** Build a polars-shaped lazy query builder in the Python
+package that **compiles to the existing SQL surface**. This is the unbuilt
+half of a standing commitment, not a new direction: `DESIGN.md §1` names
+the primary API as "SQL **and** DataFrame", `DESIGN.md §6` claims parity
+between them, and `DESIGN.md §6.6` already slates `rolling(mean, '30m')`
+sugar for "the DataFrame/Python API, not a new engine". Today none of that
+exists in Python: the surface is `db.sql(string)` plus `db.read(...)` (a
+fixed keyword-argument scan, not composable), and `QueryResult` calls
+itself lazy while wrapping an already-materialized table.
+
+**Why a builder, precisely.** For a one-off interactive query, SQL is fine
+and often clearer; the builder is not a replacement surface. It wins in
+three cases, and the first is the one this project is now committed to:
+(1) *programmatic composition*: the VII-B factor workload means generating
+hundreds of expressions in loops over windows and columns, which f-string
+SQL does with quoting hell and injection risk (qlib grew a bespoke
+expression DSL for exactly this; zipline's Pipeline *is* this builder
+pattern); (2) *tooling*: autocomplete, type checks, and build-time errors
+instead of a parse error out of a 40-line string; (3) *reusable handles*:
+a lazy pipeline that can be extended with another `.filter(...)` and
+executed against N pinned versions (the Part V "same query across N
+versions" surface).
+
+**The decided interface** (vocabulary follows polars, which the target
+user already knows; explicitly *not* ArcticDB's `q[q["x"] > 1]` style):
+
+```python
+(db.table("trades", as_of="2026-07-01")     # lowers to the h5i() UDTF, so the pin holds
+   .filter(col("symbol").is_in(syms))
+   .group_by("symbol")
+   .agg(col("price").mean().alias("px"))
+   .collect())                               # or .to_pandas() / .to_polars()
+```
+
+## Lowering rules (the design's load-bearing wall)
+
+1. **The builder is a compiler, never an evaluator** (the Part VII
+   layering rule governs). Every verb lowers to SQL text executed through
+   the same native `sql()` path, against the same session with the same
+   registered UDTFs/UDFs/UDAFs/UDWFs
+   (`crates/h5i-db-query/src/session.rs:238-275`). No Python-side kernel,
+   ever: a verb that cannot lower to SQL does not ship (it goes to the
+   engine, or to Tier VII-D if it is post-query analytics).
+2. **Version resolution stays in the catalog.** `db.table(name,
+   version=…| as_of=…| snapshot=…)` lowers to `h5i('name', …)` (plain
+   table name when unpinned), so research-mode pins see the query exactly
+   as they see hand-written SQL. The batch-1 pin bug is the cautionary
+   case: any Python-side table/version resolution would sit permanently
+   outside "bounded at the source".
+3. **The generated SQL is a first-class artifact.** `.sql()` returns it,
+   `.explain(analyze=…)` proxies EXPLAIN; formatting is deterministic so
+   it can be logged, diffed, snapshot-tested, and recorded by the run
+   ledger (#14) with no new record shape. This is also the graduation
+   path: a user who outgrows the builder copies its SQL and keeps going.
+4. **Injection safety is structural, not disciplined.** All identifiers
+   and literals pass through one central quoting/escaping formatter;
+   user strings never concatenate into SQL anywhere else.
+5. **Escape hatch from day one.** `sql_expr("…")` embeds a raw SQL
+   expression as an `Expr`. Full SQL coverage through builder verbs is an
+   explicit non-goal; the escape hatch is the pressure valve that keeps
+   the verb set closed.
+6. **Zero new pyo3 surface in v1.** The builder is a pure-Python module
+   inside `h5i_db` with no new dependencies (the base wheel stays
+   pyarrow-only, the VII-D packaging rule untouched). Crossing a
+   `LogicalPlan`/Substrait over the boundary is deferred until SQL-text
+   generation is *measured* as limiting (inexpressible plan or
+   double-parse cost visible in the bench), per the §P5 evidence gate.
+
+## Tier VIII-A — Builder core
+
+| # | Item | Acceptance criteria |
+|---|------|---------------------|
+| VIII-A1 | **Expression core + lowering.** `col()`/`lit()`; arithmetic, comparison, boolean ops; `is_in`/`is_null`/`between`; `alias`, `cast`. Verbs: `filter`, `select`, `with_columns`, `sort`, `limit`. `.sql()` and `.explain()`. The central identifier/literal formatter (rule 4). | Differential test: every documented example's `.collect()` equals `db.sql()` of hand-written golden SQL (Arrow-level equality). Property test over adversarial identifiers and string literals (quotes, unicode, reserved words) round-trips correctly. Generated SQL is byte-stable across runs (snapshot-tested). |
+| VIII-A2 | **Time-travel entry point.** `db.table(name, version=\|as_of=\|snapshot=)` lowering per rule 2; `.collect(memory_limit=, timeout=, max_rows=)` passes through to the existing `sql()` limits; terminal methods return the existing `QueryResult`. | A pinned builder query behaves identically to the equivalent `h5i()` SQL under a research-mode pin (tested with a stale-version fixture). Conflicting pin kwargs error the same way `db.read` does. Unpinned `db.table('t')` lowers to the plain name (latest, re-resolved per query). |
+| VIII-A3 | **Aggregation + the registered operator surface.** `group_by`/`agg` with standard aggregates plus `vwap`/`wavg`; `.over()` windows; `ewma`, the VII-B1 rolling UDWFs (`ts_rank`, `ts_corr`, `mad`, …) and VII-B2 cross-sectional (`cs_rank`, `cs_winsorize`) as expression methods; the `DESIGN.md §6.6` rolling sugar (`col('price').rolling_mean('30m')`) lowering to the documented `RANGE INTERVAL` window pattern. | Each operator reachable from the builder is differential-tested against its documented SQL form in `docs-src/manual/sql.md`. Rolling sugar generates exactly the documented window-frame SQL. An unknown aggregate/operator raises at build time (not engine parse time) with a did-you-mean, reusing the envelope-v2 edit-distance approach. |
+| VIII-A4 | **Joins.** `.join(other, on=, how='inner'\|'left')` between two builder pipelines (lowered via subqueries/CTEs) and `.join_asof(other, on=, by=, direction=, tolerance=)` lowering to the `asof_join` UDTF. | `join_asof` matches the documented UDTF semantics; the raw-time-unit tolerance caveat from the SQL manual is surfaced in the docstring. A worked example joins the same table at two pinned versions (the Part V N-versions surface) and is documented. |
+| VIII-A5 | **Escape hatch, docs, drift protection.** `sql_expr()`; a manual page with executable examples; `skills/h5i-db/references/python.md` update; fix the `QueryResult` docstring (it claims lazy; the builder is the lazy handle, `collect()` materializes). | The docs page passes the executable-docs test; every builder example shows its `.sql()` output so the docs teach the lowering, not just the verbs. The skill reference lists the verb set. The base wheel gains no new dependency (checked in CI metadata). |
+
+## Do NOT build
+
+- **No eager mode, no Python-side compute.** The moment one verb executes
+  in Python, the pin guarantee and the layering rule are both broken for
+  every pipeline containing it.
+- **No ArcticDB-style `__getitem__` DSL.** One vocabulary (polars), one
+  way to spell each verb.
+- **No `LogicalPlan`/Substrait boundary crossing in v1** (rule 6; revisit
+  only on measured evidence).
+- **No full-SQL-coverage ambition.** New verbs are accepted only with a
+  programmatic-composition use case; one-off queries belong in SQL, and
+  `sql_expr()` covers the gap meanwhile.
+- **No new capability.** The builder must add ergonomics only: anything it
+  can express is reachable via `db.sql()` and the CLI, so agent
+  reachability (the layering rule's CLI clause) holds by construction.
+
+## Cross-references (Part VIII ⇄ existing parts)
+
+- Part VIII **is** the concrete design for the DataFrame half of
+  `DESIGN.md §1/§6`; the §6 claim "they share plans, so feature parity is
+  free" is made true in Python by sharing *SQL text* rather than plan
+  objects.
+- VIII-A2 ⇄ **research-mode pin** (Part VI, `pin.rs`): the entry point
+  must route through `h5i()` so the pin sees every builder query.
+- VIII-A3 ⇄ **VII-B1/B2**: the builder is the second frontend to those
+  operators; the **VII-B3** Alpha158 corpus can later compile qlib
+  expression strings through the builder, making the corpus double as
+  builder conformance.
+- VIII-A4 ⇄ **D5 / `asof.rs`**: `join_asof` is the DataFrame verb
+  `DESIGN.md §6.4` promised ("operator-first: DataFrame `join_asof` …").
+- VIII-A5 ⇄ **VI-A2 / DESIGN.md §8**: agents keep driving SQL/CLI; the
+  builder is the human-notebook surface (`DESIGN.md`: "notebook usability
+  is how a DataFrame store earns adoption").
+- `.sql()` ⇄ **run ledger #14**: a builder pipeline is recorded by its
+  generated SQL; the ledger needs no new record shape.
+
+## Build order
+
+1. **VIII-A1 + VIII-A2 together** — expression core and pin-correct entry
+   point are one correctness story; neither is shippable alone.
+2. **VIII-A3** — the factor workload is the motivating user; sequence
+   after VII-B1/B2 land (they define the operator surface being wrapped).
+3. **VIII-A4**, then **VIII-A5** finishing touches — though docs land in
+   lockstep with each item (the drift test forces this anyway), so
+   VIII-A5 is really a running obligation plus the final sweep.
+
+This Part is additive and must not block Part VII engine work: the
+builder wraps whatever operator surface exists at the time, and grows
+with it.
+
+## Part VIII implementation status (2026-07-25, branch `data-frame-lazy-run`)
+
+| # | State | Notes |
+|---|---|---|
+| VIII-A1 | ✅ | `h5i_db/dataframe.py`: `Expr` with real precedence rendering (no defensive parentheses), `col`/`lit`/`sql_expr`/`when`, verbs `filter`/`select`/`with_columns`/`sort`/`limit`/`head`/`unique`/`pipe`, `.sql()`/`.explain()`/`.schema()`. One quoting site; identifiers **always** quoted so Arrow's case survives (bare SQL folds to lowercase). |
+| VIII-A2 | ✅ | `Database.table(name, version=\|as_of=\|snapshot=)` → `h5i()`; unpinned → bare name, which is snapshot-bound per query so two references to one table agree. Conflicting pins raise `InvalidInputError` with `code`/`hint` set like the native layer. |
+| VIII-A3 | ✅ | `group_by().agg()`/`.count()`, `.over()`, rolling sugar (row-count **or** duration frames), the VII-B1 UDWFs, the VII-B2 cross-sectional pair plus `cs_demean`/`cs_zscore` as generated SQL, `ewma`, `vwap`/`wavg`, `time_bucket`. Build-time validation for alpha range, winsorize cutoffs, durations and cast types. |
+| VIII-A4 | ✅ | `.join()` (inner/left/right/full/cross/semi/anti) with `l`/`r` as contract aliases; `.join_asof()` lowering to the `asof_join` UDTF. **It refuses a pinned or already-operated-on side** rather than silently reading latest — the table function's blind spot, surfaced instead of inherited. |
+| VIII-A5 | ✅ | `sql_expr()`; `docs-src/api/dataframe.md`; skill reference updated; the `QueryResult` "lazy" docstring corrected (it was never lazy). Base wheel gains no dependency — asserted by a test that AST-parses the module's imports. Mistyped operators raise at build time naming the nearest real method (`.groupby` → `.group_by`), the edit-distance approach the CLI envelope already uses. |
+
+**Verification.** 127 Python tests (`crates/h5i-db-python/python/tests/`),
+at **100% line and branch coverage** of `dataframe.py`,
+run in CI for the first time — the job previously built the wheel and ran an
+inline smoke script, so `test_bindings.py` was never executed. Coverage:
+differential tests against hand-written golden SQL (Arrow-level equality) for
+aggregation, OHLCV, every window/rolling/cross-sectional operator, scalar
+functions, joins and ASOF; adversarial round-trips for nine identifier shapes
+(reserved words, embedded quotes, unicode, dots, `--`) and eight literal
+shapes, including `'; DROP TABLE trades; --` as a value; pin tests proving a
+pinned pipeline differs from the same pipeline at head; wrap-rule tests
+pinning the flat-vs-subquery decisions; and byte-stability of generated SQL.
+
+Two test techniques earned their keep and are worth reusing. Precedence is
+checked **numerically** — every expression is computed twice, once as
+generated SQL and once in Python, so a misplaced parenthesis surfaces as a
+wrong number instead of passing a string comparison nobody reads closely.
+And the wrap rules are checked by **executing** a matrix of verb orderings
+rather than reasoning about them; that matrix is what found all four
+wrap-rule defects, including `.limit(n).group_by(...)` applying `LIMIT`
+after the grouping, which planned cleanly and returned a wrong answer. The
+lesson generalises past this Part: a query builder's dangerous bugs are the
+ones that produce *valid* SQL meaning something else, and only execution
+finds them.
+
+Writing the numeric cases also settled a semantics question: integer/integer
+division truncates, because the builder must not mean something different
+from the same expression in `db.sql()`. Pinned by test, called out in docs.
+
+**Ten defects, none found by reading.** Four wrap-rule bugs came from the
+verb-ordering matrix; an adversarial review pass (fuzzing arithmetic trees
+against a Python evaluator, and sweeping verb × verb combinations) found six
+more, two of them silent wrong answers: `a * (b / c)` rendering as
+`a * b / c` (only AND/OR may be flattened — every other operator is
+left-associative, and integer division makes the re-association observable),
+and a filter after a window-function projection folding into the same level,
+where SQL's WHERE-before-SELECT order recomputed the window over the
+surviving rows. The other four were wrong at the boundary: a projection
+aliasing the pending sort key silently re-pointed `ORDER BY`; `with_columns`
+documented a replace it never implemented; `.over()` on a compound
+expression bound to the last operand only; and `join(on=[])` dropped the
+`ON` clause and cross-joined. All are fixed and pinned; `with_columns` now
+overwrites via an explicit `replace=` lowering to `* EXCEPT (…)`, which is
+the schema-free way to do it without breaking laziness.
+
+The pattern across all ten: **not one was a crash.** Every defect either
+produced valid SQL meaning something else, or a planner error far from its
+cause. A builder that emits a string the engine accepts has no failing
+edge to trip over, so correctness has to come from executing the
+combinations and comparing values — budget review effort accordingly.
+
+**Generated tests** (`test_dataframe_matrix.py`) then made both techniques
+permanent rather than one-off investigations: seeded fuzzing of arithmetic
+and boolean operator trees against a Python reference implementing *SQL*
+semantics (truncating division, sign-follows-dividend modulo), and the full
+7×7 and 7×7×7 verb matrix, each pipeline executed and checked against
+invariants — a row limit anywhere still bounds the result, a filter still
+holds at the end, a window column is never recomputed downstream. Driving
+the remaining gaps with `coverage --branch` was worth it twice over: it
+found `.sign()` lowering to a function DataFusion does not have (dead API
+that no test had ever called) and a `when(...).then(...)` chain being
+unnameable without `.otherwise()`. The chain is now an `Expr` in its own
+right, since a `CASE` with no `ELSE` is already a complete expression.
+
+Two lessons for the next surface of this kind. Coverage of a *generated*
+API is not busywork: an unexercised method is one that may not lower to
+anything real, and only calling it finds out. And the fuzzer's reference
+must model the target's semantics, not Python's — the first draft used
+Python's flooring division and reported a false positive within seconds.
+
+**Then a vacuity audit, which is the finding worth carrying forward.**
+Asked whether the suite was actually comprehensive, the answer was no, and
+for a reason coverage cannot show: the fixture generated **one row per
+timestamp**, so every `PARTITION BY ts` bucket held a single row. On that
+data `cs_rank` is always 1.0, `cs_demean` always 0.0, `cs_zscore` always
+NULL and `cs_winsorize` an identity. The Tier VII-B2 operators had passing
+differential tests that would have passed against a badly broken
+implementation, because both sides computed the same degenerate answer.
+Ranking, tie-averaging, percentile normalisation and NULL exclusion were
+never observed at all. The same audit found **no NULL anywhere in any
+fixture**, leaving the documented NULL discipline of those operators
+untested.
+
+`test_dataframe_semantics.py` fixes both with a panel fixture (5
+timestamps × 6 symbols, including a tie, an outlier and a zero-variance
+bucket) and a nullable column whose NULL pattern ranges from none to all,
+with expectations from references written in plain Python **from the
+specification** rather than from the generated SQL. It pins one trap worth
+naming: SQL's three-valued logic means `filter(p)` and `filter(~p)` do not
+partition the rows, since `NOT NULL` is NULL — surprising in an API shaped
+like polars. Mutation-checked: making the cross-section global instead of
+per-bucket fails seven tests, five of them the new ones.
+
+The generalisation, for the next operator family: **a differential test on
+degenerate data proves only that both sides are degenerate.** Any operator
+defined over a group needs a fixture where the group has more than one
+member, and the fixture should assert its own non-degeneracy — which
+`test_the_panel_fixture_is_actually_a_cross_section` now does, so the
+guard cannot rot back into vacuity unnoticed.
+
+**Type breadth and scale** (`test_dataframe_types_and_scale.py`) close the
+last two gaps the audit named. Types: timezone-aware timestamps (aware,
+naive and offset literals; `time_bucket` with a timezone; RANGE interval
+frames, the combination most likely to break on an aware column), ns/ms
+units, `date32`, boolean columns used as predicates in their own right,
+`decimal128` precision surviving `sum`/`mean`, and the int32 → int64 /
+float32 → double promotions, pinned because the result type is not the
+input type. Scale: 16k rows over 8 appends, asserting from `EXPLAIN
+ANALYZE` that a time-range filter opens fewer segment groups than a full
+scan and an unsatisfiable predicate opens none, that a memory budget turns
+an overrun into a typed `LimitError`, and that a deadline cancels a
+quadratic query. This is the first Python-side check of the pruning claim
+`manual/sql.md` makes; it was previously only reachable via the CLI's
+`--stats`.
+
+One of those was a genuine open question rather than a formality: **does
+the builder's subquery wrapping defeat predicate pushdown?** It does not —
+a wrapped pipeline opens exactly the same segment groups as the flat one.
+Worth keeping as a test, because a regression there would cost a full scan
+on every wrapped query while every correctness test still passed.
+
+`test_docs_are_executable.py` closes a gap the Rust
+`docs_are_executable` test leaves: that test only runs lines starting
+`h5i-db`, so Python fences were never checked. The new one executes every
+runnable Python fence on the builder page **and** asserts each following
+```sql fence is what the example actually compiles to — a claimed lowering
+is now a tested one (mutation-checked: corrupting a documented frame
+fails it).
+
+**Deferred, as designed.** No `LogicalPlan`/Substrait crossing (rule 6 —
+SQL-text generation has not yet been measured as limiting). Join output
+columns are not deduplicated, so a `SELECT *` over two tables sharing a name
+yields both; documented rather than solved, since fixing it needs schema
+knowledge the builder deliberately does not fetch at build time.

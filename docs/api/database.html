@@ -57,8 +57,7 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html" class="active">Database</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html" class="active">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -72,7 +71,7 @@
 <p>An h5i-db database directory — the top-level handle everything hangs off. A
 database is a plain directory on disk; there is no server. The handle is a
 context manager, so the idiomatic form is:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">h5i_db</span>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
 
 <span class="k">with</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="s2">&quot;market.db&quot;</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
     <span class="o">...</span>
@@ -476,7 +475,7 @@ history is never touched.</p>
 </dl>
 <p class="api-label">Returns</p>
 <p><code>dict</code> — a report; problems are listed in it rather than raised.</p></div></section>
-    <nav class="page-nav"><a class="prev" href="../api/index.html"><span class="dir">← Previous</span><span class="pn-title">Overview</span></a><a class="next" href="../api/results-and-plans.html"><span class="dir">Next →</span><span class="pn-title">QueryResult &amp; MutationPlan</span></a></nav>
+    <nav class="page-nav"><a class="prev" href="../api/index.html"><span class="dir">← Previous</span><span class="pn-title">Overview</span></a><a class="next" href="../api/dataframe.html"><span class="dir">Next →</span><span class="pn-title">DataFrame builder</span></a></nav>
   </article>
 
   <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#constructor">Constructor</a><ul><li><a href="#h5i_dbdatabase">h5i_db.Database</a></li></ul></li><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li><li><a href="#databasearrival_delta">Database.arrival_delta</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#data-safety-policy">Data-safety policy</a><ul><li><a href="#databasedata_policy">Database.data_policy</a></li><li><a href="#databaseset_data_policy">Database.set_data_policy</a></li><li><a href="#databaseclear_data_policy">Database.clear_data_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>

@@ -218,6 +218,12 @@ jobs:
           assert len(db.sql("SELECT * FROM trades")) == 2
           print("python smoke OK")
           EOF
+      - name: Python test suite
+        run: |
+          # pandas and polars are optional at runtime, installed here so the
+          # to_pandas / to_polars converters are actually exercised.
+          pip install pytest pandas polars
+          python -m pytest crates/h5i-db-python/python/tests -q
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-linux

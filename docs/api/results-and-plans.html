@@ -57,8 +57,7 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/results-and-plans.html" class="active">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html" class="active">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -69,12 +68,13 @@
 <span class="sep">/</span>
 <span>QueryResult &amp; MutationPlan</span></div>
 <h1 id="queryresult-mutationplan"><code>QueryResult</code> &amp; <code>MutationPlan</code><a class="headerlink" href="#queryresult-mutationplan" title="Permanent link">#</a></h1>
-<p>Two small result objects returned by <a href="database.html"><code>Database</code></a>: the lazy
-holder a query produces, and the staged handle a mutation plan produces.</p>
+<p>Two small result objects returned by <a href="database.html"><code>Database</code></a>: the holder a
+finished query produces, and the staged handle a mutation plan produces.</p>
 <h2 id="queryresult">QueryResult<a class="headerlink" href="#queryresult" title="Permanent link">#</a></h2>
-<p>Returned by <a href="database.html#databasesql"><code>Database.sql()</code></a>. A lazy holder of an
-Arrow result with convenience converters — data stays in Arrow until you ask
-for a specific frame type.</p>
+<p>Returned by <a href="database.html#databasesql"><code>Database.sql()</code></a>. The query has
+already run; this holds its Arrow result and converts on demand, so data stays
+in Arrow until you ask for a specific frame type. For a query that has <em>not</em>
+run yet, see the <a href="dataframe.html">DataFrame builder</a>.</p>
 <div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT symbol, vwap(price, size) AS v FROM trades GROUP BY symbol&quot;</span><span class="p">)</span>
 <span class="n">res</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>     <span class="c1"># -&gt; pandas.DataFrame</span>
 <span class="nb">len</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>            <span class="c1"># -&gt; row count</span>
@@ -162,7 +162,7 @@ gating direct deletes/writes, the plan flow is the <em>only</em> way to mutate �
 which is the point: every destructive change gets a previewed, auditable
 checkpoint.</p>
 </div></div></section>
-    <nav class="page-nav"><a class="prev" href="../api/database.html"><span class="dir">← Previous</span><span class="pn-title">Database</span></a><a class="next" href="../api/exceptions.html"><span class="dir">Next →</span><span class="pn-title">Exceptions</span></a></nav>
+    <nav class="page-nav"><a class="prev" href="../api/dataframe.html"><span class="dir">← Previous</span><span class="pn-title">DataFrame builder</span></a><a class="next" href="../api/exceptions.html"><span class="dir">Next →</span><span class="pn-title">Exceptions</span></a></nav>
   </article>
 
   <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#queryresult">QueryResult</a><ul><li><a href="#queryresultto_arrow">QueryResult.to_arrow</a></li><li><a href="#queryresultto_pandas">QueryResult.to_pandas</a></li><li><a href="#queryresultto_polars">QueryResult.to_polars</a></li><li><a href="#dunder-methods">Dunder methods</a></li></ul></li><li><a href="#mutationplan">MutationPlan</a><ul><li><a href="#attributes">Attributes</a></li><li><a href="#mutationplanbefore_sample">MutationPlan.before_sample</a></li><li><a href="#mutationplanafter_sample">MutationPlan.after_sample</a></li><li><a href="#mutationplanapply">MutationPlan.apply</a></li><li><a href="#mutationplandiscard">MutationPlan.discard</a></li></ul></li></ul></aside>

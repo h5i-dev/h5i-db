@@ -12,6 +12,17 @@ boundary as Arrow IPC streams, so any pyarrow >= 14 works.
     old = db.read("trades", version=3)            # time travel
     plan = db.plan_delete_range("trades", start, end)   # previewable mutation
     plan.apply()                                  # or plan.discard()
+
+Queries can also be built up rather than written as strings; the builder
+compiles to the same SQL surface (see :mod:`h5i_db.dataframe`)::
+
+    from h5i_db import col
+
+    (db.table("trades", as_of="2026-07-01T00:00:00Z")
+       .filter(col("symbol") == "AAPL")
+       .group_by("symbol")
+       .agg(col("price").mean().alias("px"))
+       .collect())
 """
 
 from __future__ import annotations
@@ -35,6 +46,19 @@ from h5i_db._native import (  # noqa: F401
     StorageError,
     TimeoutError,  # noqa: A001 -- deliberate: h5i_db.TimeoutError subclasses H5iError
     __version__,
+)
+from h5i_db.dataframe import (  # noqa: F401
+    Expr,
+    GroupBy,
+    LazyFrame,
+    col,
+    count_star,
+    lit,
+    sql_expr,
+    time_bucket,
+    vwap,
+    wavg,
+    when,
 )
 
 TableLike = Union[pa.Table, pa.RecordBatch, Sequence[pa.RecordBatch]]
@@ -66,7 +90,11 @@ def _schema_ipc(schema: pa.Schema) -> bytes:
 
 
 class QueryResult:
-    """Lazy holder of a query result with convenience converters."""
+    """A materialised query result with convenience converters.
+
+    The query has already run by the time you hold one of these. For a
+    query that has *not* run yet, see :class:`h5i_db.LazyFrame`.
+    """
 
     def __init__(self, table: pa.Table):
         self._table = table
@@ -266,6 +294,29 @@ class Database:
             _from_ipc(self._native.sql(query, memory_limit, timeout, max_rows))
         )
 
+    def table(
+        self,
+        name: str,
+        version: Optional[int] = None,
+        as_of: Optional[str] = None,
+        snapshot: Optional[str] = None,
+    ) -> LazyFrame:
+        """Start a lazy query against a table.
+
+        Returns a :class:`LazyFrame` that builds SQL; nothing runs until
+        ``.collect()`` (or another terminal method). ``.sql()`` shows what
+        it compiles to.
+
+        Pass at most one read point. With one, the frame reads through the
+        ``h5i()`` table function, so version pins apply exactly as they do to
+        hand-written SQL. Without one, it reads the bare table name, which is
+        snapshot-bound for the duration of the query.
+
+            db.table("trades").filter(col("px") > 0).collect()
+            db.table("trades", version=42).sql()
+        """
+        return LazyFrame._from_table(self, name, version, as_of, snapshot)
+
     def read(
         self,
         name: str,
@@ -387,6 +438,17 @@ __all__ = [
     "Database",
     "QueryResult",
     "MutationPlan",
+    "LazyFrame",
+    "GroupBy",
+    "Expr",
+    "col",
+    "lit",
+    "sql_expr",
+    "count_star",
+    "when",
+    "time_bucket",
+    "vwap",
+    "wavg",
     "H5iError",
     "NotFoundError",
     "ConflictError",
