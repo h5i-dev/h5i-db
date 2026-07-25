@@ -303,6 +303,55 @@ enum Command {
     },
 }
 
+impl Command {
+    /// The database this invocation targets, used to render `<db>` in error
+    /// `next_actions` as a runnable path. Exhaustive on purpose: a new
+    /// subcommand must decide what its database is rather than silently
+    /// emitting placeholders.
+    fn db_path(&self) -> Option<&PathBuf> {
+        use Command::*;
+        match self {
+            Init { db }
+            | CreateTable { db, .. }
+            | DropTable { db, .. }
+            | Rename { db, .. }
+            | Tables { db }
+            | Schema { db, .. }
+            | Sample { db, .. }
+            | Query { db, .. }
+            | Ingest { db, .. }
+            | Versions { db, .. }
+            | LeakageCheck { db, .. }
+            | Restore { db, .. }
+            | ReplaceRange { db, .. }
+            | DeleteRange { db, .. }
+            | Compact { db, .. }
+            | Vacuum { db, .. }
+            | Ui { db, .. }
+            | Verify { db, .. } => Some(db),
+            Snapshot(cmd) => Some(match cmd {
+                SnapshotCmd::Create { db, .. }
+                | SnapshotCmd::List { db }
+                | SnapshotCmd::Delete { db, .. } => db,
+            }),
+            Plan(cmd) => Some(match cmd {
+                PlanCmd::List { db, .. }
+                | PlanCmd::Show { db, .. }
+                | PlanCmd::Apply { db, .. }
+                | PlanCmd::Discard { db, .. } => db,
+            }),
+            Policy(cmd) => Some(match cmd {
+                PolicyCmd::Show { db } | PolicyCmd::Set { db, .. } => db,
+            }),
+            DataPolicy(cmd) => Some(match cmd {
+                DataPolicyCmd::Get { db, .. }
+                | DataPolicyCmd::Set { db, .. }
+                | DataPolicyCmd::Clear { db, .. } => db,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum IngestMode {
     Write,
@@ -397,6 +446,9 @@ fn main() {
         .with_writer(std::io::stderr)
         .try_init();
     let cli = Cli::parse();
+    // Captured before `run` consumes the command, so a failure can render its
+    // recovery commands against the database the caller actually named.
+    let db = cli.command.db_path().map(|p| p.display().to_string());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -406,7 +458,7 @@ fn main() {
         // Downstream closed stdout (`… | head`): quiet success, no envelope.
         Err(err) if is_broken_pipe(&err) => 0,
         Err(err) => {
-            write_error(&err);
+            write_error(&err, db.as_deref());
             err.exit_category() as i32
         }
     };

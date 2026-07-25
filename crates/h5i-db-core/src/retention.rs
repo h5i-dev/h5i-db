@@ -94,7 +94,7 @@ impl Database {
     pub async fn retention(&self, name: &str) -> Result<Option<RetentionFloor>> {
         let entry = crate::catalog::load_entry(self.backend(), name)
             .await?
-            .ok_or_else(|| Error::TableNotFound { name: name.into() })?;
+            .ok_or_else(|| Error::table_not_found(name))?;
         self.retention_floor(entry.table_id).await
     }
 

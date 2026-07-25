@@ -52,10 +52,17 @@ impl Snapshot {
 
 pub async fn load(backend: &Backend, name: &str) -> Result<Snapshot> {
     let path = layout::snapshot_path(name);
-    let bytes = backend
-        .get_opt(&path)
-        .await?
-        .ok_or_else(|| Error::SnapshotNotFound { name: name.into() })?;
+    let bytes = match backend.get_opt(&path).await? {
+        Some(bytes) => bytes,
+        None => {
+            // Miss only: list the snapshots to offer a name suggestion.
+            let existing = list(backend).await.unwrap_or_default();
+            return Err(Error::snapshot_not_found_among(
+                name,
+                existing.iter().map(|s| s.name.as_str()),
+            ));
+        }
+    };
     let snap: Snapshot = serde_json::from_slice(&bytes)
         .map_err(|e| Error::corruption(path.as_ref(), format!("snapshot parse: {e}")))?;
     snap.verify(path.as_ref())?;

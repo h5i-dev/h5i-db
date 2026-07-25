@@ -524,9 +524,18 @@ impl Database {
     }
 
     async fn entry(&self, name: &str) -> Result<CatalogEntry> {
-        catalog::load_entry(&self.backend, name)
-            .await?
-            .ok_or_else(|| Error::TableNotFound { name: name.into() })
+        if let Some(entry) = catalog::load_entry(&self.backend, name).await? {
+            return Ok(entry);
+        }
+        // Miss: pay one catalog listing to turn "not found" into "did you mean
+        // …". Only the error path does this, so the hit path is unchanged.
+        let existing = catalog::list_entries(&self.backend)
+            .await
+            .unwrap_or_default();
+        Err(Error::table_not_found_among(
+            name,
+            existing.iter().map(|e| e.name.as_str()),
+        ))
     }
 
     async fn spec(&self, table_id: Uuid, revision: u32) -> Result<TableSpec> {
@@ -1151,6 +1160,7 @@ impl Database {
                 }
                 if !batch_is_sorted(b, &spec.sort_key)? {
                     return Err(Error::SortOrderViolation {
+                        table: name.into(),
                         detail: "append input batch is not sorted by the table sort key".into(),
                     });
                 }
@@ -1161,6 +1171,7 @@ impl Database {
                             && bmin < prev
                         {
                             return Err(Error::SortOrderViolation {
+                                table: name.into(),
                                 detail: "append input batches are not mutually ordered".into(),
                             });
                         }
@@ -1183,6 +1194,7 @@ impl Database {
                     && min < table_max
                 {
                     return Err(Error::SortOrderViolation {
+                        table: name.into(),
                         detail: format!(
                             "append input starts at {min} but the table already contains \
                                  rows up to {table_max}; use replace_range or write"

@@ -231,13 +231,38 @@ pub fn write_value<T: serde::Serialize>(value: &T, format: Format) -> Result<()>
     Ok(())
 }
 
+/// Envelope schema version. Bump on any breaking change to the shape below so
+/// a caller can tell "field absent" from "this reader is older than I am".
+///
+/// 1 = `{code, message, retryable, hint}`
+/// 2 = adds `schema_version`, `next_actions`, `did_you_mean`
+pub const ERROR_SCHEMA_VERSION: u32 = 2;
+
 /// The machine-readable error envelope, written to stderr.
-pub fn write_error(err: &Error) {
+///
+/// `db` is the database path this invocation was given, used to turn the
+/// `<db>` placeholder in [`h5i_db_core::NextAction`] commands into something
+/// an agent can run verbatim. Errors raised before a path is known (bad
+/// arguments) simply keep the placeholder.
+pub fn write_error(err: &Error, db: Option<&str>) {
+    let next_actions: Vec<_> = err
+        .next_actions()
+        .into_iter()
+        .map(|mut a| {
+            if let Some(db) = db {
+                a.cmd = a.cmd.replace("<db>", db);
+            }
+            a
+        })
+        .collect();
     let envelope = serde_json::json!({
+        "schema_version": ERROR_SCHEMA_VERSION,
         "code": err.code(),
         "message": err.to_string(),
         "retryable": err.retryable(),
         "hint": err.hint(),
+        "did_you_mean": err.did_you_mean(),
+        "next_actions": next_actions,
     });
     let mut stderr = std::io::stderr().lock();
     let _ = writeln!(stderr, "{envelope}");

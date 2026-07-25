@@ -34,7 +34,7 @@ pub use database::{
     CommitResult, Database, ReadAt, ResolvedTable, ScanOptions, ScanReport, VacuumReport,
     VerifyReport, VersionSummary, WriteOptions,
 };
-pub use error::{Error, ExitCategory, Result};
+pub use error::{Error, ExitCategory, NextAction, Result, nearest_name};
 pub use manifest::{ColumnStats, Head, OpKind, SegmentMeta, VersionManifest};
 pub use plan::{MutationPlan, PlanSummary};
 pub use policy::MutationPolicy;
