@@ -297,6 +297,178 @@ def test_boolean_grouping_agrees_with_python():
             assert got == want, (predicate._render(0), got, want)
 
 
+def test_right_operand_keeps_its_own_grouping():
+    """`a * (b / c)` must not flatten to `a * b / c`.
+
+    Only AND and OR may be flattened. Everything else is left-associative, so
+    re-associating changes the answer -- silently, since both forms are valid
+    SQL and integer division makes the difference real.
+    """
+    cases = [
+        (lit(2) * (lit(3) / lit(2)), "2 * (3 / 2)"),
+        (lit(5) * (lit(7) % lit(3)), "5 * (7 % 3)"),
+        (lit(2) * (lit(3) * lit(4)), "2 * (3 * 4)"),
+        (lit(2) + (lit(3) + lit(4)), "2 + (3 + 4)"),
+        (lit(2) - (lit(3) + lit(4)), "2 - (3 + 4)"),
+        (col("a") / (col("b") / col("c")), '"a" / ("b" / "c")'),
+    ]
+    for expr, expected in cases:
+        assert expr._render(0) == expected, (expr._render(0), expected)
+    with open_db() as db:
+        # SQL integer division makes the re-association observable.
+        for expr, want in [
+            (lit(2) * (lit(3) / lit(2)), 2),
+            (lit(5) * (lit(7) % lit(3)), 5),
+        ]:
+            got = (
+                db.table("trades")
+                .select(expr.alias("v"))
+                .limit(1)
+                .to_arrow()
+                .column("v")[0]
+                .as_py()
+            )
+            assert got == want, (expr._render(0), got, want)
+
+
+def test_filter_after_a_window_column_does_not_recompute_it():
+    """WHERE runs before the select list, so the window must move down.
+
+    Folding the filter into the same level would recompute the window over
+    only the surviving rows -- a wrong answer with no error.
+    """
+    with open_db() as db:
+        built = (
+            db.table("trades")
+            .with_columns(ma=col("price").rolling_mean(3, order_by="ts"))
+            .filter(col("price") > 105)
+            .select("ma")
+            .sort("ma")
+        )
+        assert built.sql().count("SELECT") == 2, built.sql()
+        _same(
+            db,
+            built,
+            "SELECT ma FROM (SELECT *, avg(price) OVER "
+            "(ORDER BY ts ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) AS ma "
+            "FROM trades) WHERE price > 105 ORDER BY ma",
+        )
+        # Same rule for a bare aggregate in the projection. Filtering the
+        # one-row result by a column the aggregate dropped now says exactly
+        # that, instead of quietly summing only the surviving rows.
+        agg = db.table("trades").select(col("price").sum().alias("s")).filter(
+            col("price") > 105
+        )
+        assert agg.sql().count("SELECT") == 2, agg.sql()
+        err = _raises(h5i_db.H5iError, agg.collect)
+        assert "price" in str(err)
+        # Filtering it by the aggregate's own output does work.
+        kept = (
+            db.table("trades")
+            .select(col("price").sum().alias("s"))
+            .filter(col("s") > 0)
+        )
+        assert kept.to_arrow().column("s")[0].as_py() == 1266.0
+        # A plain scalar projection still needs no extra level.
+        flat = db.table("trades").with_columns(r=col("price") - 1).filter(
+            col("size") > 0
+        )
+        assert flat.sql().count("SELECT") == 1, flat.sql()
+
+
+def test_a_projection_may_not_shadow_the_pending_sort_key():
+    err = _raises(
+        h5i_db.InvalidInputError,
+        frame().sort("ts").select,
+        col("ts").alias("real_ts"),
+        (lit(0) - col("size")).alias("ts"),
+    )
+    assert "pending sort" in str(err)
+    _raises(
+        h5i_db.InvalidInputError,
+        frame().sort("price").with_columns,
+        price=lit(0.0),
+    )
+    # Renaming something the sort does not use is fine.
+    frame().sort("ts").select(col("price").alias("p"))
+
+
+def test_with_columns_replaces_only_when_asked():
+    err = _raises(
+        h5i_db.InvalidInputError,
+        frame().with_columns,
+        x=col("price") + 1,
+        replace="nope",
+    )
+    assert "does not define" in str(err)
+    assert 'SELECT * EXCEPT ("price"), "price" * 2 AS "price"' in (
+        frame().with_columns(price=col("price") * 2, replace="price").sql()
+    )
+    with open_db() as db:
+        row = (
+            db.table("trades")
+            .with_columns(price=col("price") * 2, replace="price")
+            .sort("ts")
+            .limit(1)
+            .to_arrow()
+            .to_pylist()[0]
+        )
+        assert row["price"] == 200.0
+        assert row["symbol"] == "AAPL"  # the other columns survive
+        # Re-defining a name added earlier overwrites it rather than
+        # duplicating it: the column is known to exist at that point.
+        chained = (
+            db.table("trades")
+            .with_columns(x=col("price") + 1)
+            .with_columns(x=col("x") * 10)
+        )
+        assert 'EXCEPT ("x")' in chained.sql(), chained.sql()
+        out = chained.sort("ts").limit(1).to_arrow().to_pylist()[0]
+        assert out["x"] == 1010.0
+        assert [n for n in out] .count("x") == 1
+
+
+def test_over_rejects_a_compound_expression():
+    err = _raises(
+        h5i_db.InvalidInputError,
+        (col("price").sum() / count_star()).over,
+        partition_by="symbol",
+    )
+    assert "single aggregate" in str(err)
+    _raises(h5i_db.InvalidInputError, (lit(1) + col("price").sum()).over, "symbol")
+    _raises(h5i_db.InvalidInputError, col("price").over, "symbol")
+    # Windowing each part separately is the documented way, and works.
+    with open_db() as db:
+        built = db.table("trades").select(
+            (
+                col("price").sum().over(partition_by="symbol")
+                / count_star().over(partition_by="symbol")
+            ).alias("mean_px")
+        )
+        assert built.to_arrow().num_rows == 12
+
+
+def test_join_requires_keys_unless_a_cross_join_is_asked_for():
+    err = _raises(
+        h5i_db.InvalidInputError, frame().join, frame("quotes"), on=[]
+    )
+    assert "cross" in err.hint
+    _raises(h5i_db.InvalidInputError, frame().join, frame("quotes"), on=())
+    _raises(
+        h5i_db.InvalidInputError,
+        frame().join,
+        frame("quotes"),
+        left_on=[],
+        right_on=[],
+    )
+    _raises(h5i_db.InvalidInputError, frame().join, frame("quotes"), on=5)
+
+
+def test_sort_argument_validation():
+    _raises(h5i_db.InvalidInputError, frame().sort, ["ts", "price"], "ab")
+    _raises(h5i_db.InvalidInputError, frame().sort, ["ts", "price"], [1, 0])
+
+
 def test_literals_render_by_type():
     cases = [
         (None, "NULL"),

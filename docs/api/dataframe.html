@@ -152,8 +152,8 @@ a base for several queries.</p>
 <td>Replace the projection</td>
 </tr>
 <tr>
-<td><code>.with_columns(*exprs, **named)</code></td>
-<td>Add or replace columns, keeping the rest</td>
+<td><code>.with_columns(*exprs, replace=None, **named)</code></td>
+<td>Add columns, keeping the rest</td>
 </tr>
 <tr>
 <td><code>.group_by(*keys).agg(...)</code></td>
@@ -192,6 +192,19 @@ a base for several queries.</p>
 <p>Strings are column names wherever an expression is accepted, so
 <code>.group_by("symbol")</code> and <code>.group_by(col("symbol"))</code> are the same thing.
 Keyword arguments name the result: <code>with_columns(ret=col("close") - 1)</code>.</p>
+<p><code>with_columns</code> <strong>adds</strong>. Naming a column that already exists is an error,
+because <code>SELECT *</code> would then carry two of it. Say so explicitly to
+overwrite one:</p>
+<div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">price</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="mi">2</span><span class="p">,</span> <span class="n">replace</span><span class="o">=</span><span class="s2">&quot;price&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">EXCEPT</span><span class="w"> </span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="p">),</span><span class="w"> </span><span class="ss">&quot;price&quot;</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;price&quot;</span>
+<span class="k">FROM</span><span class="w"> </span><span class="ss">&quot;trades&quot;</span>
+</code></pre></div>
+
+<p>The builder never reads the schema — that is what keeps it lazy — so a
+<code>replace</code> name that does not exist is caught by the engine, not at build
+time.</p>
 <section class="api-member"><h3 id="terminal-methods">Terminal methods<a class="headerlink" href="#terminal-methods" title="Permanent link">#</a></h3><div class="api-body">
 <div class="table-wrap"><table>
 <thead>
@@ -369,8 +382,11 @@ so they take the bucket to compare within:</p>
 </tbody>
 </table></div>
 <p>For a raw window frame, <code>.over(partition_by=, order_by=, rows=, duration=)</code>
-applies to any aggregate, where <code>rows</code> is a trailing count or a
-<code>(preceding, following)</code> pair with <code>None</code> for unbounded.</p>
+applies to a single aggregate, where <code>rows</code> is a trailing count or a
+<code>(preceding, following)</code> pair with <code>None</code> for unbounded. SQL attaches <code>OVER</code>
+to one function call, so window each part of a compound expression
+separately — <code>col("a").sum().over(...) / count_star().over(...)</code>, not
+<code>(col("a").sum() / count_star()).over(...)</code>, which is rejected.</p>
 <h2 id="joins">Joins<a class="headerlink" href="#joins" title="Permanent link">#</a></h2>
 <p><code>.join()</code> renders both sides as subqueries aliased <code>l</code> and <code>r</code>. Those aliases
 are part of the contract: reach a specific side with
@@ -457,8 +473,14 @@ earlier stage <em>computed</em> gets its own level, because SQL resolves <code>W
 
 <p>Filtering a <em>base</em> column instead stays flat, and independent <code>with_columns</code>
 calls coalesce into one projection. Aggregation, <code>LIMIT</code> and <code>DISTINCT</code>
-always close a level, since whatever follows acts on their output. The
-generated SQL is deterministic, so it is safe to snapshot-test or diff.</p>
+always close a level, since whatever follows acts on their output. So does a
+projection holding a <strong>window function or aggregate</strong>: SQL evaluates <code>WHERE</code>
+before the select list, so filtering in the same level would recompute the
+window over only the surviving rows.</p>
+<p>Because levels close, a stage can only see what the stage before it emitted.
+Filtering or sorting by a column an earlier <code>.select()</code> dropped is an error
+naming that column, as it would be for a DataFrame.</p>
+<p>The generated SQL is deterministic, so it is safe to snapshot-test or diff.</p>
 <h2 id="escape-hatch">Escape hatch<a class="headerlink" href="#escape-hatch" title="Permanent link">#</a></h2>
 <p><code>sql_expr()</code> embeds a raw fragment anywhere an expression is accepted. Full
 SQL coverage through builder verbs is deliberately not a goal — reach for

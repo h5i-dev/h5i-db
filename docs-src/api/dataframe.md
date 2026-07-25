@@ -69,7 +69,7 @@ a base for several queries.
 |---|---|
 | `.filter(*preds)` | Keep matching rows; several predicates are ANDed |
 | `.select(*exprs, **named)` | Replace the projection |
-| `.with_columns(*exprs, **named)` | Add or replace columns, keeping the rest |
+| `.with_columns(*exprs, replace=None, **named)` | Add columns, keeping the rest |
 | `.group_by(*keys).agg(...)` | Aggregate; keys are projected alongside |
 | `.group_by(*keys).count()` | Rows per group |
 | `.sort(by, descending=False)` | Order the result |
@@ -82,6 +82,23 @@ a base for several queries.
 Strings are column names wherever an expression is accepted, so
 `.group_by("symbol")` and `.group_by(col("symbol"))` are the same thing.
 Keyword arguments name the result: `with_columns(ret=col("close") - 1)`.
+
+`with_columns` **adds**. Naming a column that already exists is an error,
+because `SELECT *` would then carry two of it. Say so explicitly to
+overwrite one:
+
+```python
+db.table("trades").with_columns(price=col("price") * 2, replace="price")
+```
+
+```sql
+SELECT * EXCEPT ("price"), "price" * 2 AS "price"
+FROM "trades"
+```
+
+The builder never reads the schema — that is what keeps it lazy — so a
+`replace` name that does not exist is caught by the engine, not at build
+time.
 
 ### Terminal methods
 
@@ -205,8 +222,11 @@ so they take the bucket to compare within:
 | `.cs_zscore(partition_by)` | `(x - avg(x) OVER (…)) / stddev(x) OVER (…)` |
 
 For a raw window frame, `.over(partition_by=, order_by=, rows=, duration=)`
-applies to any aggregate, where `rows` is a trailing count or a
-`(preceding, following)` pair with `None` for unbounded.
+applies to a single aggregate, where `rows` is a trailing count or a
+`(preceding, following)` pair with `None` for unbounded. SQL attaches `OVER`
+to one function call, so window each part of a compound expression
+separately — `col("a").sum().over(...) / count_star().over(...)`, not
+`(col("a").sum() / count_star()).over(...)`, which is rejected.
 
 ## Joins
 
@@ -308,8 +328,16 @@ LIMIT 10
 
 Filtering a *base* column instead stays flat, and independent `with_columns`
 calls coalesce into one projection. Aggregation, `LIMIT` and `DISTINCT`
-always close a level, since whatever follows acts on their output. The
-generated SQL is deterministic, so it is safe to snapshot-test or diff.
+always close a level, since whatever follows acts on their output. So does a
+projection holding a **window function or aggregate**: SQL evaluates `WHERE`
+before the select list, so filtering in the same level would recompute the
+window over only the surviving rows.
+
+Because levels close, a stage can only see what the stage before it emitted.
+Filtering or sorting by a column an earlier `.select()` dropped is an error
+naming that column, as it would be for a DataFrame.
+
+The generated SQL is deterministic, so it is safe to snapshot-test or diff.
 
 ## Escape hatch
 

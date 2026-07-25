@@ -38,4 +38,9 @@ and `.ewma(alpha, order_by, partition_by)`. Cross-sectional:
 table function reads both at latest, so it refuses a pin rather than ignore
 it. Use `db.sql()` with the `ASOF JOIN` keyword form when you need a pin.
 
+Gotchas the builder enforces rather than papering over: `with_columns` adds,
+so overwriting needs `replace="name"`; `.over()` attaches to one aggregate,
+so window each part of a compound expression separately; `/` between two
+integer columns truncates, because expressions keep SQL semantics.
+
 Full reference: `docs-src/api/dataframe.md`.

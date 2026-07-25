@@ -55,7 +55,13 @@ _P_MUL = 6
 _P_UNARY = 7
 _P_ATOM = 8
 
-_CAST_TYPE_RE = _re.compile(r"^[A-Za-z][A-Za-z0-9_ ]*(\(\s*\d+\s*(,\s*\d+\s*)?\))?$")
+# A SQL type name: one word, or two for the likes of DOUBLE PRECISION, with
+# an optional precision. Deliberately tight -- anything longer is a clause
+# trying to pass as a type, and belongs in sql_expr() where it is visible.
+_CAST_TYPE_RE = _re.compile(
+    r"^[A-Za-z][A-Za-z0-9_]*( [A-Za-z][A-Za-z0-9_]*)?"
+    r"(\(\s*\d+\s*(,\s*\d+\s*)?\))?$"
+)
 _DURATION_RE = _re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(s|m|h|d|w|mo|y)\s*$")
 
 # Duration suffix -> (SQL interval unit, next smaller unit, multiplier).
@@ -221,7 +227,7 @@ class Expr:
     and raise a :class:`TypeError` here).
     """
 
-    __slots__ = ("_sql", "_prec", "_alias", "_refs")
+    __slots__ = ("_sql", "_prec", "_alias", "_refs", "_after_where", "_windowable")
 
     def __init__(
         self,
@@ -229,6 +235,8 @@ class Expr:
         prec: int = _P_ATOM,
         alias: Optional[str] = None,
         refs: Optional[frozenset] = frozenset(),
+        after_where: bool = False,
+        windowable: bool = False,
     ):
         self._sql = sql
         self._prec = prec
@@ -237,6 +245,12 @@ class Expr:
         # makes the frame conservatively wrap rather than risk a dangling
         # reference to a column the previous stage did not project.
         self._refs = refs
+        # True for anything SQL evaluates *after* WHERE -- aggregates and
+        # window functions. A later filter must not be folded into the same
+        # level, or the window silently recomputes over the filtered rows.
+        self._after_where = after_where
+        # True only for expressions that may legally take an OVER clause.
+        self._windowable = windowable
 
     # -- rendering ---------------------------------------------------------
 
@@ -260,7 +274,14 @@ class Expr:
     def alias(self, name: str) -> "Expr":
         """Name this expression in the output (``expr AS name``)."""
         quote_ident(name)  # validate eagerly, at the call site
-        return Expr(self._sql, self._prec, name, self._refs)
+        return Expr(
+            self._sql,
+            self._prec,
+            name,
+            self._refs,
+            self._after_where,
+            self._windowable,
+        )
 
     @property
     def output_name(self) -> Optional[str]:
@@ -481,7 +502,13 @@ class Expr:
         return _call("count", self)
 
     def n_unique(self) -> "Expr":
-        return Expr(f"count(DISTINCT {self._sql})", _P_ATOM, refs=self._refs)
+        return Expr(
+            f"count(DISTINCT {self._sql})",
+            _P_ATOM,
+            refs=self._refs,
+            after_where=True,
+            windowable=True,
+        )
 
     def std(self) -> "Expr":
         return _call("stddev", self)
@@ -501,6 +528,7 @@ class Expr:
             f"WITHIN GROUP (ORDER BY {self._sql})",
             _P_ATOM,
             refs=self._refs,
+            after_where=True,
         )
 
     def first(self, order_by: Optional[Any] = None, descending: bool = False) -> "Expr":
@@ -519,6 +547,8 @@ class Expr:
             f"{fn}({self._sql} ORDER BY {', '.join(items)})",
             _P_ATOM,
             refs=_merge_refs(self._refs, refs),
+            after_where=True,
+            windowable=True,
         )
 
     # -- window functions --------------------------------------------------
@@ -538,6 +568,13 @@ class Expr:
         where ``None`` means unbounded. ``duration`` is a time-based frame
         such as ``'30m'``, which needs ``order_by`` on a timestamp column.
         """
+        if not self._windowable:
+            raise _invalid(
+                "OVER applies to a single aggregate or window function, not to "
+                f"a compound expression ({self._sql})",
+                hint="window each part separately, e.g. "
+                "col('a').sum().over(...) / count_star().over(...)",
+            )
         clause, refs = _window_clause(
             partition_by, order_by, descending, rows, duration
         )
@@ -545,6 +582,7 @@ class Expr:
             f"{self._sql} OVER ({clause})",
             _P_ATOM,
             refs=_merge_refs(self._refs, refs),
+            after_where=True,
         )
 
     def ewma(
@@ -562,6 +600,7 @@ class Expr:
             f"ewma({self._sql}, {_fmt_literal(float(alpha))})",
             _P_ATOM,
             refs=self._refs,
+            windowable=True,
         )
         return base.over(partition_by=partition_by, order_by=order_by)
 
@@ -582,6 +621,7 @@ class Expr:
             f"{fn}({args})",
             _P_ATOM,
             refs=_merge_refs(self._refs, *[e._refs for e in extra]),
+            windowable=True,
         )
         return base.over(
             partition_by=partition_by, order_by=order_by, rows=rows, duration=duration
@@ -674,6 +714,7 @@ class Expr:
             f"{self._render(_P_ADD)} - avg({self._sql}) OVER ({clause})",
             _P_ADD,
             refs=_merge_refs(self._refs, refs),
+            after_where=True,
         )
 
     def cs_zscore(self, partition_by: Any) -> "Expr":
@@ -684,6 +725,7 @@ class Expr:
             f"/ stddev({self._sql}) OVER ({clause})",
             _P_MUL,
             refs=_merge_refs(self._refs, refs),
+            after_where=True,
         )
 
     def _cross_sectional(
@@ -701,6 +743,7 @@ class Expr:
             f"{fn}({args}) OVER ({clause})",
             _P_ATOM,
             refs=_merge_refs(self._refs, refs),
+            after_where=True,
         )
 
 
@@ -725,18 +768,39 @@ def _binary(
     left: ExprLike, op: str, right: ExprLike, prec: int, non_assoc: bool = False
 ) -> Expr:
     lhs, rhs = _to_expr(left), _to_expr(right)
-    right_prec = prec + 1 if (non_assoc or op in {"-", "/", "%"}) else prec
+    # Only AND and OR are safe to flatten. Every other operator here is
+    # left-associative, so the right operand keeps its own grouping: `a * (b /
+    # c)` must not render as `a * b / c`, which re-associates and (with SQL's
+    # integer division) computes something else entirely.
+    right_prec = prec if op in ("AND", "OR") else prec + 1
     return Expr(
         f"{lhs._render(prec)} {op} {rhs._render(right_prec)}",
         prec,
         refs=_merge_refs(lhs._refs, rhs._refs),
+        after_where=lhs._after_where or rhs._after_where,
     )
+
+
+# Function names SQL evaluates after WHERE. Scalar functions inherit the flag
+# from their arguments instead, so `abs(sum(x))` is still late.
+_AGGREGATES = frozenset(
+    {
+        "sum", "avg", "min", "max", "count", "stddev", "var_samp", "median",
+        "vwap", "wavg", "first_value", "last_value",
+    }
+)
 
 
 def _call(fn: str, *args: ExprLike) -> Expr:
     exprs = [_to_expr(a) for a in args]
     rendered = ", ".join(e._render(0) for e in exprs)
-    return Expr(f"{fn}({rendered})", _P_ATOM, refs=_merge_refs(*[e._refs for e in exprs]))
+    return Expr(
+        f"{fn}({rendered})",
+        _P_ATOM,
+        refs=_merge_refs(*[e._refs for e in exprs]),
+        after_where=fn in _AGGREGATES or any(e._after_where for e in exprs),
+        windowable=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -776,12 +840,18 @@ def sql_expr(sql: str) -> Expr:
     """
     if not isinstance(sql, str) or not sql.strip():
         raise _invalid("sql_expr() needs a non-empty SQL string")
-    return Expr(sql.strip(), _P_RAW, refs=None)
+    # Opaque in every direction: it may be an aggregate, so it is treated as
+    # evaluated after WHERE, and it may take OVER, so that is allowed.
+    return Expr(
+        sql.strip(), _P_RAW, refs=None, after_where=True, windowable=True
+    )
 
 
 def count_star() -> Expr:
     """``count(*)``."""
-    return Expr("count(*)", _P_ATOM, refs=frozenset())
+    return Expr(
+        "count(*)", _P_ATOM, refs=frozenset(), after_where=True, windowable=True
+    )
 
 
 def vwap(price: ExprLike, size: ExprLike) -> Expr:
@@ -905,11 +975,15 @@ def _order_items(order_by: Any, descending: Union[bool, Sequence[bool]]):
     if isinstance(descending, bool):
         flags = [descending] * len(exprs)
     else:
+        if isinstance(descending, str):
+            raise _invalid("descending must be a bool or a list of bools")
         flags = list(descending)
         if len(flags) != len(exprs):
             raise _invalid(
                 f"descending has {len(flags)} entries but order_by has {len(exprs)}"
             )
+        if not all(isinstance(f, bool) for f in flags):
+            raise _invalid("descending must contain only bools")
     items = []
     for expr, desc in zip(exprs, flags):
         # An aliased ordering key refers to the projected name, which is what
@@ -1005,6 +1079,7 @@ class _Query:
         "filters",
         "group_by",
         "order_by",
+        "order_refs",
         "limit",
         "offset",
         "distinct",
@@ -1019,6 +1094,9 @@ class _Query:
         self.filters: list = []
         self.group_by: Optional[list] = None
         self.order_by: Optional[list] = None
+        # Names the pending ORDER BY resolves against, so a later projection
+        # can tell whether it would shadow one of them.
+        self.order_refs: frozenset = frozenset()
         self.limit: Optional[int] = None
         self.offset: Optional[int] = None
         self.distinct = False
@@ -1032,6 +1110,7 @@ class _Query:
         other.filters = list(self.filters)
         other.group_by = None if self.group_by is None else list(self.group_by)
         other.order_by = None if self.order_by is None else list(self.order_by)
+        other.order_refs = self.order_refs
         other.limit = self.limit
         other.offset = self.offset
         other.distinct = self.distinct
@@ -1218,7 +1297,7 @@ class LazyFrame:
         for expr in exprs:
             if expr._alias is not None:
                 raise _invalid("a filter predicate cannot be aliased")
-        q = self._level(self._needs_wrap_for(exprs))
+        q = self._level(self._filter_needs_wrap(exprs))
         q.filters.extend(exprs)
         return self._next(q)
 
@@ -1227,29 +1306,86 @@ class LazyFrame:
         projection = _projection_list(exprs, named)
         if not projection:
             raise _invalid("select() needs at least one column")
+        self._reject_shadowed_ordering(projection)
         q = self._level(self._needs_wrap_for(projection))
         q.projection = projection
         return self._next(q)
 
     def with_columns(
-        self, *exprs: Expr, **named: Union[str, Expr]
+        self,
+        *exprs: Expr,
+        replace: Optional[Union[str, Sequence[str]]] = None,
+        **named: Union[str, Expr],
     ) -> "LazyFrame":
-        """Add or replace columns, keeping everything already projected."""
+        """Add columns, keeping everything already projected.
+
+        Every expression needs a name, from a keyword or ``.alias(...)``.
+
+        Naming a column that already exists is an error, because ``SELECT *``
+        would then carry two of it. To overwrite one, list it in ``replace``::
+
+            frame.with_columns(price=col("price") * 2, replace="price")
+
+        ``replace`` names must exist -- the builder never reads the schema, so
+        the engine is what checks them.
+        """
         additions = _projection_list(exprs, named)
         if not additions:
             raise _invalid("with_columns() needs at least one column")
+        names = []
         for expr in additions:
             if expr.output_name is None:
                 raise _invalid(
                     "with_columns() needs a name for every expression",
                     hint="pass it as a keyword (name=expr) or use .alias(...)",
                 )
-        q = self._level(self._needs_wrap_for(additions))
+            names.append(expr.output_name)
+        duplicates = {n for n in names if names.count(n) > 1}
+        if duplicates:
+            raise _invalid(
+                "with_columns() was given the same name twice: "
+                + ", ".join(sorted(duplicates))
+            )
+        replaced = frozenset(_as_name_list(replace, "replace"))
+        unknown = replaced - set(names)
+        if unknown:
+            raise _invalid(
+                "replace names a column this call does not define: "
+                + ", ".join(sorted(unknown))
+            )
+        self._reject_shadowed_ordering(additions)
+        # Re-defining a name this level already projects would duplicate it,
+        # so that addition belongs one level up, where the wildcard can drop
+        # the older definition. Here the column is known to exist -- this
+        # call is what produced it -- so excluding it is always safe.
+        collides = frozenset(names) & self._q.defined_aliases()
+        q = self._level(self._needs_wrap_for(additions) or bool(collides))
+        star = _star_except(replaced | collides)
         if q.projection is None:
-            q.projection = [col("*")] + additions
+            q.projection = [star] + additions
         else:
             q.projection = q.projection + additions
         return self._next(q)
+
+    def _reject_shadowed_ordering(self, projection: Sequence[Expr]) -> None:
+        """Refuse a projection that renames a column the pending sort uses.
+
+        ``ORDER BY`` resolves against the select list, so an alias reusing the
+        sort key's name silently re-points the sort at the new expression.
+        """
+        if self._q.order_by is None:
+            return
+        shadowed = sorted(
+            {e._alias for e in projection if e._alias} & self._q.order_refs
+        )
+        if shadowed:
+            raise _invalid(
+                "this projection names "
+                + ", ".join(repr(s) for s in shadowed)
+                + ", which the pending sort orders by, so the sort would "
+                "silently follow the new expression",
+                hint="sort after this step instead, or pick another name",
+            )
 
     def _needs_wrap_for(self, exprs: Sequence[Expr]) -> bool:
         """Can these expressions be added to the current level as-is?
@@ -1266,13 +1402,26 @@ class LazyFrame:
             or _conflicts(exprs, self._q.defined_aliases())
         )
 
+    def _filter_needs_wrap(self, exprs: Sequence[Expr]) -> bool:
+        """As :meth:`_needs_wrap_for`, plus WHERE's evaluation order.
+
+        SQL applies WHERE before the select list, so folding a filter into a
+        level whose projection holds a window function or aggregate would
+        silently recompute it over the surviving rows -- a wrong answer, not
+        an error.
+        """
+        return self._needs_wrap_for(exprs) or (
+            self._q.projection is not None
+            and any(e._after_where for e in self._q.projection)
+        )
+
     def sort(
         self,
         by: Union[str, Expr, Sequence[Union[str, Expr]]],
         descending: Union[bool, Sequence[bool]] = False,
     ) -> "LazyFrame":
         """Order the result."""
-        items, _ = _order_items(by, descending)
+        items, refs = _order_items(by, descending)
         # Under DISTINCT, a sort key outside the select list is a planning
         # error, so it has to sort a level down instead.
         wrap = self._q.limit is not None or (
@@ -1280,6 +1429,7 @@ class LazyFrame:
         )
         q = self._level(wrap)
         q.order_by = items
+        q.order_refs = refs if refs is not None else frozenset()
         return self._next(q)
 
     def limit(self, n: int, offset: int = 0) -> "LazyFrame":
@@ -1487,6 +1637,14 @@ class LazyFrame:
         raise _no_attribute(self, name)
 
 
+def _star_except(names: frozenset) -> Expr:
+    """``*``, or ``* EXCEPT (…)`` when columns are being overwritten."""
+    if not names:
+        return col("*")
+    excluded = ", ".join(quote_ident(n) for n in sorted(names))
+    return Expr(f"* EXCEPT ({excluded})", _P_ATOM, refs=None)
+
+
 def _conflicts(exprs: Sequence[Expr], aliases: frozenset) -> bool:
     """Do these expressions reach for a name the current level computes?
 
@@ -1511,7 +1669,13 @@ def _as_name_list(value, what: str) -> list:
         return []
     if isinstance(value, str):
         return [value]
-    names = list(value)
+    try:
+        names = list(value)
+    except TypeError:
+        raise _invalid(
+            f"{what} must be a column name or a list of them, got "
+            f"{type(value).__name__}"
+        ) from None
     for name in names:
         if not isinstance(name, str):
             raise _invalid(f"{what} must be column names (strings)")
@@ -1533,12 +1697,20 @@ def _join_condition(how, on, left_on, right_on, predicate) -> str:
         if left_on or right_on:
             raise _invalid("pass either on= or left_on=/right_on=")
         left_names = right_names = _as_name_list(on, "on")
+        # An empty list used to render no ON clause at all, quietly turning
+        # the join into a cross product.
+        if not left_names:
+            raise _invalid(
+                "on= must name at least one column",
+                hint="for a cartesian product ask for it: how='cross'",
+            )
     else:
         left_names = _as_name_list(left_on, "left_on")
         right_names = _as_name_list(right_on, "right_on")
-        if len(left_names) != len(right_names) or not left_names:
+        if not left_names or len(left_names) != len(right_names):
             raise _invalid(
-                "left_on and right_on must name the same number of columns"
+                "left_on and right_on must name the same number of columns, "
+                "at least one"
             )
     return " AND ".join(
         f'{quote_ident("l")}.{quote_ident(left)} = '
