@@ -697,6 +697,21 @@ taken. "**Embedded + versioned + time-series/quant + Apache-2.0**, where the
 agent provably cannot see the future" remains unoccupied — and items 1–3
 above are exactly V-A2, the keystone/run-ledger, and VI-A2 below.
 
+**Positioning correction (2026-07-25).** The line above is a whitespace
+observation, not the product thesis, and later drafting over-read it as one.
+The thesis stays the README identity: a fast, fully versioned, embedded
+time-series database for quant research. "Provably cannot see the future"
+overclaims what a data layer can own: most leakage happens after data leaves
+the DB (splits, full-sample normalization, feature code, model pretraining),
+so no DB-layer feature can certify a pipeline leak-free (the same scope
+honesty already stated in V-A and in the `leakage-check` → `arrival-delta`
+rename). The defensible claim is the README's own wording, *bounded at the
+source*: what reached the client was bounded by version / arrival / event
+time, and `arrival-delta` reports what a restatement changed. research-mode
+and the arrival axis stay valuable audit features, one bullet among several,
+not the banner; read the one-sentence claim in the research-mode section
+below under this correction.
+
 ## Tier VI-A — CLI ergonomics for agents
 
 All items live in the CLI/skill/sidecar layer per `DESIGN.md §8–§9`; none
