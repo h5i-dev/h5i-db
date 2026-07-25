@@ -8,6 +8,7 @@
 mod aggregate_state;
 pub mod arrival;
 pub mod asof;
+pub mod cross_section;
 pub mod finance;
 pub mod functions;
 pub mod gapfill;

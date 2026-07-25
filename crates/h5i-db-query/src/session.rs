@@ -272,6 +272,11 @@ impl H5iSession {
         for udwf in crate::rolling::rolling_udwfs() {
             ctx.register_udwf(udwf);
         }
+        // Part VII-B2 cross-sectional operators (`cs_demean`/`cs_zscore` are
+        // plain SQL; see `crate::cross_section`).
+        for udwf in crate::cross_section::cross_section_udwfs() {
+            ctx.register_udwf(udwf);
+        }
 
         Ok(Self {
             ctx,
