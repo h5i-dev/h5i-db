@@ -98,7 +98,7 @@ an agent can't quietly commit malformed rows.
   [reproducible backtests](../cookbook/03_risk_and_production/02_reproducible_backtests.html)
   and [paper-trading loop](../cookbook/03_risk_and_production/05_live_paper_trading_loop.html).
 - **Check for look-ahead bias.** Before trusting a backtest metric, run it
-  through [`leakage-check … --as-of <decision-time>`](cli.html#h5i-db-leakage-check):
+  through [`arrival-delta … --as-of <decision-time>`](cli.html#h5i-db-arrival-delta):
   it re-runs the query as of the decision instant and reports how much of the
   result came from data that only became available later. A non-zero delta is
   alpha that evaporates in production.

@@ -1,13 +1,13 @@
-//! V-A1 leakage-delta integration tests: run a query against head vs an as-of
-//! read point and assert the diff surfaces availability leakage (restatement,
-//! withheld rows) while a correctly time-bounded query shows none.
+//! Arrival-delta integration tests: run a query at head vs an earlier read
+//! point and assert the diff surfaces what arrived late (restatements,
+//! withheld rows) while a correctly time-bounded query shows no movement.
 
 use std::sync::Arc;
 
 use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use h5i_db_core::{Database, ReadAt, TableOptions, WriteOptions};
-use h5i_db_query::{DEFAULT_TOLERANCE, check_leakage};
+use h5i_db_query::{DEFAULT_TOLERANCE, arrival_delta};
 
 fn schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -69,7 +69,7 @@ async fn restatement_produces_nonzero_delta() {
     .await
     .unwrap();
 
-    let report = check_leakage(
+    let report = arrival_delta(
         db.clone(),
         "SELECT avg(price) AS p FROM prices",
         ReadAt::Version(v1),
@@ -81,7 +81,7 @@ async fn restatement_produces_nonzero_delta() {
     assert!(report.comparable);
     assert_eq!(report.head_rows, 1);
     assert_eq!(report.asof_rows, 1);
-    assert!(report.leakage_detected);
+    assert!(report.changed);
     let col = &report.columns[0];
     assert_eq!(col.name, "p");
     assert!(
@@ -107,7 +107,7 @@ async fn restatement_produces_nonzero_delta() {
 }
 
 #[tokio::test]
-async fn time_bounded_query_shows_no_leakage() {
+async fn time_bounded_query_shows_no_movement() {
     let (_dir, db) = setup().await;
     let v1 = db
         .write(
@@ -128,7 +128,7 @@ async fn time_bounded_query_shows_no_leakage() {
     .unwrap();
 
     // A query bounded to ts<=2 does not depend on the withheld rows.
-    let report = check_leakage(
+    let report = arrival_delta(
         db.clone(),
         "SELECT count(*) AS c FROM prices WHERE ts <= 2",
         ReadAt::Version(v1),
@@ -140,8 +140,8 @@ async fn time_bounded_query_shows_no_leakage() {
     assert!(report.comparable);
     assert!(!report.row_count_differs);
     assert!(
-        !report.leakage_detected,
-        "a correctly-bounded query must show no leakage: {report:?}"
+        !report.changed,
+        "a correctly-bounded query must not move: {report:?}"
     );
     assert!((report.columns[0].delta.unwrap()).abs() < 1e-9);
     // Data *was* withheld even though this query didn't depend on it; the
@@ -179,7 +179,7 @@ async fn as_of_timestamp_matches_version_pin() {
         .expect("v1 summary")
         .committed_at_ns;
 
-    let report = check_leakage(
+    let report = arrival_delta(
         db.clone(),
         "SELECT avg(price) AS p FROM prices",
         ReadAt::AsOf(v1_ts),
@@ -188,7 +188,7 @@ async fn as_of_timestamp_matches_version_pin() {
     .await
     .unwrap();
 
-    assert!(report.leakage_detected);
+    assert!(report.changed);
     // Same delta the explicit version pin produced (as-of resolves to v1).
     assert!((report.columns[0].delta.unwrap() - 45.0).abs() < 1e-9);
 }
@@ -214,7 +214,7 @@ async fn row_count_change_is_detected() {
     .await
     .unwrap();
 
-    let report = check_leakage(
+    let report = arrival_delta(
         db.clone(),
         "SELECT symbol, count(*) AS c FROM prices GROUP BY symbol ORDER BY symbol",
         ReadAt::Version(v1),
@@ -227,7 +227,7 @@ async fn row_count_change_is_detected() {
     assert_eq!(report.head_rows, 2, "head sees A and B");
     assert_eq!(report.asof_rows, 1, "as-of sees only A");
     assert!(report.row_count_differs);
-    assert!(report.leakage_detected);
+    assert!(report.changed);
 }
 
 #[tokio::test]
@@ -246,7 +246,7 @@ async fn single_commit_database_reports_a_vacuous_check() {
         .unwrap()
         .sequence;
 
-    let report = check_leakage(
+    let report = arrival_delta(
         db.clone(),
         "SELECT avg(price) AS px FROM prices",
         ReadAt::Version(v1),
@@ -255,7 +255,7 @@ async fn single_commit_database_reports_a_vacuous_check() {
     .await
     .unwrap();
 
-    assert!(!report.leakage_detected, "nothing was withheld");
+    assert!(!report.changed, "nothing was withheld");
     assert!(report.withheld_versions.is_empty());
     assert!(
         report.vacuous,
@@ -282,7 +282,7 @@ async fn every_report_states_the_scope_limit() {
         .await
         .unwrap()
         .sequence;
-    let vacuous = check_leakage(
+    let vacuous = arrival_delta(
         db.clone(),
         "SELECT avg(price) AS px FROM prices",
         ReadAt::Version(v1),
@@ -299,7 +299,7 @@ async fn every_report_states_the_scope_limit() {
     )
     .await
     .unwrap();
-    let informative = check_leakage(
+    let informative = arrival_delta(
         db.clone(),
         "SELECT avg(price) AS px FROM prices",
         ReadAt::Version(v1),
@@ -310,10 +310,7 @@ async fn every_report_states_the_scope_limit() {
 
     for report in [&vacuous, &informative] {
         assert!(
-            report
-                .notes
-                .iter()
-                .any(|n| n.contains("does not prove the absence")),
+            report.notes.iter().any(|n| n.contains("clears a query")),
             "scope caveat missing: {:?}",
             report.notes
         );
@@ -324,7 +321,7 @@ async fn every_report_states_the_scope_limit() {
         "a check that withheld a commit is not vacuous: {informative:?}"
     );
     assert!(
-        informative.leakage_detected,
-        "the withheld rows change the average, so this is real leakage"
+        informative.changed,
+        "the withheld rows change the average, so the answer really did move"
     );
 }

@@ -292,7 +292,7 @@ class Database:
             )
         )
 
-    def leakage_check(
+    def arrival_delta(
         self,
         query: str,
         version: Optional[int] = None,
@@ -300,23 +300,23 @@ class Database:
         snapshot: Optional[str] = None,
         tolerance: Optional[float] = None,
     ) -> dict:
-        """Look-ahead-bias diagnostic (see the CLI ``leakage-check``).
+        """How much this query's answer moved because data arrived late.
 
-        Runs ``query`` twice, against the current head (*leaking*: every
-        commit, including rows that only arrived after the decision instant)
-        and against a decision read point (*non-leaking*), and returns the
-        delta between the two results as a dict. Specify exactly one of
+        Runs ``query`` twice, at the current head and at an earlier read
+        point, and returns the difference as a dict. Specify exactly one of
         ``version`` / ``as_of`` (RFC3339 availability timestamp) / ``snapshot``
-        as the decision point; ``tolerance`` is the per-cell numeric noise
-        floor (default ``1e-9``).
+        as the earlier point; ``tolerance`` is the per-cell numeric noise floor
+        (default ``1e-9``).
 
-        A non-zero ``leakage_detected`` / ``max_abs_delta`` is *availability*
-        leakage (late-arriving or restated rows across commits); a zero delta
-        does not prove its absence, and this does not detect look-ahead *inside*
-        a single snapshot.
+        A measurement, not a verdict. ``changed`` says the answer moved, which
+        means late-arriving or restated rows affected it. It sees only that
+        shape of look-ahead: a signal reading its own bar leaves it unmoved, so
+        no value of the delta clears a query. Read ``vacuous`` first - when the
+        two read points resolve to the same version the zero is arithmetic, not
+        evidence - and ``notes`` alongside the numbers.
         """
         return json.loads(
-            self._native.leakage_check(query, version, as_of, snapshot, tolerance)
+            self._native.arrival_delta(query, version, as_of, snapshot, tolerance)
         )
 
     # -- maintenance ----------------------------------------------------------

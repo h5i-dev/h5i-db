@@ -6,12 +6,12 @@
 //! `h5i-db-core` is engine-free.
 
 mod aggregate_state;
+pub mod arrival;
 pub mod asof;
 pub mod finance;
 pub mod functions;
 pub mod gapfill;
 pub mod latest;
-pub mod leakage;
 pub mod metrics;
 mod predicate_cache;
 pub mod provider;
@@ -25,10 +25,10 @@ pub use aggregate_state::{
     AggregateStateMetrics, AggregateStateMode, AggregateStateStore, FinanceAggregate,
     FinanceAggregateResult, FinanceAggregateSpec,
 };
-pub use asof::{AsOfDirection, AsOfJoinExec, AsOfJoinNode, AsOfOptions, asof_join};
-pub use leakage::{
-    ColumnDelta, DEFAULT_TOLERANCE, LeakageReport, TableVersionDelta, check_leakage,
+pub use arrival::{
+    ArrivalDeltaReport, ColumnDelta, DEFAULT_TOLERANCE, TableVersionDelta, arrival_delta,
 };
+pub use asof::{AsOfDirection, AsOfJoinExec, AsOfJoinNode, AsOfOptions, asof_join};
 pub use metrics::{
     OperatorPerformanceMetrics, QueryPerformanceReport, QueryStatus, ReportedDataFrame,
     ReportedQueryStream, ScanMetrics, ScanMetricsCollector, WorkloadTelemetryEnvelope,

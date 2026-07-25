@@ -60,17 +60,17 @@ export H5I_DB_AS_OF=2026-07-01T00:00:00Z
 Every subsequent `query` inherits the pin, which is what makes it a jail rather
 than a flag you can forget. An explicit flag still wins over the environment.
 
-## Auditing after the fact — `leakage-check`
+## Auditing after the fact — `arrival-delta`
 
 Runs one query twice, at head and at a decision point, and reports the delta:
 the alpha that evaporates is the part that came from data that had not arrived.
 
 ```bash
-h5i-db leakage-check market.db "<sql>" --as-of 2026-07-01T00:00:00Z --format json
+h5i-db arrival-delta market.db "<sql>" --as-of 2026-07-01T00:00:00Z --format json
 ```
 
 Read the report's `notes` before its numbers. A zero delta does not prove there
-is no leakage — this check only sees the arrival axis. And if the report says
+is no look-ahead: it only sees the arrival axis. And if the report says
 `vacuous: true`, the check compared identical data (nothing was withheld,
 typically because the database has no arrival history at all), so its zero
 means nothing whatsoever.

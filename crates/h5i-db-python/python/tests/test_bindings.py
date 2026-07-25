@@ -144,7 +144,7 @@ def test_new_methods():
         assert "trades" not in db.tables()
 
 
-def test_leakage_check_detects_withheld_rows():
+def test_arrival_delta_detects_withheld_rows():
     with tempfile.TemporaryDirectory() as tmp, _open_db(tmp) as db:
         db.append("trades", _sample(3))  # version 1: 3 rows
         # Append two later rows as version 2 (ts strictly increasing).
@@ -158,11 +158,11 @@ def test_leakage_check_detects_withheld_rows():
         )
         db.append("trades", later)
 
-        report = db.leakage_check(
+        report = db.arrival_delta(
             "SELECT count(*) AS c FROM trades", version=1
         )
         assert report["comparable"] is True
-        assert report["leakage_detected"] is True
+        assert report["changed"] is True
         col = report["columns"][0]
         assert col["name"] == "c"
         assert col["head"] == 5.0 and col["asof"] == 3.0 and col["delta"] == 2.0
@@ -170,7 +170,7 @@ def test_leakage_check_detects_withheld_rows():
 
         # A decision point is required.
         try:
-            db.leakage_check("SELECT count(*) FROM trades")
+            db.arrival_delta("SELECT count(*) FROM trades")
             raise AssertionError("expected InvalidInputError")
         except h5i_db.InvalidInputError:
             pass

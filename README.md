@@ -16,7 +16,7 @@ damage the store.
   gapfill/resample, rolling windows, `vwap`, `ewma`.
 - **Point-in-time reads.** Pin a read point and the data you pull is bounded by
   it, so the frame that reaches pandas cannot contain rows from after the
-  decision instant. `leakage-check` measures what a later restatement changed.
+  decision instant. `arrival-delta` measures what a later restatement changed.
 - **Safe for automated writers.** Previewable mutations, policy gates,
   fail-closed data constraints, crash-safe commits, and an audit trail.
 - **Embedded.** One directory, no server, no daemon. Apache-2.0.
@@ -145,7 +145,7 @@ than an archaeology project.
 - **Point-in-time pulls.** A read point can be pinned on two axes: event time
 (`--decision-time`) and arrival (`--as-of`). The frame you hand to pandas is
 then bounded at the source, which is the only place a bound survives the trip
-into Python. `leakage-check` measures, after the fact, how much of a result
+into Python. `arrival-delta` measures, after the fact, how much of a result
 depended on data that arrived later.
 
 ```bash

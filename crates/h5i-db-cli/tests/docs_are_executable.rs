@@ -239,7 +239,7 @@ fn documented_environment_variables_are_real() {
 }
 
 #[test]
-fn the_demo_runs_end_to_end_and_shows_real_leakage() {
+fn the_demo_runs_end_to_end_and_shows_a_real_arrival_delta() {
     let tmp = tempfile::tempdir().unwrap();
     let out = Command::new(bin())
         .args(["demo", "--dir", tmp.path().to_str().unwrap()])
@@ -254,8 +254,8 @@ fn the_demo_runs_end_to_end_and_shows_real_leakage() {
 
     // The tour must actually reach its punchline, not just not crash.
     assert!(
-        text.contains("leakage_detected: true"),
-        "no leakage shown:\n{text}"
+        text.contains("changed: true"),
+        "the tour never reaches a moved result:\n{text}"
     );
     assert!(
         text.contains("vacuous: false"),

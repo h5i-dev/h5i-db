@@ -165,15 +165,16 @@ the time-series function library.
 List a table's committed versions: `version`, `op`, `committed_at`, `rows`,
 `bytes`, `segments`, `note`.
 
-### `h5i-db leakage-check`
+### `h5i-db arrival-delta`
 
-Look-ahead-bias diagnostic: run one query against the current head (**leaking**:
-every commit, including data that only arrived after the decision instant)
-and against an as-of read point (**non-leaking**: only data available as of
-that instant), and report the delta between the two results.
+How much a query's answer moved because data arrived late: run it once at the
+current head and once at an earlier read point, and report the difference.
+What moves is what depended on commits that had not landed at the earlier
+point, which in a backtest is the part of a metric a live run starting that
+day could not have earned.
 
 ```console
-$ h5i-db leakage-check market.db \
+$ h5i-db arrival-delta market.db \
     "SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol" \
     --as-of 2026-07-01T16:00:00Z --format json
 ```
@@ -183,13 +184,19 @@ $ h5i-db leakage-check market.db \
 | `--as-of <at>` | The decision point: an integer **version**, an RFC3339 **timestamp** (matched by commit *availability* time, like `h5i()`), or a **snapshot** name |
 | `--tolerance <f>` | Absolute per-cell delta below which a difference is treated as noise (default `1e-9`) |
 
-The report carries `leakage_detected`, per-column `head → asof (delta)` for the
-common single-row-metric case, `max_abs_delta`, `row_count_differs`, and
-`withheld_versions` (per table, the head-vs-as-of version gap). A non-zero
-delta proves *availability* leakage (late-arriving or restated rows across
-commits); a zero delta does not prove its absence, and this does not detect
-look-ahead *inside* a single snapshot. Pairs naturally with the
-[reproducible-backtest](#h5i-db-versions) pin-what-you-read pattern.
+The report carries `changed`, per-column `head → asof (delta)` for the common
+single-row-metric case, `max_abs_delta`, `row_count_differs`,
+`withheld_versions` (per table, the head-vs-as-of version gap), `vacuous`, and
+`notes`.
+
+**Read it as a measurement, not a verdict.** Look-ahead comes in many shapes
+and this sees one of them: rows that exist now but had not been published. A
+signal that reads its own bar leaves the delta unmoved, so no value of it, high
+or low, clears a query of look-ahead; bound the event-time axis with
+[`query --decision-time`](#h5i-db-query) for that. And check `vacuous` before
+reading the number: when both read points resolve to the same version, which is
+the normal state of a bulk-loaded database, the zero is arithmetic rather than
+evidence, and the report says so in `notes`.
 
 ---
 
