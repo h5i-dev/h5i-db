@@ -353,11 +353,16 @@ fn latest_path(segment: &SegmentMeta, by_column: &str) -> ObjectPath {
 #[derive(Debug)]
 pub struct LatestByFunc {
     db: Arc<Database>,
+    pin: crate::pin::PinContext,
 }
 
 impl LatestByFunc {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self::pinned(db, crate::pin::PinContext::default())
+    }
+
+    pub(crate) fn pinned(db: Arc<Database>, pin: crate::pin::PinContext) -> Self {
+        Self { db, pin }
     }
 }
 
@@ -383,7 +388,8 @@ impl TableFunctionImpl for LatestByFunc {
         let table = string_arg(args, 0, "the table name")?;
         let by_column = string_arg(args, 1, "the group column")?;
         let store = LatestByStore::new(self.db.clone(), LatestByMode::ReadWrite);
-        let (batch, _metrics) = block_on(store.latest_by(&table, ReadAt::Latest, &by_column))
+        self.pin.check_usable("latest_on")?;
+        let (batch, _metrics) = block_on(store.latest_by(&table, self.pin.read_at(), &by_column))
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let schema = batch.schema();
         Ok(Arc::new(MemTable::try_new(schema, vec![vec![batch]])?))

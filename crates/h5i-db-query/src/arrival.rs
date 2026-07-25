@@ -1,31 +1,31 @@
-//! Leakage-delta report (ROADMAP Part V, item V-A1).
+//! Arrival delta: how much a query's answer moved because data arrived late.
 //!
-//! Runs one query twice: against the current head (**leaking**: every commit,
-//! including data that only became available after the decision instant) and
-//! against an as-of read point (**non-leaking**: only data available as of that
-//! instant), then diffs the two results. The difference is the "alpha that
-//! evaporates": the portion of a metric that came from decision-time data
-//! leakage rather than genuine signal (cf. the one-switch leaking/non-leaking
-//! backtest diagnostic).
+//! Runs one query twice, at the current head and at an earlier read point, and
+//! diffs the two results. What moves is what depended on commits that had not
+//! landed at the earlier point: vendor restatements, late prints, corrections.
+//! In a backtest that difference is the part of a metric a live run starting
+//! that day could not have earned.
 //!
-//! This exists *because* h5i-db already resolves an as-of read point by commit
-//! availability time (`ReadAt::AsOf`, `committed_at_ns`), so both runs are
-//! deterministic, reproducible, and cheap (O(1) time-travel + reused aggregate
-//! states). No new engine primitive is required; this is a thin surface over
-//! [`H5iSession::new_at`].
+//! Cheap because the engine already resolves a read point by commit
+//! availability (`ReadAt::AsOf`, `committed_at_ns`): both runs are
+//! deterministic and reuse aggregate states, so this needs no engine primitive
+//! of its own. It is a thin surface over [`H5iSession::new_at`].
 //!
-//! **Scope (state it honestly).** This measures *data-availability* leakage,
-//! i.e. late-arriving or restated rows across commits. It does **not** detect
-//! look-ahead *inside* a single snapshot (a window overrunning into future
-//! rows, which needs the event-time cutoff of `query --embargo`), nor an LLM's
-//! pretraining leakage. A non-zero delta proves availability leakage; a zero
-//! delta does not prove its absence.
+//! **This is a measurement, not a verdict, which is why it is not called a
+//! leakage check.** Look-ahead comes in many shapes and this sees exactly one
+//! of them: rows that exist now but had not been published. It is blind to
+//! look-ahead *inside* a single snapshot (a signal reading its own bar, a
+//! window overrunning forward) because those rows were always in the table,
+//! and blind to whatever a model already learned in pretraining. A non-zero
+//! delta proves late-arriving data moved the answer; no value of it, high or
+//! low, clears a query of look-ahead. The event-time axis is a separate tool
+//! (`query --decision-time`).
 //!
-//! Because of that asymmetry the report carries its own caveats: every report
-//! states the scope limit, and one whose as-of point withheld *nothing* (a
-//! database with no arrival history — the usual bulk-ingest cold start) is
-//! flagged `vacuous`, since its zero delta is arithmetically forced rather
-//! than evidence. Silence must never read as a clean bill of health.
+//! Two consequences shape the report. It always carries that scope limit in
+//! `notes`, and a run whose earlier read point withheld *nothing* (a database
+//! with no arrival history, which is the usual bulk-ingest cold start) is
+//! flagged `vacuous`, since its zero is arithmetically forced rather than
+//! evidence. Silence must never read as a clean bill of health.
 
 use std::sync::Arc;
 
@@ -65,7 +65,7 @@ pub struct ColumnDelta {
 }
 
 /// A table whose as-of version differs from head, i.e. commits were withheld
-/// from the non-leaking run. Empty means the as-of point saw the same data.
+/// from the earlier run. Empty means the earlier point saw the same data.
 #[derive(Debug, Clone, Serialize)]
 pub struct TableVersionDelta {
     pub table: String,
@@ -73,9 +73,9 @@ pub struct TableVersionDelta {
     pub asof_version: u64,
 }
 
-/// The full leakage-delta report (serialized as the CLI/Python envelope).
+/// The full arrival-delta report (serialized as the CLI/Python envelope).
 #[derive(Debug, Clone, Serialize)]
-pub struct LeakageReport {
+pub struct ArrivalDeltaReport {
     /// Human-readable description of the as-of read point.
     pub decision: String,
     /// Whether the two results had the same schema and could be compared.
@@ -88,9 +88,10 @@ pub struct LeakageReport {
     pub columns: Vec<ColumnDelta>,
     /// Largest absolute delta across all numeric columns.
     pub max_abs_delta: f64,
-    /// True if any availability leakage was detected (row-count change, a
-    /// numeric delta beyond tolerance, or a non-numeric cell change).
-    pub leakage_detected: bool,
+    /// True if the answer moved at all between the two read points: a
+    /// row-count change, a numeric delta beyond tolerance, or a non-numeric
+    /// cell change. Named for what it observed, not for what it implies.
+    pub changed: bool,
     pub tolerance: f64,
     /// Per-table head-vs-as-of version gap (only tables that differ).
     pub withheld_versions: Vec<TableVersionDelta>,
@@ -106,10 +107,10 @@ pub struct LeakageReport {
 }
 
 /// Always-present scope caveat: what a zero delta does and does not prove.
-const NOTE_ZERO_IS_NOT_INNOCENCE: &str = "a zero delta does not prove the absence of look-ahead bias: this check only sees \
-     data-availability (arrival-axis) leakage across commits, not look-ahead inside a single \
-     snapshot (a window overrunning into future rows, a join reading later timestamps), which \
-     needs an event-time cutoff";
+const NOTE_ZERO_IS_NOT_INNOCENCE: &str = "this measures one shape of look-ahead: data that arrived after the read point. It is \
+     blind to look-ahead inside a single snapshot (a signal reading its own bar, a window \
+     overrunning forward, a join reading later timestamps), so no value of this delta clears a \
+     query of look-ahead; bound the event-time axis with `query --decision-time` for that";
 
 /// Added when the comparison had nothing to withhold.
 const NOTE_VACUOUS: &str = "VACUOUS: the as-of point resolved to the same version as head for every table, so both runs \
@@ -128,14 +129,14 @@ fn describe(at: &ReadAt) -> String {
     }
 }
 
-/// Run `sql` against head and against `at`, returning the leakage-delta report.
-pub async fn check_leakage(
+/// Run `sql` against head and against `at`, returning the arrival-delta report.
+pub async fn arrival_delta(
     db: Arc<Database>,
     sql: &str,
     at: ReadAt,
     tolerance: f64,
-) -> DfResult<LeakageReport> {
-    // Head (leaking) session, then the as-of (non-leaking) session sharing its
+) -> DfResult<ArrivalDeltaReport> {
+    // Head session, then the earlier read point sharing its
     // runtime so the footer-metadata cache and memory pool are reused.
     let head_session = H5iSession::new(db.clone(), SessionOptions::default()).await?;
     let asof_session = H5iSession::new_with_runtime_at(
@@ -255,7 +256,7 @@ fn compare(
     asof: (SchemaRef, Vec<RecordBatch>),
     tolerance: f64,
     withheld: Vec<TableVersionDelta>,
-) -> LeakageReport {
+) -> ArrivalDeltaReport {
     let (vacuous, notes) = notes_for(&withheld);
     let (head_schema, head_batches) = head;
     let (asof_schema, asof_batches) = asof;
@@ -266,7 +267,7 @@ fn compare(
     if !schemas_match(&head_schema, &asof_schema) {
         // A shape change between the two runs: cannot align columns, but the
         // change itself is a signal.
-        return LeakageReport {
+        return ArrivalDeltaReport {
             decision,
             comparable: false,
             reason: Some(
@@ -277,7 +278,7 @@ fn compare(
             row_count_differs,
             columns: Vec::new(),
             max_abs_delta: 0.0,
-            leakage_detected: true,
+            changed: true,
             tolerance,
             withheld_versions: withheld,
             vacuous,
@@ -366,8 +367,8 @@ fn compare(
         });
     }
 
-    let leakage_detected = row_count_differs || any_cell_change || max_abs_delta > tolerance;
-    LeakageReport {
+    let changed = row_count_differs || any_cell_change || max_abs_delta > tolerance;
+    ArrivalDeltaReport {
         decision,
         comparable: true,
         reason: None,
@@ -376,7 +377,7 @@ fn compare(
         row_count_differs,
         columns,
         max_abs_delta,
-        leakage_detected,
+        changed,
         tolerance,
         withheld_versions: withheld,
         vacuous,

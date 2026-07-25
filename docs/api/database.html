@@ -282,12 +282,12 @@ Prunes segments before I/O.</dd>
                  <span class="n">time_start</span><span class="o">=</span><span class="n">t0_us</span><span class="p">,</span> <span class="n">time_end</span><span class="o">=</span><span class="n">t1_us</span><span class="p">)</span>
 </code></pre></div>
 
-</div></section><section class="api-member"><h3 id="databaseleakage_check"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">leakage_check</span></code><a class="headerlink" href="#databaseleakage_check" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">leakage_check</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+</div></section><section class="api-member"><h3 id="databasearrival_delta"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">arrival_delta</span></code><a class="headerlink" href="#databasearrival_delta" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">arrival_delta</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
               <span class="n">tolerance</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
 </code></pre></div><div class="api-body">
 
 <p>Look-ahead-bias diagnostic (the Python surface of the CLI
-<a href="../manual/cli.html#h5i-db-leakage-check"><code>leakage-check</code></a>). Runs <code>query</code> twice,
+<a href="../manual/cli.html#h5i-db-arrival-delta"><code>arrival-delta</code></a>). Runs <code>query</code> twice,
 against the current head (<em>leaking</em>: every commit, including rows that only
 became available after the decision instant) and against a decision read point
 (<em>non-leaking</em>), and returns the delta between the two results.</p>
@@ -303,7 +303,7 @@ string matched by commit <em>availability</em> time.</dd>
 (default <code>1e-9</code>).</dd>
 </dl>
 <p class="api-label">Returns</p>
-<p><code>dict</code> with the leakage report: <code>leakage_detected</code>, per-column
+<p><code>dict</code> with the arrival-delta report: <code>changed</code>, per-column
 <code>head → asof (delta)</code>, <code>max_abs_delta</code>, <code>row_count_differs</code>, and
 <code>withheld_versions</code> (per table, the head-vs-as-of version gap).</p>
 <p class="api-label">Raises</p>
@@ -311,19 +311,22 @@ string matched by commit <em>availability</em> time.</dd>
 <dt><code>InvalidInputError</code></dt>
 <dd>No decision point was given, or more than one.</dd>
 </dl>
-<div class="highlight"><pre><span></span><code><span class="n">report</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">leakage_check</span><span class="p">(</span>
+<div class="highlight"><pre><span></span><code><span class="n">report</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">arrival_delta</span><span class="p">(</span>
     <span class="s2">&quot;SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol&quot;</span><span class="p">,</span>
     <span class="n">as_of</span><span class="o">=</span><span class="s2">&quot;2026-07-01T16:00:00Z&quot;</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="k">if</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;leakage_detected&quot;</span><span class="p">]:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;alpha that evaporates:&quot;</span><span class="p">,</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;max_abs_delta&quot;</span><span class="p">])</span>
+<span class="k">if</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;changed&quot;</span><span class="p">]</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;vacuous&quot;</span><span class="p">]:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;moved by:&quot;</span><span class="p">,</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;max_abs_delta&quot;</span><span class="p">])</span>
 </code></pre></div>
 
 <div class="admonition note">
-<p class="admonition-title">Scope</p>
-<p>A non-zero delta proves <em>availability</em> leakage (late-arriving or restated
-rows across commits). A zero delta does not prove its absence, and this
-does not detect look-ahead <em>inside</em> a single snapshot.</p>
+<p class="admonition-title">Scope: a measurement, not a verdict</p>
+<p>A non-zero delta means late-arriving or restated rows moved the answer.
+That is one shape of look-ahead; a signal reading its own bar leaves this
+unmoved, so no value of the delta clears a query. Read <code>vacuous</code> first:
+when both read points resolve to the same version, which is the normal
+state of a bulk-loaded database, the zero is arithmetic rather than
+evidence. <code>notes</code> carries both caveats on every run.</p>
 </div>
 </div></section><h2 id="snapshots">Snapshots<a class="headerlink" href="#snapshots" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="databasesnapshot"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">snapshot</span></code><a class="headerlink" href="#databasesnapshot" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">snapshot</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
@@ -476,7 +479,7 @@ history is never touched.</p>
     <nav class="page-nav"><a class="prev" href="../api/index.html"><span class="dir">← Previous</span><span class="pn-title">Overview</span></a><a class="next" href="../api/results-and-plans.html"><span class="dir">Next →</span><span class="pn-title">QueryResult &amp; MutationPlan</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#constructor">Constructor</a><ul><li><a href="#h5i_dbdatabase">h5i_db.Database</a></li></ul></li><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li><li><a href="#databaseleakage_check">Database.leakage_check</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#data-safety-policy">Data-safety policy</a><ul><li><a href="#databasedata_policy">Database.data_policy</a></li><li><a href="#databaseset_data_policy">Database.set_data_policy</a></li><li><a href="#databaseclear_data_policy">Database.clear_data_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#constructor">Constructor</a><ul><li><a href="#h5i_dbdatabase">h5i_db.Database</a></li></ul></li><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li><li><a href="#databasearrival_delta">Database.arrival_delta</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#data-safety-policy">Data-safety policy</a><ul><li><a href="#databasedata_policy">Database.data_policy</a></li><li><a href="#databaseset_data_policy">Database.set_data_policy</a></li><li><a href="#databaseclear_data_policy">Database.clear_data_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

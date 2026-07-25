@@ -459,3 +459,159 @@ fn without_embargo_nothing_about_the_default_path_changes() {
     ));
     assert_eq!(scalar(&arrival, "c"), 4.0);
 }
+
+// -- the pin must hold through the table functions --------------------------
+//
+// `--as-of` and `--decision-time` bound the session by swapping what the
+// catalog hands out, but the table functions (`h5i()`, `asof_join()`,
+// `latest_on()`, `gapfill()`, `tail()`) resolve their tables straight from the
+// database. They once read straight past the pin, which made the jail a
+// formality: one word of SQL defeated it. These tests are the reproduction.
+
+#[test]
+fn table_functions_cannot_read_past_an_arrival_pin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap(cwd);
+    // v2 of trades exists; a session pinned at v1 must not see it, by any route.
+    let pinned = |sql: &str| {
+        ok_json(&run(
+            &["query", "m.db", sql, "--as-of", "1", "--format", "json"],
+            cwd,
+        ))
+    };
+
+    assert_eq!(
+        scalar(&pinned("SELECT count(*) AS c FROM trades"), "c"),
+        2.0
+    );
+    assert_eq!(
+        scalar(&pinned("SELECT count(*) AS c FROM h5i('trades')"), "c"),
+        2.0,
+        "h5i() must follow the pin, not the head"
+    );
+    assert_eq!(
+        scalar(
+            &pinned("SELECT count(*) AS c FROM latest_on('trades','symbol')"),
+            "c"
+        ),
+        1.0
+    );
+    assert_eq!(
+        scalar(
+            &pinned("SELECT count(*) AS c FROM asof_join('trades','quotes','ts','ts','symbol')"),
+            "c"
+        ),
+        2.0,
+        "both sides of an asof join must follow the pin"
+    );
+
+    // The pinned price proves it is really reading v1 and not just counting.
+    assert_eq!(
+        scalar(&pinned("SELECT max(price) AS c FROM h5i('trades')"), "c"),
+        102.0
+    );
+}
+
+#[test]
+fn a_pinned_session_refuses_a_different_read_point() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap(cwd);
+    // Selecting another version from inside the jail is the obvious escape;
+    // it is refused rather than honoured.
+    let e = err_envelope(&run(
+        &[
+            "query",
+            "m.db",
+            "SELECT count(*) AS c FROM h5i('trades', 2)",
+            "--as-of",
+            "1",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(e["code"], "invalid_input");
+    assert!(
+        e["message"].as_str().unwrap().contains("pinned"),
+        "the error should explain the session is pinned: {e}"
+    );
+}
+
+#[test]
+fn table_functions_refuse_rather_than_ignore_an_event_time_cutoff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap_bulk(cwd);
+    // These consume their tables internally, so the cutoff cannot be pushed
+    // into them. Refusing loudly is the whole point: returning rows from after
+    // the decision instant while the session claims to be pinned is worse than
+    // any error.
+    for sql in [
+        "SELECT count(*) AS c FROM h5i('trades')",
+        "SELECT count(*) AS c FROM latest_on('trades','symbol')",
+        "SELECT count(*) AS c FROM asof_join('trades','trades','ts','ts','symbol')",
+    ] {
+        let out = run(
+            &[
+                "query",
+                "b.db",
+                sql,
+                "--decision-time",
+                "2026-07-01T10:30:00Z",
+                "--format",
+                "json",
+            ],
+            cwd,
+        );
+        let e = err_envelope(&out);
+        assert_eq!(e["code"], "invalid_input", "for {sql}");
+        let msg = e["message"].as_str().unwrap();
+        assert!(
+            msg.contains("event-time cutoff") && msg.contains("Reference the table by name"),
+            "the refusal should name the cause and the alternative: {msg}"
+        );
+    }
+
+    // And the alternative it names actually works.
+    let ok = ok_json(&run(
+        &[
+            "query",
+            "b.db",
+            "SELECT count(*) AS c FROM trades",
+            "--decision-time",
+            "2026-07-01T10:30:00Z",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(scalar(&ok, "c"), 2.0);
+}
+
+#[test]
+fn an_unpinned_session_leaves_the_table_functions_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap(cwd);
+    // The guard must be invisible when nothing is pinned, including explicit
+    // time travel, which is what h5i() is for.
+    let plain = |sql: &str| ok_json(&run(&["query", "m.db", sql, "--format", "json"], cwd));
+    assert_eq!(
+        scalar(&plain("SELECT count(*) AS c FROM h5i('trades')"), "c"),
+        3.0
+    );
+    assert_eq!(
+        scalar(&plain("SELECT count(*) AS c FROM h5i('trades', 1)"), "c"),
+        2.0,
+        "time travel by explicit version still works unpinned"
+    );
+    assert_eq!(
+        scalar(
+            &plain("SELECT count(*) AS c FROM latest_on('trades','symbol')"),
+            "c"
+        ),
+        1.0
+    );
+}

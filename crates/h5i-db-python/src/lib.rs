@@ -25,7 +25,7 @@ use pyo3::types::PyBytes;
 
 use h5i_db_core::{DataPolicy, Database, Error, ReadAt, ScanOptions, TableOptions, WriteOptions};
 use h5i_db_query::datafusion::error::DataFusionError;
-use h5i_db_query::{DEFAULT_TOLERANCE, H5iSession, SessionOptions, check_leakage};
+use h5i_db_query::{DEFAULT_TOLERANCE, H5iSession, SessionOptions, arrival_delta};
 
 // -- exceptions -------------------------------------------------------------
 //
@@ -835,11 +835,11 @@ impl NativeDatabase {
     }
 
     /// Look-ahead-bias check (V-A1): run `query` against head and against the
-    /// decision read point, and return the leakage-delta report as JSON.
+    /// earlier read point, and return the arrival-delta report as JSON.
     /// Exactly one of `version` / `as_of` / `snapshot` must pin the decision
     /// point; `tolerance` defaults to the crate default.
     #[pyo3(signature = (query, version = None, as_of = None, snapshot = None, tolerance = None))]
-    fn leakage_check(
+    fn arrival_delta(
         &self,
         py: Python<'_>,
         query: &str,
@@ -850,7 +850,7 @@ impl NativeDatabase {
     ) -> PyResult<String> {
         if version.is_none() && as_of.is_none() && snapshot.is_none() {
             return Err(invalid(
-                "leakage_check needs a decision point: one of version, as_of, snapshot",
+                "arrival_delta needs a decision point: one of version, as_of, snapshot",
             ));
         }
         let at = parse_read_at(version, as_of, snapshot)?;
@@ -864,7 +864,7 @@ impl NativeDatabase {
             .detach(move || {
                 inner
                     .runtime
-                    .block_on(async move { check_leakage(inner.db.clone(), &query, at, tol).await })
+                    .block_on(async move { arrival_delta(inner.db.clone(), &query, at, tol).await })
             })
             .map_err(df_err)?;
         to_json(&report)

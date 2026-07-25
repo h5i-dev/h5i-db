@@ -316,15 +316,15 @@ window = db.read("trades", columns=["ts", "price"],
                  time_start=t0_us, time_end=t1_us)
 ```
 
-### `Database.leakage_check`
+### `Database.arrival_delta`
 
 ```python
-leakage_check(query, version=None, as_of=None, snapshot=None,
+arrival_delta(query, version=None, as_of=None, snapshot=None,
               tolerance=None) -> dict
 ```
 
 Look-ahead-bias diagnostic (the Python surface of the CLI
-[`leakage-check`](../manual/cli.html#h5i-db-leakage-check)). Runs `query` twice,
+[`arrival-delta`](../manual/cli.html#h5i-db-arrival-delta)). Runs `query` twice,
 against the current head (*leaking*: every commit, including rows that only
 became available after the decision instant) and against a decision read point
 (*non-leaking*), and returns the delta between the two results.
@@ -344,7 +344,7 @@ became available after the decision instant) and against a decision read point
 
 **Returns**
 
-`dict` with the leakage report: `leakage_detected`, per-column
+`dict` with the arrival-delta report: `changed`, per-column
 `head → asof (delta)`, `max_abs_delta`, `row_count_differs`, and
 `withheld_versions` (per table, the head-vs-as-of version gap).
 
@@ -354,18 +354,21 @@ became available after the decision instant) and against a decision read point
 :   No decision point was given, or more than one.
 
 ```python
-report = db.leakage_check(
+report = db.arrival_delta(
     "SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol",
     as_of="2026-07-01T16:00:00Z",
 )
-if report["leakage_detected"]:
-    print("alpha that evaporates:", report["max_abs_delta"])
+if report["changed"] and not report["vacuous"]:
+    print("moved by:", report["max_abs_delta"])
 ```
 
-!!! note "Scope"
-    A non-zero delta proves *availability* leakage (late-arriving or restated
-    rows across commits). A zero delta does not prove its absence, and this
-    does not detect look-ahead *inside* a single snapshot.
+!!! note "Scope: a measurement, not a verdict"
+    A non-zero delta means late-arriving or restated rows moved the answer.
+    That is one shape of look-ahead; a signal reading its own bar leaves this
+    unmoved, so no value of the delta clears a query. Read `vacuous` first:
+    when both read points resolve to the same version, which is the normal
+    state of a bulk-loaded database, the zero is arithmetic rather than
+    evidence. `notes` carries both caveats on every run.
 
 ## Snapshots
 

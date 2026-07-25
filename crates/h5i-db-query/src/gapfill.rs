@@ -19,7 +19,7 @@ use datafusion::datasource::MemTable;
 use datafusion::error::{DataFusionError, Result as DfResult};
 use datafusion::logical_expr::Expr;
 use datafusion::scalar::ScalarValue;
-use h5i_db_core::{Database, ReadAt, ScanOptions};
+use h5i_db_core::{Database, ScanOptions};
 
 use crate::udtf::block_on;
 
@@ -36,11 +36,16 @@ enum FillMode {
 #[derive(Debug)]
 pub struct GapFillFunc {
     db: Arc<Database>,
+    pin: crate::pin::PinContext,
 }
 
 impl GapFillFunc {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self::pinned(db, crate::pin::PinContext::default())
+    }
+
+    pub(crate) fn pinned(db: Arc<Database>, pin: crate::pin::PinContext) -> Self {
+        Self { db, pin }
     }
 }
 
@@ -251,8 +256,10 @@ impl TableFunctionImpl for GapFillFunc {
                     .into(),
             ));
         }
+        self.pin.check_usable("gapfill")?;
+        let at = self.pin.read_at();
         let (resolved, batches) = block_on(async {
-            let resolved = self.db.resolve(&table, ReadAt::Latest).await?;
+            let resolved = self.db.resolve(&table, at).await?;
             let (batches, _) = self
                 .db
                 .scan_resolved(&resolved, ScanOptions::default())

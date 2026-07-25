@@ -203,9 +203,9 @@ pub async fn run(dir: Option<PathBuf>, keep: bool) -> Result<PathBuf> {
     step(
         7,
         "How much of the original number was data that had not arrived?",
-        "h5i-db leakage-check demo.db \"SELECT vwap(price, size) …\" --as-of 1",
+        "h5i-db arrival-delta demo.db \"SELECT vwap(price, size) …\" --as-of 1",
     );
-    let report = h5i_db_query::check_leakage(
+    let report = h5i_db_query::arrival_delta(
         db.clone(),
         vwap_sql,
         ReadAt::Version(v1),
@@ -215,8 +215,8 @@ pub async fn run(dir: Option<PathBuf>, keep: bool) -> Result<PathBuf> {
     .map_err(|e| h5i_db_core::Error::internal(e.to_string()))?;
     let col = &report.columns[0];
     println!(
-        "    -> leakage_detected: {}, head {:.4} vs as-of {:.4}, delta {:+.4}",
-        report.leakage_detected,
+        "    -> changed: {}, head {:.4} vs as-of {:.4}, delta {:+.4}",
+        report.changed,
         col.head.unwrap_or_default(),
         col.asof.unwrap_or_default(),
         col.delta.unwrap_or_default()

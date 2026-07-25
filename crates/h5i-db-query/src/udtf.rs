@@ -21,6 +21,8 @@ use datafusion::logical_expr::Expr;
 use datafusion::scalar::ScalarValue;
 use h5i_db_core::{Database, ReadAt};
 
+use crate::pin::PinContext;
+
 use crate::provider::{H5iTableProvider, ScanMetricsCollector};
 
 /// Run an async resolution from DataFusion's synchronous planning context.
@@ -59,11 +61,26 @@ pub struct TimeTravelFunc {
     db: Arc<Database>,
     url: ObjectStoreUrl,
     metrics: ScanMetricsCollector,
+    pin: PinContext,
 }
 
 impl TimeTravelFunc {
     pub fn new(db: Arc<Database>, url: ObjectStoreUrl, metrics: ScanMetricsCollector) -> Self {
-        Self { db, url, metrics }
+        Self::pinned(db, url, metrics, PinContext::default())
+    }
+
+    pub(crate) fn pinned(
+        db: Arc<Database>,
+        url: ObjectStoreUrl,
+        metrics: ScanMetricsCollector,
+        pin: PinContext,
+    ) -> Self {
+        Self {
+            db,
+            url,
+            metrics,
+            pin,
+        }
     }
 }
 
@@ -97,9 +114,12 @@ impl TableFunctionImpl for TimeTravelFunc {
         let table = literal_str(&args[0]).ok_or_else(|| {
             DataFusionError::Plan("h5i: first argument must be a table name string".into())
         })?;
+        self.pin.check_usable("h5i")?;
         let at = match args.get(1) {
-            None => ReadAt::Latest,
+            None => self.pin.read_at(),
             Some(arg) => {
+                // A pinned session chooses the read point; nothing inside it may.
+                self.pin.check_no_explicit_read_point("h5i")?;
                 if let Some(v) = literal_int(arg) {
                     ReadAt::Version(v)
                 } else if let Some(s) = literal_str(arg) {

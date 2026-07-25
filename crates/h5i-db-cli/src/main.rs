@@ -241,9 +241,15 @@ enum Command {
     /// List a table's committed versions.
     Versions { db: PathBuf, table: String },
 
-    /// Look-ahead-bias check: run a query against the current head and against
-    /// an as-of read point, and report the "leakage delta" between them.
-    LeakageCheck {
+    /// Measure how much a query's answer moved because data arrived late: run
+    /// it at the current head and at an earlier read point, and report the
+    /// difference.
+    ///
+    /// A measurement, not a verdict. It sees one shape of look-ahead (commits
+    /// that had not landed yet) and is blind to a signal reading its own bar,
+    /// so no value of the delta clears a query. Check `vacuous` before reading
+    /// the number: on a database with no arrival history the zero is forced.
+    ArrivalDelta {
         db: PathBuf,
         /// SQL text, or "-" for stdin.
         sql: String,
@@ -381,7 +387,7 @@ impl Command {
             | Query { db, .. }
             | Ingest { db, .. }
             | Versions { db, .. }
-            | LeakageCheck { db, .. }
+            | ArrivalDelta { db, .. }
             | Restore { db, .. }
             | ReplaceRange { db, .. }
             | DeleteRange { db, .. }
@@ -678,7 +684,7 @@ async fn drain_budgeted(
     })
 }
 
-/// Parse a decision point shared by `query --as-of` and `leakage-check
+/// Parse a decision point shared by `query --as-of` and `arrival-delta
 /// --as-of`: an integer version, an RFC3339 timestamp resolved against commit
 /// *availability* (`committed_at_ns`), or a snapshot name. Mirrors the `h5i()`
 /// time-travel function so one spelling works everywhere.
@@ -1156,7 +1162,7 @@ async fn run(cli: Cli) -> Result<()> {
             write_value(&rows, format)
         }
 
-        Command::LeakageCheck {
+        Command::ArrivalDelta {
             db,
             sql,
             as_of,
@@ -1174,7 +1180,7 @@ async fn run(cli: Cli) -> Result<()> {
             };
             let at = parse_read_at(&as_of)?;
             let db = Arc::new(Database::open_read_only(&db).await?);
-            let report = h5i_db_query::check_leakage(
+            let report = h5i_db_query::arrival_delta(
                 db,
                 &sql,
                 at,

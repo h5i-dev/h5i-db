@@ -16,7 +16,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::streaming::{PartitionStream, StreamingTableExec};
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::StreamExt;
-use h5i_db_core::{Database, ReadAt};
+use h5i_db_core::Database;
 
 use crate::udtf::block_on;
 
@@ -26,11 +26,16 @@ use crate::udtf::block_on;
 /// callers should apply `LIMIT` or cancel the query when they are done.
 pub struct TailFunc {
     db: Arc<Database>,
+    pin: crate::pin::PinContext,
 }
 
 impl TailFunc {
     pub fn new(db: Arc<Database>) -> Self {
-        Self { db }
+        Self::pinned(db, crate::pin::PinContext::default())
+    }
+
+    pub(crate) fn pinned(db: Arc<Database>, pin: crate::pin::PinContext) -> Self {
+        Self { db, pin }
     }
 }
 
@@ -59,7 +64,8 @@ impl TableFunctionImpl for TailFunc {
             .transpose()?
             .unwrap_or(250)
             .max(10);
-        let resolved = block_on(self.db.resolve(table, ReadAt::Latest))
+        self.pin.check_usable("tail")?;
+        let resolved = block_on(self.db.resolve(table, self.pin.read_at()))
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let after = requested_after.unwrap_or(resolved.manifest.sequence);
         Ok(Arc::new(TailProvider {

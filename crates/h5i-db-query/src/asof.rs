@@ -889,6 +889,7 @@ pub struct AsOfJoinFunc {
     db: Arc<h5i_db_core::Database>,
     url: datafusion::execution::object_store::ObjectStoreUrl,
     metrics: ScanMetricsCollector,
+    pin: crate::pin::PinContext,
 }
 
 impl AsOfJoinFunc {
@@ -897,7 +898,21 @@ impl AsOfJoinFunc {
         url: datafusion::execution::object_store::ObjectStoreUrl,
         metrics: ScanMetricsCollector,
     ) -> Self {
-        Self { db, url, metrics }
+        Self::pinned(db, url, metrics, crate::pin::PinContext::default())
+    }
+
+    pub(crate) fn pinned(
+        db: Arc<h5i_db_core::Database>,
+        url: datafusion::execution::object_store::ObjectStoreUrl,
+        metrics: ScanMetricsCollector,
+        pin: crate::pin::PinContext,
+    ) -> Self {
+        Self {
+            db,
+            url,
+            metrics,
+            pin,
+        }
     }
 }
 
@@ -969,9 +984,10 @@ impl TableFunctionImpl for AsOfJoinFunc {
             inner: false,
         };
 
-        let left = block_on(self.db.resolve(&left_table, h5i_db_core::ReadAt::Latest))
+        self.pin.check_usable("asof_join")?;
+        let left = block_on(self.db.resolve(&left_table, self.pin.read_at()))
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let right = block_on(self.db.resolve(&right_table, h5i_db_core::ReadAt::Latest))
+        let right = block_on(self.db.resolve(&right_table, self.pin.read_at()))
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let (schema, right_kept) = asof_output_schema(&left.schema, &right.schema, &options)?;
         Ok(Arc::new(AsOfTableProvider {
