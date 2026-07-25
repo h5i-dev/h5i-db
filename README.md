@@ -3,21 +3,16 @@
 **A fast, fully versioned, embedded time-series database for quant research.
 Written in Rust.**
 
-It sits under a research loop rather than replacing it: you pull with SQL and
-model in Python. What the database is responsible for is that the inputs are
-versioned, the pulls are reproducible, and an automated writer cannot quietly
-damage the store.
-
 - **Blazing fast on time-series shape.** Over 4.5× faster than DuckDB and Polars
   for OHLCV+VWAP rollups on 20M rows, with full SQL via DataFusion.
 - **Immutable & versioned.** Every write is an atomic commit; any past version
   reads in O(1), so a bad ingest is one `restore` away from undone.
-- **Rich time-series SQL.** Native ASOF join, timezone-aware `time_bucket`,
+- **Rich time-series SQL.** ASOF join, timezone-aware `time_bucket`,
   gapfill/resample, rolling windows, `vwap`, `ewma`.
 - **Point-in-time reads.** Pin a read point and the data you pull is bounded by
   it, so the frame that reaches pandas cannot contain rows from after the
   decision instant. `arrival-delta` measures what a later restatement changed.
-- **Safe for automated writers.** Previewable mutations, policy gates,
+- **Agent-Friendly Deisgn.** Previewable mutations, policy gates,
   fail-closed data constraints, crash-safe commits, and an audit trail.
 - **Embedded.** One directory, no server, no daemon. Apache-2.0.
 
@@ -80,11 +75,6 @@ plan.apply()
 ```bash
 npx skills add h5i-dev/h5i-db        # installs the h5i-db skill from skills/h5i-db/
 ```
-
-The skill teaches an agent the safe driving pattern (discover, query under a
-limit, plan/apply for mutations) and ships in-repo at
-[`skills/h5i-db/`](skills/h5i-db/SKILL.md) so it always matches this
-repository's CLI.
 
 ---
 
