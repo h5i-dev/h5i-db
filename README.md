@@ -138,11 +138,6 @@ then bounded at the source, which is the only place a bound survives the trip
 into Python. `arrival-delta` measures, after the fact, how much of a result
 depended on data that arrived later.
 
-```bash
-export H5I_DB_DECISION_TIME=2026-07-01T00:00:00Z   # pins subsequent pulls
-h5i-db query market.db "SELECT vwap(price, size) FROM trades"
-```
-
 - **Don't let a result destroy the context window.** `H5I_DB_PROFILE=agent` caps
 every query and spills the rest to Parquet, reporting the true row count and
 where the withheld rows live. Output never changes based on whether stdout is
