@@ -1069,6 +1069,29 @@ class _Query:
             or self.distinct
         )
 
+    def output_names(self) -> Optional[frozenset]:
+        """Names this level emits, or ``None`` when a wildcard emits them all."""
+        if self.projection is None:
+            return None
+        names = set()
+        for expr in self.projection:
+            name = expr.output_name
+            if name is None or expr._sql == "*":
+                return None
+            names.add(name)
+        return frozenset(names)
+
+    def can_order_by(self, keys: Sequence[Expr]) -> bool:
+        """Is every sort key already in the select list?
+
+        Only DISTINCT cares: a plain SELECT may order by a column it does not
+        project, but ``SELECT DISTINCT`` may not.
+        """
+        names = self.output_names()
+        if names is None:
+            return True
+        return all(k.output_name in names for k in keys)
+
     def is_bare_table(self) -> bool:
         return (
             self.base_table is not None
@@ -1250,7 +1273,12 @@ class LazyFrame:
     ) -> "LazyFrame":
         """Order the result."""
         items, _ = _order_items(by, descending)
-        q = self._level(self._q.limit is not None)
+        # Under DISTINCT, a sort key outside the select list is a planning
+        # error, so it has to sort a level down instead.
+        wrap = self._q.limit is not None or (
+            self._q.distinct and not self._q.can_order_by(_as_expr_list(by))
+        )
+        q = self._level(wrap)
         q.order_by = items
         return self._next(q)
 

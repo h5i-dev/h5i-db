@@ -543,6 +543,15 @@ def test_an_existing_ordering_closes_a_level_before_aggregation():
     # DISTINCT is stricter still: every ORDER BY key must be selected.
     built = frame().sort("price").select("symbol").unique()
     assert built.sql().count("SELECT") == 2, built.sql()
+    # Sorting a de-duplicated frame by a column it no longer carries is a
+    # user error either way; wrapping makes the engine say which column is
+    # missing rather than complain about DISTINCT.
+    built = frame().select("symbol").unique().sort("price")
+    assert built.sql().count("SELECT") == 2, built.sql()
+    # Sorting by a column DISTINCT does project needs no extra level, and
+    # neither does `SELECT DISTINCT *`, which projects everything.
+    assert frame().select("symbol").unique().sort("symbol").sql().count("SELECT") == 1
+    assert frame().unique().sort("price").sql().count("SELECT") == 1
 
 
 def test_limit_before_group_by_limits_the_input_not_the_groups():
@@ -578,6 +587,10 @@ def test_verb_order_combinations_all_plan():
             .group_by("symbol")
             .agg(col("m").max().alias("mm")),
             t.unique().limit(3).filter(col("price") > 0),
+            t.select("symbol").unique().sort("symbol"),
+            t.unique().sort("price"),
+            t.select("symbol", "price").unique().sort(["price", "symbol"]),
+            t.with_columns(r=col("price") + 1).unique().sort("r"),
             t.join(db.table("quotes"), on="ts").filter(
                 col("ts", relation="l").is_not_null()
             ),
@@ -591,6 +604,13 @@ def test_verb_order_combinations_all_plan():
         ]
         for built in pipelines:
             built.collect()  # raises if the query does not plan
+
+        # Referring to a column an earlier stage dropped names that column.
+        err = _raises(
+            h5i_db.InvalidInputError,
+            db.table("trades").select("symbol").unique().sort("price").collect,
+        )
+        assert "price" in str(err)
 
 
 def test_opaque_sql_expr_forces_a_wrap_only_when_aliases_exist():
