@@ -1,28 +1,25 @@
 # h5i-db
 
-**The database that can show an agent the past and nothing else.**
+**A fast, fully versioned, embedded time-series database for quant research.
+Written in Rust.**
 
-An embedded, fully versioned analytical database for quant research, written in
-Rust and Apache-2.0.
+It sits under a research loop rather than replacing it: you pull with SQL and
+model in Python. What the database is responsible for is that the inputs are
+versioned, the pulls are reproducible, and an automated writer cannot quietly
+damage the store.
 
-Look-ahead bias is the correctness bug in backtesting, and it gets worse when an
-agent runs forty backtests overnight — nobody reviews forty results closely
-enough to catch the one that quietly read tomorrow's close. h5i-db makes that
-structurally impossible rather than checkable after the fact: pin a session to a
-decision instant and no query inside it can read a row stamped later, or a
-commit that had not arrived yet.
-
-- **Point-in-time enforced, not offered.** `--decision-time` bounds every scan
-  in the session; `--as-of` pins which commits exist. Both are part of the
-  table, not a filter a query can forget or widen.
+- **Blazing fast on time-series shape.** Over 4.5× faster than DuckDB and Polars
+  for OHLCV+VWAP rollups on 20M rows, with full SQL via DataFusion.
 - **Immutable & versioned.** Every write is an atomic commit; any past version
-  reads in O(1), and `leakage-check` quantifies what a restatement changed.
-- **Built for agents, not chatbots.** One-call orientation, output budgets that
-  protect a context window, and error envelopes carrying runnable recovery
-  commands. No LLM inside the database.
-- **Fast where time-series shape allows.** Over 4.5× faster than DuckDB and
-  Polars for OHLCV+VWAP rollups on 20M rows, with full SQL via DataFusion
-  (ASOF join, `time_bucket`, gapfill/resample, `vwap`, `ewma`).
+  reads in O(1), so a bad ingest is one `restore` away from undone.
+- **Rich time-series SQL.** Native ASOF join, timezone-aware `time_bucket`,
+  gapfill/resample, rolling windows, `vwap`, `ewma`.
+- **Point-in-time reads.** Pin a read point and the data you pull is bounded by
+  it, so the frame that reaches pandas cannot contain rows from after the
+  decision instant. `leakage-check` measures what a later restatement changed.
+- **Safe for automated writers.** Previewable mutations, policy gates,
+  fail-closed data constraints, crash-safe commits, and an audit trail.
+- **Embedded.** One directory, no server, no daemon. Apache-2.0.
 
 📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
 [Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) · [Agent skill](skills/h5i-db/SKILL.md)
@@ -84,8 +81,8 @@ plan.apply()
 npx skills add h5i-dev/h5i-db        # installs the h5i-db skill from skills/h5i-db/
 ```
 
-The skill teaches an agent the safe driving pattern — discover → query with
-limits → plan/apply for mutations — and ships in-repo at
+The skill teaches an agent the safe driving pattern (discover, query under a
+limit, plan/apply for mutations) and ships in-repo at
 [`skills/h5i-db/`](skills/h5i-db/SKILL.md) so it always matches this
 repository's CLI.
 
@@ -141,15 +138,18 @@ The premise is that the agent lives *outside* the database. Nothing here
 generates SQL or embeds a model; the database's job is to be legible and
 impossible to corrupt, and everything below follows from that.
 
-- **Show it the past, and nothing else.** A research session is pinned on two
-axes — event time (`--decision-time`, so a window cannot overrun forwards) and
-arrival (`--as-of`, so a later restatement stays invisible). Both are enforced
-in the table, so a query that explicitly asks for the future still gets none.
-A table that cannot be bounded refuses the session rather than being quietly
-exempt.
+- **Reproducible inputs.** Every read resolves to a version, so "which data did
+this run see" has an answer, and re-running against that version is O(1) rather
+than an archaeology project.
+
+- **Point-in-time pulls.** A read point can be pinned on two axes: event time
+(`--decision-time`) and arrival (`--as-of`). The frame you hand to pandas is
+then bounded at the source, which is the only place a bound survives the trip
+into Python. `leakage-check` measures, after the fact, how much of a result
+depended on data that arrived later.
 
 ```bash
-export H5I_DB_DECISION_TIME=2026-07-01T00:00:00Z   # pins the whole session
+export H5I_DB_DECISION_TIME=2026-07-01T00:00:00Z   # pins subsequent pulls
 h5i-db query market.db "SELECT vwap(price, size) FROM trades"
 ```
 
@@ -160,7 +160,7 @@ a terminal.
 
 - **One call to get oriented.** `h5i-db context <db>` returns every table's
 schema, size, time range and head version, the operations policy gates, and
-any plan already staged — deterministic, so it can be cached, and `--budget`
+any plan already staged. Deterministic, so it can be cached, and `--budget`
 caps it in tokens.
 
 - **Errors that can be acted on.** The stderr envelope carries `next_actions`
@@ -183,17 +183,17 @@ writer at every step.
 - **OLTP or high-concurrency serving.** One writer at a time, no row-level
   MVCC, no interactive transactions. Use Postgres.
 - **Sub-microsecond tick capture.** The write cadence this is built for is
-  minute bars, end-of-day, and vendor files — not the capture layer itself.
+  minute bars, end-of-day, and vendor files, not the capture layer itself.
   That is kdb+ territory.
 - **Databases with no time column.** The whole design assumes a time index;
-  without one you lose pruning, the ASOF join, and research mode entirely.
+  without one you lose pruning, the ASOF join, and point-in-time reads.
 
 ---
 
 ## Development
 
 ```bash
-cargo test --workspace          # 60+ tests incl. crash-safety fault injection
+cargo test --workspace          # ~290 tests incl. crash-safety fault injection
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
 ```
 
