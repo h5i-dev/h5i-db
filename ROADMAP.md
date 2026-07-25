@@ -863,6 +863,33 @@ arrival replay) and the format-change tier.
 
 Suggested start order within batch 1: 9 → 6 → 4 → 3 → 2 → 1 → 10 → 5 → 7 → 8.
 
+### Batch 1 implementation status (2026-07-24, branch `agentic-features`)
+
+**All ten delivered.** Built in the order above except that the docs (#9) and
+docs-as-tests (#8) moved to the end, so they describe shipped reality and the
+test validates the final text rather than an interim one.
+
+| # | Status | Notes |
+|---|--------|-------|
+| 1 | ✅ | `context` + `--budget` + `--stale-after` (VI-B3 folded in). Budget shedding is monotone in the budget — the omission record is counted against it, and entries are fixed-size counts, because listing dropped names let a *tighter* budget produce a *larger* document. |
+| 2 | ✅ | `H5I_DB_PROFILE=agent`: 1000 rows / 1 MiB, lazy Parquet spill (capped at 5M rows, reported when hit), stderr summary with an honest `total_rows`. Default profile byte-identical, incl. plan-level LIMIT pushdown. Explicit `--max-bytes` keeps its hard exit-4 contract. |
+| 3 | ✅ | Envelope v2: `schema_version`, `next_actions[{cmd,why}]` with `<db>` substituted by the CLI, `did_you_mean` via case-insensitive edit distance. A CI test *executes* a suggested command. Python bindings expose both. |
+| 4 | ✅ | `query --as-of` + `H5I_DB_AS_OF`; pins every table. Session construction now classifies its error, so a bad decision point is exit 2, not 5. |
+| 5 | ✅ | `--decision-time` + `--embargo` + `H5I_DB_DECISION_TIME`, enforced by registering each table behind a view. **Design change:** the axes are independent, not one instant driving both — under a bulk ingest the commit and event clocks are years apart, and coupling them made the event-time axis unusable on exactly the databases it exists for. Fails closed on tables with no time column or a unitless integer one. |
+| 6 | ✅ | `vacuous` + `notes` on every leakage report. |
+| 7 | ✅ | `--idempotency-key` on every direct mutation path; recorded in the manifest, matched by a bounded 64-commit walk back from head. |
+| 8 | ✅ | `demo` (restatement scenario, ~0.25 s) + docs-as-tests + a CI job that also checks the skill stays `npx skills`-installable. |
+| 9 | ✅ | README leads with the point-in-time claim and gains a when-NOT-to-use section; SKILL.md is task-shaped (65 lines) over `references/`. |
+| 10 | ✅ | Both already delivered — see the Part IV addendum for the evidence. |
+
+**Not yet done, and deliberately so:** the release-profile benchmark gate
+(`benchmarks/run_performance_workload.py`) has not been re-run. Nothing in
+this batch touches the scan or plan layer — the default query path keeps its
+LIMIT pushdown and early exit, the extra work is one `getenv` and one `Option`
+compare per batch, and the catalog listing added for `did_you_mean` is on the
+error path only — but that reasoning should be confirmed against the gate on
+a reference machine before merge (Part II invariant 7).
+
 **Batch 2 — trust & substrate** (repays the Tier 0 debt the flag stands on,
 and runs the two design tracks in parallel with it).
 

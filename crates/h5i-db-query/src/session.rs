@@ -214,8 +214,13 @@ impl H5iSession {
                 // something a query could forget. It optimizes like any other
                 // filter, which means it prunes segments too.
                 Some(cutoff_ns) => {
-                    let view =
-                        embargoed_view(&name, provider, &schema, time_column.as_deref(), cutoff_ns)?;
+                    let view = embargoed_view(
+                        &name,
+                        provider,
+                        &schema,
+                        time_column.as_deref(),
+                        cutoff_ns,
+                    )?;
                     ctx.register_table(&name, view)?;
                 }
                 None => {
@@ -740,13 +745,13 @@ fn cutoff_scalar(
             ScalarValue::TimestampNanosecond(Some(cutoff_ns), tz.clone())
         }
         other => {
-            return Err(DataFusionError::External(Box::new(h5i_db_core::Error::invalid(
-                format!(
+            return Err(DataFusionError::External(Box::new(
+                h5i_db_core::Error::invalid(format!(
                     "table {table:?} has time column {column:?} of type {other}, which carries no \
                      time unit, so an event-time cutoff cannot be expressed against it; use a \
                      timestamp-typed time column, or drop --embargo and pin the arrival axis only"
-                ),
-            ))));
+                )),
+            )));
         }
     })
 }

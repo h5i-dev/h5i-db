@@ -489,6 +489,9 @@ impl NativeDatabase {
     }
 
     /// Ingest an Arrow IPC stream. mode: "write" | "append".
+    // pyo3 flattens the write options into keyword arguments, which is the
+    // ergonomic shape on the Python side even though it trips the arity lint.
+    #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (name, ipc, mode = "append", expected_version = None, note = None, idempotency_key = None))]
     fn ingest(
         &self,
