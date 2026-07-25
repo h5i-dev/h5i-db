@@ -121,6 +121,13 @@ when(col("price") > 100).then(lit(1)).otherwise(lit(0))
     `TypeError` if used as a truth value. Mind the precedence too: `&` binds
     tighter than `>`, so the comparisons need parentheses.
 
+!!! note "Operators mean what SQL means"
+    Expressions compile to SQL and keep SQL's semantics, not Python's. Most
+    visibly, `/` between two integer columns is **integer** division —
+    `col("size") / 4` truncates. Cast for true division:
+    `col("size").cast("DOUBLE") / 4`. The rule is deliberate: the same
+    expression must not mean one thing here and another in `db.sql()`.
+
 Identifiers and literals are quoted at a single site, and identifiers are
 always quoted so case survives (`col("Symbol")` finds a field named
 `Symbol`, which bare SQL would fold to lowercase). A value containing

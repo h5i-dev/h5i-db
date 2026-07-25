@@ -248,6 +248,14 @@ pass <code>col("price", relation="l")</code> to qualify a side of a join.</p>
 <code>TypeError</code> if used as a truth value. Mind the precedence too: <code>&amp;</code> binds
 tighter than <code>&gt;</code>, so the comparisons need parentheses.</p>
 </div>
+<div class="admonition note">
+<p class="admonition-title">Operators mean what SQL means</p>
+<p>Expressions compile to SQL and keep SQL's semantics, not Python's. Most
+visibly, <code>/</code> between two integer columns is <strong>integer</strong> division —
+<code>col("size") / 4</code> truncates. Cast for true division:
+<code>col("size").cast("DOUBLE") / 4</code>. The rule is deliberate: the same
+expression must not mean one thing here and another in <code>db.sql()</code>.</p>
+</div>
 <p>Identifiers and literals are quoted at a single site, and identifiers are
 always quoted so case survives (<code>col("Symbol")</code> finds a field named
 <code>Symbol</code>, which bare SQL would fold to lowercase). A value containing

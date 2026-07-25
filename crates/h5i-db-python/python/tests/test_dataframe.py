@@ -186,6 +186,117 @@ def test_precedence_avoids_redundant_parentheses():
         assert expr._render(0) == expected, (expr._render(0), expected)
 
 
+def test_arithmetic_agrees_with_python():
+    """Precedence rendering, checked numerically rather than by eye.
+
+    Each case computes the same thing twice: once as SQL the builder
+    generated, once in Python. A misplaced parenthesis shows up as a
+    different number.
+    """
+    cases = [
+        (lambda p, s: p + s * 2, col("price") + col("size") * 2),
+        (lambda p, s: (p + s) * 2, (col("price") + col("size")) * 2),
+        (lambda p, s: p - (s - 1), col("price") - (col("size") - 1)),
+        (lambda p, s: p - s - 1, col("price") - col("size") - 1),
+        (lambda p, s: p / (s * 2), col("price") / (col("size") * 2)),
+        (lambda p, s: p / s / 2, col("price") / col("size") / 2),
+        (lambda p, s: -p + s, -col("price") + col("size")),
+        (lambda p, s: -(p + s), -(col("price") + col("size"))),
+        (
+            lambda p, s: p * 2 - s / 4,
+            col("price") * 2 - col("size").cast("DOUBLE") / 4,
+        ),
+        (lambda p, s: (p - s) / (p + s), (col("price") - col("size")) / (col("price") + col("size"))),
+        (lambda p, s: 100 - p / 2, 100 - col("price") / 2),
+        (lambda p, s: 2 * (p - 1) + 3 * (s + 1), 2 * (col("price") - 1) + 3 * (col("size") + 1)),
+    ]
+    with open_db() as db:
+        rows = (
+            db.table("trades").select("ts", "price", "size").sort("ts").to_arrow()
+        ).to_pylist()
+        for reference, expr in cases:
+            got = (
+                db.table("trades")
+                .select(col("ts"), expr.alias("v"))
+                .sort("ts")
+                .to_arrow()
+                .column("v")
+                .to_pylist()
+            )
+            want = [reference(r["price"], r["size"]) for r in rows]
+            for a, b in zip(got, want):
+                assert abs(a - b) < 1e-9, (expr._render(0), a, b)
+
+
+def test_division_keeps_sql_semantics_not_python_ones():
+    """Integer / integer is integer division, as it is in SQL.
+
+    The builder compiles to SQL and must not quietly mean something else
+    than the same expression typed into db.sql(). Cast to get true division.
+    """
+    with open_db() as db:
+        out = (
+            db.table("trades")
+            .select(
+                (col("size") / 4).alias("int_div"),
+                (col("size").cast("DOUBLE") / 4).alias("true_div"),
+            )
+            .sort("int_div")
+            .to_arrow()
+        )
+        assert out.column("int_div")[0].as_py() == 2      # 10 / 4
+        assert out.column("true_div")[0].as_py() == 2.5
+        golden = db.sql("SELECT size / 4 AS int_div FROM trades ORDER BY int_div")
+        assert out.column("int_div").to_pylist() == (
+            golden.to_arrow().column("int_div").to_pylist()
+        )
+
+
+def test_boolean_grouping_agrees_with_python():
+    predicates = [
+        (
+            lambda p, s: p > 103 and s < 20,
+            (col("price") > 103) & (col("size") < 20),
+        ),
+        (
+            lambda p, s: p > 103 or s < 12,
+            (col("price") > 103) | (col("size") < 12),
+        ),
+        (
+            lambda p, s: p > 109 or (s < 20 and p < 103),
+            (col("price") > 109) | ((col("size") < 20) & (col("price") < 103)),
+        ),
+        (
+            lambda p, s: (p > 109 or s < 20) and p < 103,
+            ((col("price") > 109) | (col("size") < 20)) & (col("price") < 103),
+        ),
+        (
+            lambda p, s: not (p > 103),
+            ~(col("price") > 103),
+        ),
+        (
+            lambda p, s: not (p > 103 and s < 20),
+            ~((col("price") > 103) & (col("size") < 20)),
+        ),
+    ]
+    with open_db() as db:
+        rows = (
+            db.table("trades").select("ts", "price", "size").sort("ts").to_arrow()
+        ).to_pylist()
+        for reference, predicate in predicates:
+            got = (
+                db.table("trades")
+                .filter(predicate)
+                .select("ts")
+                .sort("ts")
+                .to_arrow()
+                .column("ts")
+                .to_pylist()
+            )
+            want = [r["ts"] for r in rows if reference(r["price"], r["size"])]
+            assert got == want, (predicate._render(0), got, want)
+
+
 def test_literals_render_by_type():
     cases = [
         (None, "NULL"),
