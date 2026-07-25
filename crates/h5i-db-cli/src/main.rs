@@ -7,6 +7,7 @@
 
 mod ingest;
 mod output;
+mod profile;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -24,6 +25,7 @@ use ingest::{InputFormat, align_batch, open_input};
 use output::{
     BatchWriter, Format, Progress, is_broken_pipe, write_batches, write_error, write_value,
 };
+use profile::{AGENT_MAX_BYTES, AGENT_MAX_ROWS, Profile, ResultSpill, ResultSummary};
 
 #[derive(Parser)]
 #[command(
@@ -514,6 +516,108 @@ fn classify_df_error(e: datafusion::error::DataFusionError) -> Error {
     }
 }
 
+/// What draining a result stream produced.
+struct Drained {
+    /// stdout does not hold the whole result.
+    truncated: bool,
+    /// Rows the query produced. Exact only when the whole stream was drained,
+    /// which is the case under the agent profile.
+    total_rows: u64,
+    /// Rows actually rendered to stdout.
+    returned_rows: u64,
+    /// Present only under the agent profile.
+    spill: Option<profile::SpillOutcome>,
+}
+
+/// Stream a result to stdout under a row/byte budget, and — under the agent
+/// profile — into a recoverable Parquet spill.
+///
+/// The two profiles read the stream differently on purpose. By default the
+/// row limit is pushed into the plan, so DataFusion stops early and nothing
+/// here needs a row budget; only the byte cap applies and hitting it ends the
+/// scan. Under the agent profile there is no plan limit, because reporting an
+/// honest `total_rows` and spilling the withheld rows both require seeing the
+/// whole result — the cost of that is the price of recoverability, and an
+/// agent that writes `LIMIT` in its SQL avoids it entirely.
+async fn drain_budgeted(
+    stream: &mut (
+             impl futures::Stream<Item = datafusion::error::Result<arrow::array::RecordBatch>> + Unpin
+         ),
+    schema: SchemaRef,
+    format: Format,
+    head_rows: Option<usize>,
+    byte_cap: Option<u64>,
+    agent: bool,
+) -> Result<Drained> {
+    let mut writer = BatchWriter::new(format, schema.clone(), byte_cap)?;
+    // The spill opens itself once the result outgrows what stdout will render.
+    let mut spill = agent.then(|| ResultSpill::new(schema, head_rows.unwrap_or(usize::MAX)));
+    let mut returned_rows: u64 = 0;
+    let mut total_rows: u64 = 0;
+    // True once stdout has taken all it may; the stream keeps flowing in agent
+    // mode so the spill and the row count stay complete.
+    let mut stdout_full = false;
+
+    while let Some(batch) = stream.next().await {
+        let batch = batch.map_err(classify_df_error)?;
+        total_rows += batch.num_rows() as u64;
+
+        if let Some(spill) = spill.as_mut() {
+            spill.push(&batch)?;
+        }
+        if stdout_full {
+            continue;
+        }
+
+        let room = match head_rows {
+            Some(h) => (h as u64).saturating_sub(returned_rows),
+            None => u64::MAX,
+        };
+        if room == 0 {
+            stdout_full = true;
+        } else {
+            let take = room.min(batch.num_rows() as u64) as usize;
+            let slice = if take == batch.num_rows() {
+                batch.clone()
+            } else {
+                batch.slice(0, take)
+            };
+            let within_bytes = writer.write(&slice)?;
+            returned_rows += take as u64;
+            // Either the byte cap tripped or this batch was cut short.
+            if !within_bytes || take < batch.num_rows() {
+                stdout_full = true;
+                // A byte-capped result can be short of the row budget and
+                // still be incomplete on stdout, so make sure the withheld
+                // rows have somewhere to live.
+                if !within_bytes && let Some(spill) = spill.as_mut() {
+                    spill.force()?;
+                }
+            }
+        }
+        // Without a spill to fill there is nothing more to learn from the
+        // stream, so stop reading it — this preserves the default profile's
+        // early-exit behaviour exactly.
+        if stdout_full && spill.is_none() {
+            writer.finish()?;
+            return Ok(Drained {
+                truncated: true,
+                total_rows,
+                returned_rows,
+                spill: None,
+            });
+        }
+    }
+    writer.finish()?;
+    let spill = spill.map(|s| s.finish()).transpose()?;
+    Ok(Drained {
+        truncated: stdout_full,
+        total_rows,
+        returned_rows,
+        spill,
+    })
+}
+
 /// Parse a decision point shared by `query --as-of` and `leakage-check
 /// --as-of`: an integer version, an RFC3339 timestamp resolved against commit
 /// *availability* (`committed_at_ns`), or a snapshot name. Mirrors the `h5i()`
@@ -769,58 +873,83 @@ async fn run(cli: Cli) -> Result<()> {
             }
             .map_err(classify_df_error)?;
 
-            // Stream result batches straight to stdout instead of collecting
-            // the full result first. Returns whether output was truncated.
-            async fn drain(
-                mut stream: impl futures::Stream<
-                    Item = datafusion::error::Result<arrow::record_batch::RecordBatch>,
-                > + Unpin,
-                writer: &mut BatchWriter,
-            ) -> Result<bool> {
-                while let Some(batch) = stream.next().await {
-                    let batch = batch.map_err(classify_df_error)?;
-                    if !writer.write(&batch)? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
-            }
+            // The profile only fills in budgets the caller left unset, and it
+            // never changes anything else about the output — in particular it
+            // is read from the environment, never sniffed from the TTY, so a
+            // piped run produces the same bytes as an interactive one.
+            let agent = Profile::from_env().is_agent();
+            let head_rows = if agent {
+                Some(max_rows.unwrap_or(AGENT_MAX_ROWS))
+            } else {
+                max_rows
+            };
+            let byte_cap = if agent {
+                Some(max_bytes.unwrap_or(AGENT_MAX_BYTES))
+            } else {
+                max_bytes
+            };
+            // A limit the caller asked for stays a hard error on breach; the
+            // profile's own budget is soft, and truncation is reported instead.
+            let hard_byte_limit = max_bytes;
+            // Only the default profile pushes the row limit into the plan.
+            let plan_limit = if agent { None } else { max_rows };
+
             let work = async {
                 // Only pay for query-local performance reporting when the
                 // caller asked for it; the default path plans and streams
                 // without constructing a report.
-                let (truncated, report) = if stats {
+                let (drained, report) = if stats {
                     let df = session
                         .sql_reported(&sql)
                         .await
                         .map_err(classify_df_error)?;
-                    let df = match max_rows {
+                    let df = match plan_limit {
                         Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
                         None => df,
                     };
                     let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
-                    let mut writer = BatchWriter::new(format, stream.schema(), max_bytes)?;
-                    let truncated = drain(&mut stream, &mut writer).await?;
-                    writer.finish()?;
-                    (truncated, stream.report().cloned())
+                    let schema = stream.schema();
+                    let drained =
+                        drain_budgeted(&mut stream, schema, format, head_rows, byte_cap, agent)
+                            .await?;
+                    (drained, stream.report().cloned())
                 } else {
                     let df = session.sql(&sql).await.map_err(classify_df_error)?;
-                    let df = match max_rows {
+                    let df = match plan_limit {
                         Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
                         None => df,
                     };
                     let schema: SchemaRef = Arc::new(df.schema().as_arrow().clone());
                     let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
-                    let mut writer = BatchWriter::new(format, schema, max_bytes)?;
-                    let truncated = drain(&mut stream, &mut writer).await?;
-                    writer.finish()?;
-                    (truncated, None)
+                    let drained =
+                        drain_budgeted(&mut stream, schema, format, head_rows, byte_cap, agent)
+                            .await?;
+                    (drained, None)
                 };
-                if truncated {
+
+                // Tell the agent what it did not see — including on an
+                // untruncated result, where an exact row count saves it a
+                // second COUNT(*) round trip.
+                if let Some(spill) = &drained.spill {
+                    ResultSummary::build(
+                        drained.total_rows,
+                        drained.returned_rows,
+                        drained.truncated,
+                        head_rows.unwrap_or(AGENT_MAX_ROWS),
+                        byte_cap.unwrap_or(AGENT_MAX_BYTES),
+                        spill,
+                    )
+                    .emit();
+                }
+
+                // Breaching a caller-set --max-bytes keeps its exit-4 envelope.
+                if drained.truncated
+                    && let Some(limit) = hard_byte_limit
+                {
                     return Err(Error::LimitExceeded {
                         detail: format!(
-                            "result exceeded --max-bytes={}; output truncated at a batch boundary",
-                            max_bytes.unwrap_or_default()
+                            "result exceeded --max-bytes={limit}; output truncated at a batch \
+                             boundary"
                         ),
                     });
                 }
