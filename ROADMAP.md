@@ -1175,3 +1175,135 @@ Tier 0 (Part III) remains the standing precondition, and the Part VI
 positioning correction applies to how this Part is marketed: these are
 features of a versioned time-series database for quant research, not
 components of a leakage-proof pipeline.
+
+---
+
+# Part VIII — Lazy DataFrame builder for the Python API (2026-07-25)
+
+**Decision.** Build a polars-shaped lazy query builder in the Python
+package that **compiles to the existing SQL surface**. This is the unbuilt
+half of a standing commitment, not a new direction: `DESIGN.md §1` names
+the primary API as "SQL **and** DataFrame", `DESIGN.md §6` claims parity
+between them, and `DESIGN.md §6.6` already slates `rolling(mean, '30m')`
+sugar for "the DataFrame/Python API, not a new engine". Today none of that
+exists in Python: the surface is `db.sql(string)` plus `db.read(...)` (a
+fixed keyword-argument scan, not composable), and `QueryResult` calls
+itself lazy while wrapping an already-materialized table.
+
+**Why a builder, precisely.** For a one-off interactive query, SQL is fine
+and often clearer; the builder is not a replacement surface. It wins in
+three cases, and the first is the one this project is now committed to:
+(1) *programmatic composition*: the VII-B factor workload means generating
+hundreds of expressions in loops over windows and columns, which f-string
+SQL does with quoting hell and injection risk (qlib grew a bespoke
+expression DSL for exactly this; zipline's Pipeline *is* this builder
+pattern); (2) *tooling*: autocomplete, type checks, and build-time errors
+instead of a parse error out of a 40-line string; (3) *reusable handles*:
+a lazy pipeline that can be extended with another `.filter(...)` and
+executed against N pinned versions (the Part V "same query across N
+versions" surface).
+
+**The decided interface** (vocabulary follows polars, which the target
+user already knows; explicitly *not* ArcticDB's `q[q["x"] > 1]` style):
+
+```python
+(db.table("trades", as_of="2026-07-01")     # lowers to the h5i() UDTF, so the pin holds
+   .filter(col("symbol").is_in(syms))
+   .group_by("symbol")
+   .agg(col("price").mean().alias("px"))
+   .collect())                               # or .to_pandas() / .to_polars()
+```
+
+## Lowering rules (the design's load-bearing wall)
+
+1. **The builder is a compiler, never an evaluator** (the Part VII
+   layering rule governs). Every verb lowers to SQL text executed through
+   the same native `sql()` path, against the same session with the same
+   registered UDTFs/UDFs/UDAFs/UDWFs
+   (`crates/h5i-db-query/src/session.rs:238-275`). No Python-side kernel,
+   ever: a verb that cannot lower to SQL does not ship (it goes to the
+   engine, or to Tier VII-D if it is post-query analytics).
+2. **Version resolution stays in the catalog.** `db.table(name,
+   version=…| as_of=…| snapshot=…)` lowers to `h5i('name', …)` (plain
+   table name when unpinned), so research-mode pins see the query exactly
+   as they see hand-written SQL. The batch-1 pin bug is the cautionary
+   case: any Python-side table/version resolution would sit permanently
+   outside "bounded at the source".
+3. **The generated SQL is a first-class artifact.** `.sql()` returns it,
+   `.explain(analyze=…)` proxies EXPLAIN; formatting is deterministic so
+   it can be logged, diffed, snapshot-tested, and recorded by the run
+   ledger (#14) with no new record shape. This is also the graduation
+   path: a user who outgrows the builder copies its SQL and keeps going.
+4. **Injection safety is structural, not disciplined.** All identifiers
+   and literals pass through one central quoting/escaping formatter;
+   user strings never concatenate into SQL anywhere else.
+5. **Escape hatch from day one.** `sql_expr("…")` embeds a raw SQL
+   expression as an `Expr`. Full SQL coverage through builder verbs is an
+   explicit non-goal; the escape hatch is the pressure valve that keeps
+   the verb set closed.
+6. **Zero new pyo3 surface in v1.** The builder is a pure-Python module
+   inside `h5i_db` with no new dependencies (the base wheel stays
+   pyarrow-only, the VII-D packaging rule untouched). Crossing a
+   `LogicalPlan`/Substrait over the boundary is deferred until SQL-text
+   generation is *measured* as limiting (inexpressible plan or
+   double-parse cost visible in the bench), per the §P5 evidence gate.
+
+## Tier VIII-A — Builder core
+
+| # | Item | Acceptance criteria |
+|---|------|---------------------|
+| VIII-A1 | **Expression core + lowering.** `col()`/`lit()`; arithmetic, comparison, boolean ops; `is_in`/`is_null`/`between`; `alias`, `cast`. Verbs: `filter`, `select`, `with_columns`, `sort`, `limit`. `.sql()` and `.explain()`. The central identifier/literal formatter (rule 4). | Differential test: every documented example's `.collect()` equals `db.sql()` of hand-written golden SQL (Arrow-level equality). Property test over adversarial identifiers and string literals (quotes, unicode, reserved words) round-trips correctly. Generated SQL is byte-stable across runs (snapshot-tested). |
+| VIII-A2 | **Time-travel entry point.** `db.table(name, version=\|as_of=\|snapshot=)` lowering per rule 2; `.collect(memory_limit=, timeout=, max_rows=)` passes through to the existing `sql()` limits; terminal methods return the existing `QueryResult`. | A pinned builder query behaves identically to the equivalent `h5i()` SQL under a research-mode pin (tested with a stale-version fixture). Conflicting pin kwargs error the same way `db.read` does. Unpinned `db.table('t')` lowers to the plain name (latest, re-resolved per query). |
+| VIII-A3 | **Aggregation + the registered operator surface.** `group_by`/`agg` with standard aggregates plus `vwap`/`wavg`; `.over()` windows; `ewma`, the VII-B1 rolling UDWFs (`ts_rank`, `ts_corr`, `mad`, …) and VII-B2 cross-sectional (`cs_rank`, `cs_winsorize`) as expression methods; the `DESIGN.md §6.6` rolling sugar (`col('price').rolling_mean('30m')`) lowering to the documented `RANGE INTERVAL` window pattern. | Each operator reachable from the builder is differential-tested against its documented SQL form in `docs-src/manual/sql.md`. Rolling sugar generates exactly the documented window-frame SQL. An unknown aggregate/operator raises at build time (not engine parse time) with a did-you-mean, reusing the envelope-v2 edit-distance approach. |
+| VIII-A4 | **Joins.** `.join(other, on=, how='inner'\|'left')` between two builder pipelines (lowered via subqueries/CTEs) and `.join_asof(other, on=, by=, direction=, tolerance=)` lowering to the `asof_join` UDTF. | `join_asof` matches the documented UDTF semantics; the raw-time-unit tolerance caveat from the SQL manual is surfaced in the docstring. A worked example joins the same table at two pinned versions (the Part V N-versions surface) and is documented. |
+| VIII-A5 | **Escape hatch, docs, drift protection.** `sql_expr()`; a manual page with executable examples; `skills/h5i-db/references/python.md` update; fix the `QueryResult` docstring (it claims lazy; the builder is the lazy handle, `collect()` materializes). | The docs page passes the executable-docs test; every builder example shows its `.sql()` output so the docs teach the lowering, not just the verbs. The skill reference lists the verb set. The base wheel gains no new dependency (checked in CI metadata). |
+
+## Do NOT build
+
+- **No eager mode, no Python-side compute.** The moment one verb executes
+  in Python, the pin guarantee and the layering rule are both broken for
+  every pipeline containing it.
+- **No ArcticDB-style `__getitem__` DSL.** One vocabulary (polars), one
+  way to spell each verb.
+- **No `LogicalPlan`/Substrait boundary crossing in v1** (rule 6; revisit
+  only on measured evidence).
+- **No full-SQL-coverage ambition.** New verbs are accepted only with a
+  programmatic-composition use case; one-off queries belong in SQL, and
+  `sql_expr()` covers the gap meanwhile.
+- **No new capability.** The builder must add ergonomics only: anything it
+  can express is reachable via `db.sql()` and the CLI, so agent
+  reachability (the layering rule's CLI clause) holds by construction.
+
+## Cross-references (Part VIII ⇄ existing parts)
+
+- Part VIII **is** the concrete design for the DataFrame half of
+  `DESIGN.md §1/§6`; the §6 claim "they share plans, so feature parity is
+  free" is made true in Python by sharing *SQL text* rather than plan
+  objects.
+- VIII-A2 ⇄ **research-mode pin** (Part VI, `pin.rs`): the entry point
+  must route through `h5i()` so the pin sees every builder query.
+- VIII-A3 ⇄ **VII-B1/B2**: the builder is the second frontend to those
+  operators; the **VII-B3** Alpha158 corpus can later compile qlib
+  expression strings through the builder, making the corpus double as
+  builder conformance.
+- VIII-A4 ⇄ **D5 / `asof.rs`**: `join_asof` is the DataFrame verb
+  `DESIGN.md §6.4` promised ("operator-first: DataFrame `join_asof` …").
+- VIII-A5 ⇄ **VI-A2 / DESIGN.md §8**: agents keep driving SQL/CLI; the
+  builder is the human-notebook surface (`DESIGN.md`: "notebook usability
+  is how a DataFrame store earns adoption").
+- `.sql()` ⇄ **run ledger #14**: a builder pipeline is recorded by its
+  generated SQL; the ledger needs no new record shape.
+
+## Build order
+
+1. **VIII-A1 + VIII-A2 together** — expression core and pin-correct entry
+   point are one correctness story; neither is shippable alone.
+2. **VIII-A3** — the factor workload is the motivating user; sequence
+   after VII-B1/B2 land (they define the operator surface being wrapped).
+3. **VIII-A4**, then **VIII-A5** finishing touches — though docs land in
+   lockstep with each item (the drift test forces this anyway), so
+   VIII-A5 is really a running obligation plus the final sweep.
+
+This Part is additive and must not block Part VII engine work: the
+builder wraps whatever operator surface exists at the time, and grows
+with it.

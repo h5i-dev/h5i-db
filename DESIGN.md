@@ -398,6 +398,8 @@ the DataFrame API are exposed (they share plans, so feature parity is free).
 6. Rolling/window: DataFusion window functions already cover
    `avg OVER (PARTITION BY sym ORDER BY ts RANGE INTERVAL …)`; we add sugar
    (`rolling(mean, '30m')`) in the DataFrame/Python API, not a new engine.
+   The Python DataFrame API itself (lazy builder compiling to this SQL
+   surface) is designed in `ROADMAP.md` Part VIII.
 7. **Observability**: `EXPLAIN` / `EXPLAIN ANALYZE` extended with h5i-db scan
    metrics — manifests/segments/row-groups considered vs pruned, bytes read,
    spill bytes, peak memory. This is how we verify pruning actually fires,
