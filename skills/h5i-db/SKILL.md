@@ -1,6 +1,6 @@
 ---
 name: h5i-db
-description: Use when working with an h5i-db database — an embedded, versioned time-series database for quant research, driven by the `h5i-db` CLI or the `h5i_db` Python package. Covers orienting in a database, querying it under a context budget, running look-ahead-free backtests, ingesting safely, and previewing destructive changes before they land.
+description: Use when working with an h5i-db database — an embedded, versioned time-series database for quant research, driven by the `h5i-db` CLI or the `h5i_db` Python package. Covers creating a database and loading Parquet or CSV tick data, orienting in an existing one, querying it (SQL, ASOF joins, OHLCV/VWAP rollups, time travel) under a context budget, running look-ahead-free backtests, and previewing destructive changes before they land.
 ---
 
 # Driving h5i-db
@@ -10,7 +10,27 @@ Every write is an immutable commit. Nothing you do destroys history short of
 worry about is not losing data — it is writing *wrong* data, or reading data
 you should not have been able to see yet.
 
-## Start every session with these two lines
+`h5i-db <command> --help` is the authoritative flag reference and cannot go
+stale. Reach for it before guessing at a flag.
+
+## Starting from nothing
+
+A database is one directory; there is no server.
+
+```bash
+h5i-db init market.db
+h5i-db create-table market.db trades --like ticks.parquet --time-column ts
+h5i-db ingest market.db trades ticks.parquet --idempotency-key load-1
+```
+
+`--like` infers the schema from a Parquet/CSV/Arrow file. The time column must
+be named at creation: without one you lose segment pruning, the ASOF join, and
+research mode. → [references/setup.md](references/setup.md)
+
+To see the whole thing work before touching real data, `h5i-db demo` builds a
+small database and walks ingest → query → restatement → leakage in seconds.
+
+## Starting from an existing database
 
 ```bash
 export H5I_DB_PROFILE=agent      # caps every result; withheld rows spill to Parquet
@@ -59,7 +79,14 @@ are visible — so a restatement that arrived later stays invisible too.
 
 ## Reference
 
-[SQL extensions](references/sql.md) (time travel, ASOF joins, `time_bucket`,
-`vwap`, `ewma`) · [mutations and safety net](references/mutations.md) ·
+[Setup and guardrails](references/setup.md) · [SQL extensions](references/sql.md)
+(time travel, ASOF joins, `time_bucket`, `vwap`, `ewma`) ·
+[mutations and safety net](references/mutations.md) ·
 [research mode and leakage](references/research-mode.md) ·
 [Python](references/python.md)
+
+Everything needed for the work above is in this directory and in
+`h5i-db <command> --help`. If you have network access and want to go deeper,
+<https://db.h5i.dev/llms.txt> indexes the full manual and Python API; treat it
+as optional, since it describes the published version rather than the binary
+you have.
