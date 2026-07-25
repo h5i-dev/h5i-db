@@ -1318,7 +1318,7 @@ with it.
 | VIII-A4 | ✅ | `.join()` (inner/left/right/full/cross/semi/anti) with `l`/`r` as contract aliases; `.join_asof()` lowering to the `asof_join` UDTF. **It refuses a pinned or already-operated-on side** rather than silently reading latest — the table function's blind spot, surfaced instead of inherited. |
 | VIII-A5 | ✅ | `sql_expr()`; `docs-src/api/dataframe.md`; skill reference updated; the `QueryResult` "lazy" docstring corrected (it was never lazy). Base wheel gains no dependency — asserted by a test that AST-parses the module's imports. Mistyped operators raise at build time naming the nearest real method (`.groupby` → `.group_by`), the edit-distance approach the CLI envelope already uses. |
 
-**Verification.** 113 Python tests (`crates/h5i-db-python/python/tests/`),
+**Verification.** 127 Python tests (`crates/h5i-db-python/python/tests/`),
 at **100% line and branch coverage** of `dataframe.py`,
 run in CI for the first time — the job previously built the wheel and ran an
 inline smoke script, so `test_bindings.py` was never executed. Coverage:
@@ -1416,6 +1416,27 @@ defined over a group needs a fixture where the group has more than one
 member, and the fixture should assert its own non-degeneracy — which
 `test_the_panel_fixture_is_actually_a_cross_section` now does, so the
 guard cannot rot back into vacuity unnoticed.
+
+**Type breadth and scale** (`test_dataframe_types_and_scale.py`) close the
+last two gaps the audit named. Types: timezone-aware timestamps (aware,
+naive and offset literals; `time_bucket` with a timezone; RANGE interval
+frames, the combination most likely to break on an aware column), ns/ms
+units, `date32`, boolean columns used as predicates in their own right,
+`decimal128` precision surviving `sum`/`mean`, and the int32 → int64 /
+float32 → double promotions, pinned because the result type is not the
+input type. Scale: 16k rows over 8 appends, asserting from `EXPLAIN
+ANALYZE` that a time-range filter opens fewer segment groups than a full
+scan and an unsatisfiable predicate opens none, that a memory budget turns
+an overrun into a typed `LimitError`, and that a deadline cancels a
+quadratic query. This is the first Python-side check of the pruning claim
+`manual/sql.md` makes; it was previously only reachable via the CLI's
+`--stats`.
+
+One of those was a genuine open question rather than a formality: **does
+the builder's subquery wrapping defeat predicate pushdown?** It does not —
+a wrapped pipeline opens exactly the same segment groups as the flat one.
+Worth keeping as a test, because a regression there would cost a full scan
+on every wrapped query while every correctness test still passed.
 
 `test_docs_are_executable.py` closes a gap the Rust
 `docs_are_executable` test leaves: that test only runs lines starting
