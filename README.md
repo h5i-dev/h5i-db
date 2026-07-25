@@ -140,13 +140,11 @@ depended on data that arrived later.
 
 - **Don't let a result destroy the context window.** `H5I_DB_PROFILE=agent` caps
 every query and spills the rest to Parquet, reporting the true row count and
-where the withheld rows live. Output never changes based on whether stdout is
-a terminal.
+where the withheld rows live.
 
 - **One call to get oriented.** `h5i-db context <db>` returns every table's
 schema, size, time range and head version, the operations policy gates, and
-any plan already staged. Deterministic, so it can be cached, and `--budget`
-caps it in tokens.
+any plan already staged.
 
 - **Errors that can be acted on.** The stderr envelope carries `next_actions`
 (runnable commands), `did_you_mean` for typos, and a `retryable` flag. A CI
