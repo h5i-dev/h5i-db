@@ -8,6 +8,7 @@
 mod aggregate_state;
 pub mod arrival;
 pub mod asof;
+pub mod cross_section;
 pub mod finance;
 pub mod functions;
 pub mod gapfill;
@@ -17,6 +18,7 @@ mod pin;
 mod predicate_cache;
 pub mod provider;
 pub mod pruning;
+pub mod rolling;
 pub mod session;
 mod sidecar;
 pub mod tail;

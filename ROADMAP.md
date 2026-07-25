@@ -8,6 +8,8 @@ Part IV addendum + Part VI (agent ergonomics & competitive positioning) added
 review, a three-track web survey of the 2025–26 "agentic database" landscape,
 and an external cross-check of the performance program against production
 engines and recent papers. Part VI's build order supersedes Part V's.
+Part VII (quant data-layer features, from a source-level study of
+`~/Ref/zipline` and `~/Ref/qlib`) added 2026-07-25 (branch `quant-features`).
 
 This document merges the former `ROADMAP_PERFORMANCE.md` into the
 production-readiness roadmap; the separate file is gone. Part I tracks
@@ -697,6 +699,21 @@ taken. "**Embedded + versioned + time-series/quant + Apache-2.0**, where the
 agent provably cannot see the future" remains unoccupied — and items 1–3
 above are exactly V-A2, the keystone/run-ledger, and VI-A2 below.
 
+**Positioning correction (2026-07-25).** The line above is a whitespace
+observation, not the product thesis, and later drafting over-read it as one.
+The thesis stays the README identity: a fast, fully versioned, embedded
+time-series database for quant research. "Provably cannot see the future"
+overclaims what a data layer can own: most leakage happens after data leaves
+the DB (splits, full-sample normalization, feature code, model pretraining),
+so no DB-layer feature can certify a pipeline leak-free (the same scope
+honesty already stated in V-A and in the `leakage-check` → `arrival-delta`
+rename). The defensible claim is the README's own wording, *bounded at the
+source*: what reached the client was bounded by version / arrival / event
+time, and `arrival-delta` reports what a restatement changed. research-mode
+and the arrival axis stay valuable audit features, one bullet among several,
+not the banner; read the one-sentence claim in the research-mode section
+below under this correction.
+
 ## Tier VI-A — CLI ergonomics for agents
 
 All items live in the CLI/skill/sidecar layer per `DESIGN.md §8–§9`; none
@@ -804,6 +821,9 @@ kdb+; stating it buys trust.
   (`XNYS`, half-days) means maintaining an external dataset forever;
   defer until a real workload demands it. Symbol *identity over time*
   relates to A1 (global symbol dictionary) — revisit when A1 lands.
+  *(Update 2026-07-25: Part VII now carries concrete designs for
+  adjustments (VII-A1) and symbol identity (VII-A3); both need no
+  external calendar dataset, so only calendars stay deferred.)*
 - **README addition (cheap, trust-buying):** a "when NOT to use h5i-db"
   section (multi-TB distributed, OLTP, sub-µs capture) — also stops agents
   from mis-recommending it.
@@ -939,3 +959,219 @@ Explicitly *not* in these batches: implementations of arrival replay / A1 /
 T1.1 / B2 (blocked on RFC #17), V-C / V-D, HORIZON JOIN (D5), T2.4
 decoded-batch cache, VI-A6 / VI-A7 / VI-B5. Leading batch-3 candidates: T2.4
 and V-C1.
+
+---
+
+# Part VII — Quant data-layer features (zipline/qlib source study, 2026-07-25)
+
+Sourced from a source-level study of `~/Ref/zipline` (final Quantopian
+master, `014f1fc3`) and `~/Ref/qlib` (`79633dd9`), on branch
+`quant-features`, filtered by the same scope rule as Parts III–IV: h5i-db
+borrows data-layer and analytics-layer mechanisms, never the backtester,
+order simulation, ML platform, or live-trading surface. Findings that refine
+an *existing* item (run ledger #14, RFC #17, T0.1, D6, gapfill) are folded
+into Tier VII-C rather than duplicated as new items. File:line references
+are to the studied checkouts above. Tier VII-D (companion analytics layer)
+was added the same day from an ecosystem check of the maintained metric
+libraries (`quantstats` active; `empyrical` unmaintained since ~2020, fork
+`empyrical-reloaded`; `skfolio` / `Riskfolio-Lib` for optimization;
+`pypbo` for backtest-overfitting probability) — re-verify maintenance status
+before depending on any of them.
+
+**Framing.** Both engines converge on the same lesson from opposite
+directions: their most valuable machinery exists to fake, in application
+code, what a versioned timestamp-native database provides structurally.
+zipline's bundle system copies the entire dataset into a timestamped
+directory per ingest to get arrival-axis time travel
+(`data/bundles/core.py:374-491`; cite in docs as the motivating
+anti-pattern for h5i-db manifests). qlib's PIT store hand-rolls fact-level
+bitemporality as linked lists of byte offsets, read whole-file per query,
+because no engine sat underneath (`qlib/data/data.py:748-830`, self-labelled
+"not multi-threading-safe"). And both share one architectural regret worth
+recording as a warning: positional calendar indexing (integer offsets into a
+global calendar array) hardcodes bars-per-day assumptions
+(`high_freq.py:86`: 240), silently loses precision past 16.7M bars (a
+float32 row index, `file_storage.py:336`), and structurally rules out
+crypto/irregular grids (`domain.py:200-207` makes "date not on the calendar"
+a hard error). h5i-db's timestamp-native model with calendars kept at the
+edge as data is confirmed, not challenged, by both studies.
+
+**Layering rule (decided 2026-07-25; governs every item in this Part).**
+Rust/engine if the feature *reads data as part of its semantics* or must
+hold under a research-mode pin; Python companion if it *orchestrates
+queries or renders artifacts*. Two facts settle most cases. (1) There is no
+"export to Python" step for SQL-reachable features: UDFs/UDAFs/UDTFs are
+registered at one site (`crates/h5i-db-query/src/session.rs:238-269`) and
+are immediately callable from `db.sql(...)`, the CLI, and the UI. (2) The
+batch-1 pin bug is the cautionary case — a feature that resolves tables
+outside the catalog escapes the pin, so `adjust()` / `pit()` / universe
+resolution in Python would sit permanently outside the only guarantee the
+project claims ("bounded at the source"). Conversely, do **not** move
+companion math to Rust for speed alone: returns-series metrics run over
+thousands of rows where numpy already operates at memory bandwidth and the
+PyO3/Arrow boundary crossing costs the same order as the computation, so the
+speedup is a wash while the wheel/MSRV/iteration costs are real (§P5's
+evidence gate and invariant 7 apply — profile first). Row count decides:
+scan-path work (20 M rows) is Rust, post-query work (10³–10⁵ rows) is
+Python. The one legitimate non-speed reason to move a companion item into
+Rust is **CLI reachability** — an agent driving the binary cannot call a
+Python-only helper (see VII-D4).
+
+## Tier VII-A — Corporate actions, PIT fundamentals, identity
+
+The new data-layer features. All three exploit versioning/ASOF machinery
+that already exists; none needs an external calendar dataset.
+
+| # | Item | Source | Acceptance criteria |
+|---|------|--------|---------------------|
+| VII-A1 | **Adjustment layer with read-time ratios.** A versioned `adjustments` table `(entity, effective_date, kind: mul\|add, value)` plus an `adjust()` surface (table function or rewrite) that restates a price window into the basis known at decision time t by composing ratios as a suffix product over effective dates ≤ t. Dividend ratios (`1 - amount/prev_close`) are computed **lazily at read time against the pinned version's closes**, fixing zipline's write-time baking (`data/adjustments.py:456-530`), which silently desynchronizes ratios from restated bars. The `add` kind covers futures roll splicing, which zipline models as the *same* mechanism (`data/history_loader.py:189-205`): one feature covers splits, dividends, and continuous futures. The perspective flag (`is_perspective_after`, `history_loader.py:471-545`) maps onto the existing decision-time axis. | zipline `lib/adjusted_array.py:181-318`, `lib/_windowtemplate.pxi:118-137` (apply adjustments known on-or-before the anchor row), `lib/adjustment.pyx:280-412`, `pipeline/loaders/frame.py:50-59` (apply-date vs effective-date split) | Golden cases reproduce zipline's worked split example (0.5 split, `history_loader.py:471-545`); the same adjusted query at two DB versions with a restated close yields correspondingly different dividend ratios (the write-time-baking bug is untestable in zipline, provable here); a futures roll-splice case via `kind=add`; volume uses 1/ratio for splits only; differential-tested against a hand-written pandas reference. |
+| VII-A2 | **Point-in-time fundamentals pattern.** A `(instrument, field, period, arrival_date, value)` table shape plus a `pit()` read surface: last announced value per period as of decision time (ASOF on `arrival_date`), a `P()`-style collapse that evaluates a period-axis expression per calendar bar (`P(Mean($$roewa_q, 2))` = 2-period mean of the quarters *known at t*), and qlib's hard refusal to reference future periods (`pit.py:32-36` raises). Two zipline rules land in the same feature: effective visibility of an event is `max(event_date, arrival_date)` (`pipeline/loaders/utils.py:123`, the ASOF-with-embargo rule in one line), and *forward-looking* rows (next earnings date) are visible only in `[learned_at, happens_at)` (`utils.py:25-79`). Fact-level arrival is a **column**, which commit-level versioning cannot express: this independently validates `available_at` in RFC #17. | qlib `pit.py:24-72`, `data.py:748-830`, 20-byte record + linked-list format (`config.py:247-258`, `docs/advanced/PIT.rst`); zipline `pipeline/loaders/utils.py:25-138` | The qlib golden restatement case reproduces (2019Q2 `roewa` reads 0.0 on 07-15..17 and 0.175322 from 07-18, `tests/test_pit.py:96-104`); a future-period reference errors; reads prune on `arrival_date` via the manifest (no per-bar loop, verified with `--stats`); a `[learned_at, happens_at)` visibility case for a forward-looking event. |
+| VII-A3 | **Symbol identity and universe membership spans.** A `symbol_mappings` pattern with half-open ownership periods where each period's end is *recomputed as the successor's start* (gap elimination makes as-of resolution total, zipline `assets.py:104-138`); ambiguity-as-error lookup semantics (no as-of date + multiple owners must fail, never guess: `MultipleSymbolsFound`, `assets.py:819-867`); universe membership as `(instrument, valid_from, valid_to)` spans applied as a **post-filter after window computation** (qlib threads spans down and masks after per-instrument evaluation, `data.py:559-628`), so index entry never truncates a lookback window. | zipline `assets/assets.py:101-189, 745-867`, `asset_db_schema.py` (sid + time-ranged symbol rows + EAV side-table); qlib `file_storage.py:193-218`, `data.py:691-723` | A ticker-reuse fixture resolves to different entities by as-of date; an ambiguous no-date lookup errors with the candidates listed; a rolling factor over a universe-filtered query equals compute-then-filter (window not truncated at membership start); an expression-defined universe (qlib `ExpressionDFilter`, `filter.py:312-370`) compiles to spans that enter the result-cache key. |
+
+## Tier VII-B — Factor/expression surface
+
+| # | Item | Source | Acceptance criteria |
+|---|------|--------|---------------------|
+| VII-B1 | **Close the rolling-operator gap.** The study's headline quantification: ~20 operators cover the *entire* published qlib factor zoo (Alpha158 + Alpha360), all expressible as window functions or mergeable UDAFs. Missing in h5i-db today: windowed OLS `slope`/`rsquare`/`resi` (regression of x on within-window position), `idxmax`/`idxmin` (1-based argmax position), time-series `rank` (percentile of current value in trailing window), rolling `corr`/`cov` (with the zero-variance NaN mask, `ops.py:1494-1497`), `mad`, rolling `quantile`. qlib's incremental accumulators (`_libs/rolling.pyx`: ring buffer carrying `x_sum, x2_sum, y_sum, xy_sum…`, O(1) per step) are literally mergeable aggregate states, so these are P3-cache-eligible from day one. | qlib `ops.py:713-1524` (full vocabulary), `_libs/rolling.pyx:48-134`; zipline `factors/statistical.py:484-572` (`vectorized_beta` with an explicit `allowed_missing` NaN budget) | Parity with pandas/qlib reference output on a full-mantissa dataset (the P3 float lesson applies); merge-of-states ≡ recompute property test per operator; `Skew` rejects N<3 and `Kurt` N<4 (qlib semantics); zero-variance windows yield NULL, not garbage, for corr/rsquare. |
+| VII-B2 | **Cross-sectional window functions.** `cs_rank`, `cs_zscore`, `cs_demean`, `cs_winsorize` over `PARTITION BY <time bucket>`. Neither reference engine has this in its expression layer: qlib has *zero* cross-sectional operators (cross-section lives in a separate pandas processor stage, `processor.py:300-371`), and zipline implements them as a triple-nested Python loop (`lib/normalize.py`). One SQL statement replacing a two-stage factor pipeline is the cheapest differentiated win in this Part. Borrow zipline's NaN discipline: winsorize cutoffs count non-NaN only (`factor.py:1855-1889`); masked entities are excluded from the statistic but NaN-filled in the output. | zipline `factors/factor.py:540-1086`, `lib/normalize.py`; qlib `processor.py:300-371` (`CSRankNorm`, incl. the `(rank_pct-0.5)*3.46` unit-std rescale) | A one-statement SQL factor reproduces qlib's `CSRankNorm` pipeline on a golden dataset; NaN/mask semantics match zipline's row funcs; works composed over `time_bucket` output (minute and daily). |
+| VII-B3 | **Alpha158/360 conformance corpus.** The ~518 expression strings (`contrib/data/loader.py:61-310, 4-58`) are a ready-made test suite for the factor surface: they exercise exactly the VII-B1/B2 vocabulary plus Ref/Mean/Std/Abs/Log/Greater/Less and nothing else. Compile each to SQL, run against a pinned fixture, compare to recorded qlib output. This is a quant-flavored extension of the T0.1 differential harness, not a separate mechanism. | qlib `contrib/data/loader.py` | Every Alpha158 K-bar/price/rolling family and Alpha360 column compiles and matches recorded qlib reference values within tolerance on a golden Parquet fixture; corpus runs in CI (subset per-PR, full nightly); failures name the expression string. |
+| VII-B4 | **Lookback widening + `window_safe`.** Two plan-time properties. (1) Widen-then-trim: derive each rolling expression's required lookback statically and extend the scanned time range by the union lookback, trimming before emit, so a time-filtered rolling query is correct at the range edge (qlib `get_extended_window_size`, `base.py:222-235`, returns an exact `(left, right)` pad and represents *future* refs as a right pad; zipline computes union-`extra_rows` per leaf and per-consumer `offset` truncation, `graph.py:302-457`). This is the D6 planning rule. (2) `window_safe`: an expression-level flag making adjustment-correctness a type property; rolling windows over `adjust()`-ed prices are rejected unless the input is adjustment-invariant (returns, ratios), because composing windows over restated levels is silently wrong (zipline raises `NonWindowSafeInput`, `term.py:610-614`, `errors.py:517-528`). Depends on VII-A1. | qlib `base.py:222-235`, `ops.py:764-824`; zipline `pipeline/graph.py:302-457`, `term.py:95, 610-614` | A rolling query over `WHERE ts >= t0` equals the unfiltered query sliced to `>= t0` (no silent warmup truncation, property-tested); N overlapping windows over one table plan a single widened scan (verified via `--stats` bytes); a windowed aggregate over a non-invariant adjusted level errors with an explanation, and over returns passes. |
+| VII-B5 | **Volatility & liquidity estimators (SQL-side).** Two families of per-bucket estimators that need bar/tick shape rather than a returns series, and that no SQL engine ships. (1) OHLC volatility: Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang — pure per-bucket OHLC arithmetic, so they extend the existing OHLCV rollup and are mergeable-aggregate-state eligible exactly like `vwap`. (2) Realized-variance family (realized variance, bipower variation, a noise-robust two-scale variant) and liquidity/microstructure measures (Amihud illiquidity, Roll effective spread, Kyle's lambda, order-flow imbalance, VPIN) — all windowed aggregations over trades/quotes. These are the "metrics" most often hand-rolled in pandas per notebook, and they belong beside `vwap`, not in the companion layer. | Ecosystem gap (no maintained SQL/engine implementation); standard estimator literature | Each estimator matches a reference implementation on a golden OHLCV/tick fixture; the OHLC family registers as P3-cache-eligible aggregate states and a warm re-query reuses states; documented tick-data preconditions (which need trades vs quotes) so a wrong-input call errors rather than returning a plausible number. |
+| VII-B6 | **Label generation & stationarity transforms (SQL-side).** Triple-barrier first-touch labeling (profit target / stop / time horizon, whichever is hit first) expressed over the horizon-join machinery rather than a pandas loop — this is the concrete consumer that justifies **D5 HORIZON JOIN**. Plus fractional differentiation as a fixed-width weighted window (a stationarity transform, hence a window function). Both are numerical methods, not metrics, and both are per-row over full tables, so they are engine work by the layering rule. | López de Prado labeling/transform lineage; D5 (QuestDB 9.3.3 horizon join) | Triple-barrier labels match a reference pandas implementation including simultaneous-touch tie-breaking (documented and deterministic); labeling a large table streams in bounded memory; fracdiff weights are computed once per (d, width) and the transform matches reference output; both refuse to run under a `--decision-time` pin without an explicit opt-in, since they read forward in time by construction. |
+
+## Tier VII-C — Refinements folded into existing items
+
+No new item numbers; these amend the named designs.
+
+| Folds into | Refinement | Source |
+|---|---|---|
+| Run ledger (#14) | Record the **uncommitted** `git diff` / `git status` / `git diff --cached` alongside the commit SHA (research runs are dirty-tree runs); split immutable **params** from mutable **tags** (qlib's online/offline model state is a tag query, not a param); artifacts form a declared DAG with existence-checked prerequisites and idempotent regeneration (`depend_cls` + `check()` + `skip_existing`), which is what makes a ledger *replayable* rather than merely recorded. | qlib `workflow/recorder.py:362-378`, `record_temp.py:34-159, 212-246`, `workflow/online/utils.py:19-180` |
+| Research-mode / walk-forward | A walk-forward **span planner** as a pure API: `(template spans, step, expanding\|sliding, embargo) → [(train, embargo, test)…]`, calendar-aligned, generated before any compute; qlib's `RollingGen` (+ `trunc_days` leak truncation and the `MultiHorizonGenBase` label-leak accounting) is the field-tested shape. First consumer of the keystone `(commit, query)` cache. | qlib `workflow/task/gen.py:126-137, 140-301, 304-348` |
+| Research-mode embargo | The embargo should eventually be **data, not a constant**: zipline expresses per-session availability as a cutoff timestamp table (default: 45 minutes *before* the open, `data_query_offset`), which handles half-days and per-market conventions without a calendar dependency in the engine. | zipline `pipeline/domain.py:60-75, 169-209` |
+| Gapfill/LOCF | Two load-bearing rules: (1) never forward-fill past an entity's end-of-life (zipline restores NaNs after `asset.end_date` because ffill will happily fabricate prices for delisted symbols); (2) seeding a leading gap requires a backward last-traded lookup whose value is restated into the window's perspective (composes with VII-A1). `LAST_VALUE(… IGNORE NULLS)` reintroduces bug (1) unless spans (VII-A3) bound the fill. | zipline `data/data_portal.py:988-1032` |
+| Keystone cache / P2-P3 | Confirmations, not changes: canonicalize-then-hash keys (sort/dedupe/strip *before* md5; range deliberately excluded from the key; cache the full series, slice at read) and per-node memoization making CSE free. Key the keystone cache on `(version, canonical_expr, freq)`. | qlib `utils/__init__.py:271-274, 350-372`, `cache.py:502-557`, `base.py:184-203` |
+| `context` / data health (VI-A1/B3) | A `describe`-style data-health surface has a field-tested metric list: per-column null count/ratio, inf count, distinct count, mean/std/skew/kurt, lag-1 autocorrelation, per time bucket. All trivially SQL; a natural aggregate-state-cache consumer. | qlib `contrib/report/data/ana.py:28-216`, `scripts/check_data_health.py` |
+
+## Tier VII-D — Companion analytics layer (Python, 2026-07-25)
+
+Pure-Python, post-query, over frames the engine already returns. Packaged
+as an optional extra or separate distribution (the `h5i-db-llm` precedent in
+`DESIGN.md §9`) so `pip install h5i-db` stays pyarrow-only and pandas-scale
+dependencies never enter the base wheel. No Rust core: every item here runs
+over 10³–10⁵ rows (see §Layering rule).
+
+**Selection principle.** Single-run performance ratios are commodity —
+wrap, never reimplement (zipline itself delegates to `empyrical` rather than
+writing its own Sharpe). What is *not* commodity is anything whose input is
+**many runs** or **raw microstructure**, because both are things only a
+versioned store can hand you and a returns-series library structurally
+cannot see. VII-D1 is the differentiated item; VII-B5/B6 are the
+microstructure half, deliberately placed in the engine tier.
+
+| # | Item | Rationale | Acceptance criteria |
+|---|------|-----------|---------------------|
+| VII-D1 | **Overfitting statistics wired to the run ledger** (the flagship of this tier). Deflated Sharpe Ratio, minimum track record length, Probability of Backtest Overfitting (CSCV), effective number of independent trials, and multiple-testing corrections (White's Reality Check, Hansen's SPA). | Every one of these requires the **number of independent trials** that produced the winning strategy. In practice that number is guessed or omitted, because nothing records how many backtests were run — the run ledger (#14) records exactly it, and V-D1's stability sweep produces the trial × time-slice matrix CSCV consumes. This is a statistic nobody else can compute *honestly*, which is a stronger claim than computing it faster. The math is thin (`pypbo` is a single-purpose research repo); the value is the wiring. | DSR/MinTRL match published reference values on the source papers' worked examples; the trial count is read from the ledger rather than passed by hand, and a run not in the ledger is refused rather than silently counted as one trial; CSCV consumes the sweep matrix with shared sub-results deduped by `(commit, query)`; a deliberately overfit strategy set yields DSR ≈ 0 / high PBO and a robust one does not. |
+| VII-D2 | **Version-attributed tearsheet.** Standard ratios (Sharpe, Sortino, Calmar, Omega, CAGR, volatility, drawdown table, VaR/CVaR, tail ratio, win rate, profit factor, capture ratios, Kelly, ulcer index, alpha/beta, rolling variants) **delegated** to `quantstats` / `empyrical-reloaded`; statistical tests (ADF, KPSS, Hurst, variance ratio, Ljung-Box) delegated to `statsmodels` / `arch`. h5i-db's contribution is the header: the data version SHA, the arrival/decision-time pins, and the embargo the numbers were computed under. | "A Sharpe you can cite" — plain quantstats cannot say which data produced its number. Wrapping keeps the metric surface at zero maintenance while the provenance line is the part only this project can write. | Report header carries version SHA + both pin axes + embargo, and regenerating from the same SHA reproduces byte-identical numbers; ratio values match the wrapped library exactly (we are not a second implementation); the wrapper is generic over `f(returns) -> scalar` so a new metric needs no plumbing (zipline's `ReturnsStatistic` shape). |
+| VII-D3 | **Factor evaluation report.** Information coefficient and rank IC per date, ICIR, IC decay across horizons, quantile-bucket forward returns and the top-minus-bottom spread, factor autocorrelation, and turnover. Computation is cross-sectional SQL (VII-B2) plus horizon joins (D5); this item is the summarization and rendering. | The alphalens/qlib overlap, and the natural consumer of VII-B2 — the IC decay curve is one query rather than a per-horizon loop. Both reference projects ship this and both compute it in pandas; we can push the heavy half into SQL. | IC/rank-IC match qlib's `SigAnaRecord` output on a golden fixture; the decay curve is produced by a single horizon-join query (verified in the plan, not a Python loop); quantile spreads reproduce alphalens semantics incl. NaN/mask handling. |
+| VII-D4 | **Validation splitters.** Purged K-fold cross-validation with embargo and combinatorial purged CV (CPCV) — index arithmetic with no data access. **Must share code and embargo semantics with the walk-forward span planner** (VII-C), not duplicate them. | Numerical methods rather than metrics, and the natural companion to walk-forward: both answer "which spans may this fold see". Duplicating embargo logic in two places is how the two drift apart. | Purged folds contain no observation whose label horizon overlaps a test fold (property-tested); CPCV path count matches the reference combinatorics; a leaking split is rejected with the offending indices named; splitter and span planner share one embargo implementation. **Interface decision (defer to #14):** if the run ledger exposes walk-forward as a CLI verb, the shared span/embargo core moves to Rust for agent reachability and Python keeps only the sklearn-shaped wrapper. |
+
+**Out of scope for this tier** (buy, don't build): portfolio optimization
+and covariance shrinkage/denoising (`skfolio`, `Riskfolio-Lib`,
+`PyPortfolioOpt` own this), execution algorithms and market-impact models,
+Monte-Carlo strategy simulators, and any plotting framework beyond the
+single tearsheet. Reimplementing a standard ratio is a defect, not a
+feature.
+
+## Do NOT borrow (confirmed by source study)
+
+- **All storage machinery**: bcolz ragged ctables, `.bin` flat files with a
+  float32 header index, HDF5 dataset caches with hand-built row-offset
+  indexes, Redis reader/writer locks, `.meta` pickle sidecars. Parquet +
+  manifest + DataFusion supersedes every one (row-group stats replace the
+  hand-built indexes; MVCC manifests replace the locks; commit versions
+  replace mtime-free cache invalidation).
+- **Bundle-style time travel** (full copy per ingest, directory-listing
+  resolution): cite as the anti-pattern h5i-db's manifests exist to kill.
+- **Positional calendar indexing** in any form; reaffirms the Part VI
+  do-not entry for calendars. Date spines are input relations.
+- **numexpr fusion** (zipline `pipeline/expression.py`) and **LabelArray**
+  (hand-built dictionary encoding): DataFusion's planner and Arrow
+  dictionary arrays are the modern equivalents. One requirement survives:
+  dictionary-encoded columns carrying overwrite-style adjustments must remap
+  adjustment payloads alongside the baseline (`adjusted_array.py:340-357`).
+- **Backtest machinery**: MetricsTracker/Ledger/PositionTracker, simulation
+  clock gating, MLflow/MongoDB infrastructure. And note zipline itself
+  delegates risk statistics to `empyrical` rather than reimplementing them:
+  Sharpe-class portfolio metrics belong in the Python companion layer over
+  exported returns (VII-D2), not in SQL aggregates.
+- **Reimplementing any commodity performance ratio.** See VII-D2: wrapping a
+  maintained library is the feature; a second implementation is a defect.
+
+## Cross-references (Part VII ⇄ existing parts)
+
+- VII-A1 amends the Part VI do-not list (adjustments pulled forward with a
+  concrete calendar-free design); `window_safe` (VII-B4) is its guard.
+- VII-A2 ⇄ **RFC #17 `available_at`**: fact-level arrival is the same axis;
+  design them together. Also ⇄ D5 HORIZON JOIN (label generation reads the
+  other direction along the same event axis).
+- VII-A3 ⇄ **A1 global symbol dictionary**: entity identity and dictionary
+  interning are one design conversation.
+- VII-B1 ⇄ **P3 aggregate states** (mergeable accumulators) and **D6**
+  (rolling workload in the bench first; custom operators only on a measured
+  loss).
+- VII-B3 ⇄ **T0.1** differential harness: same substrate, quant corpus.
+- VII-B5 ⇄ **P3 aggregate states** (the OHLC volatility family is the second
+  mergeable-state family after OHLCV/VWAP, and its best graduation evidence).
+- VII-B6 ⇄ **D5 HORIZON JOIN**: triple-barrier labeling is the concrete
+  workload that justifies building it.
+- VII-C run-ledger rows ⇄ **#14** joint design doc; span planner ⇄ the
+  keystone cache's walk-forward consumer.
+- **VII-D1 ⇄ #14 run ledger ⇄ V-D1 stability sweep** — the tightest coupling
+  in this Part: the ledger supplies the trial count, the sweep supplies the
+  trial × slice matrix, and VII-D1 is the statistic they exist to enable.
+  None of the three is fully valuable alone; consider them one story when
+  sequencing.
+- VII-D2 ⇄ **VI-A2 output profile** (a tearsheet is a spill-sized artifact,
+  not a context-window payload) and ⇄ the run ledger's declared metrics: the
+  companion layer is the *producer* of the metrics the ledger attributes.
+- VII-D3 ⇄ **VII-B2 + D5**: it is the reporting half of those two.
+- VII-D4 ⇄ **VII-C span planner** (shared embargo core) and ⇄ **#14** for the
+  Rust-vs-Python interface decision.
+
+## Build order (relative to the batch 2 list)
+
+1. **VII-B2 cross-sectional functions + VII-B1 rolling UDAFs** — small,
+   additive, immediately testable; start VII-B3's corpus with whatever
+   subset compiles and grow it as operators land (it doubles as the T0.1
+   quant extension, batch 2 #11).
+2. **VII-B4** widen-then-trim in the planner (with D6's bench workload) and
+   the `window_safe` flag stub.
+3. **VII-A1 adjustment layer** — the flagship of this Part; ships with
+   `window_safe` enforcement and the roll-splice case.
+4. **VII-A3 identity/universe spans** — sequence with A1 (shared entity-key
+   design).
+5. **VII-A2 PIT fundamentals** — sequence with RFC #17; the table shape
+   works today via ASOF, so docs/cookbook can precede the dedicated surface.
+6. **VII-C rows** land opportunistically inside their host items.
+
+The companion tier runs on its own track, gated on the run ledger rather
+than on the engine items above:
+
+- **VII-D2 tearsheet first** — it is mostly wrapping, it is the cheapest
+  demonstration that provenance-attributed metrics are worth having, and it
+  produces the "declared output metrics" the ledger design (#14) needs a
+  concrete consumer for. Do it while #14 is being designed, not after.
+- **VII-B5** alongside VII-B1 (same UDAF machinery, and the OHLC volatility
+  family is P3's graduation evidence).
+- **VII-D3** once VII-B2 lands; **VII-B6 + D5** as a pair when a labeling
+  workload appears.
+- **VII-D4** with the walk-forward span planner, sharing one embargo core.
+- **VII-D1 last of the tier, and only after the run ledger exists** — it is
+  the differentiated item, but a DSR computed from a hand-passed trial count
+  is exactly the overclaim the Part VI positioning correction warns about.
+  The statistic is only honest when the ledger supplies the count.
+
+Tier 0 (Part III) remains the standing precondition, and the Part VI
+positioning correction applies to how this Part is marketed: these are
+features of a versioned time-series database for quant research, not
+components of a leakage-proof pipeline.
