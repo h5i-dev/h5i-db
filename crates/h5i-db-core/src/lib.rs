@@ -31,8 +31,8 @@ pub use backend::{Backend, HeadState, HeadStore, HeadTag, MetaLockGuard};
 pub use backend_object::ObjectStoreHeadStore;
 pub use data_policy::{CmpOp, Constraint, DataPolicy, OnFail, Predicate, ScalarLit};
 pub use database::{
-    CommitResult, Database, ReadAt, ResolvedTable, ScanOptions, ScanReport, VacuumReport,
-    VerifyReport, VersionSummary, WriteOptions,
+    CommitResult, Database, IDEMPOTENCY_LOOKBACK, IDEMPOTENCY_META_KEY, ReadAt, ResolvedTable,
+    ScanOptions, ScanReport, VacuumReport, VerifyReport, VersionSummary, WriteOptions,
 };
 pub use error::{Error, ExitCategory, NextAction, Result, nearest_name};
 pub use manifest::{ColumnStats, Head, OpKind, SegmentMeta, VersionManifest};

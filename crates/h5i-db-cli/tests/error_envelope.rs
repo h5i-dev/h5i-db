@@ -230,3 +230,65 @@ fn version_conflict_points_at_the_version_log() {
         "a conflict should point at the version log: {cmds:?}"
     );
 }
+
+#[test]
+fn an_idempotency_key_makes_a_retry_safe_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap(cwd);
+
+    // Re-running the *same* ingest is the shape of an agent retrying after an
+    // ambiguous failure. Without a key the second attempt is rejected as out
+    // of order; with one it returns the commit that already happened.
+    let blind = run(
+        &["ingest", "m.db", "trades", "t.csv", "--format", "json"],
+        cwd,
+    );
+    assert_eq!(envelope(&blind)["code"], "sort_order_violation");
+
+    let first: serde_json::Value = serde_json::from_slice(
+        &ok(&run(
+            &[
+                "ingest",
+                "m.db",
+                "trades",
+                "overlap.csv",
+                "--mode",
+                "write",
+                "--idempotency-key",
+                "load-2026-07-01",
+                "--format",
+                "json",
+            ],
+            cwd,
+        ))
+        .stdout,
+    )
+    .unwrap();
+
+    let replay: serde_json::Value = serde_json::from_slice(
+        &ok(&run(
+            &[
+                "ingest",
+                "m.db",
+                "trades",
+                "overlap.csv",
+                "--mode",
+                "write",
+                "--idempotency-key",
+                "load-2026-07-01",
+                "--format",
+                "json",
+            ],
+            cwd,
+        ))
+        .stdout,
+    )
+    .unwrap();
+
+    assert_eq!(
+        replay["sequence"], first["sequence"],
+        "the retry must return the original commit, not make a new one"
+    );
+    assert_eq!(replay["segments_added"], 0);
+}

@@ -489,7 +489,7 @@ impl NativeDatabase {
     }
 
     /// Ingest an Arrow IPC stream. mode: "write" | "append".
-    #[pyo3(signature = (name, ipc, mode = "append", expected_version = None, note = None))]
+    #[pyo3(signature = (name, ipc, mode = "append", expected_version = None, note = None, idempotency_key = None))]
     fn ingest(
         &self,
         py: Python<'_>,
@@ -498,12 +498,14 @@ impl NativeDatabase {
         mode: &str,
         expected_version: Option<u64>,
         note: Option<String>,
+        idempotency_key: Option<String>,
     ) -> PyResult<String> {
         let batches = ipc_to_batches(ipc)?;
         let opts = WriteOptions {
             expected_version,
             note,
             user_meta: serde_json::Map::new(),
+            idempotency_key,
         };
         let name = name.to_string();
         let result = match mode {

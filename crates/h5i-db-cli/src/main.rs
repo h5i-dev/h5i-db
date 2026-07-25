@@ -52,6 +52,13 @@ struct WriteFlags {
     /// Free-text note recorded in the version manifest.
     #[arg(long)]
     note: Option<String>,
+    /// Make this mutation replayable exactly once. A retry after an ambiguous
+    /// failure (a timeout that may or may not have committed) carries the same
+    /// key, finds the commit it already produced, and returns it instead of
+    /// writing the rows twice. Retries are only deduplicated against the last
+    /// 64 commits.
+    #[arg(long)]
+    idempotency_key: Option<String>,
 }
 
 impl WriteFlags {
@@ -60,6 +67,7 @@ impl WriteFlags {
             expected_version: self.expected_version,
             note: self.note.clone(),
             user_meta: serde_json::Map::new(),
+            idempotency_key: self.idempotency_key.clone(),
         }
     }
 }
