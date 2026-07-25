@@ -21,3 +21,16 @@ target
 #.idea/
 /PERSONA.md
 __pycache__/
+
+# Python build artifacts and test output.
+# `maturin develop` writes the compiled extension into the source tree, so it
+# sits next to the package and is easy to `git add -A` by accident.
+*.so
+*.pyd
+*.dylib
+*.egg-info/
+dist/
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
