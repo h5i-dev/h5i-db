@@ -20,7 +20,7 @@ use futures::StreamExt;
 use h5i_db_core::{
     Database, Error, ReadAt, Result, ScanOptions, StorageOptions, TableOptions, WriteOptions,
 };
-use h5i_db_query::{H5iSession, PredicateCacheMode, SessionOptions};
+use h5i_db_query::{H5iSession, PredicateCacheMode, ResearchPin, SessionOptions};
 
 use ingest::{InputFormat, align_batch, open_input};
 use output::{
@@ -181,6 +181,22 @@ enum Command {
         /// whole shell session.
         #[arg(long, env = "H5I_DB_AS_OF")]
         as_of: Option<String>,
+        /// Research mode, event-time axis: an RFC3339 instant on the *data's*
+        /// clock. Rows stamped after it are unreadable in this query.
+        ///
+        /// This is the half of the jail that works on bulk-loaded history,
+        /// where nothing was ever withheld by arrival: it blocks the window
+        /// that overruns into the future and the join that reads a later
+        /// timestamp. Independent of --as-of on purpose — under a bulk ingest
+        /// the two clocks are years apart. `H5I_DB_DECISION_TIME` pins a
+        /// session. Defaults to the --as-of instant when that is a timestamp,
+        /// which is the aligned case of a continuously-ingested database.
+        #[arg(long, env = "H5I_DB_DECISION_TIME")]
+        decision_time: Option<String>,
+        /// Extra safety gap subtracted from the decision time, e.g. "1d".
+        /// Needs a decision time to measure back from.
+        #[arg(long, env = "H5I_DB_EMBARGO")]
+        embargo: Option<humantime::Duration>,
     },
 
     /// Ingest data into a table from Parquet/CSV/Arrow (or stdin with "-").
@@ -659,6 +675,66 @@ fn parse_read_at(s: &str) -> Result<ReadAt> {
     Ok(ReadAt::Snapshot(s.to_string()))
 }
 
+/// Build a research-mode pin from the two axes.
+///
+/// They are deliberately independent. Arrival is measured on the *commit*
+/// clock and event time on the *data* clock, and under a bulk ingest those are
+/// years apart: ten years of history committed this morning has a first commit
+/// of today, so an arrival pin at a historical instant resolves to nothing
+/// while an event-time cutoff at the same instant is exactly what is wanted.
+/// Coupling them would make the event-time axis unusable on precisely the
+/// databases it exists for.
+///
+/// When the two clocks *are* aligned — a continuously-ingested database — an
+/// RFC3339 `--as-of` supplies the decision time as well, so the common case
+/// stays one flag.
+fn research_pin(
+    as_of: Option<&str>,
+    decision_time: Option<&str>,
+    embargo: Option<std::time::Duration>,
+) -> Result<ResearchPin> {
+    let at = match as_of {
+        Some(s) => parse_read_at(s)?,
+        None => ReadAt::Latest,
+    };
+    // An explicit decision time wins; otherwise inherit an --as-of instant.
+    let decision_ns = match decision_time {
+        Some(s) => Some(parse_rfc3339_ns(s, "--decision-time")?),
+        None => match at {
+            ReadAt::AsOf(ns) => Some(ns),
+            _ => None,
+        },
+    };
+
+    if decision_time.is_none() && embargo.is_none() {
+        // No event-time axis requested: arrival only, exactly as before.
+        return Ok(ResearchPin::at(at));
+    }
+    let Some(decision_ns) = decision_ns else {
+        return Err(Error::invalid(
+            "--embargo needs an instant to measure back from; pass --decision-time with an \
+             RFC3339 timestamp (or an RFC3339 --as-of, when the commit and event clocks agree)",
+        ));
+    };
+    let embargo_ns = match embargo {
+        Some(d) => i64::try_from(d.as_nanos())
+            .map_err(|_| Error::invalid(format!("--embargo {d:?} is too long to represent")))?,
+        None => 0,
+    };
+    let cutoff_ns = decision_ns.checked_sub(embargo_ns).ok_or_else(|| {
+        Error::invalid("--embargo reaches back before the representable time range")
+    })?;
+    Ok(ResearchPin::at(at).with_event_time_cutoff_ns(cutoff_ns))
+}
+
+/// Parse an RFC3339 instant into nanoseconds since the epoch.
+fn parse_rfc3339_ns(s: &str, flag: &str) -> Result<i64> {
+    let ts = chrono::DateTime::parse_from_rfc3339(s)
+        .map_err(|e| Error::invalid(format!("{flag} {s:?} is not an RFC3339 timestamp: {e}")))?;
+    ts.timestamp_nanos_opt()
+        .ok_or_else(|| Error::invalid(format!("{flag} {s:?} is outside the representable range")))
+}
+
 /// `--…-mb` flags → bytes, rejecting 0 and overflow.
 fn mb_to_bytes(mb: u64) -> Result<u64> {
     if mb == 0 {
@@ -870,6 +946,8 @@ async fn run(cli: Cli) -> Result<()> {
             stats,
             predicate_cache,
             as_of,
+            decision_time,
+            embargo,
         } => {
             let sql = if sql == "-" {
                 let mut buf = String::new();
@@ -900,9 +978,16 @@ async fn run(cli: Cli) -> Result<()> {
             // Session construction resolves every table, so --as-of surfaces
             // real user errors here (unknown snapshot, version out of range).
             // Classify rather than blanket-internal them so exit codes hold.
-            let session = match &as_of {
-                Some(at) => H5iSession::new_at(db, options, parse_read_at(at)?).await,
-                None => H5iSession::new(db, options).await,
+            let pin = research_pin(
+                as_of.as_deref(),
+                decision_time.as_deref(),
+                embargo.map(|d| *d),
+            )?;
+            let session = if pin.is_unpinned() {
+                // Byte-for-byte the pre-research-mode path.
+                H5iSession::new(db, options).await
+            } else {
+                H5iSession::new_pinned(db, options, pin).await
             }
             .map_err(classify_df_error)?;
 

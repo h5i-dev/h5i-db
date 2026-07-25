@@ -252,3 +252,210 @@ fn a_bad_decision_point_is_a_user_error_not_an_internal_one() {
     assert_eq!(out.status.code(), Some(2), "envelope: {envelope}");
     assert_eq!(envelope["code"], "version_not_found");
 }
+
+// -- event-time axis (ROADMAP Part VI, --embargo) ---------------------------
+//
+// The arrival pin cannot see these bugs: every row below was committed in the
+// same breath, so nothing was ever withheld by availability. Only an
+// event-time cutoff hides the future here — which is exactly the case of a
+// database whose whole history arrived in one bulk ingest.
+
+const BULK: &str = "ts,symbol,price\n\
+2026-07-01T09:00:00Z,AAPL,10.0\n\
+2026-07-01T10:00:00Z,AAPL,20.0\n\
+2026-07-01T11:00:00Z,AAPL,30.0\n\
+2026-07-01T12:00:00Z,AAPL,40.0\n";
+
+/// One table, one commit: the bulk-ingest cold start.
+fn bootstrap_bulk(cwd: &Path) {
+    std::fs::write(cwd.join("bulk.csv"), BULK).unwrap();
+    ok_json(&run(&["init", "b.db", "--format", "json"], cwd));
+    ok_json(&run(
+        &[
+            "create-table",
+            "b.db",
+            "trades",
+            "--like",
+            "bulk.csv",
+            "--time-column",
+            "ts",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    ok_json(&run(
+        &["ingest", "b.db", "trades", "bulk.csv", "--format", "json"],
+        cwd,
+    ));
+}
+
+#[test]
+fn embargo_hides_future_rows_the_arrival_pin_cannot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap_bulk(cwd);
+    let sql = "SELECT count(*) AS c, max(price) AS mx FROM trades";
+
+    // The arrival axis is powerless here: one commit, so every as-of point
+    // resolves to the same version and sees all four rows.
+    let arrival_only = ok_json(&run(
+        &["query", "b.db", sql, "--as-of", "1", "--format", "json"],
+        cwd,
+    ));
+    assert_eq!(scalar(&arrival_only, "c"), 4.0);
+    assert_eq!(scalar(&arrival_only, "mx"), 40.0);
+
+    // The event-time axis does the work: at a decision instant of 10:30 with
+    // no embargo, only the 09:00 and 10:00 prints are readable.
+    let jailed = ok_json(&run(
+        &[
+            "query",
+            "b.db",
+            sql,
+            "--decision-time",
+            "2026-07-01T10:30:00Z",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(scalar(&jailed, "c"), 2.0);
+    assert_eq!(
+        scalar(&jailed, "mx"),
+        20.0,
+        "a row stamped after the decision instant must be unreadable"
+    );
+
+    // A one-hour embargo pulls the cutoff back to 09:30.
+    let embargoed = ok_json(&run(
+        &[
+            "query",
+            "b.db",
+            sql,
+            "--decision-time",
+            "2026-07-01T10:30:00Z",
+            "--embargo",
+            "1h",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(scalar(&embargoed, "c"), 1.0);
+    assert_eq!(scalar(&embargoed, "mx"), 10.0);
+}
+
+#[test]
+fn the_cutoff_cannot_be_escaped_by_writing_a_wider_predicate() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap_bulk(cwd);
+    // A query that explicitly asks for the future still does not get it: the
+    // cutoff is part of the table, not a filter the query composes with.
+    let out = ok_json(&run(
+        &[
+            "query",
+            "b.db",
+            "SELECT count(*) AS c FROM trades WHERE ts <= '2026-07-01T23:00:00Z'",
+            "--decision-time",
+            "2026-07-01T10:30:00Z",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(scalar(&out, "c"), 2.0, "the jail wins over the query");
+}
+
+#[test]
+fn a_window_cannot_overrun_into_the_future() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap_bulk(cwd);
+    // The classic leak: a window function that reaches past the decision
+    // instant. Unpinned it sees 40.0; embargoed the future rows do not exist.
+    let sql = "SELECT max(px) AS mx FROM (SELECT last_value(price) OVER (ORDER BY ts \
+               ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS px FROM trades)";
+    let leaky = ok_json(&run(&["query", "b.db", sql, "--format", "json"], cwd));
+    assert_eq!(scalar(&leaky, "mx"), 40.0);
+
+    let safe = ok_json(&run(
+        &[
+            "query",
+            "b.db",
+            sql,
+            "--decision-time",
+            "2026-07-01T10:30:00Z",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(
+        scalar(&safe, "mx"),
+        20.0,
+        "a window reaching forward must find nothing past the cutoff"
+    );
+}
+
+#[test]
+fn embargo_env_var_pins_a_session_and_needs_an_instant() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap_bulk(cwd);
+    let sql = "SELECT count(*) AS c FROM trades";
+
+    // Both axes from the environment: an agent inherits the whole jail.
+    let jailed = ok_json(&run_env(
+        &["query", "b.db", sql, "--format", "json"],
+        cwd,
+        &[("H5I_DB_DECISION_TIME", "2026-07-01T10:30:00Z")],
+    ));
+    assert_eq!(scalar(&jailed, "c"), 2.0);
+
+    // An embargo with no decision instant is refused rather than guessed at.
+    let e = err_envelope(&run(
+        &["query", "b.db", sql, "--embargo", "1h", "--format", "json"],
+        cwd,
+    ));
+    assert_eq!(e["code"], "invalid_input");
+    assert!(
+        e["message"].as_str().unwrap().contains("--decision-time"),
+        "the error should name the missing flag: {e}"
+    );
+
+    // Neither is a version pin, which says nothing about *when* the decision
+    // was made.
+    let e = err_envelope(&run(
+        &[
+            "query",
+            "b.db",
+            sql,
+            "--as-of",
+            "1",
+            "--embargo",
+            "1h",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(e["code"], "invalid_input");
+}
+
+#[test]
+fn without_embargo_nothing_about_the_default_path_changes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cwd = tmp.path();
+    bootstrap_bulk(cwd);
+    let sql = "SELECT count(*) AS c FROM trades";
+    let plain = ok_json(&run(&["query", "b.db", sql, "--format", "json"], cwd));
+    assert_eq!(scalar(&plain, "c"), 4.0);
+    // And the arrival pin alone still behaves exactly as it did before.
+    let arrival = ok_json(&run(
+        &["query", "b.db", sql, "--as-of", "1", "--format", "json"],
+        cwd,
+    ));
+    assert_eq!(scalar(&arrival, "c"), 4.0);
+}
