@@ -111,9 +111,54 @@ no global <code>--db</code> flag).</p>
 </table></div>
 </div></section><section class="api-member"><h3 id="errors-and-exit-codes">Errors and exit codes<a class="headerlink" href="#errors-and-exit-codes" title="Permanent link">#</a></h3><div class="api-body">
 <p>Errors are a single JSON envelope on <strong>stderr</strong>:</p>
-<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;version_conflict&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;…&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;retryable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;hint&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;…&quot;</span><span class="p">}</span>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;schema_version&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;table_not_found&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;message&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;table \&quot;trade\&quot; not found&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;retryable&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;hint&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;run `h5i-db tables &lt;db&gt;` to list tables&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;did_you_mean&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trades&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;next_actions&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;h5i-db schema market.db trades&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;why&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;\&quot;trade\&quot; does not exist; \&quot;trades\&quot; is the closest name&quot;</span><span class="p">},</span>
+<span class="w">    </span><span class="p">{</span><span class="nt">&quot;cmd&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;h5i-db tables market.db&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;why&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;list the tables that do exist&quot;</span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
 </code></pre></div>
 
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>code</code></td>
+<td>Stable machine-readable identifier; branch on this, not on <code>message</code></td>
+</tr>
+<tr>
+<td><code>retryable</code></td>
+<td>Whether re-running the same call can plausibly succeed</td>
+</tr>
+<tr>
+<td><code>hint</code></td>
+<td>One line of prose for a human</td>
+</tr>
+<tr>
+<td><code>did_you_mean</code></td>
+<td>Closest existing identifier when the failure looks like a typo; absent otherwise</td>
+</tr>
+<tr>
+<td><code>next_actions</code></td>
+<td>Commands you can run verbatim, best first. <code>&lt;db&gt;</code> is already substituted with the database you invoked</td>
+</tr>
+<tr>
+<td><code>schema_version</code></td>
+<td>Bumped on any breaking change to this shape</td>
+</tr>
+</tbody>
+</table></div>
 <p>Exit codes are stable and branchable:</p>
 <div class="table-wrap"><table>
 <thead>
@@ -165,11 +210,54 @@ no global <code>--db</code> flag).</p>
 <td><code>--note &lt;text&gt;</code></td>
 <td>Free-text note recorded in the version manifest</td>
 </tr>
+<tr>
+<td><code>--idempotency-key &lt;token&gt;</code></td>
+<td>Make the mutation replayable exactly once</td>
+</tr>
 </tbody>
 </table></div>
+<p><code>--idempotency-key</code> is what makes an unattended ingest loop safe to retry. A
+repeat carrying the same key finds the commit it already produced and returns
+it with <code>"segments_added": 0</code> instead of writing the rows a second time, which
+matters because a duplicated append does not error: it just leaves the data
+wrong from then on. The key is recorded in the commit's own manifest, and
+retries are deduplicated against the last 64 commits.</p>
+<div class="highlight"><pre><span></span><code>h5i-db<span class="w"> </span>ingest<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>day.parquet<span class="w"> </span>--idempotency-key<span class="w"> </span>load-2026-07-01
+</code></pre></div>
+
 <hr />
 </div></section><h2 id="database-tables">Database &amp; tables<a class="headerlink" href="#database-tables" title="Permanent link">#</a></h2>
-<section class="api-member"><h3 id="h5i-db-init"><code><span class="api-qual">h5i-db </span><span class="api-name">init</span></code><a class="headerlink" href="#h5i-db-init" title="Permanent link">#</a></h3><div class="api-body">
+<section class="api-member"><h3 id="h5i-db-context"><code><span class="api-qual">h5i-db </span><span class="api-name">context</span></code><a class="headerlink" href="#h5i-db-context" title="Permanent link">#</a></h3><div class="api-body">
+<p>Everything needed to orient, in one call: every table's columns, size, segment
+count, time range and head version, which operations the policy gates, the
+snapshots that exist, and any plan already staged and waiting for review. It
+replaces a <code>tables</code> → <code>schema</code> → <code>sample</code> → <code>versions</code> walk repeated per table.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>context<span class="w"> </span>market.db<span class="w"> </span>--format<span class="w"> </span>json
+<span class="gp">$ </span>h5i-db<span class="w"> </span>context<span class="w"> </span>market.db<span class="w"> </span>--budget<span class="w"> </span><span class="m">2000</span><span class="w">        </span><span class="c1"># cap the answer in tokens</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>context<span class="w"> </span>market.db<span class="w"> </span>--stale-after<span class="w"> </span>15m<span class="w">    </span><span class="c1"># flag tables whose head is old</span>
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--budget &lt;tokens&gt;</code></td>
+<td>Approximate ceiling. Detail is shed in a fixed order (columns, snapshots, notes, then whole tables smallest-first) and whatever went is counted under <code>omitted</code>, with the command that recovers it</td>
+</tr>
+<tr>
+<td><code>--stale-after &lt;dur&gt;</code></td>
+<td>Report per-table commit age and flag anything older than this</td>
+</tr>
+</tbody>
+</table></div>
+<p>Output is deterministic for a given database state, so it can be cached as a
+preamble; <code>--stale-after</code> is the only flag that makes it depend on the clock.</p>
+</div></section><section class="api-member"><h3 id="h5i-db-init"><code><span class="api-qual">h5i-db </span><span class="api-name">init</span></code><a class="headerlink" href="#h5i-db-init" title="Permanent link">#</a></h3><div class="api-body">
 <p>Create a new database directory.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>init<span class="w"> </span>market.db
 </code></pre></div>
@@ -305,19 +393,62 @@ bypasses versioning. Snapshots protect tables from it; use them.</p>
 <td><code>--predicate-cache</code></td>
 <td>Read and build immutable predicate-cache sidecars</td>
 </tr>
+<tr>
+<td><code>--as-of &lt;at&gt;</code></td>
+<td>Pin every table at a read point: a version, an RFC3339 availability timestamp, or a snapshot name</td>
+</tr>
+<tr>
+<td><code>--decision-time &lt;ts&gt;</code></td>
+<td>Hide rows stamped after this RFC3339 instant</td>
+</tr>
+<tr>
+<td><code>--embargo &lt;dur&gt;</code></td>
+<td>Extra gap subtracted from <code>--decision-time</code>, e.g. <code>1d</code></td>
+</tr>
 </tbody>
 </table></div>
 <p>See the <a href="sql.html">SQL reference</a> for <code>h5i()</code> time travel, <code>asof_join</code>, and
 the time-series function library.</p>
+<h4 id="point-in-time-reads">Point-in-time reads<a class="headerlink" href="#point-in-time-reads" title="Permanent link">#</a></h4>
+<p><code>--as-of</code> and <code>--decision-time</code> bound what a query can read, on two different
+clocks. <code>--as-of</code> is the <em>commit</em> clock: it pins every table at a version, so a
+restatement that landed later is not visible. <code>--decision-time</code> is the <em>data</em>
+clock: it hides rows whose time column is later than the instant, so a window
+cannot reach forward and a join cannot pull in a later timestamp.</p>
+<p>They are independent because under a bulk load the two clocks are far apart:
+ten years of history committed this morning has a first commit of today, so an
+arrival pin at a historical instant resolves to nothing while an event-time
+cutoff at that same instant is exactly what you want. When the clocks do agree,
+an RFC3339 <code>--as-of</code> also supplies the decision time, so the common case stays
+one flag.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># One decision date, both axes, for a walk-forward step.</span>
+h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT vwap(price, size) FROM trades&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--as-of<span class="w"> </span><span class="m">2026</span>-07-01T00:00:00Z<span class="w"> </span>--decision-time<span class="w"> </span><span class="m">2026</span>-07-01T00:00:00Z<span class="w"> </span>--embargo<span class="w"> </span>1d
+</code></pre></div>
+
+<p><code>H5I_DB_AS_OF</code>, <code>H5I_DB_DECISION_TIME</code> and <code>H5I_DB_EMBARGO</code> set the same
+things for a whole shell, which is how you hand a bounded view to a script or
+an agent rather than relying on it to pass the flag every time. An explicit
+flag still wins over the environment.</p>
+<p>The bound is part of the table, not a filter you compose with, so a query that
+explicitly asks for later rows still gets none. Three things refuse rather
+than being quietly exempt: a table with no time column, a table whose time
+column is a bare integer carrying no unit, and, under <code>--decision-time</code>, the
+table functions (<code>h5i()</code>, <code>asof_join()</code>, <code>gapfill()</code>, <code>resample()</code>, <code>tail()</code>,
+<code>latest_on()</code>), which read their tables directly and cannot have the cutoff
+pushed into them. Under <code>--as-of</code> alone those functions work normally,
+resolving at the pinned version; selecting a <em>different</em> read point from
+inside a pinned session is refused.</p>
 </div></section><section class="api-member"><h3 id="h5i-db-versions"><code><span class="api-qual">h5i-db </span><span class="api-name">versions</span></code><a class="headerlink" href="#h5i-db-versions" title="Permanent link">#</a></h3><div class="api-body">
 <p>List a table's committed versions: <code>version</code>, <code>op</code>, <code>committed_at</code>, <code>rows</code>,
 <code>bytes</code>, <code>segments</code>, <code>note</code>.</p>
-</div></section><section class="api-member"><h3 id="h5i-db-leakage-check"><code><span class="api-qual">h5i-db </span><span class="api-name">leakage-check</span></code><a class="headerlink" href="#h5i-db-leakage-check" title="Permanent link">#</a></h3><div class="api-body">
-<p>Look-ahead-bias diagnostic: run one query against the current head (<strong>leaking</strong>:
-every commit, including data that only arrived after the decision instant)
-and against an as-of read point (<strong>non-leaking</strong>: only data available as of
-that instant), and report the delta between the two results.</p>
-<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>leakage-check<span class="w"> </span>market.db<span class="w"> </span><span class="se">\</span>
+</div></section><section class="api-member"><h3 id="h5i-db-arrival-delta"><code><span class="api-qual">h5i-db </span><span class="api-name">arrival-delta</span></code><a class="headerlink" href="#h5i-db-arrival-delta" title="Permanent link">#</a></h3><div class="api-body">
+<p>How much a query's answer moved because data arrived late: run it once at the
+current head and once at an earlier read point, and report the difference.
+What moves is what depended on commits that had not landed at the earlier
+point, which in a backtest is the part of a metric a live run starting that
+day could not have earned.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>arrival-delta<span class="w"> </span>market.db<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span><span class="s2">&quot;SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--as-of<span class="w"> </span><span class="m">2026</span>-07-01T16:00:00Z<span class="w"> </span>--format<span class="w"> </span>json
 </code></pre></div>
@@ -340,13 +471,18 @@ that instant), and report the delta between the two results.</p>
 </tr>
 </tbody>
 </table></div>
-<p>The report carries <code>leakage_detected</code>, per-column <code>head → asof (delta)</code> for the
-common single-row-metric case, <code>max_abs_delta</code>, <code>row_count_differs</code>, and
-<code>withheld_versions</code> (per table, the head-vs-as-of version gap). A non-zero
-delta proves <em>availability</em> leakage (late-arriving or restated rows across
-commits); a zero delta does not prove its absence, and this does not detect
-look-ahead <em>inside</em> a single snapshot. Pairs naturally with the
-<a href="#h5i-db-versions">reproducible-backtest</a> pin-what-you-read pattern.</p>
+<p>The report carries <code>changed</code>, per-column <code>head → asof (delta)</code> for the common
+single-row-metric case, <code>max_abs_delta</code>, <code>row_count_differs</code>,
+<code>withheld_versions</code> (per table, the head-vs-as-of version gap), <code>vacuous</code>, and
+<code>notes</code>.</p>
+<p><strong>Read it as a measurement, not a verdict.</strong> Look-ahead comes in many shapes
+and this sees one of them: rows that exist now but had not been published. A
+signal that reads its own bar leaves the delta unmoved, so no value of it, high
+or low, clears a query of look-ahead; bound the event-time axis with
+<a href="#h5i-db-query"><code>query --decision-time</code></a> for that. And check <code>vacuous</code> before
+reading the number: when both read points resolve to the same version, which is
+the normal state of a bulk-loaded database, the zero is arithmetic rather than
+evidence, and the report says so in <code>notes</code>.</p>
 <hr />
 </div></section><h2 id="writing-data">Writing data<a class="headerlink" href="#writing-data" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="h5i-db-ingest"><code><span class="api-qual">h5i-db </span><span class="api-name">ingest</span></code><a class="headerlink" href="#h5i-db-ingest" title="Permanent link">#</a></h3><div class="api-body">
@@ -597,6 +733,15 @@ verified preserved.</p>
 
 <p><code>--deep</code> additionally re-reads every segment and verifies content checksums.
 Problems are reported in the chosen format and the command exits non-zero.</p>
+</div></section><section class="api-member"><h3 id="h5i-db-demo"><code><span class="api-qual">h5i-db </span><span class="api-name">demo</span></code><a class="headerlink" href="#h5i-db-demo" title="Permanent link">#</a></h3><div class="api-body">
+<p>Build a small database and walk the whole arc on real data: ingest, the metric
+a strategy would have traded on, a vendor restatement previewed through
+plan/apply, the arrival delta that correction reveals, and a session that
+cannot read past its decision instant. Takes about a second.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>demo
+<span class="gp">$ </span>h5i-db<span class="w"> </span>demo<span class="w"> </span>--dir<span class="w"> </span>./scratch<span class="w"> </span>--keep<span class="w">      </span><span class="c1"># keep the database it builds</span>
+</code></pre></div>
+
 </div></section><section class="api-member"><h3 id="h5i-db-ui"><code><span class="api-qual">h5i-db </span><span class="api-name">ui</span></code><a class="headerlink" href="#h5i-db-ui" title="Permanent link">#</a></h3><div class="api-body">
 <p>Launch the local review UI — loopback only.</p>
 <div class="table-wrap"><table>
@@ -622,7 +767,7 @@ badges, version diffs, and an SQL scratchpad that reports pruning per query.</p>
     <nav class="page-nav"><a class="prev" href="../manual/concepts.html"><span class="dir">← Previous</span><span class="pn-title">Core concepts</span></a><a class="next" href="../manual/sql.html"><span class="dir">Next →</span><span class="pn-title">SQL reference</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li><li><a href="#h5i-db-leakage-check">h5i-db leakage-check</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-data-policy">h5i-db data-policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-context">h5i-db context</a></li><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li><li><a href="#h5i-db-arrival-delta">h5i-db arrival-delta</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-data-policy">h5i-db data-policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-demo">h5i-db demo</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

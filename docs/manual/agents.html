@@ -146,6 +146,28 @@ gate behind human review.</p>
 </tr>
 </tbody>
 </table></div>
+<h3 id="the-agent-output-profile">The agent output profile<a class="headerlink" href="#the-agent-output-profile" title="Permanent link">#</a></h3>
+<p>Passing a limit on every call only works if the caller remembers, and one
+forgotten flag can end a session. <code>H5I_DB_PROFILE=agent</code> moves the budget into
+the environment instead:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span><span class="nb">export</span><span class="w"> </span><span class="nv">H5I_DB_PROFILE</span><span class="o">=</span>agent
+<span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT * FROM trades&quot;</span><span class="w"> </span>--format<span class="w"> </span>jsonl
+<span class="go">{&quot;ts&quot;:&quot;2026-07-01T09:30:00Z&quot;,&quot;symbol&quot;:&quot;AAPL&quot;,&quot;price&quot;:210.5}</span>
+<span class="go">… 1000 rows …</span>
+</code></pre></div>
+
+<p>stdout stops at 1000 rows or 1 MiB, and a JSON summary on stderr reports what
+was withheld:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;profile&quot;</span><span class="p">:</span><span class="s2">&quot;agent&quot;</span><span class="p">,</span><span class="nt">&quot;truncated&quot;</span><span class="p">:</span><span class="kc">true</span><span class="p">,</span><span class="nt">&quot;total_rows&quot;</span><span class="p">:</span><span class="mi">2841193</span><span class="p">,</span><span class="nt">&quot;returned_rows&quot;</span><span class="p">:</span><span class="mi">1000</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">&quot;full_result_path&quot;</span><span class="p">:</span><span class="s2">&quot;/tmp/h5i-db-results/result-….parquet&quot;</span><span class="p">,</span><span class="nt">&quot;full_result_rows&quot;</span><span class="p">:</span><span class="mi">2841193</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Nothing is lost, only withheld: the rows that did not fit are in that Parquet
+file. <code>H5I_DB_RESULT_DIR</code> moves where those land. Two properties worth relying
+on: output content never depends on whether stdout is a terminal, so a piped
+run produces the same bytes as an interactive one, and an explicit
+<code>--max-bytes</code> you pass yourself remains a hard <code>limit_exceeded</code> error rather
+than a soft truncation.</p>
 <h2 id="policy-gated-review">Policy-gated review<a class="headerlink" href="#policy-gated-review" title="Permanent link">#</a></h2>
 <p>The <a href="concepts.html#the-mutation-policy">mutation policy</a> forces chosen
 operations through the previewable plan/apply flow:</p>
@@ -177,11 +199,20 @@ an agent can't quietly commit malformed rows.</p>
   attributable to an exact input state — see the cookbook's
   <a href="../cookbook/03_risk_and_production/02_reproducible_backtests.html">reproducible backtests</a>
   and <a href="../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">paper-trading loop</a>.</li>
-<li><strong>Check for look-ahead bias.</strong> Before trusting a backtest metric, run it
-  through <a href="cli.html#h5i-db-leakage-check"><code>leakage-check … --as-of &lt;decision-time&gt;</code></a>:
-  it re-runs the query as of the decision instant and reports how much of the
-  result came from data that only became available later. A non-zero delta is
-  alpha that evaporates in production.</li>
+<li><strong>Bound the pull, not the loop.</strong> A cutoff applied when the data leaves the
+  database survives the trip into pandas, where nothing else can enforce it.
+  <a href="cli.html#point-in-time-reads"><code>query --decision-time &lt;ts&gt;</code></a> hides rows
+  stamped later and <code>--as-of</code> pins which commits exist; set
+  <code>H5I_DB_DECISION_TIME</code> to bound a whole session.</li>
+<li><strong>Measure what the data did afterwards.</strong> No cutoff can prevent a vendor
+  restating history, so measure it instead:
+  <a href="cli.html#h5i-db-arrival-delta"><code>arrival-delta … --as-of &lt;decision-time&gt;</code></a>
+  re-runs a query at both read points and reports how much the answer moved.
+  Read <code>vacuous</code> before the number: on a database with no arrival history the
+  zero is arithmetic rather than evidence.</li>
+<li><strong>Orient in one call.</strong> <a href="cli.html#h5i-db-context"><code>context</code></a> answers what
+  <code>tables</code>, <code>schema</code>, <code>sample</code> and <code>versions</code> answer, in one deterministic
+  document that also names any staged plan and the operations policy gates.</li>
 <li><strong>Notes are for provenance.</strong> <code>--note</code> / <code>note=</code> lands in the version
   manifest; make agents write <em>why</em> ("re-mark after vendor restatement,
   ticket DX-142"), and <code>versions</code> becomes your change log.</li>
@@ -192,7 +223,7 @@ an agent can't quietly commit malformed rows.</p>
     <nav class="page-nav"><a class="prev" href="../manual/sql.html"><span class="dir">← Previous</span><span class="pn-title">SQL reference</span></a><a class="next" href="../manual/operations.html"><span class="dir">Next →</span><span class="pn-title">Operations guide</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#machine-readable-everything">Machine-readable everything</a></li><li><a href="#resource-limits-as-flags">Resource limits as flags</a></li><li><a href="#policy-gated-review">Policy-gated review</a></li><li><a href="#patterns-that-work">Patterns that work</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#machine-readable-everything">Machine-readable everything</a></li><li><a href="#resource-limits-as-flags">Resource limits as flags</a><ul><li><a href="#the-agent-output-profile">The agent output profile</a></li></ul></li><li><a href="#policy-gated-review">Policy-gated review</a></li><li><a href="#patterns-that-work">Patterns that work</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

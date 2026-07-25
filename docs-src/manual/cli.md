@@ -34,8 +34,28 @@ no global `--db` flag).
 Errors are a single JSON envelope on **stderr**:
 
 ```json
-{"code": "version_conflict", "message": "…", "retryable": true, "hint": "…"}
+{
+  "schema_version": 2,
+  "code": "table_not_found",
+  "message": "table \"trade\" not found",
+  "retryable": false,
+  "hint": "run `h5i-db tables <db>` to list tables",
+  "did_you_mean": "trades",
+  "next_actions": [
+    {"cmd": "h5i-db schema market.db trades", "why": "\"trade\" does not exist; \"trades\" is the closest name"},
+    {"cmd": "h5i-db tables market.db", "why": "list the tables that do exist"}
+  ]
+}
 ```
+
+| Field | Use |
+|---|---|
+| `code` | Stable machine-readable identifier; branch on this, not on `message` |
+| `retryable` | Whether re-running the same call can plausibly succeed |
+| `hint` | One line of prose for a human |
+| `did_you_mean` | Closest existing identifier when the failure looks like a typo; absent otherwise |
+| `next_actions` | Commands you can run verbatim, best first. `<db>` is already substituted with the database you invoked |
+| `schema_version` | Bumped on any breaking change to this shape |
 
 Exit codes are stable and branchable:
 
@@ -58,10 +78,43 @@ Commands that commit a version (`ingest`, `restore`, `replace-range`,
 |---|---|
 | `--expected-version <N>` | Require the table head to be exactly version N (optimistic guard); mismatch exits 3 |
 | `--note <text>` | Free-text note recorded in the version manifest |
+| `--idempotency-key <token>` | Make the mutation replayable exactly once |
+
+`--idempotency-key` is what makes an unattended ingest loop safe to retry. A
+repeat carrying the same key finds the commit it already produced and returns
+it with `"segments_added": 0` instead of writing the rows a second time, which
+matters because a duplicated append does not error: it just leaves the data
+wrong from then on. The key is recorded in the commit's own manifest, and
+retries are deduplicated against the last 64 commits.
+
+```bash
+h5i-db ingest market.db trades day.parquet --idempotency-key load-2026-07-01
+```
 
 ---
 
 ## Database & tables
+
+### `h5i-db context`
+
+Everything needed to orient, in one call: every table's columns, size, segment
+count, time range and head version, which operations the policy gates, the
+snapshots that exist, and any plan already staged and waiting for review. It
+replaces a `tables` → `schema` → `sample` → `versions` walk repeated per table.
+
+```console
+$ h5i-db context market.db --format json
+$ h5i-db context market.db --budget 2000        # cap the answer in tokens
+$ h5i-db context market.db --stale-after 15m    # flag tables whose head is old
+```
+
+| Flag | Meaning |
+|---|---|
+| `--budget <tokens>` | Approximate ceiling. Detail is shed in a fixed order (columns, snapshots, notes, then whole tables smallest-first) and whatever went is counted under `omitted`, with the command that recovers it |
+| `--stale-after <dur>` | Report per-table commit age and flag anything older than this |
+
+Output is deterministic for a given database state, so it can be cached as a
+preamble; `--stale-after` is the only flag that makes it depend on the clock.
 
 ### `h5i-db init`
 
@@ -156,9 +209,48 @@ $ cat report.sql | h5i-db query market.db - --format csv > out.csv
 | `--threads <N>` | Number of threads / partitions |
 | `--stats` | Print scan/pruning statistics to stderr after the query |
 | `--predicate-cache` | Read and build immutable predicate-cache sidecars |
+| `--as-of <at>` | Pin every table at a read point: a version, an RFC3339 availability timestamp, or a snapshot name |
+| `--decision-time <ts>` | Hide rows stamped after this RFC3339 instant |
+| `--embargo <dur>` | Extra gap subtracted from `--decision-time`, e.g. `1d` |
 
 See the [SQL reference](sql.html) for `h5i()` time travel, `asof_join`, and
 the time-series function library.
+
+#### Point-in-time reads
+
+`--as-of` and `--decision-time` bound what a query can read, on two different
+clocks. `--as-of` is the *commit* clock: it pins every table at a version, so a
+restatement that landed later is not visible. `--decision-time` is the *data*
+clock: it hides rows whose time column is later than the instant, so a window
+cannot reach forward and a join cannot pull in a later timestamp.
+
+They are independent because under a bulk load the two clocks are far apart:
+ten years of history committed this morning has a first commit of today, so an
+arrival pin at a historical instant resolves to nothing while an event-time
+cutoff at that same instant is exactly what you want. When the clocks do agree,
+an RFC3339 `--as-of` also supplies the decision time, so the common case stays
+one flag.
+
+```bash
+# One decision date, both axes, for a walk-forward step.
+h5i-db query market.db "SELECT vwap(price, size) FROM trades" \
+    --as-of 2026-07-01T00:00:00Z --decision-time 2026-07-01T00:00:00Z --embargo 1d
+```
+
+`H5I_DB_AS_OF`, `H5I_DB_DECISION_TIME` and `H5I_DB_EMBARGO` set the same
+things for a whole shell, which is how you hand a bounded view to a script or
+an agent rather than relying on it to pass the flag every time. An explicit
+flag still wins over the environment.
+
+The bound is part of the table, not a filter you compose with, so a query that
+explicitly asks for later rows still gets none. Three things refuse rather
+than being quietly exempt: a table with no time column, a table whose time
+column is a bare integer carrying no unit, and, under `--decision-time`, the
+table functions (`h5i()`, `asof_join()`, `gapfill()`, `resample()`, `tail()`,
+`latest_on()`), which read their tables directly and cannot have the cutoff
+pushed into them. Under `--as-of` alone those functions work normally,
+resolving at the pinned version; selecting a *different* read point from
+inside a pinned session is refused.
 
 ### `h5i-db versions`
 
@@ -374,6 +466,18 @@ $ h5i-db verify market.db trades --deep
 
 `--deep` additionally re-reads every segment and verifies content checksums.
 Problems are reported in the chosen format and the command exits non-zero.
+
+### `h5i-db demo`
+
+Build a small database and walk the whole arc on real data: ingest, the metric
+a strategy would have traded on, a vendor restatement previewed through
+plan/apply, the arrival delta that correction reveals, and a session that
+cannot read past its decision instant. Takes about a second.
+
+```console
+$ h5i-db demo
+$ h5i-db demo --dir ./scratch --keep      # keep the database it builds
+```
 
 ### `h5i-db ui`
 

@@ -105,6 +105,10 @@ fn subcommand(tokens: &[String]) -> Vec<String> {
     let Some(first) = words.first() else {
         return Vec::new();
     };
+    // `h5i-db <command> --help` is prose about the CLI, not an invocation.
+    if first.starts_with('<') {
+        return Vec::new();
+    }
     if NESTED.contains(&first.as_str()) {
         words.iter().take(2).map(|s| s.to_string()).collect()
     } else {
@@ -126,8 +130,9 @@ fn help_for(sub: &[String]) -> Option<String> {
 fn doc_files() -> Vec<PathBuf> {
     let root = repo_root();
     let mut files = vec![root.join("README.md")];
-    let skills = root.join("skills");
-    let mut stack = vec![skills];
+    // The manual drifted through a whole release once because only the README
+    // and the skill were scanned; anything a user reads is in scope.
+    let mut stack = vec![root.join("skills"), root.join("docs-src")];
     while let Some(dir) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;

@@ -61,6 +61,34 @@ A supervisor can hard-cap any call without touching the database:
 | `--max-bytes N` | — | Cap output bytes at batch boundaries |
 | (open read-only) | `Database(path, read_only=True)` | Reject every write at the handle level |
 
+### The agent output profile
+
+Passing a limit on every call only works if the caller remembers, and one
+forgotten flag can end a session. `H5I_DB_PROFILE=agent` moves the budget into
+the environment instead:
+
+```console
+$ export H5I_DB_PROFILE=agent
+$ h5i-db query market.db "SELECT * FROM trades" --format jsonl
+{"ts":"2026-07-01T09:30:00Z","symbol":"AAPL","price":210.5}
+… 1000 rows …
+```
+
+stdout stops at 1000 rows or 1 MiB, and a JSON summary on stderr reports what
+was withheld:
+
+```json
+{"profile":"agent","truncated":true,"total_rows":2841193,"returned_rows":1000,
+ "full_result_path":"/tmp/h5i-db-results/result-….parquet","full_result_rows":2841193}
+```
+
+Nothing is lost, only withheld: the rows that did not fit are in that Parquet
+file. `H5I_DB_RESULT_DIR` moves where those land. Two properties worth relying
+on: output content never depends on whether stdout is a terminal, so a piped
+run produces the same bytes as an interactive one, and an explicit
+`--max-bytes` you pass yourself remains a hard `limit_exceeded` error rather
+than a soft truncation.
+
 ## Policy-gated review
 
 The [mutation policy](concepts.html#the-mutation-policy) forces chosen
@@ -97,11 +125,20 @@ an agent can't quietly commit malformed rows.
   attributable to an exact input state — see the cookbook's
   [reproducible backtests](../cookbook/03_risk_and_production/02_reproducible_backtests.html)
   and [paper-trading loop](../cookbook/03_risk_and_production/05_live_paper_trading_loop.html).
-- **Check for look-ahead bias.** Before trusting a backtest metric, run it
-  through [`arrival-delta … --as-of <decision-time>`](cli.html#h5i-db-arrival-delta):
-  it re-runs the query as of the decision instant and reports how much of the
-  result came from data that only became available later. A non-zero delta is
-  alpha that evaporates in production.
+- **Bound the pull, not the loop.** A cutoff applied when the data leaves the
+  database survives the trip into pandas, where nothing else can enforce it.
+  [`query --decision-time <ts>`](cli.html#point-in-time-reads) hides rows
+  stamped later and `--as-of` pins which commits exist; set
+  `H5I_DB_DECISION_TIME` to bound a whole session.
+- **Measure what the data did afterwards.** No cutoff can prevent a vendor
+  restating history, so measure it instead:
+  [`arrival-delta … --as-of <decision-time>`](cli.html#h5i-db-arrival-delta)
+  re-runs a query at both read points and reports how much the answer moved.
+  Read `vacuous` before the number: on a database with no arrival history the
+  zero is arithmetic rather than evidence.
+- **Orient in one call.** [`context`](cli.html#h5i-db-context) answers what
+  `tables`, `schema`, `sample` and `versions` answer, in one deterministic
+  document that also names any staged plan and the operations policy gates.
 - **Notes are for provenance.** `--note` / `note=` lands in the version
   manifest; make agents write *why* ("re-mark after vendor restatement,
   ticket DX-142"), and `versions` becomes your change log.
