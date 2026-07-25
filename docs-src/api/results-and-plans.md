@@ -6,14 +6,15 @@ order: 2
 
 # `QueryResult` & `MutationPlan`
 
-Two small result objects returned by [`Database`](database.html): the lazy
-holder a query produces, and the staged handle a mutation plan produces.
+Two small result objects returned by [`Database`](database.html): the holder a
+finished query produces, and the staged handle a mutation plan produces.
 
 ## QueryResult
 
-Returned by [`Database.sql()`](database.html#databasesql). A lazy holder of an
-Arrow result with convenience converters — data stays in Arrow until you ask
-for a specific frame type.
+Returned by [`Database.sql()`](database.html#databasesql). The query has
+already run; this holds its Arrow result and converts on demand, so data stays
+in Arrow until you ask for a specific frame type. For a query that has *not*
+run yet, see the [DataFrame builder](dataframe.html).
 
 ```python
 res = db.sql("SELECT symbol, vwap(price, size) AS v FROM trades GROUP BY symbol")

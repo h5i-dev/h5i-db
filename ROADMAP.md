@@ -1307,3 +1307,38 @@ user already knows; explicitly *not* ArcticDB's `q[q["x"] > 1]` style):
 This Part is additive and must not block Part VII engine work: the
 builder wraps whatever operator surface exists at the time, and grows
 with it.
+
+## Part VIII implementation status (2026-07-25, branch `data-frame-lazy-run`)
+
+| # | State | Notes |
+|---|---|---|
+| VIII-A1 | ✅ | `h5i_db/dataframe.py`: `Expr` with real precedence rendering (no defensive parentheses), `col`/`lit`/`sql_expr`/`when`, verbs `filter`/`select`/`with_columns`/`sort`/`limit`/`head`/`unique`/`pipe`, `.sql()`/`.explain()`/`.schema()`. One quoting site; identifiers **always** quoted so Arrow's case survives (bare SQL folds to lowercase). |
+| VIII-A2 | ✅ | `Database.table(name, version=\|as_of=\|snapshot=)` → `h5i()`; unpinned → bare name, which is snapshot-bound per query so two references to one table agree. Conflicting pins raise `InvalidInputError` with `code`/`hint` set like the native layer. |
+| VIII-A3 | ✅ | `group_by().agg()`/`.count()`, `.over()`, rolling sugar (row-count **or** duration frames), the VII-B1 UDWFs, the VII-B2 cross-sectional pair plus `cs_demean`/`cs_zscore` as generated SQL, `ewma`, `vwap`/`wavg`, `time_bucket`. Build-time validation for alpha range, winsorize cutoffs, durations and cast types. |
+| VIII-A4 | ✅ | `.join()` (inner/left/right/full/cross/semi/anti) with `l`/`r` as contract aliases; `.join_asof()` lowering to the `asof_join` UDTF. **It refuses a pinned or already-operated-on side** rather than silently reading latest — the table function's blind spot, surfaced instead of inherited. |
+| VIII-A5 | ✅ | `sql_expr()`; `docs-src/api/dataframe.md`; skill reference updated; the `QueryResult` "lazy" docstring corrected (it was never lazy). Base wheel gains no dependency — asserted by a test that AST-parses the module's imports. |
+
+**Verification.** 70 Python tests (`crates/h5i-db-python/python/tests/`),
+run in CI for the first time — the job previously built the wheel and ran an
+inline smoke script, so `test_bindings.py` was never executed. Coverage:
+differential tests against hand-written golden SQL (Arrow-level equality) for
+aggregation, OHLCV, every window/rolling/cross-sectional operator, scalar
+functions, joins and ASOF; adversarial round-trips for nine identifier shapes
+(reserved words, embedded quotes, unicode, dots, `--`) and eight literal
+shapes, including `'; DROP TABLE trades; --` as a value; pin tests proving a
+pinned pipeline differs from the same pipeline at head; wrap-rule tests
+pinning the flat-vs-subquery decisions; and byte-stability of generated SQL.
+
+`test_docs_are_executable.py` closes a gap the Rust
+`docs_are_executable` test leaves: that test only runs lines starting
+`h5i-db`, so Python fences were never checked. The new one executes every
+runnable Python fence on the builder page **and** asserts each following
+```sql fence is what the example actually compiles to — a claimed lowering
+is now a tested one (mutation-checked: corrupting a documented frame
+fails it).
+
+**Deferred, as designed.** No `LogicalPlan`/Substrait crossing (rule 6 —
+SQL-text generation has not yet been measured as limiting). Join output
+columns are not deduplicated, so a `SELECT *` over two tables sharing a name
+yields both; documented rather than solved, since fixing it needs schema
+knowledge the builder deliberately does not fetch at build time.
