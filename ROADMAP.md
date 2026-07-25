@@ -882,6 +882,20 @@ test validates the final text rather than an interim one.
 | 9 | ✅ | README leads with the point-in-time claim and gains a when-NOT-to-use section; SKILL.md is task-shaped (65 lines) over `references/`. |
 | 10 | ✅ | Both already delivered — see the Part IV addendum for the evidence. |
 
+**Bug found and fixed after the batch (2026-07-24): the pin leaked through the
+table functions.** `--as-of` / `--decision-time` bound a session by swapping
+what the *catalog* returns, but `h5i()`, `asof_join()`, `gapfill()`,
+`resample()`, `tail()` and `latest_on()` resolve their tables straight from the
+`Database`, so they read past the pin: `FROM h5i('trades')` returned the head
+under both axes. The tests only ever exercised plain table references, which is
+why item 5 passed while the guarantee did not hold. Closed in `pin.rs`: the
+arrival axis is applied to every table function (so `--as-of` holds and the
+operators stay usable), and the event-time axis refuses them, since they
+consume their tables internally rather than exposing something the cutoff can
+be pushed into. **Lesson for the remaining tiers: a guarantee stated over
+"every query" must be tested through every path that reaches storage, not just
+the one the feature was written against.**
+
 **Renamed after the fact (2026-07-24): `leakage-check` → `arrival-delta`**
 (CLI verb, `Database.arrival_delta`, `arrival::arrival_delta`,
 `ArrivalDeltaReport`, and the `leakage_detected` field → `changed`). The old
