@@ -141,7 +141,7 @@ The premise is that the agent lives *outside* the database. Nothing here
 generates SQL or embeds a model; the database's job is to be legible and
 impossible to corrupt, and everything below follows from that.
 
-**Show it the past, and nothing else.** A research session is pinned on two
+- **Show it the past, and nothing else.** A research session is pinned on two
 axes — event time (`--decision-time`, so a window cannot overrun forwards) and
 arrival (`--as-of`, so a later restatement stays invisible). Both are enforced
 in the table, so a query that explicitly asks for the future still gets none.
@@ -153,22 +153,22 @@ export H5I_DB_DECISION_TIME=2026-07-01T00:00:00Z   # pins the whole session
 h5i-db query market.db "SELECT vwap(price, size) FROM trades"
 ```
 
-**Don't let a result destroy the context window.** `H5I_DB_PROFILE=agent` caps
+- **Don't let a result destroy the context window.** `H5I_DB_PROFILE=agent` caps
 every query and spills the rest to Parquet, reporting the true row count and
 where the withheld rows live. Output never changes based on whether stdout is
 a terminal.
 
-**One call to get oriented.** `h5i-db context <db>` returns every table's
+- **One call to get oriented.** `h5i-db context <db>` returns every table's
 schema, size, time range and head version, the operations policy gates, and
 any plan already staged — deterministic, so it can be cached, and `--budget`
 caps it in tokens.
 
-**Errors that can be acted on.** The stderr envelope carries `next_actions`
+- **Errors that can be acted on.** The stderr envelope carries `next_actions`
 (runnable commands), `did_you_mean` for typos, and a `retryable` flag. A CI
 test executes the commands the binary suggests, so they cannot rot into
 plausible fiction.
 
-**Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
+- **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
 require that gate; `--idempotency-key` makes a retried ingest replay instead of
 double-appending; an opt-in `data-policy` rejects malformed rows fail-closed;
 commits are fsync-before-swap with a manifest hash chain, tested by killing the
