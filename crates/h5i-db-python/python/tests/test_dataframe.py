@@ -424,6 +424,64 @@ def test_aggregation_limit_and_distinct_close_a_level():
     assert frame().limit(10).limit(3).sql().count("SELECT") == 2
 
 
+def test_an_existing_ordering_closes_a_level_before_aggregation():
+    # ORDER BY a column that is neither grouped nor aggregated is a planning
+    # error, so the sort has to move into a subquery.
+    built = frame().sort("price").group_by("symbol").agg(count_star().alias("n"))
+    assert built.sql().count("SELECT") == 2, built.sql()
+    # DISTINCT is stricter still: every ORDER BY key must be selected.
+    built = frame().sort("price").select("symbol").unique()
+    assert built.sql().count("SELECT") == 2, built.sql()
+
+
+def test_limit_before_group_by_limits_the_input_not_the_groups():
+    built = frame().limit(5).group_by("symbol").agg(count_star().alias("n"))
+    assert built.sql() == (
+        'SELECT "symbol", count(*) AS "n"\n'
+        "FROM (\n"
+        "  SELECT *\n"
+        '  FROM "trades"\n'
+        "  LIMIT 5\n"
+        ') AS "_s1"\n'
+        'GROUP BY "symbol"'
+    ), built.sql()
+
+
+def test_verb_order_combinations_all_plan():
+    """Every ordering of the verbs must produce runnable SQL."""
+    with open_db() as db:
+        t = db.table("trades")
+        pipelines = [
+            t.sort("price").group_by("symbol").agg(count_star().alias("n")),
+            t.sort("price").select("symbol").unique(),
+            t.sort("price").select("symbol"),
+            t.select("symbol").unique().sort("symbol"),
+            t.sort("price").with_columns(x=col("price") + 1),
+            t.limit(5).group_by("symbol").agg(count_star().alias("n")),
+            t.group_by("symbol")
+            .agg(count_star().alias("n"))
+            .sort("n")
+            .filter(col("n") > 0),
+            t.group_by("symbol")
+            .agg(col("price").mean().alias("m"))
+            .group_by("symbol")
+            .agg(col("m").max().alias("mm")),
+            t.unique().limit(3).filter(col("price") > 0),
+            t.join(db.table("quotes"), on="ts").filter(
+                col("ts", relation="l").is_not_null()
+            ),
+            t.join_asof(db.table("quotes"), on="ts").filter(col("price") > 0),
+            t.with_columns(a=col("price") * 2)
+            .filter(col("a") > 4)
+            .with_columns(b=col("a") + 1)
+            .filter(col("b") > 10)
+            .sort("b")
+            .limit(3),
+        ]
+        for built in pipelines:
+            built.collect()  # raises if the query does not plan
+
+
 def test_opaque_sql_expr_forces_a_wrap_only_when_aliases_exist():
     # No computed names in scope: the fragment resolves against the FROM.
     assert frame().select("a").filter(sql_expr('"b" > 1')).sql().count("SELECT") == 1

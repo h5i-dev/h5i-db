@@ -1035,6 +1035,23 @@ class _Query:
             e._alias for e in self.projection if e._alias is not None
         )
 
+    def closes_level(self) -> bool:
+        """Has this level produced a result that a later stage acts *on*?
+
+        Aggregation reads the rows this level emits, so anything that already
+        shapes them -- a projection, an ordering, a row limit, DISTINCT or an
+        earlier GROUP BY -- means the aggregate belongs one level up. Ordering
+        matters too, not just semantics: ``ORDER BY`` a column that is neither
+        grouped nor aggregated is a planning error, not a silent difference.
+        """
+        return (
+            self.projection is not None
+            or self.group_by is not None
+            or self.order_by is not None
+            or self.limit is not None
+            or self.distinct
+        )
+
     def is_bare_table(self) -> bool:
         return (
             self.base_table is not None
@@ -1237,7 +1254,9 @@ class LazyFrame:
 
     def unique(self) -> "LazyFrame":
         """``SELECT DISTINCT`` over the current projection."""
-        q = self._level(self._q.limit is not None)
+        # DISTINCT requires every ORDER BY key to be in the select list, so an
+        # existing ordering has to move down a level rather than ride along.
+        q = self._level(self._q.limit is not None or self._q.order_by is not None)
         q.distinct = True
         return self._next(q)
 
@@ -1522,9 +1541,10 @@ class GroupBy:
                 "agg() needs at least one aggregate",
                 hint="use .count() for a plain group count",
             )
-        # Aggregation is a hard boundary: always start a fresh level so the
-        # keys and aggregates resolve against the previous stage's output.
-        q = self._frame._level(self._frame._q.projection is not None)
+        # Aggregation is a hard boundary: start a fresh level whenever the
+        # previous one already shaped its rows, so the aggregate reads what
+        # the pipeline said it should.
+        q = self._frame._level(self._frame._q.closes_level())
         q.projection = list(self._keys) + aggs
         q.group_by = [
             quote_ident(k._alias) if k._alias is not None else k._render(0)
