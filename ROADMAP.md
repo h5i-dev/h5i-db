@@ -1318,7 +1318,7 @@ with it.
 | VIII-A4 | ✅ | `.join()` (inner/left/right/full/cross/semi/anti) with `l`/`r` as contract aliases; `.join_asof()` lowering to the `asof_join` UDTF. **It refuses a pinned or already-operated-on side** rather than silently reading latest — the table function's blind spot, surfaced instead of inherited. |
 | VIII-A5 | ✅ | `sql_expr()`; `docs-src/api/dataframe.md`; skill reference updated; the `QueryResult` "lazy" docstring corrected (it was never lazy). Base wheel gains no dependency — asserted by a test that AST-parses the module's imports. Mistyped operators raise at build time naming the nearest real method (`.groupby` → `.group_by`), the edit-distance approach the CLI envelope already uses. |
 
-**Verification.** 76 Python tests (`crates/h5i-db-python/python/tests/`),
+**Verification.** 83 Python tests (`crates/h5i-db-python/python/tests/`),
 run in CI for the first time — the job previously built the wheel and ran an
 inline smoke script, so `test_bindings.py` was never executed. Coverage:
 differential tests against hand-written golden SQL (Arrow-level equality) for
@@ -1344,6 +1344,28 @@ finds them.
 Writing the numeric cases also settled a semantics question: integer/integer
 division truncates, because the builder must not mean something different
 from the same expression in `db.sql()`. Pinned by test, called out in docs.
+
+**Ten defects, none found by reading.** Four wrap-rule bugs came from the
+verb-ordering matrix; an adversarial review pass (fuzzing arithmetic trees
+against a Python evaluator, and sweeping verb × verb combinations) found six
+more, two of them silent wrong answers: `a * (b / c)` rendering as
+`a * b / c` (only AND/OR may be flattened — every other operator is
+left-associative, and integer division makes the re-association observable),
+and a filter after a window-function projection folding into the same level,
+where SQL's WHERE-before-SELECT order recomputed the window over the
+surviving rows. The other four were wrong at the boundary: a projection
+aliasing the pending sort key silently re-pointed `ORDER BY`; `with_columns`
+documented a replace it never implemented; `.over()` on a compound
+expression bound to the last operand only; and `join(on=[])` dropped the
+`ON` clause and cross-joined. All are fixed and pinned; `with_columns` now
+overwrites via an explicit `replace=` lowering to `* EXCEPT (…)`, which is
+the schema-free way to do it without breaking laziness.
+
+The pattern across all ten: **not one was a crash.** Every defect either
+produced valid SQL meaning something else, or a planner error far from its
+cause. A builder that emits a string the engine accepts has no failing
+edge to trip over, so correctness has to come from executing the
+combinations and comparing values — budget review effort accordingly.
 
 `test_docs_are_executable.py` closes a gap the Rust
 `docs_are_executable` test leaves: that test only runs lines starting
