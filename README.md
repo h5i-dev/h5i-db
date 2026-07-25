@@ -124,10 +124,6 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Why for agents
 
-The premise is that the agent lives *outside* the database. Nothing here
-generates SQL or embeds a model; the database's job is to be legible and
-impossible to corrupt, and everything below follows from that.
-
 - **Reproducible inputs.** Every read resolves to a version, so "which data did
 this run see" has an answer, and re-running against that version is O(1) rather
 than an archaeology project.
@@ -147,9 +143,7 @@ schema, size, time range and head version, the operations policy gates, and
 any plan already staged.
 
 - **Errors that can be acted on.** The stderr envelope carries `next_actions`
-(runnable commands), `did_you_mean` for typos, and a `retryable` flag. A CI
-test executes the commands the binary suggests, so they cannot rot into
-plausible fiction.
+(runnable commands), `did_you_mean` for typos, and a `retryable` flag.
 
 - **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
 require that gate; `--idempotency-key` makes a retried ingest replay instead of
