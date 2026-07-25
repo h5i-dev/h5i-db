@@ -1316,9 +1316,9 @@ with it.
 | VIII-A2 | ✅ | `Database.table(name, version=\|as_of=\|snapshot=)` → `h5i()`; unpinned → bare name, which is snapshot-bound per query so two references to one table agree. Conflicting pins raise `InvalidInputError` with `code`/`hint` set like the native layer. |
 | VIII-A3 | ✅ | `group_by().agg()`/`.count()`, `.over()`, rolling sugar (row-count **or** duration frames), the VII-B1 UDWFs, the VII-B2 cross-sectional pair plus `cs_demean`/`cs_zscore` as generated SQL, `ewma`, `vwap`/`wavg`, `time_bucket`. Build-time validation for alpha range, winsorize cutoffs, durations and cast types. |
 | VIII-A4 | ✅ | `.join()` (inner/left/right/full/cross/semi/anti) with `l`/`r` as contract aliases; `.join_asof()` lowering to the `asof_join` UDTF. **It refuses a pinned or already-operated-on side** rather than silently reading latest — the table function's blind spot, surfaced instead of inherited. |
-| VIII-A5 | ✅ | `sql_expr()`; `docs-src/api/dataframe.md`; skill reference updated; the `QueryResult` "lazy" docstring corrected (it was never lazy). Base wheel gains no dependency — asserted by a test that AST-parses the module's imports. |
+| VIII-A5 | ✅ | `sql_expr()`; `docs-src/api/dataframe.md`; skill reference updated; the `QueryResult` "lazy" docstring corrected (it was never lazy). Base wheel gains no dependency — asserted by a test that AST-parses the module's imports. Mistyped operators raise at build time naming the nearest real method (`.groupby` → `.group_by`), the edit-distance approach the CLI envelope already uses. |
 
-**Verification.** 70 Python tests (`crates/h5i-db-python/python/tests/`),
+**Verification.** 76 Python tests (`crates/h5i-db-python/python/tests/`),
 run in CI for the first time — the job previously built the wheel and ran an
 inline smoke script, so `test_bindings.py` was never executed. Coverage:
 differential tests against hand-written golden SQL (Arrow-level equality) for
@@ -1328,6 +1328,22 @@ functions, joins and ASOF; adversarial round-trips for nine identifier shapes
 shapes, including `'; DROP TABLE trades; --` as a value; pin tests proving a
 pinned pipeline differs from the same pipeline at head; wrap-rule tests
 pinning the flat-vs-subquery decisions; and byte-stability of generated SQL.
+
+Two test techniques earned their keep and are worth reusing. Precedence is
+checked **numerically** — every expression is computed twice, once as
+generated SQL and once in Python, so a misplaced parenthesis surfaces as a
+wrong number instead of passing a string comparison nobody reads closely.
+And the wrap rules are checked by **executing** a matrix of verb orderings
+rather than reasoning about them; that matrix is what found all four
+wrap-rule defects, including `.limit(n).group_by(...)` applying `LIMIT`
+after the grouping, which planned cleanly and returned a wrong answer. The
+lesson generalises past this Part: a query builder's dangerous bugs are the
+ones that produce *valid* SQL meaning something else, and only execution
+finds them.
+
+Writing the numeric cases also settled a semantics question: integer/integer
+division truncates, because the builder must not mean something different
+from the same expression in `db.sql()`. Pinned by test, called out in docs.
 
 `test_docs_are_executable.py` closes a gap the Rust
 `docs_are_executable` test leaves: that test only runs lines starting
