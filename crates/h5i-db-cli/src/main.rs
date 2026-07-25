@@ -152,6 +152,13 @@ enum Command {
         /// Read and build disposable immutable predicate-cache sidecars.
         #[arg(long)]
         predicate_cache: bool,
+        /// Research mode, arrival axis: pin **every** table at a decision
+        /// point, so the query can only read data that had already been
+        /// committed then. Accepts an RFC3339 timestamp (commit availability),
+        /// an integer version, or a snapshot name. Set `H5I_DB_AS_OF` to pin a
+        /// whole shell session.
+        #[arg(long, env = "H5I_DB_AS_OF")]
+        as_of: Option<String>,
     },
 
     /// Ingest data into a table from Parquet/CSV/Arrow (or stdin with "-").
@@ -455,6 +462,26 @@ fn classify_df_error(e: datafusion::error::DataFusionError) -> Error {
     }
 }
 
+/// Parse a decision point shared by `query --as-of` and `leakage-check
+/// --as-of`: an integer version, an RFC3339 timestamp resolved against commit
+/// *availability* (`committed_at_ns`), or a snapshot name. Mirrors the `h5i()`
+/// time-travel function so one spelling works everywhere.
+///
+/// Bare integers win over snapshot names by design: a snapshot named "42"
+/// would otherwise silently shadow version 42. Name snapshots, not numbers.
+fn parse_read_at(s: &str) -> Result<ReadAt> {
+    if let Ok(v) = s.parse::<u64>() {
+        return Ok(ReadAt::Version(v));
+    }
+    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(s) {
+        let ns = ts
+            .timestamp_nanos_opt()
+            .ok_or_else(|| Error::invalid(format!("--as-of timestamp {s:?} out of range")))?;
+        return Ok(ReadAt::AsOf(ns));
+    }
+    Ok(ReadAt::Snapshot(s.to_string()))
+}
+
 /// `--…-mb` flags → bytes, rejecting 0 and overflow.
 fn mb_to_bytes(mb: u64) -> Result<u64> {
     if mb == 0 {
@@ -653,6 +680,7 @@ async fn run(cli: Cli) -> Result<()> {
             threads,
             stats,
             predicate_cache,
+            as_of,
         } => {
             let sql = if sql == "-" {
                 let mut buf = String::new();
@@ -665,23 +693,29 @@ async fn run(cli: Cli) -> Result<()> {
                 sql
             };
             let db = Arc::new(Database::open_read_only(&db).await?);
-            let session = H5iSession::new(
-                db,
-                SessionOptions {
-                    memory_limit: memory_limit_mb.map(|m| m * 1024 * 1024),
-                    spill_dir,
-                    target_partitions: threads,
-                    batch_size: None,
-                    telemetry_capacity: 0,
-                    predicate_cache: if predicate_cache {
-                        PredicateCacheMode::ReadWrite
-                    } else {
-                        PredicateCacheMode::Disabled
-                    },
+            let options = SessionOptions {
+                memory_limit: memory_limit_mb.map(|m| m * 1024 * 1024),
+                spill_dir,
+                target_partitions: threads,
+                batch_size: None,
+                telemetry_capacity: 0,
+                predicate_cache: if predicate_cache {
+                    PredicateCacheMode::ReadWrite
+                } else {
+                    PredicateCacheMode::Disabled
                 },
-            )
-            .await
-            .map_err(Error::internal)?;
+            };
+            // Research mode pins every table at the decision point; without
+            // --as-of this is the same `new()` call as before, so the default
+            // path is untouched.
+            // Session construction resolves every table, so --as-of surfaces
+            // real user errors here (unknown snapshot, version out of range).
+            // Classify rather than blanket-internal them so exit codes hold.
+            let session = match &as_of {
+                Some(at) => H5iSession::new_at(db, options, parse_read_at(at)?).await,
+                None => H5iSession::new(db, options).await,
+            }
+            .map_err(classify_df_error)?;
 
             // Stream result batches straight to stdout instead of collecting
             // the full result first. Returns whether output was truncated.
@@ -811,18 +845,7 @@ async fn run(cli: Cli) -> Result<()> {
             } else {
                 sql
             };
-            // --as-of: integer version, RFC3339 timestamp (availability), or a
-            // snapshot name, mirroring the h5i() time-travel function.
-            let at = if let Ok(v) = as_of.parse::<u64>() {
-                ReadAt::Version(v)
-            } else if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&as_of) {
-                let ns = ts.timestamp_nanos_opt().ok_or_else(|| {
-                    Error::invalid(format!("--as-of timestamp {as_of:?} out of range"))
-                })?;
-                ReadAt::AsOf(ns)
-            } else {
-                ReadAt::Snapshot(as_of.clone())
-            };
+            let at = parse_read_at(&as_of)?;
             let db = Arc::new(Database::open_read_only(&db).await?);
             let report = h5i_db_query::check_leakage(
                 db,
