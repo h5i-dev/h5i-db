@@ -108,7 +108,28 @@ pub struct WriteOptions {
     pub expected_version: Option<u64>,
     pub note: Option<String>,
     pub user_meta: serde_json::Map<String, serde_json::Value>,
+    /// Caller-chosen token making this mutation replayable exactly once.
+    ///
+    /// A retry after an ambiguous failure — a timeout that may or may not have
+    /// landed — carries the same key, finds the commit it already produced,
+    /// and returns it instead of appending the rows a second time. Duplicated
+    /// ticks are silent poison: nothing errors, the data is simply wrong from
+    /// then on, so this is the one guard an unattended ingest loop needs.
+    pub idempotency_key: Option<String>,
 }
+
+/// Manifest `user_meta` key under which an idempotency token is recorded.
+/// Namespaced so it cannot collide with a caller's own metadata.
+pub const IDEMPOTENCY_META_KEY: &str = "h5i.idempotency_key";
+
+/// How many commits back a key is looked for.
+///
+/// A retry follows its original within moments, so the match is at or very
+/// near the head; the bound keeps the guard from turning into a full history
+/// scan on a long-lived table. Retries separated by more commits than this
+/// are not deduplicated — stated plainly rather than implied, because the
+/// guarantee has an edge and callers should know where it is.
+pub const IDEMPOTENCY_LOOKBACK: u64 = 64;
 
 /// Vacuum report (dry-run by default).
 #[derive(Debug, Clone, Default, Serialize)]
@@ -524,9 +545,18 @@ impl Database {
     }
 
     async fn entry(&self, name: &str) -> Result<CatalogEntry> {
-        catalog::load_entry(&self.backend, name)
-            .await?
-            .ok_or_else(|| Error::TableNotFound { name: name.into() })
+        if let Some(entry) = catalog::load_entry(&self.backend, name).await? {
+            return Ok(entry);
+        }
+        // Miss: pay one catalog listing to turn "not found" into "did you mean
+        // …". Only the error path does this, so the hit path is unchanged.
+        let existing = catalog::list_entries(&self.backend)
+            .await
+            .unwrap_or_default();
+        Err(Error::table_not_found_among(
+            name,
+            existing.iter().map(|e| e.name.as_str()),
+        ))
     }
 
     async fn spec(&self, table_id: Uuid, revision: u32) -> Result<TableSpec> {
@@ -924,6 +954,55 @@ impl Database {
 
     /// Shared prologue for write-path ops: resolve entry/spec/head and check
     /// the caller's expected_version.
+    /// If this mutation carries an idempotency key that a recent commit
+    /// already recorded, return that commit instead of doing the work again.
+    ///
+    /// Deliberately a *read* of committed history rather than a lock or a
+    /// reservation: the question "did my write land?" is answered by the
+    /// version chain, which is the only thing that can answer it honestly
+    /// after a crash. Costs nothing when no key is supplied.
+    async fn idempotent_replay(
+        &self,
+        name: &str,
+        opts: &WriteOptions,
+    ) -> Result<Option<CommitResult>> {
+        let Some(key) = opts.idempotency_key.as_deref() else {
+            return Ok(None);
+        };
+        let entry = self.entry(name).await?;
+        let head = self.head(name, entry.table_id).await?.head.sequence;
+        let floor = head
+            .saturating_sub(IDEMPOTENCY_LOOKBACK)
+            .max(self.retention_min_seq(entry.table_id).await?);
+        let mut seq = head;
+        loop {
+            let manifest = self.manifest_at(entry.table_id, seq).await?;
+            if manifest
+                .user_meta
+                .get(IDEMPOTENCY_META_KEY)
+                .and_then(|v| v.as_str())
+                == Some(key)
+            {
+                return Ok(Some(CommitResult {
+                    table: name.to_string(),
+                    sequence: manifest.sequence,
+                    op: manifest.op.to_string(),
+                    rows_total: manifest.rows,
+                    segments_total: manifest.segments.len(),
+                    // The replay added nothing; saying otherwise would make a
+                    // caller believe a second commit happened.
+                    segments_added: 0,
+                    segments_deduped: 0,
+                    committed_at_ns: manifest.committed_at_ns,
+                }));
+            }
+            if seq == 0 || seq <= floor {
+                return Ok(None);
+            }
+            seq -= 1;
+        }
+    }
+
     async fn write_prologue(
         &self,
         name: &str,
@@ -1015,6 +1094,9 @@ impl Database {
         batches: Vec<RecordBatch>,
         opts: WriteOptions,
     ) -> Result<CommitResult> {
+        if let Some(replay) = self.idempotent_replay(name, &opts).await? {
+            return Ok(replay);
+        }
         let staged = self.stage_write(name, batches, &opts).await?;
         self.commit_staged(staged).await
     }
@@ -1078,6 +1160,9 @@ impl Database {
         batches: Vec<RecordBatch>,
         opts: WriteOptions,
     ) -> Result<CommitResult> {
+        if let Some(replay) = self.idempotent_replay(name, &opts).await? {
+            return Ok(replay);
+        }
         self.append_inner(name, batches, opts, true).await
     }
 
@@ -1151,6 +1236,7 @@ impl Database {
                 }
                 if !batch_is_sorted(b, &spec.sort_key)? {
                     return Err(Error::SortOrderViolation {
+                        table: name.into(),
                         detail: "append input batch is not sorted by the table sort key".into(),
                     });
                 }
@@ -1161,6 +1247,7 @@ impl Database {
                             && bmin < prev
                         {
                             return Err(Error::SortOrderViolation {
+                                table: name.into(),
                                 detail: "append input batches are not mutually ordered".into(),
                             });
                         }
@@ -1183,6 +1270,7 @@ impl Database {
                     && min < table_max
                 {
                     return Err(Error::SortOrderViolation {
+                        table: name.into(),
                         detail: format!(
                             "append input starts at {min} but the table already contains \
                                  rows up to {table_max}; use replace_range or write"
@@ -1442,6 +1530,9 @@ impl Database {
         opts: WriteOptions,
         op: OpKind,
     ) -> Result<CommitResult> {
+        if let Some(replay) = self.idempotent_replay(name, &opts).await? {
+            return Ok(replay);
+        }
         if start >= end {
             return Err(Error::invalid(format!(
                 "empty range: start {start} must be < end {end}"
@@ -1524,6 +1615,9 @@ impl Database {
         version: u64,
         opts: WriteOptions,
     ) -> Result<CommitResult> {
+        if let Some(replay) = self.idempotent_replay(name, &opts).await? {
+            return Ok(replay);
+        }
         let (entry, spec, head, parent_manifest) =
             self.write_prologue(name, OpKind::Restore, &opts).await?;
         if version > head.head.sequence {
@@ -1821,6 +1915,9 @@ impl Database {
         target_bytes: Option<u64>,
         opts: WriteOptions,
     ) -> Result<CommitResult> {
+        if let Some(replay) = self.idempotent_replay(name, &opts).await? {
+            return Ok(replay);
+        }
         let (entry, spec, head, parent_manifest) =
             self.write_prologue(name, OpKind::Compact, &opts).await?;
         let schema = spec.schema()?;
@@ -2263,7 +2360,18 @@ fn child_manifest(
         execution_mode: Some("direct".to_string()),
         plan_hash: None,
         note: opts.note.clone(),
-        user_meta: opts.user_meta.clone(),
+        user_meta: {
+            let mut meta = opts.user_meta.clone();
+            // Recorded on the commit itself: the version chain is the only
+            // record that survives the crash this guard exists for.
+            if let Some(key) = &opts.idempotency_key {
+                meta.insert(
+                    crate::database::IDEMPOTENCY_META_KEY.to_string(),
+                    serde_json::Value::String(key.clone()),
+                );
+            }
+            meta
+        },
         schema_revision: spec.schema_revision,
         rows: 0,
         bytes: 0,

@@ -458,4 +458,38 @@ fn leakage_check_reports_delta_across_a_withheld_version() {
     assert_eq!(report["columns"][0]["delta"], 2.0);
     // The withheld append is attributed to the trades table.
     assert_eq!(report["withheld_versions"][0]["table"], "trades");
+    // A real comparison is not vacuous, but still states its scope limit.
+    assert_eq!(report["vacuous"], false);
+    let notes = report["notes"].as_array().unwrap();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("does not prove the absence")),
+        "every report must carry the scope caveat: {notes:?}"
+    );
+
+    // Pinning at head withholds nothing: the check is vacuous and says so,
+    // so a bulk-ingested database cannot mistake silence for a clean bill.
+    let vacuous = ok_json(&run(
+        &[
+            "leakage-check",
+            "m.db",
+            "SELECT count(*) AS c FROM trades",
+            "--as-of",
+            "2",
+            "--format",
+            "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(vacuous["leakage_detected"], false);
+    assert_eq!(vacuous["vacuous"], true);
+    assert!(
+        vacuous["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().starts_with("VACUOUS:")),
+        "the vacuity notice must reach the CLI envelope: {vacuous:?}"
+    );
 }

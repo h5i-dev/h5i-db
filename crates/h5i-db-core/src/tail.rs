@@ -52,7 +52,7 @@ impl Database {
         loop {
             let entry = crate::catalog::load_entry(self.backend(), name)
                 .await?
-                .ok_or_else(|| Error::TableNotFound { name: name.into() })?;
+                .ok_or_else(|| Error::table_not_found(name))?;
             if let Some(state) = self.backend().heads.read(entry.table_id).await?
                 && state.head.sequence > after
             {

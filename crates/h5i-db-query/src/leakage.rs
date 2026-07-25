@@ -17,9 +17,15 @@
 //! **Scope (state it honestly).** This measures *data-availability* leakage,
 //! i.e. late-arriving or restated rows across commits. It does **not** detect
 //! look-ahead *inside* a single snapshot (a window overrunning into future
-//! rows, which needs an effect checker, V-A2), nor an LLM's pretraining
-//! leakage. A non-zero delta proves availability leakage; a zero delta does not
-//! prove its absence.
+//! rows, which needs the event-time cutoff of `query --embargo`), nor an LLM's
+//! pretraining leakage. A non-zero delta proves availability leakage; a zero
+//! delta does not prove its absence.
+//!
+//! Because of that asymmetry the report carries its own caveats: every report
+//! states the scope limit, and one whose as-of point withheld *nothing* (a
+//! database with no arrival history — the usual bulk-ingest cold start) is
+//! flagged `vacuous`, since its zero delta is arithmetically forced rather
+//! than evidence. Silence must never read as a clean bill of health.
 
 use std::sync::Arc;
 
@@ -88,7 +94,29 @@ pub struct LeakageReport {
     pub tolerance: f64,
     /// Per-table head-vs-as-of version gap (only tables that differ).
     pub withheld_versions: Vec<TableVersionDelta>,
+    /// True when the as-of point resolved to the *same* version as head for
+    /// every table in the database: nothing was withheld, so the two runs read
+    /// byte-identical data and a zero delta carries **no information**. The
+    /// usual cause is a database whose whole history arrived in one bulk
+    /// ingest — there is no arrival history to compare against.
+    pub vacuous: bool,
+    /// Caveats that must be read alongside the numbers. Always non-empty:
+    /// the scope limit below applies to every run, vacuity adds a second note.
+    pub notes: Vec<String>,
 }
+
+/// Always-present scope caveat: what a zero delta does and does not prove.
+const NOTE_ZERO_IS_NOT_INNOCENCE: &str = "a zero delta does not prove the absence of look-ahead bias: this check only sees \
+     data-availability (arrival-axis) leakage across commits, not look-ahead inside a single \
+     snapshot (a window overrunning into future rows, a join reading later timestamps), which \
+     needs an event-time cutoff";
+
+/// Added when the comparison had nothing to withhold.
+const NOTE_VACUOUS: &str = "VACUOUS: the as-of point resolved to the same version as head for every table, so both runs \
+     read identical data and the delta below is necessarily zero. This database has no arrival \
+     history to check against (typically a single bulk ingest). Ingest continuously, or \
+     reconstruct arrival history from the vendor's publication timestamps, before trusting an \
+     arrival-axis result";
 
 /// Describe a read point for the report.
 fn describe(at: &ReadAt) -> String {
@@ -207,6 +235,20 @@ fn schemas_match(a: &SchemaRef, b: &SchemaRef) -> bool {
             .all(|(x, y)| x.name() == y.name() && x.data_type() == y.data_type())
 }
 
+/// Caveats for a run that withheld `withheld` commits. Vacuity is judged over
+/// every table in the database, not just the ones this query touched: that is
+/// conservative (a gap anywhere means we do not claim vacuity) and it catches
+/// the case the note exists for — a database with no arrival history at all.
+fn notes_for(withheld: &[TableVersionDelta]) -> (bool, Vec<String>) {
+    let vacuous = withheld.is_empty();
+    let mut notes = Vec::with_capacity(2);
+    if vacuous {
+        notes.push(NOTE_VACUOUS.to_string());
+    }
+    notes.push(NOTE_ZERO_IS_NOT_INNOCENCE.to_string());
+    (vacuous, notes)
+}
+
 fn compare(
     decision: String,
     head: (SchemaRef, Vec<RecordBatch>),
@@ -214,6 +256,7 @@ fn compare(
     tolerance: f64,
     withheld: Vec<TableVersionDelta>,
 ) -> LeakageReport {
+    let (vacuous, notes) = notes_for(&withheld);
     let (head_schema, head_batches) = head;
     let (asof_schema, asof_batches) = asof;
     let head_rows: u64 = head_batches.iter().map(|b| b.num_rows() as u64).sum();
@@ -237,6 +280,8 @@ fn compare(
             leakage_detected: true,
             tolerance,
             withheld_versions: withheld,
+            vacuous,
+            notes,
         };
     }
 
@@ -334,6 +379,8 @@ fn compare(
         leakage_detected,
         tolerance,
         withheld_versions: withheld,
+        vacuous,
+        notes,
     }
 }
 

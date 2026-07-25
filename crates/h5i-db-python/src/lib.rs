@@ -90,20 +90,54 @@ pyo3::create_exception!(
 );
 
 /// Attach the machine-readable envelope fields to an exception instance.
-fn tagged(err: PyErr, code: &str, hint: Option<&str>, retryable: bool) -> PyErr {
+fn tagged(
+    err: PyErr,
+    code: &str,
+    hint: Option<&str>,
+    retryable: bool,
+    did_you_mean: Option<&str>,
+    next_actions: Vec<(String, String)>,
+) -> PyErr {
     Python::attach(|py| {
         let value = err.value(py);
         let _ = value.setattr("code", code);
         let _ = value.setattr("hint", hint);
         let _ = value.setattr("retryable", retryable);
+        let _ = value.setattr("did_you_mean", did_you_mean);
+        // List of {"cmd": …, "why": …} so Python callers get the same
+        // machine-executable recovery steps the CLI envelope carries. The
+        // commands keep the `<db>` placeholder: unlike the CLI, the bindings
+        // are not invoked with a path on the command line.
+        let actions: Vec<_> = next_actions
+            .into_iter()
+            .map(|(cmd, why)| {
+                let d = pyo3::types::PyDict::new(py);
+                let _ = d.set_item("cmd", cmd);
+                let _ = d.set_item("why", why);
+                d
+            })
+            .collect();
+        let _ = value.setattr("next_actions", actions);
     });
     err
+}
+
+/// [`tagged`] for errors that carry no suggestion or recovery step (raised
+/// outside the core error model: encoding faults, raw DataFusion failures).
+fn tagged_plain(err: PyErr, code: &str, hint: Option<&str>, retryable: bool) -> PyErr {
+    tagged(err, code, hint, retryable, None, Vec::new())
 }
 
 fn to_py_err(e: Error) -> PyErr {
     let code = e.code();
     let retryable = e.retryable();
     let hint = e.hint();
+    let did_you_mean = e.did_you_mean().map(str::to_string);
+    let next_actions: Vec<(String, String)> = e
+        .next_actions()
+        .into_iter()
+        .map(|a| (a.cmd, a.why))
+        .collect();
     let msg = format!(
         "[{code}] {e}{}",
         hint.as_deref()
@@ -129,7 +163,14 @@ fn to_py_err(e: Error) -> PyErr {
         "storage" | "io" | "arrow" | "parquet" | "metadata" => StorageError::new_err(msg),
         _ => H5iError::new_err(msg),
     };
-    tagged(err, code, hint.as_deref(), retryable)
+    tagged(
+        err,
+        code,
+        hint.as_deref(),
+        retryable,
+        did_you_mean.as_deref(),
+        next_actions,
+    )
 }
 
 fn df_err(e: DataFusionError) -> PyErr {
@@ -138,7 +179,7 @@ fn df_err(e: DataFusionError) -> PyErr {
         DataFusionError::External(inner) => {
             return match inner.downcast::<Error>() {
                 Ok(core) => to_py_err(*core),
-                Err(other) => tagged(
+                Err(other) => tagged_plain(
                     H5iError::new_err(format!("[query] {other}")),
                     "query",
                     None,
@@ -156,11 +197,11 @@ fn df_err(e: DataFusionError) -> PyErr {
         DataFusionError::ResourcesExhausted(_) => (|m| LimitError::new_err(m), "limit_exceeded"),
         _ => (|m| H5iError::new_err(m), "query"),
     };
-    tagged(exc(format!("[{code}] {e}")), code, None, false)
+    tagged_plain(exc(format!("[{code}] {e}")), code, None, false)
 }
 
 fn invalid(msg: impl std::fmt::Display) -> PyErr {
-    tagged(
+    tagged_plain(
         InvalidInputError::new_err(format!("[invalid_input] {msg}")),
         "invalid_input",
         None,
@@ -169,7 +210,7 @@ fn invalid(msg: impl std::fmt::Display) -> PyErr {
 }
 
 fn encode_err(e: arrow::error::ArrowError) -> PyErr {
-    tagged(
+    tagged_plain(
         StorageError::new_err(format!("[arrow] {e}")),
         "arrow",
         None,
@@ -179,7 +220,7 @@ fn encode_err(e: arrow::error::ArrowError) -> PyErr {
 
 fn to_json<T: serde::Serialize>(v: &T) -> PyResult<String> {
     serde_json::to_string(v).map_err(|e| {
-        tagged(
+        tagged_plain(
             StorageError::new_err(format!("[metadata] failed to encode result: {e}")),
             "metadata",
             None,
@@ -268,7 +309,7 @@ fn shared_runtime() -> PyResult<Arc<tokio::runtime::Runtime>> {
             .enable_all()
             .build()
             .map_err(|e| {
-                tagged(
+                tagged_plain(
                     StorageError::new_err(format!("[io] failed to start runtime: {e}")),
                     "io",
                     None,
@@ -289,7 +330,7 @@ impl NativeDatabase {
             .as_ref()
             .cloned()
             .ok_or_else(|| {
-                tagged(
+                tagged_plain(
                     H5iError::new_err("[closed] database handle is closed"),
                     "closed",
                     Some("re-open the database"),
@@ -448,7 +489,10 @@ impl NativeDatabase {
     }
 
     /// Ingest an Arrow IPC stream. mode: "write" | "append".
-    #[pyo3(signature = (name, ipc, mode = "append", expected_version = None, note = None))]
+    // pyo3 flattens the write options into keyword arguments, which is the
+    // ergonomic shape on the Python side even though it trips the arity lint.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (name, ipc, mode = "append", expected_version = None, note = None, idempotency_key = None))]
     fn ingest(
         &self,
         py: Python<'_>,
@@ -457,12 +501,14 @@ impl NativeDatabase {
         mode: &str,
         expected_version: Option<u64>,
         note: Option<String>,
+        idempotency_key: Option<String>,
     ) -> PyResult<String> {
         let batches = ipc_to_batches(ipc)?;
         let opts = WriteOptions {
             expected_version,
             note,
             user_meta: serde_json::Map::new(),
+            idempotency_key,
         };
         let name = name.to_string();
         let result = match mode {
@@ -534,7 +580,7 @@ impl NativeDatabase {
                     Some(secs) => tokio::time::timeout(Duration::from_secs_f64(secs), run)
                         .await
                         .map_err(|_| {
-                            tagged(
+                            tagged_plain(
                                 TimeoutError::new_err(format!(
                                     "[timeout] query exceeded {secs}s deadline"
                                 )),

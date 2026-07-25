@@ -77,8 +77,23 @@ impl H5iSession {
     /// the point-in-time / look-ahead-bias-free surface (ROADMAP V-A1): a query
     /// run in such a session sees only data available as of `at`.
     pub async fn new_at(db: Arc<Database>, options: SessionOptions, at: ReadAt) -> DfResult<Self> {
+        Self::new_pinned(db, options, ResearchPin::at(at)).await
+    }
+
+    /// Build a session pinned on both research-mode axes (ROADMAP Part VI).
+    ///
+    /// The arrival pin alone cannot see the most common look-ahead bugs — a
+    /// window overrunning into future rows, a join reading later timestamps —
+    /// because those rows were always in the table. The event-time cutoff
+    /// closes that: it is injected into every scan, so no query in the session
+    /// can read a row stamped after it.
+    pub async fn new_pinned(
+        db: Arc<Database>,
+        options: SessionOptions,
+        pin: ResearchPin,
+    ) -> DfResult<Self> {
         let runtime = Self::build_runtime(&options)?;
-        Self::new_with_runtime_at(db, options, runtime, at).await
+        Self::new_with_runtime_pinned(db, options, runtime, pin).await
     }
 
     fn build_runtime(options: &SessionOptions) -> DfResult<Arc<RuntimeEnv>> {
@@ -121,6 +136,20 @@ impl H5iSession {
         runtime: Arc<RuntimeEnv>,
         at: ReadAt,
     ) -> DfResult<Self> {
+        Self::new_with_runtime_pinned(db, options, runtime, ResearchPin::at(at)).await
+    }
+
+    /// Like [`Self::new_pinned`], but reusing a caller-supplied [`RuntimeEnv`].
+    pub async fn new_with_runtime_pinned(
+        db: Arc<Database>,
+        options: SessionOptions,
+        runtime: Arc<RuntimeEnv>,
+        pin: ResearchPin,
+    ) -> DfResult<Self> {
+        let ResearchPin {
+            at,
+            event_time_cutoff_ns,
+        } = pin;
         let telemetry = WorkloadTelemetryBuffer::new(options.telemetry_capacity);
         let predicate_cache_mode = options.predicate_cache;
         let mut config = SessionConfig::new().with_information_schema(true);
@@ -173,13 +202,31 @@ impl H5iSession {
         let mut registered = HashSet::new();
         for resolved in resolve_all_at(&db, at).await? {
             let name = resolved.entry.name.clone();
-            ctx.register_table(
-                &name,
-                Arc::new(
-                    H5iTableProvider::new(resolved, url.clone(), metrics.clone())
-                        .with_predicate_cache(db.backend().clone(), predicate_cache_mode),
-                ),
-            )?;
+            let time_column = resolved.spec.time_column.clone();
+            let schema = resolved.schema.clone();
+            let provider = Arc::new(
+                H5iTableProvider::new(resolved, url.clone(), metrics.clone())
+                    .with_predicate_cache(db.backend().clone(), predicate_cache_mode),
+            );
+            match event_time_cutoff_ns {
+                // Register the table behind a view carrying the cutoff, so the
+                // predicate is part of every plan that names it rather than
+                // something a query could forget. It optimizes like any other
+                // filter, which means it prunes segments too.
+                Some(cutoff_ns) => {
+                    let view = embargoed_view(
+                        &name,
+                        provider,
+                        &schema,
+                        time_column.as_deref(),
+                        cutoff_ns,
+                    )?;
+                    ctx.register_table(&name, view)?;
+                }
+                None => {
+                    ctx.register_table(&name, provider)?;
+                }
+            }
             registered.insert(name);
         }
 
@@ -625,6 +672,120 @@ fn rewrite_asof_join(query: &str) -> DfResult<String> {
         relation,
         &query[on_end..]
     ))
+}
+
+/// Both axes of a research-mode pin (ROADMAP Part VI).
+///
+/// The arrival axis says which *commits* are visible; the event-time axis says
+/// which *rows* are, regardless of when they were committed. Only the second
+/// one works on a database whose whole history arrived in a single bulk
+/// ingest, which is why the flagship surface needs both.
+#[derive(Debug, Clone)]
+pub struct ResearchPin {
+    /// Arrival axis: the read point every table is pinned at.
+    pub at: ReadAt,
+    /// Event-time axis: rows whose time column exceeds this instant
+    /// (nanoseconds since the epoch) are unreadable in this session.
+    pub event_time_cutoff_ns: Option<i64>,
+}
+
+impl ResearchPin {
+    /// Arrival axis only — the historical [`H5iSession::new_at`] behaviour.
+    pub fn at(at: ReadAt) -> Self {
+        Self {
+            at,
+            event_time_cutoff_ns: None,
+        }
+    }
+
+    /// Add an event-time cutoff to an existing pin.
+    pub fn with_event_time_cutoff_ns(mut self, cutoff_ns: i64) -> Self {
+        self.event_time_cutoff_ns = Some(cutoff_ns);
+        self
+    }
+
+    /// True when neither axis constrains anything, so the caller can take the
+    /// ordinary unpinned path instead of paying for a pinned session.
+    pub fn is_unpinned(&self) -> bool {
+        matches!(self.at, ReadAt::Latest) && self.event_time_cutoff_ns.is_none()
+    }
+}
+
+impl Default for ResearchPin {
+    fn default() -> Self {
+        Self::at(ReadAt::Latest)
+    }
+}
+
+/// Express `cutoff_ns` in the time column's own type.
+///
+/// Fails closed rather than guessing. An integer time column carries no unit,
+/// so a nanosecond instant cannot be converted into it, and quietly comparing
+/// against the wrong scale would produce a jail with a hole in it — which is
+/// worse than no jail, because it looks like one.
+fn cutoff_scalar(
+    table: &str,
+    column: &str,
+    dt: &arrow::datatypes::DataType,
+    cutoff_ns: i64,
+) -> DfResult<datafusion::scalar::ScalarValue> {
+    use arrow::datatypes::{DataType, TimeUnit};
+    use datafusion::scalar::ScalarValue;
+    Ok(match dt {
+        DataType::Timestamp(TimeUnit::Second, tz) => {
+            ScalarValue::TimestampSecond(Some(cutoff_ns.div_euclid(1_000_000_000)), tz.clone())
+        }
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => {
+            ScalarValue::TimestampMillisecond(Some(cutoff_ns.div_euclid(1_000_000)), tz.clone())
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            ScalarValue::TimestampMicrosecond(Some(cutoff_ns.div_euclid(1_000)), tz.clone())
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            ScalarValue::TimestampNanosecond(Some(cutoff_ns), tz.clone())
+        }
+        other => {
+            return Err(DataFusionError::External(Box::new(
+                h5i_db_core::Error::invalid(format!(
+                    "table {table:?} has time column {column:?} of type {other}, which carries no \
+                     time unit, so an event-time cutoff cannot be expressed against it; use a \
+                     timestamp-typed time column, or drop --embargo and pin the arrival axis only"
+                )),
+            )));
+        }
+    })
+}
+
+/// Wrap `provider` in a view that applies the event-time cutoff.
+fn embargoed_view(
+    name: &str,
+    provider: Arc<H5iTableProvider>,
+    schema: &arrow::datatypes::SchemaRef,
+    time_column: Option<&str>,
+    cutoff_ns: i64,
+) -> DfResult<Arc<dyn datafusion::datasource::TableProvider>> {
+    use datafusion::datasource::provider_as_source;
+    use datafusion::logical_expr::{LogicalPlanBuilder, col, lit};
+
+    // A table with no time column cannot be embargoed, and letting it through
+    // unfiltered would be a hole in the jail — so refuse the session instead.
+    let Some(time_column) = time_column else {
+        return Err(DataFusionError::External(Box::new(
+            h5i_db_core::Error::invalid(format!(
+                "table {name:?} has no time column, so an event-time cutoff cannot be enforced on \
+                 it; give it a time column, or drop --embargo and pin the arrival axis only"
+            )),
+        )));
+    };
+    let field = schema
+        .field_with_name(time_column)
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
+    let bound = cutoff_scalar(name, time_column, field.data_type(), cutoff_ns)?;
+
+    let plan = LogicalPlanBuilder::scan(name, provider_as_source(provider), None)?
+        .filter(col(time_column).lt_eq(lit(bound)))?
+        .build()?;
+    Ok(Arc::new(datafusion::datasource::ViewTable::new(plan, None)))
 }
 
 /// Resolve every catalog table at read point `at`, concurrently.

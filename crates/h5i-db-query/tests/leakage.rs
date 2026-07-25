@@ -229,3 +229,102 @@ async fn row_count_change_is_detected() {
     assert!(report.row_count_differs);
     assert!(report.leakage_detected);
 }
+
+#[tokio::test]
+async fn single_commit_database_reports_a_vacuous_check() {
+    // The bulk-ingest cold start: the whole history arrives in one commit, so
+    // every as-of point resolves to the same version as head. The delta is
+    // arithmetically forced to zero and must not read as a clean bill.
+    let (_dir, db) = setup().await;
+    let v1 = db
+        .write(
+            "prices",
+            vec![batch(&[1, 2, 3], &["A", "A", "A"], &[10.0, 20.0, 30.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap()
+        .sequence;
+
+    let report = check_leakage(
+        db.clone(),
+        "SELECT avg(price) AS px FROM prices",
+        ReadAt::Version(v1),
+        DEFAULT_TOLERANCE,
+    )
+    .await
+    .unwrap();
+
+    assert!(!report.leakage_detected, "nothing was withheld");
+    assert!(report.withheld_versions.is_empty());
+    assert!(
+        report.vacuous,
+        "a check that withheld nothing must be flagged vacuous: {report:?}"
+    );
+    assert!(
+        report.notes.iter().any(|n| n.starts_with("VACUOUS:")),
+        "the vacuity note must be surfaced: {:?}",
+        report.notes
+    );
+}
+
+#[tokio::test]
+async fn every_report_states_the_scope_limit() {
+    // Both the vacuous and the informative case carry the "zero delta does not
+    // prove absence" caveat, so silence can never be misread as innocence.
+    let (_dir, db) = setup().await;
+    let v1 = db
+        .write(
+            "prices",
+            vec![batch(&[1, 2], &["A", "A"], &[10.0, 20.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap()
+        .sequence;
+    let vacuous = check_leakage(
+        db.clone(),
+        "SELECT avg(price) AS px FROM prices",
+        ReadAt::Version(v1),
+        DEFAULT_TOLERANCE,
+    )
+    .await
+    .unwrap();
+
+    // Now give the database an arrival history, making the same check informative.
+    db.append(
+        "prices",
+        vec![batch(&[3, 4], &["A", "A"], &[30.0, 40.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let informative = check_leakage(
+        db.clone(),
+        "SELECT avg(price) AS px FROM prices",
+        ReadAt::Version(v1),
+        DEFAULT_TOLERANCE,
+    )
+    .await
+    .unwrap();
+
+    for report in [&vacuous, &informative] {
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.contains("does not prove the absence")),
+            "scope caveat missing: {:?}",
+            report.notes
+        );
+    }
+    assert!(vacuous.vacuous);
+    assert!(
+        !informative.vacuous,
+        "a check that withheld a commit is not vacuous: {informative:?}"
+    );
+    assert!(
+        informative.leakage_detected,
+        "the withheld rows change the average, so this is real leakage"
+    );
+}

@@ -5,8 +5,11 @@
 //! (0 ok / 2 user error / 3 conflict / 4 limit / 5 internal), no prompts, no
 //! pager, SQL from an argument or stdin.
 
+mod context;
+mod demo;
 mod ingest;
 mod output;
+mod profile;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -18,12 +21,13 @@ use futures::StreamExt;
 use h5i_db_core::{
     Database, Error, ReadAt, Result, ScanOptions, StorageOptions, TableOptions, WriteOptions,
 };
-use h5i_db_query::{H5iSession, PredicateCacheMode, SessionOptions};
+use h5i_db_query::{H5iSession, PredicateCacheMode, ResearchPin, SessionOptions};
 
 use ingest::{InputFormat, align_batch, open_input};
 use output::{
     BatchWriter, Format, Progress, is_broken_pipe, write_batches, write_error, write_value,
 };
+use profile::{AGENT_MAX_BYTES, AGENT_MAX_ROWS, Profile, ResultSpill, ResultSummary};
 
 #[derive(Parser)]
 #[command(
@@ -49,6 +53,13 @@ struct WriteFlags {
     /// Free-text note recorded in the version manifest.
     #[arg(long)]
     note: Option<String>,
+    /// Make this mutation replayable exactly once. A retry after an ambiguous
+    /// failure (a timeout that may or may not have committed) carries the same
+    /// key, finds the commit it already produced, and returns it instead of
+    /// writing the rows twice. Retries are only deduplicated against the last
+    /// 64 commits.
+    #[arg(long)]
+    idempotency_key: Option<String>,
 }
 
 impl WriteFlags {
@@ -57,6 +68,7 @@ impl WriteFlags {
             expected_version: self.expected_version,
             note: self.note.clone(),
             user_meta: serde_json::Map::new(),
+            idempotency_key: self.idempotency_key.clone(),
         }
     }
 }
@@ -103,6 +115,37 @@ enum Command {
         db: PathBuf,
         from: String,
         to: String,
+    },
+
+    /// Everything needed to orient in one call: every table's schema, size,
+    /// time range and head version, the operations policy gates, existing
+    /// snapshots, and any staged plans awaiting review.
+    ///
+    /// Deterministic for a given database state, so it can be cached; only
+    /// --stale-after makes it depend on the clock.
+    Context {
+        db: PathBuf,
+        /// Approximate token ceiling. Detail is shed in a fixed order
+        /// (columns, snapshots, notes, then whole tables smallest-first) and
+        /// whatever was dropped is named under `omitted`.
+        #[arg(long)]
+        budget: Option<usize>,
+        /// Report per-table commit age and flag tables whose head is older
+        /// than this (e.g. "5m", "1h"). Omit to keep the output clock-free.
+        #[arg(long)]
+        stale_after: Option<humantime::Duration>,
+    },
+
+    /// Build a small database and walk the whole argument end to end: ingest,
+    /// query, a previewed vendor restatement, the leakage it causes, and a
+    /// session that cannot read past its decision instant. Takes seconds.
+    Demo {
+        /// Where to build it. A temporary directory when omitted.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Keep the temporary workspace instead of removing it.
+        #[arg(long)]
+        keep: bool,
     },
 
     /// List tables with row counts and time ranges.
@@ -152,6 +195,29 @@ enum Command {
         /// Read and build disposable immutable predicate-cache sidecars.
         #[arg(long)]
         predicate_cache: bool,
+        /// Research mode, arrival axis: pin **every** table at a decision
+        /// point, so the query can only read data that had already been
+        /// committed then. Accepts an RFC3339 timestamp (commit availability),
+        /// an integer version, or a snapshot name. Set `H5I_DB_AS_OF` to pin a
+        /// whole shell session.
+        #[arg(long, env = "H5I_DB_AS_OF")]
+        as_of: Option<String>,
+        /// Research mode, event-time axis: an RFC3339 instant on the *data's*
+        /// clock. Rows stamped after it are unreadable in this query.
+        ///
+        /// This is the half of the jail that works on bulk-loaded history,
+        /// where nothing was ever withheld by arrival: it blocks the window
+        /// that overruns into the future and the join that reads a later
+        /// timestamp. Independent of --as-of on purpose — under a bulk ingest
+        /// the two clocks are years apart. `H5I_DB_DECISION_TIME` pins a
+        /// session. Defaults to the --as-of instant when that is a timestamp,
+        /// which is the aligned case of a continuously-ingested database.
+        #[arg(long, env = "H5I_DB_DECISION_TIME")]
+        decision_time: Option<String>,
+        /// Extra safety gap subtracted from the decision time, e.g. "1d".
+        /// Needs a decision time to measure back from.
+        #[arg(long, env = "H5I_DB_EMBARGO")]
+        embargo: Option<humantime::Duration>,
     },
 
     /// Ingest data into a table from Parquet/CSV/Arrow (or stdin with "-").
@@ -296,6 +362,58 @@ enum Command {
     },
 }
 
+impl Command {
+    /// The database this invocation targets, used to render `<db>` in error
+    /// `next_actions` as a runnable path. Exhaustive on purpose: a new
+    /// subcommand must decide what its database is rather than silently
+    /// emitting placeholders.
+    fn db_path(&self) -> Option<&PathBuf> {
+        use Command::*;
+        match self {
+            Init { db }
+            | CreateTable { db, .. }
+            | DropTable { db, .. }
+            | Rename { db, .. }
+            | Context { db, .. }
+            | Tables { db }
+            | Schema { db, .. }
+            | Sample { db, .. }
+            | Query { db, .. }
+            | Ingest { db, .. }
+            | Versions { db, .. }
+            | LeakageCheck { db, .. }
+            | Restore { db, .. }
+            | ReplaceRange { db, .. }
+            | DeleteRange { db, .. }
+            | Compact { db, .. }
+            | Vacuum { db, .. }
+            | Ui { db, .. }
+            | Verify { db, .. } => Some(db),
+            Snapshot(cmd) => Some(match cmd {
+                SnapshotCmd::Create { db, .. }
+                | SnapshotCmd::List { db }
+                | SnapshotCmd::Delete { db, .. } => db,
+            }),
+            Plan(cmd) => Some(match cmd {
+                PlanCmd::List { db, .. }
+                | PlanCmd::Show { db, .. }
+                | PlanCmd::Apply { db, .. }
+                | PlanCmd::Discard { db, .. } => db,
+            }),
+            // The demo builds its own database, so there is none to name.
+            Demo { .. } => None,
+            Policy(cmd) => Some(match cmd {
+                PolicyCmd::Show { db } | PolicyCmd::Set { db, .. } => db,
+            }),
+            DataPolicy(cmd) => Some(match cmd {
+                DataPolicyCmd::Get { db, .. }
+                | DataPolicyCmd::Set { db, .. }
+                | DataPolicyCmd::Clear { db, .. } => db,
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum IngestMode {
     Write,
@@ -390,6 +508,9 @@ fn main() {
         .with_writer(std::io::stderr)
         .try_init();
     let cli = Cli::parse();
+    // Captured before `run` consumes the command, so a failure can render its
+    // recovery commands against the database the caller actually named.
+    let db = cli.command.db_path().map(|p| p.display().to_string());
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -399,7 +520,7 @@ fn main() {
         // Downstream closed stdout (`… | head`): quiet success, no envelope.
         Err(err) if is_broken_pipe(&err) => 0,
         Err(err) => {
-            write_error(&err);
+            write_error(&err, db.as_deref());
             err.exit_category() as i32
         }
     };
@@ -453,6 +574,188 @@ fn classify_df_error(e: datafusion::error::DataFusionError) -> Error {
         // query (or the data it touched) is at fault, not the engine.
         other => Error::invalid(other.to_string()),
     }
+}
+
+/// What draining a result stream produced.
+struct Drained {
+    /// stdout does not hold the whole result.
+    truncated: bool,
+    /// Rows the query produced. Exact only when the whole stream was drained,
+    /// which is the case under the agent profile.
+    total_rows: u64,
+    /// Rows actually rendered to stdout.
+    returned_rows: u64,
+    /// Present only under the agent profile.
+    spill: Option<profile::SpillOutcome>,
+}
+
+/// Stream a result to stdout under a row/byte budget, and — under the agent
+/// profile — into a recoverable Parquet spill.
+///
+/// The two profiles read the stream differently on purpose. By default the
+/// row limit is pushed into the plan, so DataFusion stops early and nothing
+/// here needs a row budget; only the byte cap applies and hitting it ends the
+/// scan. Under the agent profile there is no plan limit, because reporting an
+/// honest `total_rows` and spilling the withheld rows both require seeing the
+/// whole result — the cost of that is the price of recoverability, and an
+/// agent that writes `LIMIT` in its SQL avoids it entirely.
+async fn drain_budgeted(
+    stream: &mut (
+             impl futures::Stream<Item = datafusion::error::Result<arrow::array::RecordBatch>> + Unpin
+         ),
+    schema: SchemaRef,
+    format: Format,
+    head_rows: Option<usize>,
+    byte_cap: Option<u64>,
+    agent: bool,
+) -> Result<Drained> {
+    let mut writer = BatchWriter::new(format, schema.clone(), byte_cap)?;
+    // The spill opens itself once the result outgrows what stdout will render.
+    let mut spill = agent.then(|| ResultSpill::new(schema, head_rows.unwrap_or(usize::MAX)));
+    let mut returned_rows: u64 = 0;
+    let mut total_rows: u64 = 0;
+    // True once stdout has taken all it may; the stream keeps flowing in agent
+    // mode so the spill and the row count stay complete.
+    let mut stdout_full = false;
+
+    while let Some(batch) = stream.next().await {
+        let batch = batch.map_err(classify_df_error)?;
+        total_rows += batch.num_rows() as u64;
+
+        if let Some(spill) = spill.as_mut() {
+            spill.push(&batch)?;
+        }
+        if stdout_full {
+            continue;
+        }
+
+        let room = match head_rows {
+            Some(h) => (h as u64).saturating_sub(returned_rows),
+            None => u64::MAX,
+        };
+        if room == 0 {
+            stdout_full = true;
+        } else {
+            let take = room.min(batch.num_rows() as u64) as usize;
+            let slice = if take == batch.num_rows() {
+                batch.clone()
+            } else {
+                batch.slice(0, take)
+            };
+            let within_bytes = writer.write(&slice)?;
+            returned_rows += take as u64;
+            // Either the byte cap tripped or this batch was cut short.
+            if !within_bytes || take < batch.num_rows() {
+                stdout_full = true;
+                // A byte-capped result can be short of the row budget and
+                // still be incomplete on stdout, so make sure the withheld
+                // rows have somewhere to live.
+                if !within_bytes && let Some(spill) = spill.as_mut() {
+                    spill.force()?;
+                }
+            }
+        }
+        // Without a spill to fill there is nothing more to learn from the
+        // stream, so stop reading it — this preserves the default profile's
+        // early-exit behaviour exactly.
+        if stdout_full && spill.is_none() {
+            writer.finish()?;
+            return Ok(Drained {
+                truncated: true,
+                total_rows,
+                returned_rows,
+                spill: None,
+            });
+        }
+    }
+    writer.finish()?;
+    let spill = spill.map(|s| s.finish()).transpose()?;
+    Ok(Drained {
+        truncated: stdout_full,
+        total_rows,
+        returned_rows,
+        spill,
+    })
+}
+
+/// Parse a decision point shared by `query --as-of` and `leakage-check
+/// --as-of`: an integer version, an RFC3339 timestamp resolved against commit
+/// *availability* (`committed_at_ns`), or a snapshot name. Mirrors the `h5i()`
+/// time-travel function so one spelling works everywhere.
+///
+/// Bare integers win over snapshot names by design: a snapshot named "42"
+/// would otherwise silently shadow version 42. Name snapshots, not numbers.
+fn parse_read_at(s: &str) -> Result<ReadAt> {
+    if let Ok(v) = s.parse::<u64>() {
+        return Ok(ReadAt::Version(v));
+    }
+    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(s) {
+        let ns = ts
+            .timestamp_nanos_opt()
+            .ok_or_else(|| Error::invalid(format!("--as-of timestamp {s:?} out of range")))?;
+        return Ok(ReadAt::AsOf(ns));
+    }
+    Ok(ReadAt::Snapshot(s.to_string()))
+}
+
+/// Build a research-mode pin from the two axes.
+///
+/// They are deliberately independent. Arrival is measured on the *commit*
+/// clock and event time on the *data* clock, and under a bulk ingest those are
+/// years apart: ten years of history committed this morning has a first commit
+/// of today, so an arrival pin at a historical instant resolves to nothing
+/// while an event-time cutoff at the same instant is exactly what is wanted.
+/// Coupling them would make the event-time axis unusable on precisely the
+/// databases it exists for.
+///
+/// When the two clocks *are* aligned — a continuously-ingested database — an
+/// RFC3339 `--as-of` supplies the decision time as well, so the common case
+/// stays one flag.
+fn research_pin(
+    as_of: Option<&str>,
+    decision_time: Option<&str>,
+    embargo: Option<std::time::Duration>,
+) -> Result<ResearchPin> {
+    let at = match as_of {
+        Some(s) => parse_read_at(s)?,
+        None => ReadAt::Latest,
+    };
+    // An explicit decision time wins; otherwise inherit an --as-of instant.
+    let decision_ns = match decision_time {
+        Some(s) => Some(parse_rfc3339_ns(s, "--decision-time")?),
+        None => match at {
+            ReadAt::AsOf(ns) => Some(ns),
+            _ => None,
+        },
+    };
+
+    if decision_time.is_none() && embargo.is_none() {
+        // No event-time axis requested: arrival only, exactly as before.
+        return Ok(ResearchPin::at(at));
+    }
+    let Some(decision_ns) = decision_ns else {
+        return Err(Error::invalid(
+            "--embargo needs an instant to measure back from; pass --decision-time with an \
+             RFC3339 timestamp (or an RFC3339 --as-of, when the commit and event clocks agree)",
+        ));
+    };
+    let embargo_ns = match embargo {
+        Some(d) => i64::try_from(d.as_nanos())
+            .map_err(|_| Error::invalid(format!("--embargo {d:?} is too long to represent")))?,
+        None => 0,
+    };
+    let cutoff_ns = decision_ns.checked_sub(embargo_ns).ok_or_else(|| {
+        Error::invalid("--embargo reaches back before the representable time range")
+    })?;
+    Ok(ResearchPin::at(at).with_event_time_cutoff_ns(cutoff_ns))
+}
+
+/// Parse an RFC3339 instant into nanoseconds since the epoch.
+fn parse_rfc3339_ns(s: &str, flag: &str) -> Result<i64> {
+    let ts = chrono::DateTime::parse_from_rfc3339(s)
+        .map_err(|e| Error::invalid(format!("{flag} {s:?} is not an RFC3339 timestamp: {e}")))?;
+    ts.timestamp_nanos_opt()
+        .ok_or_else(|| Error::invalid(format!("{flag} {s:?} is outside the representable range")))
 }
 
 /// `--…-mb` flags → bytes, rejecting 0 and overflow.
@@ -575,6 +878,23 @@ async fn run(cli: Cli) -> Result<()> {
             )
         }
 
+        Command::Context {
+            db,
+            budget,
+            stale_after,
+        } => {
+            let label = db.display().to_string();
+            let database = Database::open_read_only(&db).await?;
+            let doc =
+                context::build(&database, &label, budget, stale_after.map(|d| d.as_secs())).await?;
+            write_value(&doc, format)
+        }
+
+        Command::Demo { dir, keep } => {
+            demo::run(dir, keep).await?;
+            Ok(())
+        }
+
         Command::Tables { db } => {
             let db = Database::open_read_only(&db).await?;
             let mut rows = Vec::new();
@@ -653,6 +973,9 @@ async fn run(cli: Cli) -> Result<()> {
             threads,
             stats,
             predicate_cache,
+            as_of,
+            decision_time,
+            embargo,
         } => {
             let sql = if sql == "-" {
                 let mut buf = String::new();
@@ -665,76 +988,114 @@ async fn run(cli: Cli) -> Result<()> {
                 sql
             };
             let db = Arc::new(Database::open_read_only(&db).await?);
-            let session = H5iSession::new(
-                db,
-                SessionOptions {
-                    memory_limit: memory_limit_mb.map(|m| m * 1024 * 1024),
-                    spill_dir,
-                    target_partitions: threads,
-                    batch_size: None,
-                    telemetry_capacity: 0,
-                    predicate_cache: if predicate_cache {
-                        PredicateCacheMode::ReadWrite
-                    } else {
-                        PredicateCacheMode::Disabled
-                    },
+            let options = SessionOptions {
+                memory_limit: memory_limit_mb.map(|m| m * 1024 * 1024),
+                spill_dir,
+                target_partitions: threads,
+                batch_size: None,
+                telemetry_capacity: 0,
+                predicate_cache: if predicate_cache {
+                    PredicateCacheMode::ReadWrite
+                } else {
+                    PredicateCacheMode::Disabled
                 },
-            )
-            .await
-            .map_err(Error::internal)?;
-
-            // Stream result batches straight to stdout instead of collecting
-            // the full result first. Returns whether output was truncated.
-            async fn drain(
-                mut stream: impl futures::Stream<
-                    Item = datafusion::error::Result<arrow::record_batch::RecordBatch>,
-                > + Unpin,
-                writer: &mut BatchWriter,
-            ) -> Result<bool> {
-                while let Some(batch) = stream.next().await {
-                    let batch = batch.map_err(classify_df_error)?;
-                    if !writer.write(&batch)? {
-                        return Ok(true);
-                    }
-                }
-                Ok(false)
+            };
+            // Research mode pins every table at the decision point; without
+            // --as-of this is the same `new()` call as before, so the default
+            // path is untouched.
+            // Session construction resolves every table, so --as-of surfaces
+            // real user errors here (unknown snapshot, version out of range).
+            // Classify rather than blanket-internal them so exit codes hold.
+            let pin = research_pin(
+                as_of.as_deref(),
+                decision_time.as_deref(),
+                embargo.map(|d| *d),
+            )?;
+            let session = if pin.is_unpinned() {
+                // Byte-for-byte the pre-research-mode path.
+                H5iSession::new(db, options).await
+            } else {
+                H5iSession::new_pinned(db, options, pin).await
             }
+            .map_err(classify_df_error)?;
+
+            // The profile only fills in budgets the caller left unset, and it
+            // never changes anything else about the output — in particular it
+            // is read from the environment, never sniffed from the TTY, so a
+            // piped run produces the same bytes as an interactive one.
+            let agent = Profile::from_env().is_agent();
+            let head_rows = if agent {
+                Some(max_rows.unwrap_or(AGENT_MAX_ROWS))
+            } else {
+                max_rows
+            };
+            let byte_cap = if agent {
+                Some(max_bytes.unwrap_or(AGENT_MAX_BYTES))
+            } else {
+                max_bytes
+            };
+            // A limit the caller asked for stays a hard error on breach; the
+            // profile's own budget is soft, and truncation is reported instead.
+            let hard_byte_limit = max_bytes;
+            // Only the default profile pushes the row limit into the plan.
+            let plan_limit = if agent { None } else { max_rows };
+
             let work = async {
                 // Only pay for query-local performance reporting when the
                 // caller asked for it; the default path plans and streams
                 // without constructing a report.
-                let (truncated, report) = if stats {
+                let (drained, report) = if stats {
                     let df = session
                         .sql_reported(&sql)
                         .await
                         .map_err(classify_df_error)?;
-                    let df = match max_rows {
+                    let df = match plan_limit {
                         Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
                         None => df,
                     };
                     let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
-                    let mut writer = BatchWriter::new(format, stream.schema(), max_bytes)?;
-                    let truncated = drain(&mut stream, &mut writer).await?;
-                    writer.finish()?;
-                    (truncated, stream.report().cloned())
+                    let schema = stream.schema();
+                    let drained =
+                        drain_budgeted(&mut stream, schema, format, head_rows, byte_cap, agent)
+                            .await?;
+                    (drained, stream.report().cloned())
                 } else {
                     let df = session.sql(&sql).await.map_err(classify_df_error)?;
-                    let df = match max_rows {
+                    let df = match plan_limit {
                         Some(n) => df.limit(0, Some(n)).map_err(classify_df_error)?,
                         None => df,
                     };
                     let schema: SchemaRef = Arc::new(df.schema().as_arrow().clone());
                     let mut stream = df.execute_stream().await.map_err(classify_df_error)?;
-                    let mut writer = BatchWriter::new(format, schema, max_bytes)?;
-                    let truncated = drain(&mut stream, &mut writer).await?;
-                    writer.finish()?;
-                    (truncated, None)
+                    let drained =
+                        drain_budgeted(&mut stream, schema, format, head_rows, byte_cap, agent)
+                            .await?;
+                    (drained, None)
                 };
-                if truncated {
+
+                // Tell the agent what it did not see — including on an
+                // untruncated result, where an exact row count saves it a
+                // second COUNT(*) round trip.
+                if let Some(spill) = &drained.spill {
+                    ResultSummary::build(
+                        drained.total_rows,
+                        drained.returned_rows,
+                        drained.truncated,
+                        head_rows.unwrap_or(AGENT_MAX_ROWS),
+                        byte_cap.unwrap_or(AGENT_MAX_BYTES),
+                        spill,
+                    )
+                    .emit();
+                }
+
+                // Breaching a caller-set --max-bytes keeps its exit-4 envelope.
+                if drained.truncated
+                    && let Some(limit) = hard_byte_limit
+                {
                     return Err(Error::LimitExceeded {
                         detail: format!(
-                            "result exceeded --max-bytes={}; output truncated at a batch boundary",
-                            max_bytes.unwrap_or_default()
+                            "result exceeded --max-bytes={limit}; output truncated at a batch \
+                             boundary"
                         ),
                     });
                 }
@@ -811,18 +1172,7 @@ async fn run(cli: Cli) -> Result<()> {
             } else {
                 sql
             };
-            // --as-of: integer version, RFC3339 timestamp (availability), or a
-            // snapshot name, mirroring the h5i() time-travel function.
-            let at = if let Ok(v) = as_of.parse::<u64>() {
-                ReadAt::Version(v)
-            } else if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&as_of) {
-                let ns = ts.timestamp_nanos_opt().ok_or_else(|| {
-                    Error::invalid(format!("--as-of timestamp {as_of:?} out of range"))
-                })?;
-                ReadAt::AsOf(ns)
-            } else {
-                ReadAt::Snapshot(as_of.clone())
-            };
+            let at = parse_read_at(&as_of)?;
             let db = Arc::new(Database::open_read_only(&db).await?);
             let report = h5i_db_query::check_leakage(
                 db,

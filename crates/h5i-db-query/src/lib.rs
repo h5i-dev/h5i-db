@@ -35,7 +35,7 @@ pub use metrics::{
 };
 pub use predicate_cache::PredicateCacheMode;
 pub use provider::H5iTableProvider;
-pub use session::{H5iSession, SessionOptions};
+pub use session::{H5iSession, ResearchPin, SessionOptions};
 pub use tail::TailProvider;
 
 // Re-export the engine so downstream crates (CLI, bench) use one version.

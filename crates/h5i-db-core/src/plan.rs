@@ -558,5 +558,5 @@ impl Database {
 async fn catalog_entry(db: &Database, table: &str) -> Result<crate::catalog::CatalogEntry> {
     crate::catalog::load_entry(db.backend(), table)
         .await?
-        .ok_or_else(|| Error::TableNotFound { name: table.into() })
+        .ok_or_else(|| Error::table_not_found(table))
 }
