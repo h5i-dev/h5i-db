@@ -6,6 +6,7 @@
 //! pager, SQL from an argument or stdin.
 
 mod context;
+mod demo;
 mod ingest;
 mod output;
 mod profile;
@@ -133,6 +134,18 @@ enum Command {
         /// than this (e.g. "5m", "1h"). Omit to keep the output clock-free.
         #[arg(long)]
         stale_after: Option<humantime::Duration>,
+    },
+
+    /// Build a small database and walk the whole argument end to end: ingest,
+    /// query, a previewed vendor restatement, the leakage it causes, and a
+    /// session that cannot read past its decision instant. Takes seconds.
+    Demo {
+        /// Where to build it. A temporary directory when omitted.
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        /// Keep the temporary workspace instead of removing it.
+        #[arg(long)]
+        keep: bool,
     },
 
     /// List tables with row counts and time ranges.
@@ -387,6 +400,8 @@ impl Command {
                 | PlanCmd::Apply { db, .. }
                 | PlanCmd::Discard { db, .. } => db,
             }),
+            // The demo builds its own database, so there is none to name.
+            Demo { .. } => None,
             Policy(cmd) => Some(match cmd {
                 PolicyCmd::Show { db } | PolicyCmd::Set { db, .. } => db,
             }),
@@ -873,6 +888,11 @@ async fn run(cli: Cli) -> Result<()> {
             let doc =
                 context::build(&database, &label, budget, stale_after.map(|d| d.as_secs())).await?;
             write_value(&doc, format)
+        }
+
+        Command::Demo { dir, keep } => {
+            demo::run(dir, keep).await?;
+            Ok(())
         }
 
         Command::Tables { db } => {

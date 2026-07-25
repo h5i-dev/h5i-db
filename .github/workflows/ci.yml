@@ -75,6 +75,28 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
 
+  # Docs-as-tests: agents execute documentation literally, so a stale example
+  # is a correctness bug. Every h5i-db invocation in the README and the skill
+  # is checked against the real binary's subcommands and flags, and the
+  # self-contained `demo` tour is run end to end.
+  docs:
+    name: Docs match the binary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p h5i-db-cli --test docs_are_executable -- --test-threads=1
+      # The skill is installed with `npx skills add`, whose discovery rules
+      # make a shallower SKILL.md shadow the packaged one.
+      - name: Skill layout is installable
+        run: |
+          test -f skills/h5i-db/SKILL.md
+          test ! -f SKILL.md
+          head -1 skills/h5i-db/SKILL.md | grep -q '^---$'
+          grep -q '^name:' skills/h5i-db/SKILL.md
+          grep -q '^description:' skills/h5i-db/SKILL.md
+
   # Supply-chain gates: RustSec advisories, license allowlist, duplicate
   # crates, registry sources (deny.toml) + cargo-audit over Cargo.lock.
   supply-chain:
