@@ -1318,7 +1318,8 @@ with it.
 | VIII-A4 | ✅ | `.join()` (inner/left/right/full/cross/semi/anti) with `l`/`r` as contract aliases; `.join_asof()` lowering to the `asof_join` UDTF. **It refuses a pinned or already-operated-on side** rather than silently reading latest — the table function's blind spot, surfaced instead of inherited. |
 | VIII-A5 | ✅ | `sql_expr()`; `docs-src/api/dataframe.md`; skill reference updated; the `QueryResult` "lazy" docstring corrected (it was never lazy). Base wheel gains no dependency — asserted by a test that AST-parses the module's imports. Mistyped operators raise at build time naming the nearest real method (`.groupby` → `.group_by`), the edit-distance approach the CLI envelope already uses. |
 
-**Verification.** 83 Python tests (`crates/h5i-db-python/python/tests/`),
+**Verification.** 97 Python tests (`crates/h5i-db-python/python/tests/`),
+at **100% line and branch coverage** of `dataframe.py`,
 run in CI for the first time — the job previously built the wheel and ran an
 inline smoke script, so `test_bindings.py` was never executed. Coverage:
 differential tests against hand-written golden SQL (Arrow-level equality) for
@@ -1366,6 +1367,25 @@ produced valid SQL meaning something else, or a planner error far from its
 cause. A builder that emits a string the engine accepts has no failing
 edge to trip over, so correctness has to come from executing the
 combinations and comparing values — budget review effort accordingly.
+
+**Generated tests** (`test_dataframe_matrix.py`) then made both techniques
+permanent rather than one-off investigations: seeded fuzzing of arithmetic
+and boolean operator trees against a Python reference implementing *SQL*
+semantics (truncating division, sign-follows-dividend modulo), and the full
+7×7 and 7×7×7 verb matrix, each pipeline executed and checked against
+invariants — a row limit anywhere still bounds the result, a filter still
+holds at the end, a window column is never recomputed downstream. Driving
+the remaining gaps with `coverage --branch` was worth it twice over: it
+found `.sign()` lowering to a function DataFusion does not have (dead API
+that no test had ever called) and a `when(...).then(...)` chain being
+unnameable without `.otherwise()`. The chain is now an `Expr` in its own
+right, since a `CASE` with no `ELSE` is already a complete expression.
+
+Two lessons for the next surface of this kind. Coverage of a *generated*
+API is not busywork: an unexercised method is one that may not lower to
+anything real, and only calling it finds out. And the fuzzer's reference
+must model the target's semantics, not Python's — the first draft used
+Python's flooring division and reported a false positive within seconds.
 
 `test_docs_are_executable.py` closes a gap the Rust
 `docs_are_executable` test leaves: that test only runs lines starting

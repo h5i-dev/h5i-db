@@ -462,7 +462,7 @@ class Expr:
         return _call("sqrt", self)
 
     def sign(self) -> "Expr":
-        return _call("sign", self)
+        return _call("signum", self)
 
     def round(self, decimals: int = 0) -> "Expr":
         if not isinstance(decimals, int) or isinstance(decimals, bool):
@@ -759,8 +759,6 @@ def _merge_refs(*refsets) -> Optional[frozenset]:
 def _to_expr(value: ExprLike) -> Expr:
     if isinstance(value, Expr):
         return value
-    if isinstance(value, _WhenThen):
-        return value._as_expr()
     return lit(value)
 
 
@@ -891,35 +889,51 @@ def time_bucket(
     return _call("time_bucket", *args)
 
 
-class _WhenThen:
-    """Intermediate state of a ``when(...).then(...)`` chain."""
+def _build_case(pairs, default: Optional[Expr]) -> Expr:
+    parts = ["CASE"]
+    refsets = []
+    late = False
+    for cond, value in pairs:
+        parts.append(f"WHEN {cond._render(0)} THEN {value._render(0)}")
+        refsets += [cond._refs, value._refs]
+        late = late or cond._after_where or value._after_where
+    if default is not None:
+        parts.append(f"ELSE {default._render(0)}")
+        refsets.append(default._refs)
+        late = late or default._after_where
+    parts.append("END")
+    return Expr(
+        " ".join(parts), _P_ATOM, refs=_merge_refs(*refsets), after_where=late
+    )
+
+
+class _WhenThen(Expr):
+    """A ``when(...).then(...)`` chain.
+
+    Already a complete expression -- a CASE with no ELSE yields NULL, which
+    is what SQL does -- so it can be aliased or used anywhere an expression
+    is accepted. It also stays open for another ``when`` or an ``otherwise``.
+    """
 
     __slots__ = ("_pairs",)
 
     def __init__(self, pairs):
+        built = _build_case(pairs, None)
+        super().__init__(
+            built._sql,
+            built._prec,
+            None,
+            built._refs,
+            built._after_where,
+            built._windowable,
+        )
         self._pairs = pairs
 
     def when(self, condition: Expr) -> "_When":
         return _When(self._pairs, condition)
 
     def otherwise(self, value: ExprLike) -> Expr:
-        return self._build(_to_expr(value))
-
-    def _as_expr(self) -> Expr:
-        """No ``otherwise`` -- SQL's implicit ``ELSE NULL``."""
-        return self._build(None)
-
-    def _build(self, default: Optional[Expr]) -> Expr:
-        parts = ["CASE"]
-        refsets = []
-        for cond, value in self._pairs:
-            parts.append(f"WHEN {cond._render(0)} THEN {value._render(0)}")
-            refsets += [cond._refs, value._refs]
-        if default is not None:
-            parts.append(f"ELSE {default._render(0)}")
-            refsets.append(default._refs)
-        parts.append("END")
-        return Expr(" ".join(parts), _P_ATOM, refs=_merge_refs(*refsets))
+        return _build_case(self._pairs, _to_expr(value))
 
 
 class _When:
@@ -959,8 +973,6 @@ def _as_expr_list(value: Any) -> list:
             out.append(col(item))
         elif isinstance(item, Expr):
             out.append(item)
-        elif isinstance(item, _WhenThen):
-            out.append(item._as_expr())
         else:
             raise _invalid(
                 f"expected a column name or Expr, got {type(item).__name__}"

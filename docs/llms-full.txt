@@ -2568,12 +2568,16 @@ always quoted so case survives (`col("Symbol")` finds a field named
 `Symbol`, which bare SQL would fold to lowercase). A value containing
 `'; DROP TABLE trades; --` is a string, never syntax.
 
-Aggregates and scalars are methods: `.sum()`, `.mean()`, `.min()`, `.max()`,
-`.count()`, `.n_unique()`, `.std()`, `.var()`, `.median()`, `.quantile(q)`,
-`.first(order_by=)`, `.last(order_by=)`, `.abs()`, `.log()`, `.sqrt()`,
-`.round(n)`, `.floor()`, `.ceil()`, `.coalesce(...)`. Plus `count_star()`,
-`vwap(price, size)`, `wavg(weight, value)` and `time_bucket(interval, ts)` as
-functions.
+Aggregates are methods: `.sum()`, `.mean()`, `.min()`, `.max()`, `.count()`,
+`.n_unique()`, `.std()`, `.var()`, `.median()`, `.quantile(q)`,
+`.first(order_by=)`, `.last(order_by=)`. So are scalars: `.abs()`, `.log()`,
+`.log10()`, `.exp()`, `.sqrt()`, `.sign()`, `.round(n)`, `.floor()`,
+`.ceil()`, `.coalesce(...)`, `.greatest(...)`, `.least(...)`. Plus
+`count_star()`, `vwap(price, size)`, `wavg(weight, value)` and
+`time_bucket(interval, ts)` as functions.
+
+A `when(...).then(...)` chain is already a complete expression — a `CASE`
+with no `ELSE` yields NULL — so it can be aliased without `.otherwise()`.
 
 The idiomatic OHLCV query, built:
 
