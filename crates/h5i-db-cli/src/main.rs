@@ -5,6 +5,7 @@
 //! (0 ok / 2 user error / 3 conflict / 4 limit / 5 internal), no prompts, no
 //! pager, SQL from an argument or stdin.
 
+mod context;
 mod ingest;
 mod output;
 mod profile;
@@ -105,6 +106,25 @@ enum Command {
         db: PathBuf,
         from: String,
         to: String,
+    },
+
+    /// Everything needed to orient in one call: every table's schema, size,
+    /// time range and head version, the operations policy gates, existing
+    /// snapshots, and any staged plans awaiting review.
+    ///
+    /// Deterministic for a given database state, so it can be cached; only
+    /// --stale-after makes it depend on the clock.
+    Context {
+        db: PathBuf,
+        /// Approximate token ceiling. Detail is shed in a fixed order
+        /// (columns, snapshots, notes, then whole tables smallest-first) and
+        /// whatever was dropped is named under `omitted`.
+        #[arg(long)]
+        budget: Option<usize>,
+        /// Report per-table commit age and flag tables whose head is older
+        /// than this (e.g. "5m", "1h"). Omit to keep the output clock-free.
+        #[arg(long)]
+        stale_after: Option<humantime::Duration>,
     },
 
     /// List tables with row counts and time ranges.
@@ -317,6 +337,7 @@ impl Command {
             | CreateTable { db, .. }
             | DropTable { db, .. }
             | Rename { db, .. }
+            | Context { db, .. }
             | Tables { db }
             | Schema { db, .. }
             | Sample { db, .. }
@@ -756,6 +777,18 @@ async fn run(cli: Cli) -> Result<()> {
                 &serde_json::json!({"renamed": {"from": from, "to": to}}),
                 format,
             )
+        }
+
+        Command::Context {
+            db,
+            budget,
+            stale_after,
+        } => {
+            let label = db.display().to_string();
+            let database = Database::open_read_only(&db).await?;
+            let doc =
+                context::build(&database, &label, budget, stale_after.map(|d| d.as_secs())).await?;
+            write_value(&doc, format)
         }
 
         Command::Tables { db } => {
