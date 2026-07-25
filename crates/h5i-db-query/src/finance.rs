@@ -148,7 +148,7 @@ struct WeightedAvgAccumulator {
     weight_first: bool,
 }
 
-fn to_f64_array(array: &ArrayRef) -> DfResult<Float64Array> {
+pub(crate) fn to_f64_array(array: &ArrayRef) -> DfResult<Float64Array> {
     Ok(arrow::compute::cast(array, &DataType::Float64)?
         .as_any()
         .downcast_ref::<Float64Array>()

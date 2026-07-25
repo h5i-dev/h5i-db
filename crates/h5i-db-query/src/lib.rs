@@ -17,6 +17,7 @@ mod pin;
 mod predicate_cache;
 pub mod provider;
 pub mod pruning;
+pub mod rolling;
 pub mod session;
 mod sidecar;
 pub mod tail;

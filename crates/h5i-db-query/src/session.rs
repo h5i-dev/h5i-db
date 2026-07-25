@@ -267,6 +267,11 @@ impl H5iSession {
         ctx.register_udaf(vwap_udaf());
         ctx.register_udaf(wavg_udaf());
         ctx.register_udwf(ewma_udwf());
+        // Part VII-B1 rolling operators (only those DataFusion lacks; see
+        // `crate::rolling` for the reachable-as mapping of the rest).
+        for udwf in crate::rolling::rolling_udwfs() {
+            ctx.register_udwf(udwf);
+        }
 
         Ok(Self {
             ctx,
