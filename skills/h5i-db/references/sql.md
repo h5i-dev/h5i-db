@@ -12,3 +12,14 @@ Available inside any `h5i-db query` / `db.sql(...)` statement:
 | `first_value/last_value(price ORDER BY ts)` | OHLC open/close |
 
 Add `--stats` to see pruning (segments skipped) on stderr.
+
+## Keeping results small
+
+Under `H5I_DB_PROFILE=agent` every query is capped (1000 rows, 1 MiB) and a
+JSON summary on stderr reports the true `total_rows` plus a
+`full_result_path` — a Parquet file holding the rows stdout withheld. Nothing
+is lost, only withheld, so there is no need to guess a `LIMIT` defensively.
+
+Explicit flags still win: `--max-rows` sets the rendered size, and a
+`--max-bytes` you pass yourself remains a hard error (exit 4) rather than a
+soft truncation.

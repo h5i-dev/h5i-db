@@ -27,3 +27,18 @@ h5i-db restore market.db trades 42                 # roll contents back (history
 h5i-db verify market.db trades --deep              # checksums + object existence
 h5i-db vacuum market.db                            # dry-run of garbage collection
 ```
+
+## Retry safety
+
+Any mutation takes `--idempotency-key <token>`. A retry after an ambiguous
+failure — a timeout that may or may not have committed — carries the same key,
+finds the commit it already produced, and returns it with `segments_added: 0`
+instead of writing the rows a second time. Duplicated ticks are silent poison:
+nothing errors, the data is simply wrong from then on.
+
+```bash
+h5i-db ingest market.db trades day.parquet --idempotency-key load-2026-07-01
+```
+
+Retries are deduplicated against the last 64 commits, which covers a retry
+loop; it is not a general-purpose exactly-once ledger.

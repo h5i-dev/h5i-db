@@ -1,11 +1,28 @@
 # h5i-db
 
-**A high-performance analytical database for quant workloads. Fully versioned, built in Rust, and AI-agent friendly.**
+**The database that can show an agent the past and nothing else.**
 
-- **Agent-Friendly Architecture**: Previewable mutations, crash-safe commits, and built-in look-ahead-bias checks safely constrain autonomous agents while preventing data crash and leakage.
-- **Blazing Fast Performance**: Over 4.5x faster than DuckDB and Polars for OHLCV+VWAP rollups on 20M rows.
-- **Immutable & Versioned**: Every write is an atomic commit with an immutable version, allowing O(1) version reads.
-- **Rich Time-Series SQL**: Full SQL via DataFusion with native operators (SQL ASOF join, timezone-aware `time_bucket`, gapfill/resample, rolling windows, `vwap`, `ewma`).
+An embedded, fully versioned analytical database for quant research, written in
+Rust and Apache-2.0.
+
+Look-ahead bias is the correctness bug in backtesting, and it gets worse when an
+agent runs forty backtests overnight — nobody reviews forty results closely
+enough to catch the one that quietly read tomorrow's close. h5i-db makes that
+structurally impossible rather than checkable after the fact: pin a session to a
+decision instant and no query inside it can read a row stamped later, or a
+commit that had not arrived yet.
+
+- **Point-in-time enforced, not offered.** `--decision-time` bounds every scan
+  in the session; `--as-of` pins which commits exist. Both are part of the
+  table, not a filter a query can forget or widen.
+- **Immutable & versioned.** Every write is an atomic commit; any past version
+  reads in O(1), and `leakage-check` quantifies what a restatement changed.
+- **Built for agents, not chatbots.** One-call orientation, output budgets that
+  protect a context window, and error envelopes carrying runnable recovery
+  commands. No LLM inside the database.
+- **Fast where time-series shape allows.** Over 4.5× faster than DuckDB and
+  Polars for OHLCV+VWAP rollups on 20M rows, with full SQL via DataFusion
+  (ASOF join, `time_bucket`, gapfill/resample, `vwap`, `ewma`).
 
 📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
 [Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) · [Agent skill](skills/h5i-db/SKILL.md)
@@ -23,9 +40,11 @@ cargo install h5i-db-cli
 ```bash
 h5i-db init market.db
 h5i-db create-table market.db trades --like ticks.parquet --time-column ts
-h5i-db ingest market.db trades ticks.parquet
+h5i-db ingest market.db trades ticks.parquet --idempotency-key load-1
+h5i-db context market.db                                           # orient in one call
 h5i-db query market.db "SELECT symbol, vwap(price,size) FROM trades GROUP BY symbol"
-h5i-db query market.db "SELECT count(*) FROM h5i('trades', 1)"     # time travel
+h5i-db query market.db "SELECT count(*) FROM trades" \
+  --decision-time 2026-07-01T00:00:00Z                             # the future is unreadable
 h5i-db ui market.db                                                # review surface
 ```
 
@@ -118,22 +137,56 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Why for agents
 
-- **Every write is an atomic, immutable commit**: a bad ingest or mutation
-  is one `restore` away from undone, and old versions read in O(1).
-- **Previewable mutations.** `plan` shows exactly what a `DELETE`/`UPDATE`
-  will touch before `apply`, and policy can require that gate: the agent
-  proposes, the human (or a rule) approves.
-- **Crash-safe by construction.** fsync-before-swap, checksums, a manifest
-  hash chain, proven by tests that kill the writer at every commit step. An
-  agent killed mid-write cannot corrupt the store.
-- **An auditable trail.** Version history records what changed and when;
-  the review UI gives humans a diff-and-approve surface over it.
-- **Data-safety guardrails.** An opt-in per-table `data-policy` enforces typed
-  constraints (`not_null`/`compare`/`in_set`) fail-closed on every write and at
-  plan time, so an agent can't quietly commit malformed rows.
-- **Look-ahead-bias checks.** `leakage-check` re-runs a query as of the
-  decision instant and reports how much of the result leaked from
-  later-arriving data, catching alpha that would evaporate in production.
+The premise is that the agent lives *outside* the database. Nothing here
+generates SQL or embeds a model; the database's job is to be legible and
+impossible to corrupt, and everything below follows from that.
+
+**Show it the past, and nothing else.** A research session is pinned on two
+axes — event time (`--decision-time`, so a window cannot overrun forwards) and
+arrival (`--as-of`, so a later restatement stays invisible). Both are enforced
+in the table, so a query that explicitly asks for the future still gets none.
+A table that cannot be bounded refuses the session rather than being quietly
+exempt.
+
+```bash
+export H5I_DB_DECISION_TIME=2026-07-01T00:00:00Z   # pins the whole session
+h5i-db query market.db "SELECT vwap(price, size) FROM trades"
+```
+
+**Don't let a result destroy the context window.** `H5I_DB_PROFILE=agent` caps
+every query and spills the rest to Parquet, reporting the true row count and
+where the withheld rows live. Output never changes based on whether stdout is
+a terminal.
+
+**One call to get oriented.** `h5i-db context <db>` returns every table's
+schema, size, time range and head version, the operations policy gates, and
+any plan already staged — deterministic, so it can be cached, and `--budget`
+caps it in tokens.
+
+**Errors that can be acted on.** The stderr envelope carries `next_actions`
+(runnable commands), `did_you_mean` for typos, and a `retryable` flag. A CI
+test executes the commands the binary suggests, so they cannot rot into
+plausible fiction.
+
+**Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
+require that gate; `--idempotency-key` makes a retried ingest replay instead of
+double-appending; an opt-in `data-policy` rejects malformed rows fail-closed;
+commits are fsync-before-swap with a manifest hash chain, tested by killing the
+writer at every step.
+
+---
+
+## When *not* to use h5i-db
+
+- **Distributed, multi-terabyte warehouses.** Single-node and embedded by
+  design. Reach for ClickHouse, Snowflake or a lakehouse.
+- **OLTP or high-concurrency serving.** One writer at a time, no row-level
+  MVCC, no interactive transactions. Use Postgres.
+- **Sub-microsecond tick capture.** The write cadence this is built for is
+  minute bars, end-of-day, and vendor files — not the capture layer itself.
+  That is kdb+ territory.
+- **Databases with no time column.** The whole design assumes a time index;
+  without one you lose pruning, the ASOF join, and research mode entirely.
 
 ---
 

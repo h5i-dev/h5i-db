@@ -1,68 +1,65 @@
 ---
 name: h5i-db
-description: Use when working with an h5i-db database — an embedded, versioned time-series DB driven by the `h5i-db` CLI or the `h5i_db` Python package. Covers discovering tables/schemas, SQL queries (ASOF joins, time_bucket, time travel), safe ingestion, and previewable plan/apply mutations.
+description: Use when working with an h5i-db database — an embedded, versioned time-series database for quant research, driven by the `h5i-db` CLI or the `h5i_db` Python package. Covers orienting in a database, querying it under a context budget, running look-ahead-free backtests, ingesting safely, and previewing destructive changes before they land.
 ---
 
-# Using h5i-db (for AI agents)
+# Driving h5i-db
 
-h5i-db is an embedded, versioned time-series database. You drive it with the
-`h5i-db` CLI (or the `h5i_db` Python package). Every write produces an
-immutable version; nothing you do can destroy history short of `vacuum
---apply` after deleting snapshots.
+Every write is an immutable commit. Nothing you do destroys history short of
+`vacuum --apply` after deleting snapshots, so the failure mode to actually
+worry about is not losing data — it is writing *wrong* data, or reading data
+you should not have been able to see yet.
 
-## Golden rules
-
-1. **Discover before you act**: `tables` → `schema` → `sample`, then query.
-2. **Prefer `--format json`** (or `jsonl` for row streams). Parse stderr on
-   failure: it is always `{code, message, retryable, hint}`. If
-   `retryable: true` (conflicts, lock timeouts), retry; otherwise follow the
-   `hint` — do not retry blindly.
-3. **Exit codes**: 0 ok · 2 your input was wrong · 3 version conflict
-   (someone else committed; re-read and retry) · 4 resource limit/timeout ·
-   5 corruption/internal (stop and report).
-4. **Mutations that remove or change data should be planned first**, and the
-   database policy may force this. `--plan` costs one extra command and gives
-   you (and the human reviewing you) an exact preview — see
-   [references/mutations.md](references/mutations.md).
-5. **Cap yourself**: pass `--max-rows`, `--timeout`, `--memory-limit-mb` on
-   queries; the harness may kill you, but the flags fail cleanly.
-
-## Discovery
+## Start every session with these two lines
 
 ```bash
-h5i-db tables market.db --format json          # names, row counts, time ranges
-h5i-db schema market.db trades --format json   # columns, types, time column, sort key
-h5i-db sample market.db trades -n 20           # peek rows
-h5i-db versions market.db trades --format json # commit history with ops + notes
+export H5I_DB_PROFILE=agent      # caps every result; withheld rows spill to Parquet
+h5i-db context market.db --format json
 ```
 
-## Query (read-only, safe)
+`context` answers in one call what `tables`, `schema`, `sample` and `versions`
+answer in a dozen: every table's columns, size, time range and head version,
+which operations policy requires a plan for, and any plan already staged and
+waiting for review. Add `--budget 2000` on a wide catalog; it sheds detail in a
+fixed order and tells you what it dropped.
+
+## Then work in this loop
+
+1. **Query.** `h5i-db query market.db "<sql>" --format json`. Under the agent
+   profile a stderr summary reports `total_rows` and, when the result was
+   truncated, a `full_result_path` holding all of it.
+2. **Read failures, don't guess.** stderr is always
+   `{code, message, retryable, hint, did_you_mean, next_actions}`.
+   `next_actions[].cmd` are runnable commands — prefer them to inventing a fix.
+   Retry only when `retryable` is true. Exit codes: 0 ok · 2 your input · 3
+   version conflict · 4 limit/timeout · 5 corruption (stop and report).
+3. **Preview before you destroy.** Any `delete-range` / `replace-range` takes
+   `--plan`, which stages the change and shows exactly what it touches; a human
+   or a rule applies it. A `policy_violation` is the signal to use that flow,
+   never to look for a way around it. → [references/mutations.md](references/mutations.md)
+4. **Make writes retry-safe.** Pass `--idempotency-key <token>` on any ingest
+   you might repeat. A retry after an ambiguous failure then returns the commit
+   that already happened instead of appending the rows twice.
+
+## Backtesting: let the database withhold the future
+
+Do not filter the future out in SQL — you will forget once, and a leaked
+backtest looks like a good one. Pin the session instead, so no query in it can
+reach past the decision instant:
 
 ```bash
-h5i-db query market.db "SELECT symbol, avg(price) FROM trades GROUP BY symbol" \
-  --format json --max-rows 1000 --timeout 30s
+h5i-db query market.db "<sql>" \
+  --decision-time 2026-07-01T00:00:00Z \   # rows stamped later are unreadable
+  --embargo 1d                             # extra safety gap
 ```
 
-Time-series SQL extensions (time travel via `h5i()`, `asof_join`,
-`time_bucket`, `vwap`, `ewma`, …) are catalogued in
-[references/sql.md](references/sql.md).
+`--as-of <version|snapshot|timestamp>` pins the other axis — which *commits*
+are visible — so a restatement that arrived later stays invisible too.
+→ [references/research-mode.md](references/research-mode.md)
 
-## Ingest
+## Reference
 
-```bash
-h5i-db ingest market.db trades new_ticks.parquet                 # append (default, auto-retries conflicts)
-h5i-db ingest market.db trades snapshot.csv --mode write         # replace the whole table
-```
-
-Appends are strict: input must be time-sorted and start at/after the table's
-max timestamp. Out-of-order data → use `replace-range` or `--mode write`.
-CSV/Parquet/Arrow accepted; `-` reads stdin.
-
-## Going further
-
-- [references/sql.md](references/sql.md) — the SQL extension catalogue
-  (time travel, ASOF joins, bucketing, finance aggregates) and query stats.
-- [references/mutations.md](references/mutations.md) — the plan/apply
-  preview flow for destructive changes, snapshots, restore, verify, vacuum.
-- [references/python.md](references/python.md) — the `h5i_db` Python API in
-  four lines.
+[SQL extensions](references/sql.md) (time travel, ASOF joins, `time_bucket`,
+`vwap`, `ewma`) · [mutations and safety net](references/mutations.md) ·
+[research mode and leakage](references/research-mode.md) ·
+[Python](references/python.md)
