@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/api/results-and-plans.html">
   <link rel="icon" type="image/png" href="../_static/logo.png">
   <link rel="apple-touch-icon" href="../_static/logo.png">
 
@@ -16,6 +17,7 @@
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="QueryResult &amp; MutationPlan · h5i-db docs">
   <meta property="og:description" content="Converting query results to Arrow, pandas, and Polars; previewing and applying mutation plans.">
+  <meta property="og:url" content="https://db.h5i.dev/api/results-and-plans.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="QueryResult &amp; MutationPlan · h5i-db docs">
@@ -58,6 +60,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html" class="active">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -103,17 +106,17 @@ timezone). Zero-copy.</p>
 </code></pre></div><div class="api-body">
 
 </div></section><h2 id="mutationplan">MutationPlan<a class="headerlink" href="#mutationplan" title="Permanent link">#</a></h2>
-<p>A previewable, not-yet-published mutation — returned by
+<p>A previewable, not-yet-published mutation, returned by
 <a href="database.html#databaseplan_replace_range"><code>plan_replace_range</code> / <code>plan_delete_range</code></a>
 and <a href="database.html#databaselist_plans"><code>list_plans</code></a>. The staged segments
 already exist on disk; publishing is a metadata-only atomic swap.</p>
 <div class="highlight"><pre><span></span><code><span class="n">plan</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">t0_us</span><span class="p">,</span> <span class="n">t1_us</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;strip bad ticks&quot;</span><span class="p">)</span>
 
 <span class="n">plan</span><span class="o">.</span><span class="n">summary</span>            <span class="c1"># {&quot;rows_affected&quot;: 12481, &quot;segments_reused&quot;: 127, …}</span>
-<span class="n">plan</span><span class="o">.</span><span class="n">before_sample</span>      <span class="c1"># pyarrow.Table — rows as they are now</span>
-<span class="n">plan</span><span class="o">.</span><span class="n">after_sample</span>       <span class="c1"># pyarrow.Table — rows as they would become</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">before_sample</span>      <span class="c1"># pyarrow.Table of rows as they are now</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">after_sample</span>       <span class="c1"># pyarrow.Table of rows as they would become</span>
 
-<span class="n">plan</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>            <span class="c1"># publish — or plan.discard()</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>            <span class="c1"># publish (or plan.discard())</span>
 </code></pre></div>
 
 <section class="api-member"><h3 id="attributes">Attributes<a class="headerlink" href="#attributes" title="Permanent link">#</a></h3><div class="api-body">
@@ -121,7 +124,7 @@ already exist on disk; publishing is a metadata-only atomic swap.</p>
 <dt><code>table</code> (<code>str</code>)</dt>
 <dd>Table the plan targets.</dd>
 <dt><code>plan_id</code> (<code>str</code>)</dt>
-<dd>UUID — also usable from the CLI (<code>h5i-db plan apply …</code>) and the review UI.</dd>
+<dd>UUID, also usable from the CLI (<code>h5i-db plan apply …</code>) and the review UI.</dd>
 <dt><code>summary</code> (<code>dict</code>)</dt>
 <dd>Machine-readable impact: affected rows, segments rewritten vs. reused.</dd>
 <dt><code>raw</code> (<code>dict</code>)</dt>
@@ -130,36 +133,36 @@ already exist on disk; publishing is a metadata-only atomic swap.</p>
 </div></section><section class="api-member"><h3 id="mutationplanbefore_sample"><code><span class="api-name">MutationPlan</span><span class="api-dot">.</span><span class="api-name">before_sample</span></code><a class="headerlink" href="#mutationplanbefore_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">before_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
 </code></pre></div><div class="api-body">
 
-<p>Property — a sample of the affected rows <strong>before</strong> the mutation, or <code>None</code>
-when the plan carries no sample.</p>
+<p>A property holding a sample of the affected rows <strong>before</strong> the mutation, or
+<code>None</code> when the plan carries no sample.</p>
 </div></section><section class="api-member"><h3 id="mutationplanafter_sample"><code><span class="api-name">MutationPlan</span><span class="api-dot">.</span><span class="api-name">after_sample</span></code><a class="headerlink" href="#mutationplanafter_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">after_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
 </code></pre></div><div class="api-body">
 
-<p>Property — the same rows <strong>after</strong> the mutation would apply.</p>
+<p>A property holding the same rows <strong>after</strong> the mutation would apply.</p>
 </div></section><section class="api-member"><h3 id="mutationplanapply"><code><span class="api-name">MutationPlan</span><span class="api-dot">.</span><span class="api-name">apply</span></code><a class="headerlink" href="#mutationplanapply" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">apply</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
 </code></pre></div><div class="api-body">
 
 <p>Publish the plan as a new version.</p>
 <p class="api-label">Returns</p>
-<p><code>dict</code> — commit metadata for the new version.</p>
+<p><code>dict</code> with commit metadata for the new version.</p>
 <p class="api-label">Raises</p>
 <dl>
 <dt><code>ConflictError</code></dt>
 <dd>The table head moved since the plan was made. <strong>Re-plan instead of
-retrying</strong> — the plan was computed against a base version that no longer
+retrying</strong>: the plan was computed against a base version that no longer
 reflects reality.</dd>
 </dl>
 </div></section><section class="api-member"><h3 id="mutationplandiscard"><code><span class="api-name">MutationPlan</span><span class="api-dot">.</span><span class="api-name">discard</span></code><a class="headerlink" href="#mutationplandiscard" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">discard</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </code></pre></div><div class="api-body">
 
 <p>Drop the plan; its staged segments become vacuum candidates immediately.
-Abandoned plans (neither applied nor discarded) expire after 7 days — see
+Abandoned plans (neither applied nor discarded) expire after 7 days; see
 <a href="../manual/operations.html#mutation-plan-hygiene">plan hygiene</a>.</p>
 <div class="admonition tip">
 <p class="admonition-title">Policy interaction</p>
 <p>With the <a href="../manual/concepts.html#the-mutation-policy">mutation policy</a>
-gating direct deletes/writes, the plan flow is the <em>only</em> way to mutate —
-which is the point: every destructive change gets a previewed, auditable
+gating direct deletes/writes, the plan flow is the <em>only</em> way to mutate.
+That is the point: every destructive change gets a previewed, auditable
 checkpoint.</p>
 </div></div></section>
     <nav class="page-nav"><a class="prev" href="../api/dataframe.html"><span class="dir">← Previous</span><span class="pn-title">DataFrame builder</span></a><a class="next" href="../api/exceptions.html"><span class="dir">Next →</span><span class="pn-title">Exceptions</span></a></nav>

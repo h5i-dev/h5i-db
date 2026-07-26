@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/installation.html">
   <link rel="icon" type="image/png" href="../_static/logo.png">
   <link rel="apple-touch-icon" href="../_static/logo.png">
 
@@ -16,6 +17,7 @@
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Installation · h5i-db docs">
   <meta property="og:description" content="Install the h5i-db CLI and Python library, or build both from source.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/installation.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Installation · h5i-db docs">
@@ -58,6 +60,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html" class="active">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -70,7 +73,7 @@
 <h1 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">#</a></h1>
 <p>h5i-db ships as two installable artifacts backed by the same Rust core: the
 <code>h5i-db</code> command-line tool and the <code>h5i_db</code> Python library. Install either or
-both — they read and write the same database directories.</p>
+both; they read and write the same database directories.</p>
 <h2 id="cli">CLI<a class="headerlink" href="#cli" title="Permanent link">#</a></h2>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>cargo<span class="w"> </span>install<span class="w"> </span>h5i-db-cli
 <span class="gp">$ </span>h5i-db<span class="w"> </span>--version
@@ -83,13 +86,13 @@ install.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>pip<span class="w"> </span>install<span class="w"> </span>h5i-db
 </code></pre></div>
 
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">h5i_db</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">h5i_db</span><span class="o">.</span><span class="n">__version__</span><span class="p">)</span>
 </code></pre></div>
 
-<p>The wheel bundles the native engine — no separate CLI install needed. The only
-required dependency is <code>pyarrow &gt;= 14</code>; <code>to_pandas()</code> and <code>to_polars()</code> work
-when pandas/Polars are present.</p>
+<p>The wheel bundles the native engine, so no separate CLI install is needed. The
+only required dependency is <code>pyarrow &gt;= 14</code>; <code>to_pandas()</code> and <code>to_polars()</code>
+work when pandas/Polars are present.</p>
 <h2 id="build-from-source">Build from source<a class="headerlink" href="#build-from-source" title="Permanent link">#</a></h2>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/h5i-dev/h5i-db
 <span class="gp">$ </span><span class="nb">cd</span><span class="w"> </span>h5i-db
@@ -102,7 +105,7 @@ when pandas/Polars are present.</p>
 <p class="admonition-title">Filesystem requirements</p>
 <p>Crash-safety relies on POSIX <code>fsync</code> and atomic rename. Keep databases on a
 local filesystem (ext4, xfs, apfs, NTFS). On WSL2 use the Linux side
-(<code>~/data/…</code>), not <code>/mnt/c</code>. Network filesystems are not recommended — see
+(<code>~/data/…</code>), not <code>/mnt/c</code>. Network filesystems are not recommended; see
 the <a href="operations.html#filesystem-caveats">Operations guide</a>.</p>
 </div>
 <h2 id="verifying-the-install">Verifying the install<a class="headerlink" href="#verifying-the-install" title="Permanent link">#</a></h2>

@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/cli.html">
   <link rel="icon" type="image/png" href="../_static/logo.png">
   <link rel="apple-touch-icon" href="../_static/logo.png">
 
@@ -16,6 +17,7 @@
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="CLI reference · h5i-db docs">
   <meta property="og:description" content="Every command, flag, output format, and exit code of the h5i-db command-line tool.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/cli.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="CLI reference · h5i-db docs">
@@ -58,6 +60,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html" class="active">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -104,7 +107,7 @@ no global <code>--db</code> flag).</p>
 </tr>
 <tr>
 <td><code>arrow</code></td>
-<td>Arrow IPC stream on stdout — lossless, pipe into other tools</td>
+<td>Arrow IPC stream on stdout; lossless, pipes into other tools</td>
 </tr>
 </tbody>
 </table></div>
@@ -173,15 +176,15 @@ no global <code>--db</code> flag).</p>
 </tr>
 <tr>
 <td><code>2</code></td>
-<td>User error — bad arguments, bad SQL, missing table</td>
+<td>User error: bad arguments, bad SQL, missing table</td>
 </tr>
 <tr>
 <td><code>3</code></td>
-<td>Conflict — another writer moved the head; usually retryable</td>
+<td>Conflict: another writer moved the head; usually retryable</td>
 </tr>
 <tr>
 <td><code>4</code></td>
-<td>Limit exceeded — <code>--max-rows</code>, <code>--max-bytes</code>, memory budget, timeout</td>
+<td>Limit exceeded: <code>--max-rows</code>, <code>--max-bytes</code>, memory budget, timeout</td>
 </tr>
 <tr>
 <td><code>5</code></td>
@@ -289,7 +292,7 @@ file (exactly one required).</p>
 </tr>
 <tr>
 <td><code>--time-column &lt;col&gt;</code></td>
-<td>Time index column — strongly recommended for time-series tables; forced non-nullable</td>
+<td>Time index column; strongly recommended for time-series tables, and forced non-nullable</td>
 </tr>
 <tr>
 <td><code>--sort-key &lt;cols&gt;</code></td>
@@ -328,7 +331,7 @@ file (exactly one required).</p>
 </tbody>
 </table></div>
 </div></section><section class="api-member"><h3 id="h5i-db-rename"><code><span class="api-qual">h5i-db </span><span class="api-name">rename</span></code><a class="headerlink" href="#h5i-db-rename" title="Permanent link">#</a></h3><div class="api-body">
-<p>Rename a table — a catalog edit, no data moves.</p>
+<p>Rename a table: a catalog edit, no data moves.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>rename<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>trades_raw
 </code></pre></div>
 
@@ -340,8 +343,8 @@ requires <code>--yes</code>:</p>
 
 <div class="admonition danger">
 <p class="admonition-title">Irreversible</p>
-<p><code>drop-table</code> permanently deletes data — it is the one command that
-bypasses versioning. Snapshots protect tables from it; use them.</p>
+<p><code>drop-table</code> permanently deletes data; it is the one command that
+bypasses versioning. Snapshots protect tables from it, so use them.</p>
 </div>
 <hr />
 </div></section><h2 id="reading-querying">Reading &amp; querying<a class="headerlink" href="#reading-querying" title="Permanent link">#</a></h2>
@@ -485,7 +488,7 @@ evidence, and the report says so in <code>notes</code>.</p>
 <hr />
 </div></section><h2 id="writing-data">Writing data<a class="headerlink" href="#writing-data" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="h5i-db-ingest"><code><span class="api-qual">h5i-db </span><span class="api-name">ingest</span></code><a class="headerlink" href="#h5i-db-ingest" title="Permanent link">#</a></h3><div class="api-body">
-<p>Ingest Parquet/CSV/Arrow into a table — from a file, or stdin with <code>-</code>.</p>
+<p>Ingest Parquet/CSV/Arrow into a table, from a file or from stdin with <code>-</code>.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>ingest<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>ticks.parquet
 <span class="gp">$ </span>curl<span class="w"> </span>-s<span class="w"> </span>https://…/ticks.csv<span class="w"> </span><span class="p">|</span><span class="w"> </span>h5i-db<span class="w"> </span>ingest<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>-<span class="w"> </span>--input-format<span class="w"> </span>csv
 </code></pre></div>
@@ -504,7 +507,7 @@ evidence, and the report says so in <code>notes</code>.</p>
 </tr>
 <tr>
 <td><code>--mode &lt;mode&gt;</code></td>
-<td><code>append</code> (default) — strict ordered append; <code>write</code> — replace table contents</td>
+<td><code>append</code> (default) for a strict ordered append; <code>write</code> to replace the table contents</td>
 </tr>
 <tr>
 <td><code>--retries &lt;N&gt;</code></td>
@@ -518,13 +521,13 @@ timezone-less CSV timestamps are applied automatically). CSV assumes a header
 row.</p>
 <div class="admonition note">
 <p class="admonition-title">Arrow over stdin</p>
-<p>Pipe an Arrow IPC <strong>stream</strong>, not an IPC <em>file</em> — a file's random-access
+<p>Pipe an Arrow IPC <strong>stream</strong>, not an IPC <em>file</em>: a file's random-access
 footer can't be consumed from a pipe. h5i-db detects the difference and
 tells you.</p>
 </div>
 </div></section><section class="api-member"><h3 id="h5i-db-restore"><code><span class="api-qual">h5i-db </span><span class="api-name">restore</span></code><a class="headerlink" href="#h5i-db-restore" title="Permanent link">#</a></h3><div class="api-body">
-<p>Make a historical version current. History moves forward — restore commits a
-<em>new</em> version with the old contents.</p>
+<p>Make a historical version current. History only moves forward, so restore
+commits a <em>new</em> version holding the old contents.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>restore<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span><span class="m">42</span><span class="w"> </span>--note<span class="w"> </span><span class="s2">&quot;roll back bad load&quot;</span>
 </code></pre></div>
 
@@ -545,7 +548,7 @@ tells you.</p>
 <tbody>
 <tr>
 <td><code>--start &lt;t&gt;</code></td>
-<td>Range start, <strong>inclusive</strong> — RFC3339, or a raw integer in the column's unit</td>
+<td>Range start, <strong>inclusive</strong>; RFC3339, or a raw integer in the column's unit</td>
 </tr>
 <tr>
 <td><code>--end &lt;t&gt;</code></td>
@@ -566,7 +569,7 @@ tells you.</p>
 </tbody>
 </table></div>
 </div></section><section class="api-member"><h3 id="h5i-db-delete-range"><code><span class="api-qual">h5i-db </span><span class="api-name">delete-range</span></code><a class="headerlink" href="#h5i-db-delete-range" title="Permanent link">#</a></h3><div class="api-body">
-<p>Delete all rows in <code>[start, end)</code> — shorthand for <code>replace-range</code> with no
+<p>Delete all rows in <code>[start, end)</code>, shorthand for <code>replace-range</code> with no
 input. Same <code>--start</code>/<code>--end</code>/<code>--plan</code> flags.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>delete-range<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--start<span class="w"> </span><span class="m">09</span>:30…<span class="w"> </span>--end<span class="w"> </span><span class="m">09</span>:31…<span class="w"> </span>--plan
 <span class="go">{&quot;plan_id&quot;: &quot;5c41…&quot;, &quot;summary&quot;: {&quot;rows_affected&quot;: 12481, &quot;segments_reused&quot;: 127}}</span>
@@ -594,7 +597,7 @@ input. Same <code>--start</code>/<code>--end</code>/<code>--plan</code> flags.</
 </tr>
 <tr>
 <td><code>plan apply &lt;db&gt; &lt;table&gt; &lt;plan-id&gt;</code></td>
-<td>Publish the plan — fails with a conflict if the head moved</td>
+<td>Publish the plan; fails with a conflict if the head moved</td>
 </tr>
 <tr>
 <td><code>plan discard &lt;db&gt; &lt;table&gt; &lt;plan-id&gt;</code></td>
@@ -612,7 +615,7 @@ reviewed plan.</p>
 </code></pre></div>
 
 <p>Keys: <code>direct_append</code>, <code>direct_write</code>, <code>direct_replace</code>, <code>direct_delete</code>,
-<code>direct_restore</code>, <code>direct_compact</code> — each <code>true</code>/<code>false</code>. The update is an
+<code>direct_restore</code>, <code>direct_compact</code>, each <code>true</code>/<code>false</code>. The update is an
 atomic read-modify-write.</p>
 <p>The mutation policy gates <em>who may write directly</em>; the <strong>data policy</strong> below
 gates <em>what data may be written at all</em>.</p>
@@ -697,7 +700,7 @@ verified preserved.</p>
 </tbody>
 </table></div>
 </div></section><section class="api-member"><h3 id="h5i-db-vacuum"><code><span class="api-qual">h5i-db </span><span class="api-name">vacuum</span></code><a class="headerlink" href="#h5i-db-vacuum" title="Permanent link">#</a></h3><div class="api-body">
-<p>Remove unreachable objects — dry run unless <code>--apply</code>.</p>
+<p>Remove unreachable objects, dry run unless <code>--apply</code>.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>vacuum<span class="w"> </span>market.db<span class="w">                    </span><span class="c1"># inspect candidates</span>
 <span class="gp">$ </span>h5i-db<span class="w"> </span>vacuum<span class="w"> </span>market.db<span class="w"> </span>--apply<span class="w">            </span><span class="c1"># actually delete</span>
 </code></pre></div>
@@ -742,7 +745,7 @@ cannot read past its decision instant. Takes about a second.</p>
 </code></pre></div>
 
 </div></section><section class="api-member"><h3 id="h5i-db-ui"><code><span class="api-qual">h5i-db </span><span class="api-name">ui</span></code><a class="headerlink" href="#h5i-db-ui" title="Permanent link">#</a></h3><div class="api-body">
-<p>Launch the local review UI — loopback only.</p>
+<p>Launch the local review UI, loopback only.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>

@@ -11,6 +11,7 @@
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1">
   <meta name="application-name" content="h5i-db">
+  <link rel="canonical" href="https://db.h5i.dev/">
   <link rel="icon" type="image/png" href="/_static/logo.png">
   <link rel="apple-touch-icon" href="/_static/logo.png">
 
@@ -19,12 +20,52 @@
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="h5i-db: High-Performance Analytical Database for Quantitative Finance">
   <meta property="og:description" content="A high-performance analytical database for quantitative finance and time-series workloads, designed for AI agents and written in Rust. Native ASOF joins, OHLCV rollups, manifest pruning, and a versioned, crash-safe storage engine.">
+  <meta property="og:url" content="https://db.h5i.dev/">
   <meta property="og:image" content="https://h5i.dev/_static/logo.png">
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="h5i-db: High-Performance Analytical Database for Quantitative Finance">
   <meta name="twitter:description" content="Polars-class analytics with a real database underneath: DataFusion SQL, native ASOF joins, versioned storage, and previewable mutations. Built in Rust for quant workloads and AI agents.">
+
+  <!-- Structured data. The publisher node points back at h5i.dev's Organization
+       so search engines treat db.h5i.dev as the same entity's docs subdomain. -->
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@graph":[
+    {
+      "@type": "Organization",
+      "@id": "https://h5i.dev/#org",
+      "name": "h5i",
+      "url": "https://h5i.dev/",
+      "logo": {"@type": "ImageObject", "url": "https://h5i.dev/_static/logo.png", "width": 1280, "height": 640},
+      "sameAs": ["https://github.com/h5i-dev/h5i", "https://github.com/h5i-dev/h5i-db"]
+    },
+    {
+      "@type": "WebSite",
+      "@id": "https://db.h5i.dev/#website",
+      "name": "h5i-db",
+      "url": "https://db.h5i.dev/",
+      "description": "Documentation for h5i-db: an embedded, versioned analytical database for quantitative finance and time-series workloads, written in Rust.",
+      "publisher": {"@id": "https://h5i.dev/#org"},
+      "inLanguage": "en"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": "https://db.h5i.dev/#software",
+      "name": "h5i-db",
+      "applicationCategory": "DeveloperApplication",
+      "applicationSubCategory": "Database",
+      "operatingSystem": "Linux, macOS, Windows",
+      "url": "https://db.h5i.dev/",
+      "downloadUrl": "https://github.com/h5i-dev/h5i-db",
+      "programmingLanguage": "Rust",
+      "license": "https://www.apache.org/licenses/LICENSE-2.0",
+      "description": "An embedded, versioned analytical database for quantitative finance and time-series workloads. Runs DataFusion SQL with native ASOF joins, OHLCV/VWAP rollups, time travel, and previewable mutations over immutable, time-sorted Parquet segments, driven from a CLI, Rust, or Python.",
+      "publisher": {"@id": "https://h5i.dev/#org"},
+      "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
+    }
+  ]}
+  </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

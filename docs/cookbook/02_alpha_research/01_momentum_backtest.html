@@ -4,22 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cross-sectional momentum: an honest monthly backtest · h5i-db docs</title>
-  <meta name="description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and - the part most backtest stacks get wrong - a versioned …">
+  <meta name="description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and, the part most backtest stacks get wrong, a versioned …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/02_alpha_research/01_momentum_backtest.html">
   <link rel="icon" type="image/png" href="../../_static/logo.png">
   <link rel="apple-touch-icon" href="../../_static/logo.png">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Cross-sectional momentum: an honest monthly backtest · h5i-db docs">
-  <meta property="og:description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and - the part most backtest stacks get wrong - a versioned …">
+  <meta property="og:description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and, the part most backtest stacks get wrong, a versioned …">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/02_alpha_research/01_momentum_backtest.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Cross-sectional momentum: an honest monthly backtest · h5i-db docs">
-  <meta name="twitter:description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and - the part most backtest stacks get wrong - a versioned …">
+  <meta name="twitter:description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and, the part most backtest stacks get wrong, a versioned …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -57,7 +59,7 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Alpha research</div><ul><li><a href="../../cookbook/02_alpha_research/01_momentum_backtest.html" class="active">Cross-sectional momentum: an honest monthly backtest</a></li><li><a href="../../cookbook/02_alpha_research/02_pairs_trading.html">Pairs trading with a version-pinned data spine</a></li><li><a href="../../cookbook/02_alpha_research/03_ewma_vol_targeting.html">EWMA volatility and vol-targeted position sizing</a></li><li><a href="../../cookbook/02_alpha_research/04_realized_volatility.html">Realized volatility from ticks: signature plots, jumps, overnight risk</a></li><li><a href="../../cookbook/02_alpha_research/05_factor_construction.html">Building a point-in-time factor library</a></li><li><a href="../../cookbook/02_alpha_research/06_event_study.html">Event studies: CARs with ASOF-aligned announcement dates</a></li><li><a href="../../cookbook/02_alpha_research/07_order_flow_imbalance.html">Order flow imbalance: does signed volume predict returns?</a></li><li><a href="../../cookbook/02_alpha_research/08_intraday_seasonality.html">Intraday seasonality: volume U-shape, volatility smile, spread decay</a></li><li><a href="../../cookbook/02_alpha_research/09_lead_lag.html">Lead-lag discovery: cross-correlations on irregular ticks</a></li><li><a href="../../cookbook/02_alpha_research/10_portfolio_rebalancing.html">Portfolio rebalancing with versioned holdings</a></li></ul></div>
   </aside>
@@ -74,7 +76,7 @@
 <h1>Cross-sectional momentum: an honest monthly backtest</h1>
 <p>The classic 12-1 momentum factor, end to end on real prices: signal
 computation as a SQL window query, monthly rebalance dates from
-<code>time_bucket('1mo', ...)</code>, and - the part most backtest stacks get wrong -
+<code>time_bucket('1mo', ...)</code>, and, the part most backtest stacks get wrong,
 a versioned, snapshotted signal table so that six months from now you can
 reproduce <em>exactly</em> what this run saw. The strategy itself is deliberately
 vanilla; the h5i-db-native workflow around it is the point.</p>
@@ -90,7 +92,7 @@ vanilla; the h5i-db-native workflow around it is the point.</p>
 </div>
 <h2 id="1-load-real-prices-into-a-versioned-table">1. Load real prices into a versioned table<a class="headerlink" href="#1-load-real-prices-into-a-versioned-table" title="Permanent link">#</a></h2>
 <p>30 large caps, daily, 2018–2026 (cached Yahoo Finance data). We store only
-what the study needs - <code>ts, symbol, adj_close</code> - with <code>sort_key</code>
+what the study needs (<code>ts, symbol, adj_close</code>) with <code>sort_key</code>
 <code>["ts", "symbol"]</code> so per-symbol window scans stream in order. <code>append</code> is
 strict about that sort key: the input must be ordered by <code>ts</code>, then
 <code>symbol</code> within each timestamp.</p>
@@ -119,8 +121,8 @@ strict about that sort key: the input must be ordered by <code>ts</code>, then
 recent month (short-term reversal). On a trading-day series that is
 <code>lag(px, 21) / lag(px, 252) - 1</code> per symbol. The rebalance grid comes from
 <code>time_bucket('1mo', ts)</code>: the last trading day of each calendar month.
-Joining the two gives the month-end signal panel - no pandas resampling, no
-calendar edge cases.</p>
+Joining the two gives the month-end signal panel, with no pandas resampling
+and no calendar edge cases.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">panel</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    WITH sig AS (</span>
@@ -191,8 +193,8 @@ calendar edge cases.</p>
 </div></div></div></div>
 <h2 id="3-portfolio-construction-and-an-honest-pl">3. Portfolio construction and an honest P&amp;L<a class="headerlink" href="#3-portfolio-construction-and-an-honest-pl" title="Permanent link">#</a></h2>
 <p>With only 30 names a "decile" is 3 stocks, so we long the top 10 and short
-the bottom 10, equal weight - closer to terciles, and less noisy. Discipline
-checklist:</p>
+the bottom 10, equal weight, which is closer to terciles and less noisy.
+Discipline checklist:</p>
 <ul>
 <li><strong>No lookahead</strong>: the signal observed at month-end <em>t</em> earns the return
   from <em>t</em> to <em>t+1</em>. The last month has no forward return and is dropped.</li>
@@ -289,13 +291,13 @@ long-only benchmark is about <em>shape</em>, not level: the benchmark rides the
 <p>The momentum book lands near a <strong>zero Sharpe</strong> here. That is not a bug: 30
 mega caps are a terrible momentum universe (the premium historically lives
 in broader, smaller cross-sections), and 2020–2023 contained brutal momentum
-crashes. Resist the urge to tweak lookbacks until the curve looks good -
-that is how backtests die. Report it as it is.</p>
-<h2 id="5-version-the-signal-the-reproducibility-layer">5. Version the signal - the reproducibility layer<a class="headerlink" href="#5-version-the-signal-the-reproducibility-layer" title="Permanent link">#</a></h2>
+crashes. Resist the urge to tweak lookbacks until the curve looks good; that
+is how backtests die. Report it as it is.</p>
+<h2 id="5-version-the-signal-the-reproducibility-layer">5. Version the signal: the reproducibility layer<a class="headerlink" href="#5-version-the-signal-the-reproducibility-layer" title="Permanent link">#</a></h2>
 <p>The panel that produced these numbers goes back into h5i-db as a <code>signals</code>
 table, and a <strong>named snapshot</strong> pins both <code>prices</code> and <code>signals</code> at this
-exact state. Anyone can later query <code>h5i('signals', 'mom-run-001')</code> - or
-re-read the prices the run saw - even after both tables move on. That is the
+exact state. Anyone can later query <code>h5i('signals', 'mom-run-001')</code>, or
+re-read the prices the run saw, even after both tables move on. That is the
 audit trail a research platform actually needs.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sig_out</span> <span class="o">=</span> <span class="p">(</span>
     <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span>
@@ -391,9 +393,9 @@ audit trail a research platform actually needs.</p>
   into one SQL statement that streams on sorted storage.</li>
 <li>Backtest hygiene is cheap: lag the signal one period, charge turnover,
   drop the unknowable last month. Do it every time.</li>
-<li>The result - near-zero Sharpe for large-cap momentum, ~70% monthly
-  turnover eating 10 bps a side - is the honest one. A universe of 30 mega
-  caps is a demo, not an alpha source.</li>
+<li>The result is the honest one: near-zero Sharpe for large-cap momentum,
+  ~70% monthly turnover eating 10 bps a side. A universe of 30 mega caps is
+  a demo, not an alpha source.</li>
 <li><code>db.snapshot("mom-run-001", ...)</code> pins prices <em>and</em> signals in one named,
   queryable state: <code>h5i('signals', 'mom-run-001')</code> reproduces this run
   forever, no CSV archaeology required.</li>
@@ -404,7 +406,7 @@ audit trail a research platform actually needs.</p>
     <nav class="page-nav"><a class="prev" href="../../cookbook/01_market_data_engineering/08_nbbo_consolidation.html"><span class="dir">← Previous</span><span class="pn-title">NBBO consolidation: best bid/offer across fragmented venues</span></a><a class="next" href="../../cookbook/02_alpha_research/02_pairs_trading.html"><span class="dir">Next →</span><span class="pn-title">Pairs trading with a version-pinned data spine</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-load-real-prices-into-a-versioned-table">1. Load real prices into a versioned table</a></li><li><a href="#2-the-signal-in-one-sql-statement">2. The signal, in one SQL statement</a></li><li><a href="#3-portfolio-construction-and-an-honest-pl">3. Portfolio construction and an honest P&amp;L</a></li><li><a href="#4-equity-curves">4. Equity curves</a></li><li><a href="#5-version-the-signal-the-reproducibility-layer">5. Version the signal - the reproducibility layer</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-load-real-prices-into-a-versioned-table">1. Load real prices into a versioned table</a></li><li><a href="#2-the-signal-in-one-sql-statement">2. The signal, in one SQL statement</a></li><li><a href="#3-portfolio-construction-and-an-honest-pl">3. Portfolio construction and an honest P&amp;L</a></li><li><a href="#4-equity-curves">4. Equity curves</a></li><li><a href="#5-version-the-signal-the-reproducibility-layer">5. Version the signal: the reproducibility layer</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

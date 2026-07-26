@@ -4,22 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Multi-writer coordination: optimistic locking, conflicts, and retries · h5i-db docs</title>
-  <meta name="description" content="An h5i-db database is a directory, and nothing stops two processes - a feed handler and a corrections job, or two teammates&#x27; notebooks - from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
+  <meta name="description" content="An h5i-db database is a directory, and nothing stops two processes (a feed handler and a corrections job, or two teammates&#x27; notebooks) from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts.html">
   <link rel="icon" type="image/png" href="../../_static/logo.png">
   <link rel="apple-touch-icon" href="../../_static/logo.png">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Multi-writer coordination: optimistic locking, conflicts, and retries · h5i-db docs">
-  <meta property="og:description" content="An h5i-db database is a directory, and nothing stops two processes - a feed handler and a corrections job, or two teammates&#x27; notebooks - from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
+  <meta property="og:description" content="An h5i-db database is a directory, and nothing stops two processes (a feed handler and a corrections job, or two teammates&#x27; notebooks) from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Multi-writer coordination: optimistic locking, conflicts, and retries · h5i-db docs">
-  <meta name="twitter:description" content="An h5i-db database is a directory, and nothing stops two processes - a feed handler and a corrections job, or two teammates&#x27; notebooks - from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
+  <meta name="twitter:description" content="An h5i-db database is a directory, and nothing stops two processes (a feed handler and a corrections job, or two teammates&#x27; notebooks) from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -57,9 +59,9 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html" class="active">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_arrival_delta.html">arrival-delta: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html" class="active">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_leakage_check.html">leakage-check: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -72,8 +74,8 @@
 <span class="sep">/</span>
 <span>Multi-writer coordination: optimistic locking, conflicts, and retries</span></div>
 <h1>Multi-writer coordination: optimistic locking, conflicts, and retries</h1>
-<p>An h5i-db database is a directory, and nothing stops two processes - a feed
-handler and a corrections job, or two teammates' notebooks - from opening it
+<p>An h5i-db database is a directory, and nothing stops two processes (a feed
+handler and a corrections job, or two teammates' notebooks) from opening it
 at the same time. h5i-db's answer to concurrent writers is <em>optimistic
 concurrency</em>: every commit can carry an <code>expected_version</code>, and if the table
 head has moved since you read it, the commit is rejected with an explicit
@@ -112,7 +114,7 @@ finally hit the same conflict machinery through the plan/apply mutation flow.</p
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">feed: 21,180 rows</pre></div></div>
 <h2 id="1-two-handles-one-database">1. Two handles, one database<a class="headerlink" href="#1-two-handles-one-database" title="Permanent link">#</a></h2>
-<p><code>writer_b</code> opens the <em>same</em> directory - think of it as a second process.
+<p><code>writer_b</code> opens the <em>same</em> directory; think of it as a second process.
 Commits made through one handle are immediately visible through the other:
 both handles read the same manifest on disk, there is no per-handle cache of
 the table head to go stale.</p>
@@ -125,7 +127,7 @@ the table head to go stale.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">head seen by A: v1, by B: v1</pre></div></div>
 <h2 id="2-a-stale-expected_version-fails-loudly">2. A stale <code>expected_version</code> fails loudly<a class="headerlink" href="#2-a-stale-expected_version-fails-loudly" title="Permanent link">#</a></h2>
-<p>B reads the head (v1), plans to append - but before it does, A commits
+<p>B reads the head (v1) and plans to append, but before it does, A commits
 another chunk. B's <code>append(..., expected_version=1)</code> is now a compare-and-
 swap against a head that no longer exists, and h5i-db rejects it. Note the
 error is machine-readable: <code>.code</code> for dispatch, <code>.retryable</code> telling you
@@ -144,7 +146,7 @@ this is safe to retry, <code>.hint</code> for the operator.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">code      = version_conflict
 retryable = True
 hint      = re-read the head of &quot;trades&quot; and retry against it; pure appends rebase safely (the CLI and Python bindings already auto-retry those)</pre></div></div>
-<p>Nothing was written - B's rows are not in the table, and the version chain
+<p>Nothing was written: B's rows are not in the table, and the version chain
 is untouched. Contrast this with "last writer wins" storage (plain Parquet
 directories, CSV drops), where B's write would have clobbered or interleaved
 with A's and nobody would know until reconciliation.</p>
@@ -173,12 +175,12 @@ CAS-retry loop you would write against any optimistic-concurrency store.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">B committed v3 on attempt 1; rows_total=6,000</pre></div></div>
 <h2 id="4-three-threads-racing-on-one-feed">4. Three threads racing on one feed<a class="headerlink" href="#4-three-threads-racing-on-one-feed" title="Permanent link">#</a></h2>
 <p>Now the stress test: the rest of the feed is split into 9 time-contiguous
-chunks, and three writer threads - each with its <strong>own</strong> <code>Database</code> handle -
+chunks, and three writer threads, each with its <strong>own</strong> <code>Database</code> handle,
 race to ingest them. Coordination is done <em>entirely</em> through the CAS: each
 thread derives "which chunk is next" from the committed head sequence and
 appends it with <code>expected_version=head</code>. When two threads pick the same
 chunk, exactly one commit lands; the loser gets <code>ConflictError</code>, re-reads
-the head, and moves on to the next chunk. No locks, no queue - the version
+the head, and moves on to the next chunk. No locks, no queue: the version
 chain is the queue.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">N_CHUNKS</span> <span class="o">=</span> <span class="mi">9</span>
 <span class="n">base_rows</span> <span class="o">=</span> <span class="mi">6_000</span>  <span class="c1"># rows already committed in sections 1-3</span>
@@ -224,7 +226,7 @@ chain is the queue.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">9 chunks x 1,520 rows for the race</pre><pre>{&#x27;writer-1&#x27;: {&#x27;commits&#x27;: 9, &#x27;conflicts&#x27;: 0},
  &#x27;writer-0&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1},
  &#x27;writer-2&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1}}</pre></div></div>
-<p>Which thread lands which chunk varies run to run - but the <em>outcome</em> is
+<p>Which thread lands which chunk varies run to run, but the <em>outcome</em> is
 deterministic: every chunk committed exactly once, in order, and the version
 chain is linear. Verify no rows were lost or duplicated:</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">rows_after</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">writer_a</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))</span>
@@ -256,7 +258,7 @@ version chain: v0..v12, strictly linear</pre></div></div>
 <p>The previewable-mutation flow (<code>plan_delete_range</code> → inspect → <code>apply</code>) is
 CAS-guarded too: a plan is built against a specific base version, and
 <code>apply()</code> refuses if the head has moved since. Here A plans to delete a
-window of suspect prints, but B commits fresh data before A applies -
+window of suspect prints, but B commits fresh data before A applies,
 exactly the race you want caught when a feed and an ops job share a table.</p>
 <p>Range arguments are raw <strong>microseconds</strong> (the <code>ts</code> column's unit), and the
 end bound is exclusive.</p>
@@ -280,7 +282,7 @@ end bound is exclusive.</p>
 
 apply failed - code=version_conflict, retryable=True
 hint = re-read the head of &quot;trades&quot; and retry against it; pure appends rebase safely (the CLI and Python bindings already auto-retry those)</pre></div></div>
-<p>The stale plan is dead - but re-planning is cheap, and the second plan is
+<p>The stale plan is dead, but re-planning is cheap, and the second plan is
 built against the <em>new</em> head, so its preview reflects B's late chunk too.
 That is the point of the CAS: you re-decide with current facts, instead of
 blindly mutating a table that changed under you.</p>
@@ -303,17 +305,17 @@ blindly mutating a table that changed under you.</p>
   &#x27;note&#x27;: &#x27;drop suspect open prints (re-planned)&#x27;}]</pre></div></div>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
-<li>Multiple <code>Database</code> handles on one path are first-class - commits through
+<li>Multiple <code>Database</code> handles on one path are supported: commits through
   one handle are immediately visible to the others, and the version chain
   stays linear no matter who writes.</li>
 <li><code>expected_version</code> turns <code>append</code> into a compare-and-swap. A stale write
-  raises <code>ConflictError</code> with <code>.code</code> / <code>.retryable</code> / <code>.hint</code> - an explicit,
+  raises <code>ConflictError</code> with <code>.code</code> / <code>.retryable</code> / <code>.hint</code>: an explicit,
   retryable failure instead of a silent lost update.</li>
 <li>The retry loop is five lines: re-read head, re-append, bounded attempts.
   Three racing threads coordinated through nothing but the CAS ingested a
   chunked feed with zero lost rows.</li>
 <li><code>plan.apply()</code> is guarded by the same mechanism: plans bind to a base
-  version, and a moved head forces a re-plan - your preview can never be
+  version, and a moved head forces a re-plan, so your preview can never be
   stale at apply time.</li>
 <li>Explicit conflict beats last-writer-wins for shared research/production
   tables: the failure mode is a retry, not a reconciliation break.</li>

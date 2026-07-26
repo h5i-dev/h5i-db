@@ -3,23 +3,25 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Maintenance: verify, compact, vacuum - keeping a versioned store healthy · h5i-db docs</title>
-  <meta name="description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates - manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
+  <title>Maintenance: verify, compact, and vacuum a versioned store · h5i-db docs</title>
+  <meta name="description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/00_fundamentals/08_maintenance.html">
   <link rel="icon" type="image/png" href="../../_static/logo.png">
   <link rel="apple-touch-icon" href="../../_static/logo.png">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
-  <meta property="og:title" content="Maintenance: verify, compact, vacuum - keeping a versioned store healthy · h5i-db docs">
-  <meta property="og:description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates - manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
+  <meta property="og:title" content="Maintenance: verify, compact, and vacuum a versioned store · h5i-db docs">
+  <meta property="og:description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/00_fundamentals/08_maintenance.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Maintenance: verify, compact, vacuum - keeping a versioned store healthy · h5i-db docs">
-  <meta name="twitter:description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates - manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
+  <meta name="twitter:title" content="Maintenance: verify, compact, and vacuum a versioned store · h5i-db docs">
+  <meta name="twitter:description" content="A versioned database makes an unusual bargain: it never overwrites data, so it accumulates manifests, segments, history. That is the feature. But it means three maintenance questions need honest answers:">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -57,9 +59,9 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html" class="active">Maintenance: verify, compact, vacuum - keeping a versioned store healthy</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html" class="active">Maintenance: verify, compact, and vacuum a versioned store</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -70,19 +72,19 @@
 <span class="sep">/</span>
 <span>Fundamentals</span>
 <span class="sep">/</span>
-<span>Maintenance: verify, compact, vacuum - keeping a versioned store healthy</span></div>
-<h1>Maintenance: verify, compact, vacuum - keeping a versioned store healthy</h1>
+<span>Maintenance: verify, compact, and vacuum a versioned store</span></div>
+<h1>Maintenance: verify, compact, and vacuum a versioned store</h1>
 <p>A versioned database makes an unusual bargain: it never overwrites data, so
-it accumulates - manifests, segments, history. That is the feature. But it
+it accumulates manifests, segments, history. That is the feature. But it
 means three maintenance questions need honest answers:</p>
 <ol>
 <li><strong>Is the data intact?</strong> <code>verify()</code> walks the manifest checksum chain;
    <code>verify(deep=True)</code> re-checksums every stored byte.</li>
 <li><strong>Why did queries get slower?</strong> Streaming ingestion leaves many small
-   Parquet segments; <code>compact()</code> merges them into one - as a new version.</li>
+   Parquet segments; <code>compact()</code> merges them into one, as a new version.</li>
 <li><strong>Where did my disk go, and what can I get back?</strong> <code>vacuum()</code> reclaims
-   <em>unreferenced</em> objects only. We test - rather than assume - what that
-   means for old versions.</li>
+   <em>unreferenced</em> objects only. We test what that means for old versions
+   rather than assuming it.</li>
 </ol>
 <p>The dataset is deliberately mistreated: a week of ticks appended in 150
 tiny commits, the way an unbatched feed writer would.</p>
@@ -114,8 +116,8 @@ tiny commits, the way an unbatched feed writer would.</p>
 </div>
 <h2 id="1-simulate-an-unbatched-writer-150-tiny-commits">1. Simulate an unbatched writer: 150 tiny commits<a class="headerlink" href="#1-simulate-an-unbatched-writer-150-tiny-commits" title="Permanent link">#</a></h2>
 <p>Every commit writes a manifest and at least one segment. 150 appends of
-~2,000 rows leave the table with 150 small Parquet files - each one a file
-open, a footer parse, and a merge step for every query that follows.</p>
+~2,000 rows leave the table with 150 small Parquet files; each one is a
+file open, a footer parse, and a merge step for every query that follows.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">20_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
 <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
 
@@ -131,12 +133,12 @@ open, a footer parse, and a merge step for every query that follows.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">313,164 rows across 150 segments, 2.4 MiB of live data, db dir = 11.3 MiB</pre></div></div>
 <h2 id="2-verify-the-checksum-chain">2. <code>verify()</code>: the checksum chain<a class="headerlink" href="#2-verify-the-checksum-chain" title="Permanent link">#</a></h2>
-<p>Shallow <code>verify</code> checks the table's manifest chain - each manifest commits
+<p>Shallow <code>verify</code> checks the table's manifest chain: each manifest commits
 to its predecessor and to every segment it references, so a truncated
 file, a lost commit, or a tampered manifest breaks the chain. It reads
 metadata only (<code>bytes_checked: 0</code>), so it is cheap enough to run on every
 open. <code>deep=True</code> additionally re-reads and re-checksums every segment
-byte - the periodic bit-rot audit, priced accordingly.</p>
+byte, the periodic bit-rot audit, priced accordingly.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;shallow:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;deep   :&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">deep</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
 </pre></div>
@@ -147,7 +149,7 @@ signed for.</p>
 <h2 id="3-compact-undo-the-segment-sprawl">3. <code>compact()</code>: undo the segment sprawl<a class="headerlink" href="#3-compact-undo-the-segment-sprawl" title="Permanent link">#</a></h2>
 <p>Time a representative aggregation against the 150-segment table, compact,
 and time it again. Compaction rewrites the <em>same rows</em> into one
-well-sized segment and commits the result as a new version - history is
+well-sized segment and commits the result as a new version; history is
 untouched, so this is safe to run whenever ingestion leaves debris.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">QUERY</span> <span class="o">=</span> <span class="s2">&quot;&quot;&quot;</span>
 <span class="s2">    SELECT time_bucket(&#39;5m&#39;, ts) AS bar, symbol,</span>
@@ -167,7 +169,7 @@ untouched, so this is safe to run whenever ingestion leaves debris.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">{&#x27;sequence&#x27;: 151, &#x27;op&#x27;: &#x27;compact&#x27;, &#x27;segments_total&#x27;: 1, &#x27;segments_added&#x27;: 1}
 
 5m-bar rollup: 22.3 ms on 150 segments -&gt; 14.0 ms on 1 segment  (1.6x)</pre></div></div>
-<p>Two honest observations. First, the speedup here is real but modest -
+<p>Two honest observations. First, the speedup here is real but modest:
 per-segment overhead scales with segment count, so a day of per-tick
 commits (tens of thousands of segments) hurts far more than our 150.
 Second, the directory <em>grew</em>: the 150 old segments are still referenced
@@ -180,10 +182,10 @@ it:</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">db dir after compact: 13.1 MiB
 version 75 still readable: 156,525 rows (head has 313,164)</pre></div></div>
-<h2 id="4-vacuum-what-it-does-and-does-not-reclaim">4. <code>vacuum()</code>: what it does - and does not - reclaim<a class="headerlink" href="#4-vacuum-what-it-does-and-does-not-reclaim" title="Permanent link">#</a></h2>
+<h2 id="4-vacuum-what-it-reclaims-and-what-it-leaves-alone">4. <code>vacuum()</code>: what it reclaims, and what it leaves alone<a class="headerlink" href="#4-vacuum-what-it-reclaims-and-what-it-leaves-alone" title="Permanent link">#</a></h2>
 <p>The natural fear is that vacuum trades history for disk. Test it instead
-of assuming: a dry run (<code>apply=False</code>) with <code>grace_seconds=0</code> - the most
-aggressive setting - right after compacting.</p>
+of assuming: a dry run (<code>apply=False</code>) with <code>grace_seconds=0</code>, the most
+aggressive setting, right after compacting.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;scanned_objects&#x27;: 306,
@@ -194,13 +196,13 @@ aggressive setting - right after compacting.</p>
 <p><strong>Zero candidates.</strong> Every one of those 151 segments is referenced by some
 version's manifest, and vacuum only ever collects <em>unreferenced</em> objects:
 staging files from discarded mutation plans, debris from interrupted
-ingests. In this build, vacuum never prunes version history - every
+ingests. In this build, vacuum never prunes version history; every
 version stays readable no matter how aggressively you vacuum. Retention
 is a policy decision it refuses to make implicitly, which is the correct
 default for anything auditors may ask about.</p>
-<p>So let's manufacture the garbage vacuum <em>does</em> exist for: stage a
-replace plan (which writes its repaired segment to storage immediately)
-and then discard it. The staged segment is now referenced by nothing.</p>
+<p>So manufacture the garbage vacuum <em>does</em> exist for: stage a replace plan
+(which writes its repaired segment to storage immediately) and then
+discard it. The staged segment is now referenced by nothing.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">lo</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 15:00:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
 <span class="n">hi</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 16:00:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
 <span class="n">window</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">time_start</span><span class="o">=</span><span class="n">lo</span><span class="p">,</span> <span class="n">time_end</span><span class="o">=</span><span class="n">hi</span><span class="p">)</span>
@@ -216,8 +218,8 @@ dry run, grace_seconds=0   : {&#x27;scanned_objects&#x27;: 307, &#x27;candidates
 <p>The default one-hour grace period hides the orphan: vacuum will not touch
 young files, because a file that looks unreferenced <em>right now</em> might be
 part of a commit another process is seconds away from publishing. Only
-<code>grace_seconds=0</code> - safe here, since nothing else is writing - exposes
-the discarded plan's segment as a candidate. Reclaim it for real:</p>
+<code>grace_seconds=0</code> (safe here, since nothing else is writing) exposes the
+discarded plan's segment as a candidate. Reclaim it for real:</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">size_before</span> <span class="o">=</span> <span class="n">du_mb</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">path</span><span class="p">)</span>
 <span class="n">result</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
@@ -236,7 +238,7 @@ db dir: 15.01 MiB -&gt; 13.13 MiB</pre></div></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">all 152 versions still readable after vacuum; deep verify clean: True</pre></div></div>
 <h2 id="5-snapshots-named-checksummed-pins">5. Snapshots: named, checksummed pins<a class="headerlink" href="#5-snapshots-named-checksummed-pins" title="Permanent link">#</a></h2>
 <p>Since vacuum never eats history here, snapshots are not a defensive
-necessity - their maintenance role is different. <code>snapshot(name)</code> records
+necessity; their maintenance role is different. <code>snapshot(name)</code> records
 the head version of chosen tables <em>plus the manifest checksum</em> under a
 durable name: a read point humans can cite ("the EOD cut") and an
 integrity anchor you can later re-verify against. Pending mutation plans
@@ -269,7 +271,8 @@ manifest checksum: b267bcbb2daf43ee…</pre><div class="nb-html"><div>
 </div></div></div></div>
 <h2 id="a-maintenance-cadence-that-works">A maintenance cadence that works<a class="headerlink" href="#a-maintenance-cadence-that-works" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>Every open / hourly</strong>: shallow <code>verify</code> - metadata-only, effectively free.</li>
+<li><strong>Every open / hourly</strong>: shallow <code>verify</code>, metadata-only and effectively
+  free.</li>
 <li><strong>After each ingestion session</strong>: <code>compact</code> tables that streamed in as
   many small commits (recipe 07's batch-size guidance reduces the need).</li>
 <li><strong>Daily, off-hours</strong>: <code>vacuum(apply=False)</code>, review the candidate list,
@@ -285,13 +288,13 @@ manifest checksum: b267bcbb2daf43ee…</pre><div class="nb-html"><div>
 <li>Small commits are a <em>query</em> tax, not just a storage tax: <code>compact()</code>
   merged 150 segments into 1 as an ordinary new version, with measurable
   speedup and zero history lost.</li>
-<li><code>vacuum()</code> collects unreferenced objects only - discarded plan staging,
+<li><code>vacuum()</code> collects unreferenced objects only: discarded plan staging,
   interrupted-write debris. We verified that even <code>grace_seconds=0,
-  apply=True</code> leaves every historical version readable: history pruning is
-  simply not something vacuum does in this build.</li>
+  apply=True</code> leaves every historical version readable, because history
+  pruning is simply not something vacuum does in this build.</li>
 <li>The grace period is crash-safety for concurrent writers; zero it only in
   single-writer maintenance windows.</li>
-<li>Snapshots are named, checksummed read points - the citable artifact for
+<li>Snapshots are named, checksummed read points: the citable artifact for
   EOD cuts and attestations, not a vacuum workaround.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
@@ -300,7 +303,7 @@ manifest checksum: b267bcbb2daf43ee…</pre><div class="nb-html"><div>
     <nav class="page-nav"><a class="prev" href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html"><span class="dir">← Previous</span><span class="pn-title">Streaming appends and tail(): a live feed on a versioned store</span></a><a class="next" href="../../cookbook/01_market_data_engineering/01_ohlcv_bars.html"><span class="dir">Next →</span><span class="pn-title">OHLCV bars from tick data</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-simulate-an-unbatched-writer-150-tiny-commits">1. Simulate an unbatched writer: 150 tiny commits</a></li><li><a href="#2-verify-the-checksum-chain">2. verify(): the checksum chain</a></li><li><a href="#3-compact-undo-the-segment-sprawl">3. compact(): undo the segment sprawl</a></li><li><a href="#4-vacuum-what-it-does-and-does-not-reclaim">4. vacuum(): what it does - and does not - reclaim</a></li><li><a href="#5-snapshots-named-checksummed-pins">5. Snapshots: named, checksummed pins</a></li><li><a href="#a-maintenance-cadence-that-works">A maintenance cadence that works</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-simulate-an-unbatched-writer-150-tiny-commits">1. Simulate an unbatched writer: 150 tiny commits</a></li><li><a href="#2-verify-the-checksum-chain">2. verify(): the checksum chain</a></li><li><a href="#3-compact-undo-the-segment-sprawl">3. compact(): undo the segment sprawl</a></li><li><a href="#4-vacuum-what-it-reclaims-and-what-it-leaves-alone">4. vacuum(): what it reclaims, and what it leaves alone</a></li><li><a href="#5-snapshots-named-checksummed-pins">5. Snapshots: named, checksummed pins</a></li><li><a href="#a-maintenance-cadence-that-works">A maintenance cadence that works</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

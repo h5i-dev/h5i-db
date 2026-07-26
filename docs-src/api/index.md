@@ -1,6 +1,6 @@
 ---
 title: Overview
-description: The h5i_db Python library — install, the five-minute tour, data interchange, and error handling.
+description: "The h5i_db Python library: install, the five-minute tour, data interchange, and error handling."
 order: 0
 ---
 
@@ -66,7 +66,7 @@ db.close()                                    # or use `with h5i_db.Database(...
   <a class="card" href="../cookbook/">
     <span class="card-no">TUTORIALS</span>
     <span class="card-title">Cookbook</span>
-    <span class="card-desc">36 executed notebooks that put the API to work — fundamentals, market data, alpha research, and risk.</span>
+    <span class="card-desc">37 executed notebooks that put the API to work: fundamentals, market data, alpha research, and risk.</span>
   </a>
 </div>
 
@@ -87,8 +87,8 @@ no type fidelity loss.
 ## Error handling
 
 Every failure raises a subclass of `h5i_db.H5iError` carrying the same
-structured envelope the CLI prints: `.code` (stable string), `.hint`
-(actionable), `.retryable` (worth retrying?).
+structured envelope the CLI prints: `.code` (stable string), `.hint` (what to
+try next), `.retryable` (whether a retry can help).
 
 ```python
 try:
@@ -98,7 +98,7 @@ except h5i_db.TimeoutError:
 except h5i_db.LimitError as e:
     print(e.code)                         # "limit_exceeded"
 except h5i_db.ConflictError:
-    ...                                   # retryable — another writer won the race
+    ...                                   # retryable: another writer won the race
 ```
 
 See [Exceptions](exceptions.html) for the full hierarchy and code table.

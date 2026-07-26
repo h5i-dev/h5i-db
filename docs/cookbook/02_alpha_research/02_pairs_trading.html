@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/02_alpha_research/02_pairs_trading.html">
   <link rel="icon" type="image/png" href="../../_static/logo.png">
   <link rel="apple-touch-icon" href="../../_static/logo.png">
 
@@ -16,6 +17,7 @@
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Pairs trading with a version-pinned data spine · h5i-db docs">
   <meta property="og:description" content="A cointegration pair strategy on real prices: scan candidate pairs with an Engle-Granger test, build a rolling hedge ratio, compute the spread z-score in SQL with h5i-db&#x27;s window functions, and backtest with lagged …">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/02_alpha_research/02_pairs_trading.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Pairs trading with a version-pinned data spine · h5i-db docs">
@@ -57,7 +59,7 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Alpha research</div><ul><li><a href="../../cookbook/02_alpha_research/01_momentum_backtest.html">Cross-sectional momentum: an honest monthly backtest</a></li><li><a href="../../cookbook/02_alpha_research/02_pairs_trading.html" class="active">Pairs trading with a version-pinned data spine</a></li><li><a href="../../cookbook/02_alpha_research/03_ewma_vol_targeting.html">EWMA volatility and vol-targeted position sizing</a></li><li><a href="../../cookbook/02_alpha_research/04_realized_volatility.html">Realized volatility from ticks: signature plots, jumps, overnight risk</a></li><li><a href="../../cookbook/02_alpha_research/05_factor_construction.html">Building a point-in-time factor library</a></li><li><a href="../../cookbook/02_alpha_research/06_event_study.html">Event studies: CARs with ASOF-aligned announcement dates</a></li><li><a href="../../cookbook/02_alpha_research/07_order_flow_imbalance.html">Order flow imbalance: does signed volume predict returns?</a></li><li><a href="../../cookbook/02_alpha_research/08_intraday_seasonality.html">Intraday seasonality: volume U-shape, volatility smile, spread decay</a></li><li><a href="../../cookbook/02_alpha_research/09_lead_lag.html">Lead-lag discovery: cross-correlations on irregular ticks</a></li><li><a href="../../cookbook/02_alpha_research/10_portfolio_rebalancing.html">Portfolio rebalancing with versioned holdings</a></li></ul></div>
   </aside>
@@ -76,9 +78,10 @@
 Engle-Granger test, build a rolling hedge ratio, compute the spread z-score
 <em>in SQL</em> with h5i-db's window functions, and backtest with lagged signals
 and costs. The h5i-db twist: prices are loaded in two commits, so at the end
-we re-run the whole pipeline against <code>h5i('prices', v_early)</code> - the exact
-table an earlier study would have seen - and show that results are pinned to
-a data version, not to whatever the vendor file happens to contain today.</p>
+we re-run the whole pipeline against <code>h5i('prices', v_early)</code>, the exact
+table an earlier study would have seen, and show that results are pinned to
+a data version rather than to whatever the vendor file happens to contain
+today.</p>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
 <span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
@@ -123,7 +126,7 @@ atomic commit; <code>versions()</code> keeps both forever.</p>
 <p>Three economically sensible candidates from the universe: KO/PEP, GS/JPM,
 CVX/XOM. We pull log adjusted closes with a plain SQL scan and run the
 Engle-Granger test (<code>statsmodels.coint</code>) on each. Correlated is not
-cointegrated - the p-value tests whether the <em>spread</em> is stationary, which
+cointegrated: the p-value tests whether the <em>spread</em> is stationary, which
 is what mean reversion actually needs.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">statsmodels.tsa.stattools</span> <span class="kn">import</span> <span class="n">coint</span>
 
@@ -188,13 +191,13 @@ is what mean reversion actually needs.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<p>Only CVX/XOM clears a 5% threshold on this sample - KO/PEP, the textbook
+<p>Only CVX/XOM clears a 5% threshold on this sample; KO/PEP, the textbook
 pair, does not (their return correlation is high but the spread trends).
-That is a typical scan outcome and worth internalizing: most "obvious"
-pairs fail the stationarity test. We trade CVX/XOM.</p>
+That is a typical scan outcome: most "obvious" pairs fail the stationarity
+test. We trade CVX/XOM.</p>
 <h2 id="3-rolling-hedge-ratio-and-the-spread">3. Rolling hedge ratio and the spread<a class="headerlink" href="#3-rolling-hedge-ratio-and-the-spread" title="Permanent link">#</a></h2>
 <p>The hedge ratio is a rolling 252-day OLS beta of log XOM on log CVX
-(rolling cov/var - same thing, vectorized). The spread
+(rolling cov/var, the same thing, vectorized). The spread
 <code>log(XOM) - beta*log(CVX)</code> and its beta go into their own h5i table so the
 signal step can run in SQL, and so the spread series itself is versioned
 alongside the prices that produced it.</p>
@@ -227,7 +230,7 @@ alongside the prices that produced it.</p>
 <p>The trading signal is the spread's z-score against a 60-day window. h5i-db
 gives us <code>rolling_avg(x, ts, n)</code> sugar for the mean and a standard
 <code>stddev(...) OVER (... ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)</code> for the
-dispersion - one query, streaming over sorted storage, no pandas
+dispersion: one query, streaming over sorted storage, with no pandas
 <code>rolling()</code> needed until the stateful backtest itself.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">zs</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
@@ -282,13 +285,14 @@ dispersion - one query, streaming over sorted storage, no pandas
 </table>
 </div></div></div></div>
 <h2 id="5-backtest-enter-at-z-2-exit-at-zero-crossing">5. Backtest: enter at |z| &gt; 2, exit at zero-crossing<a class="headerlink" href="#5-backtest-enter-at-z-2-exit-at-zero-crossing" title="Permanent link">#</a></h2>
-<p>The entry/exit rule is stateful, so we run a small explicit loop (2k rows -
+<p>The entry/exit rule is stateful, so we run a small explicit loop (2k rows,
 instant). Hygiene:</p>
 <ul>
-<li>positions are decided on <strong>yesterday's z</strong> (<code>shift(1)</code>) - no lookahead;</li>
+<li>positions are decided on <strong>yesterday's z</strong> (<code>shift(1)</code>), so no lookahead;</li>
 <li>daily P&amp;L uses the <strong>lagged</strong> hedge ratio:
-  <code>pos[t-1] * (dlog XOM - beta[t-1] * dlog CVX)</code> - the return of the book
-  you actually held, not of a spread whose beta silently rebalanced itself;</li>
+  <code>pos[t-1] * (dlog XOM - beta[t-1] * dlog CVX)</code>, the return of the book
+  you actually held rather than of a spread whose beta silently rebalanced
+  itself;</li>
 <li>costs: 10 bps per leg on notional traded, so a round turn on the pair
   costs ~<code>2 * (1 + |beta|) * 10</code> bps.</li>
 </ul>
@@ -348,7 +352,7 @@ max drawdown: -54.9%</pre></div></div>
 <p>A weakly positive Sharpe with deep drawdowns: holding a diverging spread all
 the way back to its mean is exactly how pairs books get hurt. With one pair,
 a borderline p-value and no stop-loss, this is a methodology demo, not a
-strategy - a real book would diversify across many pairs and cap divergence
+strategy; a real book would diversify across many pairs and cap divergence
 risk.</p>
 <h2 id="6-store-the-signal-and-pin-the-run">6. Store the signal and pin the run<a class="headerlink" href="#6-store-the-signal-and-pin-the-run" title="Permanent link">#</a></h2>
 <p>Positions and z-scores go into a <code>signals</code> table, and one snapshot pins
@@ -392,7 +396,7 @@ risk.</p>
 time travel makes this a one-string change: <code>FROM prices</code> becomes
 <code>FROM h5i('prices', v_early)</code>. Running on the pre-2025 version reproduces
 what a 2024 study would have found; running it twice on the same version is
-bit-identical - the property that matters when a vendor restates history
+bit-identical, the property that matters when a vendor restates history
 under your feet.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">run_pipeline</span><span class="p">(</span><span class="n">prices_rel</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Coint p-value + net Sharpe for CVX/XOM from any prices relation.&quot;&quot;&quot;</span>
@@ -481,14 +485,14 @@ under your feet.</p>
 </table>
 </div></div></div></div>
 <p>The pre-2025 run sees a different sample (different p-value, different
-Sharpe) - and re-running on that pinned version is exactly reproducible.
+Sharpe), and re-running on that pinned version is exactly reproducible.
 "Which data did this number come from?" has a precise answer: a version
 integer.</p>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
 <li>Engle-Granger on real data is humbling: of three sensible candidates only
   CVX/XOM was cointegrated at 5%. Correlation is not cointegration.</li>
-<li>The z-score ran entirely in SQL - <code>rolling_avg</code> sugar plus a standard
+<li>The z-score ran entirely in SQL: <code>rolling_avg</code> sugar plus a standard
   <code>stddev ... OVER ROWS</code> window on the stored <code>spread</code> table.</li>
 <li>Backtest honesty: lagged z, lagged hedge ratio in the P&amp;L, per-leg costs.
   The result (modest Sharpe, ugly drawdowns) is what single-pair books look

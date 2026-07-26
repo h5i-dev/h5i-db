@@ -61,7 +61,7 @@ repr(res)    # repr of the underlying Arrow table
 
 ## MutationPlan
 
-A previewable, not-yet-published mutation — returned by
+A previewable, not-yet-published mutation, returned by
 [`plan_replace_range` / `plan_delete_range`](database.html#databaseplan_replace_range)
 and [`list_plans`](database.html#databaselist_plans). The staged segments
 already exist on disk; publishing is a metadata-only atomic swap.
@@ -70,10 +70,10 @@ already exist on disk; publishing is a metadata-only atomic swap.
 plan = db.plan_delete_range("trades", t0_us, t1_us, note="strip bad ticks")
 
 plan.summary            # {"rows_affected": 12481, "segments_reused": 127, …}
-plan.before_sample      # pyarrow.Table — rows as they are now
-plan.after_sample       # pyarrow.Table — rows as they would become
+plan.before_sample      # pyarrow.Table of rows as they are now
+plan.after_sample       # pyarrow.Table of rows as they would become
 
-plan.apply()            # publish — or plan.discard()
+plan.apply()            # publish (or plan.discard())
 ```
 
 ### Attributes
@@ -82,7 +82,7 @@ plan.apply()            # publish — or plan.discard()
 :   Table the plan targets.
 
 `plan_id` (`str`)
-:   UUID — also usable from the CLI (`h5i-db plan apply …`) and the review UI.
+:   UUID, also usable from the CLI (`h5i-db plan apply …`) and the review UI.
 
 `summary` (`dict`)
 :   Machine-readable impact: affected rows, segments rewritten vs. reused.
@@ -96,8 +96,8 @@ plan.apply()            # publish — or plan.discard()
 before_sample -> pyarrow.Table | None
 ```
 
-Property — a sample of the affected rows **before** the mutation, or `None`
-when the plan carries no sample.
+A property holding a sample of the affected rows **before** the mutation, or
+`None` when the plan carries no sample.
 
 ### `MutationPlan.after_sample`
 
@@ -105,7 +105,7 @@ when the plan carries no sample.
 after_sample -> pyarrow.Table | None
 ```
 
-Property — the same rows **after** the mutation would apply.
+A property holding the same rows **after** the mutation would apply.
 
 ### `MutationPlan.apply`
 
@@ -117,13 +117,13 @@ Publish the plan as a new version.
 
 **Returns**
 
-`dict` — commit metadata for the new version.
+`dict` with commit metadata for the new version.
 
 **Raises**
 
 `ConflictError`
 :   The table head moved since the plan was made. **Re-plan instead of
-    retrying** — the plan was computed against a base version that no longer
+    retrying**: the plan was computed against a base version that no longer
     reflects reality.
 
 ### `MutationPlan.discard`
@@ -133,11 +133,11 @@ discard() -> None
 ```
 
 Drop the plan; its staged segments become vacuum candidates immediately.
-Abandoned plans (neither applied nor discarded) expire after 7 days — see
+Abandoned plans (neither applied nor discarded) expire after 7 days; see
 [plan hygiene](../manual/operations.html#mutation-plan-hygiene).
 
 !!! tip "Policy interaction"
     With the [mutation policy](../manual/concepts.html#the-mutation-policy)
-    gating direct deletes/writes, the plan flow is the *only* way to mutate —
-    which is the point: every destructive change gets a previewed, auditable
+    gating direct deletes/writes, the plan flow is the *only* way to mutate.
+    That is the point: every destructive change gets a previewed, auditable
     checkpoint.

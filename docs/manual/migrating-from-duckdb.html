@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/migrating-from-duckdb.html">
   <link rel="icon" type="image/png" href="../_static/logo.png">
   <link rel="apple-touch-icon" href="../_static/logo.png">
 
@@ -16,6 +17,7 @@
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Migrating from DuckDB · h5i-db docs">
   <meta property="og:description" content="Move tables from a .duckdb file into a versioned h5i-db store using DuckDB&#x27;s own Parquet export, plus a SQL dialect and workflow checklist for what changes.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/migrating-from-duckdb.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Migrating from DuckDB · h5i-db docs">
@@ -58,6 +60,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html" class="active">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -68,7 +71,7 @@
 <span class="sep">/</span>
 <span>Migrating from DuckDB</span></div>
 <h1 id="migrating-from-duckdb">Migrating from DuckDB<a class="headerlink" href="#migrating-from-duckdb" title="Permanent link">#</a></h1>
-<p>h5i-db does <strong>not</strong> read <code>.duckdb</code> files directly — and by design. DuckDB's
+<p>h5i-db does <strong>not</strong> read <code>.duckdb</code> files directly, and that is deliberate. DuckDB's
 on-disk format is an internal, engine-versioned block format; a native reader
 would mean tracking DuckDB's internals release by release for a run-once
 operation. Instead, migration goes through the interchange format both engines
@@ -79,9 +82,9 @@ per table.</p>
 <div class="admonition note">
 <p class="admonition-title">Is h5i-db the right destination?</p>
 <p>h5i-db is a <strong>versioned, time-series</strong> store, not a general-purpose OLAP
-engine. It shines when your data has a <strong>time column</strong> and is
-<strong>append-mostly</strong> — market ticks, metrics, event logs — and you want
-version history, time travel, ASOF joins, and crash-safe commits underneath.
+engine. It fits data that has a <strong>time column</strong> and is <strong>append-mostly</strong>
+(market ticks, metrics, event logs) and that you want version history,
+time travel, ASOF joins, and crash-safe commits underneath.
 If you use DuckDB for ad-hoc general analytics, star-schema BI, or heavy
 in-place <code>UPDATE</code>/<code>DELETE</code>, that is not what h5i-db is for. See
 <a href="concepts.html">Core concepts</a>.</p>
@@ -101,12 +104,12 @@ the schema, into a directory:</p>
 </code></pre></div>
 
 <p>Parquet preserves column names, types, and (unlike CSV) timestamp precision and
-nullability — so it is always preferable to CSV for migration.</p>
+nullability, so it is always preferable to CSV for migration.</p>
 <h3 id="2-create-the-table-in-h5i-db">2. Create the table in h5i-db<a class="headerlink" href="#2-create-the-table-in-h5i-db" title="Permanent link">#</a></h3>
-<p>Infer the schema straight from the exported Parquet, and — this is the one step
-with no DuckDB equivalent — <strong>declare the time column</strong>. This is what unlocks
-manifest pruning, streaming rollups, and ASOF joins; pick the column your
-queries filter and order by.</p>
+<p>Infer the schema straight from the exported Parquet, then <strong>declare the time
+column</strong>. That step has no DuckDB equivalent, and it is what turns on manifest
+pruning, streaming rollups, and ASOF joins; pick the column your queries filter
+and order by.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>init<span class="w"> </span>market.db
 <span class="gp">$ </span>h5i-db<span class="w"> </span>create-table<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--like<span class="w"> </span>export_dir/trades.parquet<span class="w"> </span>--time-column<span class="w"> </span>ts
 </code></pre></div>
@@ -136,30 +139,29 @@ version 1 (and up); nothing is destructive, so a mistaken load is one
 <a href="cli.html#h5i-db-restore"><code>restore</code></a> away from undone.</p>
 <div class="admonition tip">
 <p class="admonition-title">Python instead of the CLI</p>
-<p>The same flow works from Python — read the Parquet with <code>pyarrow</code> and
+<p>The same flow works from Python: read the Parquet with <code>pyarrow</code> and
 <code>db.append(table)</code>. DuckDB can hand you Arrow with zero copy via
 <code>duckdb.sql("SELECT * FROM trades").arrow()</code>, which you pass straight to
 <code>db.append("trades", ...)</code>. See the <a href="quickstart.html">Quickstart</a>.</p>
 </div>
 <hr />
 <h2 id="sql-dialect-what-ports-and-what-changes">SQL dialect: what ports and what changes<a class="headerlink" href="#sql-dialect-what-ports-and-what-changes" title="Permanent link">#</a></h2>
-<p>The query engine is <a href="sql.html">DataFusion</a>, so standard analytical SQL — joins,
+<p>The query engine is <a href="sql.html">DataFusion</a>, so standard analytical SQL (joins,
 CTEs, window functions, <code>date_trunc</code>, <code>stddev</code>, <code>corr</code>,
-<code>approx_percentile_cont</code>, <code>INTERVAL</code> arithmetic — moves over unchanged. String
-literals are single-quoted; identifiers are case-insensitive. The differences
-worth knowing:</p>
+<code>approx_percentile_cont</code>, <code>INTERVAL</code> arithmetic) moves over unchanged. String
+literals are single-quoted; identifiers are case-insensitive. What differs:</p>
 <h3 id="ports-cleanly">Ports cleanly<a class="headerlink" href="#ports-cleanly" title="Permanent link">#</a></h3>
 <ul>
-<li><strong><code>time_bucket(...)</code></strong> — h5i-db adopts DuckDB/TimescaleDB semantics
+<li><strong><code>time_bucket(...)</code></strong>: h5i-db adopts DuckDB/TimescaleDB semantics
   deliberately, so bucketed rollups port as-is.</li>
-<li><strong>ASOF joins</strong> — supported, and semantically differential-tested against
+<li><strong>ASOF joins</strong>: supported, and semantically differential-tested against
   DuckDB as the oracle (ties, NULLs, strict/non-strict). The syntax differs
-  slightly — <code>ASOF JOIN … MATCH_CONDITION</code> or the <code>asof_join(...)</code> table
+  slightly, using <code>ASOF JOIN … MATCH_CONDITION</code> or the <code>asof_join(...)</code> table
   function; see the <a href="sql.html">SQL reference</a>.</li>
 <li>Standard aggregates, window functions, and scalar date/time functions.</li>
 </ul>
 <h3 id="needs-rewriting">Needs rewriting<a class="headerlink" href="#needs-rewriting" title="Permanent link">#</a></h3>
-<p>DuckDB-specific extensions have no DataFusion equivalent — rewrite these:</p>
+<p>DuckDB-specific extensions have no DataFusion equivalent, so rewrite these:</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -200,8 +202,8 @@ worth knowing:</p>
 </table></div>
 <h3 id="time-travel-is-different-syntax">Time travel is different syntax<a class="headerlink" href="#time-travel-is-different-syntax" title="Permanent link">#</a></h3>
 <p>DuckDB's <code>AT (VERSION =&gt; …)</code> is rejected by its native storage. In h5i-db, time
-travel is first-class — read any past version with the <code>h5i()</code> table function or
-the CLI/<code>--version</code> flag:</p>
+travel is part of the query surface: read any past version with the <code>h5i()</code>
+table function or the CLI's <code>--version</code> flag:</p>
 <div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="k">count</span><span class="p">(</span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span><span class="w">   </span><span class="c1">-- the table as of version 1</span>
 </code></pre></div>
 
@@ -211,7 +213,7 @@ the CLI/<code>--version</code> flag:</p>
 <ul>
 <li><strong>Mutations are previewable, not free-form DML.</strong> There is no ad-hoc
   <code>UPDATE</code>/<code>DELETE</code> mid-query. Range deletes and updates go through a
-  <strong>plan → apply</strong> gate you can inspect (and policy can require approval for) —
+  <strong>plan → apply</strong> gate you can inspect (and policy can require approval for):
   <code>plan_delete_range(...).apply()</code> in Python, the mutation verbs on the CLI. See
   <a href="concepts.html">Core concepts</a>.</li>
 <li><strong>Writes are commits.</strong> Each <code>ingest</code> is an atomic, immutable version. There
@@ -219,7 +221,7 @@ the CLI/<code>--version</code> flag:</p>
   version if a load was wrong.</li>
 <li><strong>Sessions see a consistent snapshot.</strong> <code>FROM trades</code> is snapshot-bound when
   the session opens, so every query in a session sees one consistent set of
-  versions — use <code>h5i('trades', N)</code> to reach across versions explicitly.</li>
+  versions; use <code>h5i('trades', N)</code> to reach across versions explicitly.</li>
 </ul>
 <hr />
 <h2 id="type-mapping-notes">Type mapping notes<a class="headerlink" href="#type-mapping-notes" title="Permanent link">#</a></h2>
@@ -245,7 +247,8 @@ O(1) reads of any historical <a href="concepts.html">version</a>, previewable an
 policy-gated mutations, crash-safe-by-construction commits, and time-series
 operators (<code>vwap</code>, <code>ewma</code>, gapfill/resample, sort-free ASOF) that run on
 declared-sorted, immutable segments. That structure is also why OHLCV+VWAP
-rollups and ASOF joins are faster here than on DuckDB-over-Parquet — see the
+rollups and ASOF joins are faster here than on DuckDB-over-Parquet; the numbers
+are in the
 <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md">benchmark results</a>.</p>
     <nav class="page-nav"><a class="prev" href="../manual/quickstart.html"><span class="dir">← Previous</span><span class="pn-title">Quickstart</span></a><a class="next" href="../manual/concepts.html"><span class="dir">Next →</span><span class="pn-title">Core concepts</span></a></nav>
   </article>

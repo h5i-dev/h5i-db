@@ -27,7 +27,7 @@ no global `--db` flag).
 | `json` | One JSON array of row objects; explicit nulls; empty result is `[]` |
 | `jsonl` | One compact JSON object per row per line |
 | `csv` | With header row; empty result still emits the header |
-| `arrow` | Arrow IPC stream on stdout — lossless, pipe into other tools |
+| `arrow` | Arrow IPC stream on stdout; lossless, pipes into other tools |
 
 ### Errors and exit codes
 
@@ -62,9 +62,9 @@ Exit codes are stable and branchable:
 | Code | Meaning |
 |---|---|
 | `0` | Success (including broken pipe from `… \| head`) |
-| `2` | User error — bad arguments, bad SQL, missing table |
-| `3` | Conflict — another writer moved the head; usually retryable |
-| `4` | Limit exceeded — `--max-rows`, `--max-bytes`, memory budget, timeout |
+| `2` | User error: bad arguments, bad SQL, missing table |
+| `3` | Conflict: another writer moved the head; usually retryable |
+| `4` | Limit exceeded: `--max-rows`, `--max-bytes`, memory budget, timeout |
 | `5` | Internal error |
 
 Diagnostics volume is controlled with `RUST_LOG` (default `warn`).
@@ -141,7 +141,7 @@ $ h5i-db create-table market.db bars \
 |---|---|
 | `--schema <json>` | Explicit schema. Types: `int8..int64`, `uint8..uint64`, `float32/float64`, `utf8`, `bool`, `timestamp_s/ms/us/ns` (UTC), `date32`, `date64`. Aliases accepted: `int`→int32, `long`/`bigint`→int64, `float`→float32, `double`→float64, `string`/`str`/`text`→utf8, `boolean`→bool, `date`→date32, `timestamp`→timestamp_ns. `nullable` defaults to `true`. |
 | `--like <file>` | Infer the schema from a Parquet/CSV/Arrow file |
-| `--time-column <col>` | Time index column — strongly recommended for time-series tables; forced non-nullable |
+| `--time-column <col>` | Time index column; strongly recommended for time-series tables, and forced non-nullable |
 | `--sort-key <cols>` | Comma-separated sort key (defaults to the time column) |
 | `--target-segment-mb <N>` | Target segment size in MiB of in-memory data (default 128) |
 
@@ -166,7 +166,7 @@ Show the first rows of a table.
 
 ### `h5i-db rename`
 
-Rename a table — a catalog edit, no data moves.
+Rename a table: a catalog edit, no data moves.
 
 ```console
 $ h5i-db rename market.db trades trades_raw
@@ -182,8 +182,8 @@ $ h5i-db drop-table market.db scratch --yes
 ```
 
 !!! danger "Irreversible"
-    `drop-table` permanently deletes data — it is the one command that
-    bypasses versioning. Snapshots protect tables from it; use them.
+    `drop-table` permanently deletes data; it is the one command that
+    bypasses versioning. Snapshots protect tables from it, so use them.
 
 ---
 
@@ -296,7 +296,7 @@ evidence, and the report says so in `notes`.
 
 ### `h5i-db ingest`
 
-Ingest Parquet/CSV/Arrow into a table — from a file, or stdin with `-`.
+Ingest Parquet/CSV/Arrow into a table, from a file or from stdin with `-`.
 
 ```console
 $ h5i-db ingest market.db trades ticks.parquet
@@ -306,7 +306,7 @@ $ curl -s https://…/ticks.csv | h5i-db ingest market.db trades - --input-forma
 | Flag | Meaning |
 |---|---|
 | `--input-format <fmt>` | `auto` (default) \| `parquet` \| `csv` \| `arrow`. Auto uses the file extension, or sniffs leading bytes on stdin |
-| `--mode <mode>` | `append` (default) — strict ordered append; `write` — replace table contents |
+| `--mode <mode>` | `append` (default) for a strict ordered append; `write` to replace the table contents |
 | `--retries <N>` | Retry appends on version conflicts (default 5; safe for pure appends) |
 
 Plus the [shared write flags](#shared-write-flags). Input batches are
@@ -315,14 +315,14 @@ timezone-less CSV timestamps are applied automatically). CSV assumes a header
 row.
 
 !!! note "Arrow over stdin"
-    Pipe an Arrow IPC **stream**, not an IPC *file* — a file's random-access
+    Pipe an Arrow IPC **stream**, not an IPC *file*: a file's random-access
     footer can't be consumed from a pipe. h5i-db detects the difference and
     tells you.
 
 ### `h5i-db restore`
 
-Make a historical version current. History moves forward — restore commits a
-*new* version with the old contents.
+Make a historical version current. History only moves forward, so restore
+commits a *new* version holding the old contents.
 
 ```console
 $ h5i-db restore market.db trades 42 --note "roll back bad load"
@@ -340,7 +340,7 @@ $ h5i-db replace-range market.db trades \
 
 | Flag | Meaning |
 |---|---|
-| `--start <t>` | Range start, **inclusive** — RFC3339, or a raw integer in the column's unit |
+| `--start <t>` | Range start, **inclusive**; RFC3339, or a raw integer in the column's unit |
 | `--end <t>` | Range end, **exclusive** |
 | `--input <file>` | Replacement data (or `-` for stdin); **omit to delete the range** |
 | `--input-format <fmt>` | As in `ingest` |
@@ -348,7 +348,7 @@ $ h5i-db replace-range market.db trades \
 
 ### `h5i-db delete-range`
 
-Delete all rows in `[start, end)` — shorthand for `replace-range` with no
+Delete all rows in `[start, end)`, shorthand for `replace-range` with no
 input. Same `--start`/`--end`/`--plan` flags.
 
 ```console
@@ -368,7 +368,7 @@ Manage previewable-mutation plans (created by `--plan` above).
 |---|---|
 | `plan list <db> <table>` | Pending plans: `plan_id`, `op`, `base_version`, `created_at`, `expired`, summary |
 | `plan show <db> <table> <plan-id>` | Full plan JSON on stdout; before/after row samples on stderr |
-| `plan apply <db> <table> <plan-id>` | Publish the plan — fails with a conflict if the head moved |
+| `plan apply <db> <table> <plan-id>` | Publish the plan; fails with a conflict if the head moved |
 | `plan discard <db> <table> <plan-id>` | Drop the plan; staged segments become vacuumable |
 
 Plans expire after 7 days; see
@@ -385,7 +385,7 @@ $ h5i-db policy set market.db direct_delete=false direct_write=false
 ```
 
 Keys: `direct_append`, `direct_write`, `direct_replace`, `direct_delete`,
-`direct_restore`, `direct_compact` — each `true`/`false`. The update is an
+`direct_restore`, `direct_compact`, each `true`/`false`. The update is an
 atomic read-modify-write.
 
 The mutation policy gates *who may write directly*; the **data policy** below
@@ -441,7 +441,7 @@ verified preserved.
 
 ### `h5i-db vacuum`
 
-Remove unreachable objects — dry run unless `--apply`.
+Remove unreachable objects, dry run unless `--apply`.
 
 ```console
 $ h5i-db vacuum market.db                    # inspect candidates
@@ -481,7 +481,7 @@ $ h5i-db demo --dir ./scratch --keep      # keep the database it builds
 
 ### `h5i-db ui`
 
-Launch the local review UI — loopback only.
+Launch the local review UI, loopback only.
 
 | Flag | Meaning |
 |---|---|

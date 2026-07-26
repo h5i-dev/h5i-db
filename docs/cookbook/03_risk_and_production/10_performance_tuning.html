@@ -4,22 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Performance tuning: pruning, projection, commit granularity, caches · h5i-db docs</title>
-  <meta name="description" content="h5i-db stores each table as immutable, time-sorted Parquet segments under a versioned manifest. That layout dictates what makes queries fast - and what quietly makes them slow:">
+  <meta name="description" content="h5i-db stores each table as immutable, time-sorted Parquet segments under a versioned manifest. That layout dictates what makes queries fast, and what quietly makes them slow:">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/03_risk_and_production/10_performance_tuning.html">
   <link rel="icon" type="image/png" href="../../_static/logo.png">
   <link rel="apple-touch-icon" href="../../_static/logo.png">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Performance tuning: pruning, projection, commit granularity, caches · h5i-db docs">
-  <meta property="og:description" content="h5i-db stores each table as immutable, time-sorted Parquet segments under a versioned manifest. That layout dictates what makes queries fast - and what quietly makes them slow:">
+  <meta property="og:description" content="h5i-db stores each table as immutable, time-sorted Parquet segments under a versioned manifest. That layout dictates what makes queries fast, and what quietly makes them slow:">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/03_risk_and_production/10_performance_tuning.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Performance tuning: pruning, projection, commit granularity, caches · h5i-db docs">
-  <meta name="twitter:description" content="h5i-db stores each table as immutable, time-sorted Parquet segments under a versioned manifest. That layout dictates what makes queries fast - and what quietly makes them slow:">
+  <meta name="twitter:description" content="h5i-db stores each table as immutable, time-sorted Parquet segments under a versioned manifest. That layout dictates what makes queries fast, and what quietly makes them slow:">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -57,9 +59,9 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html" class="active">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_arrival_delta.html">arrival-delta: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html" class="active">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_leakage_check.html">leakage-check: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -73,17 +75,17 @@
 <span>Performance tuning: pruning, projection, commit granularity, caches</span></div>
 <h1>Performance tuning: pruning, projection, commit granularity, caches</h1>
 <p>h5i-db stores each table as immutable, time-sorted Parquet segments under a
-versioned manifest. That layout dictates what makes queries fast - and what
+versioned manifest. That layout dictates what makes queries fast, and what
 quietly makes them slow:</p>
 <ol>
-<li><strong>time-range pruning</strong> - the manifest records each segment's time range,
+<li><strong>time-range pruning</strong>: the manifest records each segment's time range,
    so time predicates skip whole segments before any I/O;</li>
-<li><strong>column projection</strong> - Parquet is columnar; touch fewer columns, read
+<li><strong>column projection</strong>: Parquet is columnar; touch fewer columns, read
    fewer bytes;</li>
-<li><strong>commit granularity</strong> - every commit writes a manifest and at least one
+<li><strong>commit granularity</strong>: every commit writes a manifest and at least one
    segment; a thousand tiny commits means a thousand tiny files until you
    <code>compact()</code>;</li>
-<li><strong>caches</strong> - the first query after opening a database pays for segment
+<li><strong>caches</strong>: the first query after opening a database pays for segment
    footer/metadata reads that later queries do not.</li>
 </ol>
 <p>We measure all four on a ~3M-row tick table, then close with the resource
@@ -115,7 +117,7 @@ lesson.</p>
 </pre></div>
 </div>
 <h2 id="1-the-dataset-10-days-of-ticks-one-commit-per-day">1. The dataset: 10 days of ticks, one commit per day<a class="headerlink" href="#1-the-dataset-10-days-of-ticks-one-commit-per-day" title="Permanent link">#</a></h2>
-<p>~3M rows appended day-by-day - the batching pattern h5i-db expects (one
+<p>~3M rows appended day-by-day, the batching pattern h5i-db expects (one
 commit per publication event, not per row and not one monolith). Ten
 commits leave roughly one segment per day, which is what gives the time
 predicates below something to prune.</p>
@@ -139,7 +141,7 @@ ten. The one-day scan touches ~10% of the rows and the manifest lets the
 engine skip the other nine segments without opening them. Note the two
 flavors: raw materialization (<code>SELECT *</code>) shows pruning at full strength;
 a <code>GROUP BY</code> aggregation is compute-light per row, so its wall-clock gain
-is smaller - pruning saves I/O, not hash-table work.</p>
+is smaller: pruning saves I/O, not hash-table work.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">lo</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-05&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
 <span class="n">hi</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-06&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
 <span class="n">day_pred</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;ts &gt;= to_timestamp_micros(</span><span class="si">{</span><span class="n">lo</span><span class="si">}</span><span class="s2">) AND ts &lt; to_timestamp_micros(</span><span class="si">{</span><span class="n">hi</span><span class="si">}</span><span class="s2">)&quot;</span>
@@ -162,8 +164,8 @@ aggregate:   15.4 ms full -&gt; 11.8 ms one day (1.3x)</pre></div></div>
 <h2 id="3-projection-name-your-columns">3. Projection: name your columns<a class="headerlink" href="#3-projection-name-your-columns" title="Permanent link">#</a></h2>
 <p><code>SELECT *</code> on a 6-column tick table drags symbol/exchange/side strings
 through every operator. Naming the two columns you need reads only their
-Parquet column chunks - the classic columnar win, and the reason
-<code>SELECT *</code> belongs in exploration, not in scheduled jobs.</p>
+Parquet column chunks, the classic columnar win, and the reason
+<code>SELECT *</code> belongs in exploration rather than in scheduled jobs.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">timings_ms</span><span class="p">[</span><span class="s2">&quot;SELECT ts, price&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1e3</span> <span class="o">*</span> <span class="n">bench</span><span class="p">(</span><span class="k">lambda</span><span class="p">:</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT ts, price FROM trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">())</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;SELECT *:         </span><span class="si">{</span><span class="n">timings_ms</span><span class="p">[</span><span class="s1">&#39;SELECT * (10 days)&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> ms&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;SELECT ts, price: </span><span class="si">{</span><span class="n">timings_ms</span><span class="p">[</span><span class="s1">&#39;SELECT ts, price&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> ms &quot;</span>
@@ -171,12 +173,12 @@ Parquet column chunks - the classic columnar win, and the reason
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT *:         140 ms
 SELECT ts, price: 55 ms (2.6x)</pre></div></div>
-<h2 id="4-commit-granularity-and-compact-as-the-antidote">4. Commit granularity - and <code>compact()</code> as the antidote<a class="headerlink" href="#4-commit-granularity-and-compact-as-the-antidote" title="Permanent link">#</a></h2>
+<h2 id="4-commit-granularity-and-compact-as-the-antidote">4. Commit granularity, and <code>compact()</code> as the antidote<a class="headerlink" href="#4-commit-granularity-and-compact-as-the-antidote" title="Permanent link">#</a></h2>
 <p>Every commit is durable: manifest write, fsync, new segment file. Committing
 a day of ticks in 300 micro-batches pays that price 300 times on ingest
 <em>and</em> leaves 300 small segments for every later query to open. <code>compact()</code>
-rewrites them into one segment as a new version - history intact, old
-versions still readable.</p>
+rewrites them into one segment as a new version, with history intact and
+old versions still readable.</p>
 <p>One day of ticks (~300k rows), ingested both ways:</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">day1</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">100_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">43</span><span class="p">)</span>
 
@@ -217,8 +219,8 @@ compact() took 0.85s -&gt; segments_total=1, now 12.6 ms (3.7x recovered)</pre><
 <h2 id="5-cold-vs-warm-the-first-query-pays-the-metadata-bill">5. Cold vs warm: the first query pays the metadata bill<a class="headerlink" href="#5-cold-vs-warm-the-first-query-pays-the-metadata-bill" title="Permanent link">#</a></h2>
 <p>Reopen the database and run the same aggregation twice. The first run reads
 segment footers and builds metadata caches; repeats skip that. On a local
-NVMe the gap is modest - over NFS or object storage it is the difference
-that makes long-lived readers worth keeping around.</p>
+NVMe the gap is modest; over NFS or object storage it is the difference
+that makes long-lived readers pay for themselves.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">db_path</span><span class="p">(</span><span class="s2">&quot;prod_perf&quot;</span><span class="p">))</span>  <span class="c1"># fresh handle, cold caches</span>
 
@@ -270,10 +272,10 @@ don't <code>except Exception</code>.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">max_rows    -&gt; LimitError   code=limit_exceeded hint=None
 timeout     -&gt; TimeoutError code=timeout
 memory_limit-&gt; LimitError   code=limit_exceeded</pre></div></div>
-<h2 id="8-what-the-engine-costs-you-honest-numbers">8. What the engine costs you - honest numbers<a class="headerlink" href="#8-what-the-engine-costs-you-honest-numbers" title="Permanent link">#</a></h2>
+<h2 id="8-what-the-engine-costs-you-honest-numbers">8. What the engine costs you: honest numbers<a class="headerlink" href="#8-what-the-engine-costs-you-honest-numbers" title="Permanent link">#</a></h2>
 <p>Per the design docs, h5i-db's generic scan path carries roughly <strong>20%
-overhead versus querying the same Parquet files with raw DataFusion</strong> -
-the price of version resolution, manifest bookkeeping, and the pruning
+overhead versus querying the same Parquet files with raw DataFusion</strong>, the
+price of version resolution, manifest bookkeeping, and the pruning
 machinery. For that you get time travel, atomic commits and time-series
 operators; if a one-off bulk scan is truly latency-critical, you can always
 point another Parquet reader at a table's segment files. The tuning levers
@@ -290,24 +292,26 @@ that actually move production numbers, in the order to reach for them:</p>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
 <li>Time predicates are the cheapest speedup in the system: the manifest
-  prunes whole segments before I/O - ~8x here on materializing scans
+  prunes whole segments before I/O, ~8x here on materializing scans
   (aggregations gain less; their cost is hash work, not I/O).</li>
 <li>Projection matters on wide tick tables: 2 columns ran ~3x faster than
   <code>SELECT *</code> over 3M rows.</li>
 <li>Commit granularity is a real dial: 300 micro-commits made ingest ~60x
   slower and queries ~3-4x slower than one batched commit; <code>compact()</code>
   wins the query time back in under a second.</li>
-<li>Cold-open cost is paid once per process - long-lived readers amortize it.</li>
+<li>Cold-open cost is paid once per process, so long-lived readers amortize
+  it.</li>
 <li>Guards (<code>timeout</code>, <code>max_rows</code>, <code>memory_limit</code>) turn resource blowups into
-  typed, catchable errors - mandatory for shared boxes and agent access.</li>
+  typed, catchable errors, and they are mandatory for shared boxes and
+  agent access.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>
 </div>
-    <nav class="page-nav"><a class="prev" href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html"><span class="dir">← Previous</span><span class="pn-title">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</span></a><a class="next" href="../../cookbook/03_risk_and_production/11_arrival_delta.html"><span class="dir">Next →</span><span class="pn-title">arrival-delta: which of last night&#x27;s backtests actually held up?</span></a></nav>
+    <nav class="page-nav"><a class="prev" href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html"><span class="dir">← Previous</span><span class="pn-title">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</span></a><a class="next" href="../../cookbook/03_risk_and_production/11_leakage_check.html"><span class="dir">Next →</span><span class="pn-title">leakage-check: which of last night&#x27;s backtests actually held up?</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-dataset-10-days-of-ticks-one-commit-per-day">1. The dataset: 10 days of ticks, one commit per day</a></li><li><a href="#2-time-range-pruning-scan-a-day-not-the-decade">2. Time-range pruning: scan a day, not the decade</a></li><li><a href="#3-projection-name-your-columns">3. Projection: name your columns</a></li><li><a href="#4-commit-granularity-and-compact-as-the-antidote">4. Commit granularity - and compact() as the antidote</a></li><li><a href="#5-cold-vs-warm-the-first-query-pays-the-metadata-bill">5. Cold vs warm: the first query pays the metadata bill</a></li><li><a href="#6-the-scoreboard">6. The scoreboard</a></li><li><a href="#7-resource-guards-production-etiquette">7. Resource guards: production etiquette</a></li><li><a href="#8-what-the-engine-costs-you-honest-numbers">8. What the engine costs you - honest numbers</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-dataset-10-days-of-ticks-one-commit-per-day">1. The dataset: 10 days of ticks, one commit per day</a></li><li><a href="#2-time-range-pruning-scan-a-day-not-the-decade">2. Time-range pruning: scan a day, not the decade</a></li><li><a href="#3-projection-name-your-columns">3. Projection: name your columns</a></li><li><a href="#4-commit-granularity-and-compact-as-the-antidote">4. Commit granularity, and compact() as the antidote</a></li><li><a href="#5-cold-vs-warm-the-first-query-pays-the-metadata-bill">5. Cold vs warm: the first query pays the metadata bill</a></li><li><a href="#6-the-scoreboard">6. The scoreboard</a></li><li><a href="#7-resource-guards-production-etiquette">7. Resource guards: production etiquette</a></li><li><a href="#8-what-the-engine-costs-you-honest-numbers">8. What the engine costs you: honest numbers</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

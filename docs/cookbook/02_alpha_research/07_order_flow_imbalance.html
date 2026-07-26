@@ -4,22 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Order flow imbalance: does signed volume predict returns? · h5i-db docs</title>
-  <meta name="description" content="Order flow imbalance (OFI) - the excess of buyer-initiated over seller-initiated volume - is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
+  <meta name="description" content="Order flow imbalance (OFI), the excess of buyer-initiated over seller-initiated volume, is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance.html">
   <link rel="icon" type="image/png" href="../../_static/logo.png">
   <link rel="apple-touch-icon" href="../../_static/logo.png">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Order flow imbalance: does signed volume predict returns? · h5i-db docs">
-  <meta property="og:description" content="Order flow imbalance (OFI) - the excess of buyer-initiated over seller-initiated volume - is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
+  <meta property="og:description" content="Order flow imbalance (OFI), the excess of buyer-initiated over seller-initiated volume, is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Order flow imbalance: does signed volume predict returns? · h5i-db docs">
-  <meta name="twitter:description" content="Order flow imbalance (OFI) - the excess of buyer-initiated over seller-initiated volume - is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
+  <meta name="twitter:description" content="Order flow imbalance (OFI), the excess of buyer-initiated over seller-initiated volume, is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -57,7 +59,7 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Alpha research</div><ul><li><a href="../../cookbook/02_alpha_research/01_momentum_backtest.html">Cross-sectional momentum: an honest monthly backtest</a></li><li><a href="../../cookbook/02_alpha_research/02_pairs_trading.html">Pairs trading with a version-pinned data spine</a></li><li><a href="../../cookbook/02_alpha_research/03_ewma_vol_targeting.html">EWMA volatility and vol-targeted position sizing</a></li><li><a href="../../cookbook/02_alpha_research/04_realized_volatility.html">Realized volatility from ticks: signature plots, jumps, overnight risk</a></li><li><a href="../../cookbook/02_alpha_research/05_factor_construction.html">Building a point-in-time factor library</a></li><li><a href="../../cookbook/02_alpha_research/06_event_study.html">Event studies: CARs with ASOF-aligned announcement dates</a></li><li><a href="../../cookbook/02_alpha_research/07_order_flow_imbalance.html" class="active">Order flow imbalance: does signed volume predict returns?</a></li><li><a href="../../cookbook/02_alpha_research/08_intraday_seasonality.html">Intraday seasonality: volume U-shape, volatility smile, spread decay</a></li><li><a href="../../cookbook/02_alpha_research/09_lead_lag.html">Lead-lag discovery: cross-correlations on irregular ticks</a></li><li><a href="../../cookbook/02_alpha_research/10_portfolio_rebalancing.html">Portfolio rebalancing with versioned holdings</a></li></ul></div>
   </aside>
@@ -72,16 +74,16 @@
 <span class="sep">/</span>
 <span>Order flow imbalance: does signed volume predict returns?</span></div>
 <h1>Order flow imbalance: does signed volume predict returns?</h1>
-<p>Order flow imbalance (OFI) - the excess of buyer-initiated over
-seller-initiated volume - is the workhorse microstructure signal: strongly
+<p>Order flow imbalance (OFI), the excess of buyer-initiated over
+seller-initiated volume, is the workhorse microstructure signal: strongly
 correlated with contemporaneous price moves, and (in real markets, at short
 horizons) mildly predictive of the next move. This recipe builds both
 flavors on h5i-db:</p>
 <ol>
-<li><strong>trade OFI</strong> - audit signing rules against ground truth (Lee-Ready via
+<li><strong>trade OFI</strong>: audit signing rules against ground truth (Lee-Ready via
    an ASOF join to the prevailing quote, tick test as fallback), sign the
    tape, bucket signed volume per minute,</li>
-<li><strong>quote OFI</strong> (Cont, Kukanov &amp; Stoikov 2014) - order-book pressure from
+<li><strong>quote OFI</strong> (Cont, Kukanov &amp; Stoikov 2014): order-book pressure from
    changes in best bid/ask prices and sizes, via <code>lag()</code> windows,</li>
 <li>an honest look at contemporaneous vs <em>predictive</em> correlation with
    1-minute returns.</li>
@@ -104,7 +106,7 @@ stream and <em>print our own tape off it</em>, the way a matching engine would:
 a random 25% of quote updates trigger a trade 1-50 ms later, buyers lift
 the offer, sellers hit the bid, with the true aggressor side recorded.
 The tape is price-consistent with the quotes by construction, and every
-signing rule below can be scored against ground truth - a luxury real
+signing rule below can be scored against ground truth, a luxury real
 data never affords.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">quotes</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_quotes</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
 <span class="n">q</span> <span class="o">=</span> <span class="n">quotes</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
@@ -201,15 +203,15 @@ asof_join validated against pandas.merge_asof
   tick_sign: 72.4% accuracy vs true aggressor side (377 classified)</pre></div></div>
 <p>On a price-consistent tape, Lee-Ready earns its reputation: the quote rule
 is nearly perfect (errors come from quotes that updated in the 1-50 ms
-between quote and print), while the pure tick test trails well behind -
+between quote and print), while the pure tick test trails well behind,
 the same ordering seen on real TAQ, where Lee-Ready scores ~85%.</p>
 <h2 id="3-sign-the-full-tape">3. Sign the full tape<a class="headerlink" href="#3-sign-the-full-tape" title="Permanent link">#</a></h2>
 <p>The audited quote rule would need the trade-quote ASOF at full scale.
 For this recipe the tick test (a pure <code>lag()</code> window over <code>trades</code>, no
 alignment needed) is accurate enough to carry the OFI study, and we keep
 the generator's true side as an oracle upper bound. The signed tape is
-persisted as a first-class table: signing is expensive enough that you
-want it done once, committed, and versioned.</p>
+persisted as its own table: signing is expensive enough that you want it
+done once, committed, and versioned.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">signed</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    WITH t AS (</span>
@@ -344,8 +346,8 @@ imbalance <code>(buys - sells) / total</code>, and the bucket's closing print vi
 <h2 id="5-quote-ofi-cont-et-al">5. Quote OFI (Cont et al.)<a class="headerlink" href="#5-quote-ofi-cont-et-al" title="Permanent link">#</a></h2>
 <p>Book-pressure OFI needs <em>changes</em> at the best: a bid price rising (or size
 growing at an unchanged bid) adds buy pressure; the mirror on the ask side
-subtracts. That is four <code>lag()</code> comparisons per quote - pure SQL window
-machinery - summed per minute, with the bucket's closing mid for returns.</p>
+subtracts. That is four <code>lag()</code> comparisons per quote, pure SQL window
+machinery, summed per minute, with the bucket's closing mid for returns.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">quote_ofi</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    WITH q AS (</span>
@@ -536,7 +538,7 @@ only (<code>shift</code> inside each symbol/day, so no overnight artifacts).</p>
 <ul>
 <li><strong>Quote OFI</strong> shows the textbook contemporaneous link (~0.5-0.6): book
   pressure and same-minute mid moves are near-mechanically related.</li>
-<li><strong>Trade OFI with tick-test signs</strong> also reads ~0.5 contemporaneous -
+<li><strong>Trade OFI with tick-test signs</strong> also reads ~0.5 contemporaneous,
   but the <strong>oracle</strong> row exposes most of that as circular. With <em>true</em>
   aggressor signs the correlation drops to ~0.07: in this market the mid
   is an exogenous random walk, flow has no price impact, and true signed
@@ -544,14 +546,14 @@ only (<code>shift</code> inside each symbol/day, so no overnight artifacts).</p>
   closing print. The tick rule manufactures the rest by deriving signs
   from the very price changes we then correlate against. On real data,
   where flow does move price, the oracle-equivalent number would be
-  solidly positive - the comparison is how you learn to ask.</li>
+  solidly positive; the comparison is how you learn to ask.</li>
 <li><strong>Predictive</strong> correlations sit near zero with a negative tilt for
   trade OFI: bid-ask bounce means a buy-heavy minute tends to close at
-  the ask and mean-revert a touch. Even perfect signs would not help -
+  the ask and mean-revert a touch. Even perfect signs would not help:
   there is no flow-to-future-price causality here to find, and the
   pipeline correctly finds none.</li>
 </ul>
-<p>On real tick data quote OFI does carry short-horizon predictive power -
+<p>On real tick data quote OFI does carry short-horizon predictive power,
 but the reality check applies before calling it alpha: the effect lives at
 seconds-to-minutes horizons in size-constrained depth, and capturing a
 ~1 bp move costs you the spread plus fees. OFI signals are best understood
@@ -562,13 +564,13 @@ strategies.</p>
 <li><code>asof_join(..., 'backward', tolerance)</code> is the prevailing-quote lookup,
   and time-ranged <code>db.read(time_start=, time_end=)</code> carves QA windows in
   O(window). Current-build caveat: keep both ASOF inputs within one
-  storage batch (~8k rows) and assert one output row per left row -
+  storage batch (~8k rows) and assert one output row per left row;
   larger inputs truncate silently. Cross-checking against
   <code>pandas.merge_asof</code> costs three lines and buys certainty.</li>
 <li>Signing rules are CASE expressions over that join plus <code>lag()</code> windows;
   persisting the result as a <code>signed_trades</code> table means the pass runs
   once, and every downstream study reads versioned, committed signs.</li>
-<li>Both OFI flavors reduce to one <code>time_bucket</code> GROUP BY each - with
+<li>Both OFI flavors reduce to one <code>time_bucket</code> GROUP BY each, with
   <code>last_value(... ORDER BY ts)</code> giving bucket closes without self-joins.</li>
 <li>Honest nulls matter: solid contemporaneous correlations alongside
   predictive correlations ≈ 0 (even with oracle signs) is the signature

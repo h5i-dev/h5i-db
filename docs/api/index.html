@@ -4,22 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Overview · h5i-db docs</title>
-  <meta name="description" content="The h5i_db Python library — install, the five-minute tour, data interchange, and error handling.">
+  <meta name="description" content="The h5i_db Python library: install, the five-minute tour, data interchange, and error handling.">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/api/index.html">
   <link rel="icon" type="image/png" href="../_static/logo.png">
   <link rel="apple-touch-icon" href="../_static/logo.png">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Overview · h5i-db docs">
-  <meta property="og:description" content="The h5i_db Python library — install, the five-minute tour, data interchange, and error handling.">
+  <meta property="og:description" content="The h5i_db Python library: install, the five-minute tour, data interchange, and error handling.">
+  <meta property="og:url" content="https://db.h5i.dev/api/index.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Overview · h5i-db docs">
-  <meta name="twitter:description" content="The h5i_db Python library — install, the five-minute tour, data interchange, and error handling.">
+  <meta name="twitter:description" content="The h5i_db Python library: install, the five-minute tour, data interchange, and error handling.">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,6 +60,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html" class="active">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -80,8 +83,8 @@ directly into pyarrow, pandas, and Polars.</p>
 <p>The only required dependency is <code>pyarrow &gt;= 14</code>. <code>to_pandas()</code> /
 <code>to_polars()</code> activate when pandas / Polars are installed.</p>
 <h2 id="the-five-minute-tour">The five-minute tour<a class="headerlink" href="#the-five-minute-tour" title="Permanent link">#</a></h2>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="s2">&quot;market.db&quot;</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
@@ -123,7 +126,7 @@ directly into pyarrow, pandas, and Polars.</p>
   <a class="card" href="../cookbook/">
     <span class="card-no">TUTORIALS</span>
     <span class="card-title">Cookbook</span>
-    <span class="card-desc">36 executed notebooks that put the API to work — fundamentals, market data, alpha research, and risk.</span>
+    <span class="card-desc">37 executed notebooks that put the API to work: fundamentals, market data, alpha research, and risk.</span>
   </a>
 </div>
 
@@ -141,8 +144,8 @@ directly into pyarrow, pandas, and Polars.</p>
 no type fidelity loss.</p>
 <h2 id="error-handling">Error handling<a class="headerlink" href="#error-handling" title="Permanent link">#</a></h2>
 <p>Every failure raises a subclass of <code>h5i_db.H5iError</code> carrying the same
-structured envelope the CLI prints: <code>.code</code> (stable string), <code>.hint</code>
-(actionable), <code>.retryable</code> (worth retrying?).</p>
+structured envelope the CLI prints: <code>.code</code> (stable string), <code>.hint</code> (what to
+try next), <code>.retryable</code> (whether a retry can help).</p>
 <div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
     <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM h5i(&#39;trades&#39;)&quot;</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">max_rows</span><span class="o">=</span><span class="mi">1_000_000</span><span class="p">)</span>
 <span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">TimeoutError</span><span class="p">:</span>
@@ -150,7 +153,7 @@ structured envelope the CLI prints: <code>.code</code> (stable string), <code>.h
 <span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">LimitError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="p">)</span>                         <span class="c1"># &quot;limit_exceeded&quot;</span>
 <span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">ConflictError</span><span class="p">:</span>
-    <span class="o">...</span>                                   <span class="c1"># retryable — another writer won the race</span>
+    <span class="o">...</span>                                   <span class="c1"># retryable: another writer won the race</span>
 </code></pre></div>
 
 <p>See <a href="exceptions.html">Exceptions</a> for the full hierarchy and code table.</p>

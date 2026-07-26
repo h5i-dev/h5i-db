@@ -4,22 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Time travel and versioning: which version did my backtest see? · h5i-db docs</title>
-  <meta name="description" content="Every write to an h5i-db table - append, write, delete, restore - is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is O(1) manifest lookup, not a log replay. For …">
+  <meta name="description" content="Every write to an h5i-db table (append, write, delete, restore) is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is an O(1) manifest lookup, not a log replay. For …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/00_fundamentals/05_time_travel_and_versioning.html">
   <link rel="icon" type="image/png" href="../../_static/logo.png">
   <link rel="apple-touch-icon" href="../../_static/logo.png">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Time travel and versioning: which version did my backtest see? · h5i-db docs">
-  <meta property="og:description" content="Every write to an h5i-db table - append, write, delete, restore - is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is O(1) manifest lookup, not a log replay. For …">
+  <meta property="og:description" content="Every write to an h5i-db table (append, write, delete, restore) is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is an O(1) manifest lookup, not a log replay. For …">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/00_fundamentals/05_time_travel_and_versioning.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Time travel and versioning: which version did my backtest see? · h5i-db docs">
-  <meta name="twitter:description" content="Every write to an h5i-db table - append, write, delete, restore - is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is O(1) manifest lookup, not a log replay. For …">
+  <meta name="twitter:description" content="Every write to an h5i-db table (append, write, delete, restore) is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is an O(1) manifest lookup, not a log replay. For …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -57,9 +59,9 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html" class="active">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html">Maintenance: verify, compact, vacuum - keeping a versioned store healthy</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html" class="active">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html">Maintenance: verify, compact, and vacuum a versioned store</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -72,17 +74,17 @@
 <span class="sep">/</span>
 <span>Time travel and versioning: which version did my backtest see?</span></div>
 <h1>Time travel and versioning: which version did my backtest see?</h1>
-<p>Every write to an h5i-db table - append, write, delete, restore - is an
+<p>Every write to an h5i-db table (append, write, delete, restore) is an
 atomic commit that produces a new immutable version. Old versions are never
-rewritten; reading one is O(1) manifest lookup, not a log replay. For quant
-work this is the difference between "the backtest ran on <em>some</em> state of the
-price file" and "the backtest ran on version 7, committed at 14:02:31 UTC,
-and anyone can re-read exactly that". This recipe covers the full
-versioning surface:</p>
+rewritten; reading one is an O(1) manifest lookup, not a log replay. For
+quant work this is the difference between "the backtest ran on <em>some</em> state
+of the price file" and "the backtest ran on version 7, committed at
+14:02:31 UTC, and anyone can re-read exactly that". This recipe covers the
+full versioning surface:</p>
 <ol>
 <li>the anatomy of <code>versions()</code>,</li>
 <li>three ways to time-travel: version number, commit wall-clock time
-   (<code>as_of</code>), and named snapshot - in Python and in SQL,</li>
+   (<code>as_of</code>), and named snapshot, in Python and in SQL,</li>
 <li>a vendor restatement done as a <code>write()</code> with an audit note, and a SQL
    diff between the two versions,</li>
 <li><code>restore()</code> as a rollback that <em>adds</em> history instead of erasing it.</li>
@@ -97,7 +99,7 @@ versioning surface:</p>
 </pre></div>
 </div>
 <h2 id="1-load-a-daily-price-panel-in-three-tranches">1. Load a daily price panel in three tranches<a class="headerlink" href="#1-load-a-daily-price-panel-in-three-tranches" title="Permanent link">#</a></h2>
-<p>A 120-day, 10-name daily OHLCV panel, appended in three 40-day tranches -
+<p>A 120-day, 10-name daily OHLCV panel, appended in three 40-day tranches,
 the way a real price file grows, one delivery at a time. <code>note=</code> attaches a
 human-readable label to the commit; it shows up in <code>versions()</code> and is the
 cheapest audit trail you will ever build.</p>
@@ -122,7 +124,7 @@ cheapest audit trail you will ever build.</p>
 <code>read</code>/<code>h5i()</code>, <code>op</code> is what happened (<code>create</code>, <code>append</code>, <code>write</code>,
 <code>delete_range</code>, <code>replace_range</code>, <code>restore</code>, <code>compact</code>), <code>committed_at_ns</code>
 is the wall-clock commit time, and <code>rows</code>/<code>bytes</code>/<code>segments</code> describe the
-table <em>as of that version</em> - not the delta.</p>
+table <em>as of that version</em>, not the delta.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">hist</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">))</span>
 <span class="n">hist</span><span class="p">[</span><span class="s2">&quot;committed_at&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">hist</span><span class="p">[</span><span class="s2">&quot;committed_at_ns&quot;</span><span class="p">],</span> <span class="n">utc</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="n">hist</span><span class="p">[[</span><span class="s2">&quot;sequence&quot;</span><span class="p">,</span> <span class="s2">&quot;op&quot;</span><span class="p">,</span> <span class="s2">&quot;committed_at&quot;</span><span class="p">,</span> <span class="s2">&quot;rows&quot;</span><span class="p">,</span> <span class="s2">&quot;segments&quot;</span><span class="p">,</span> <span class="s2">&quot;note&quot;</span><span class="p">]]</span>
@@ -183,11 +185,11 @@ table <em>as of that version</em> - not the delta.</p>
 </div></div></div></div>
 <h2 id="3-three-ways-to-time-travel">3. Three ways to time-travel<a class="headerlink" href="#3-three-ways-to-time-travel" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>By version number</strong> - exact, the one to persist in run metadata.</li>
-<li><strong>By commit time</strong> (<code>as_of</code>, RFC 3339) - "what did we know at 9am?".
+<li><strong>By version number:</strong> exact, and the one to persist in run metadata.</li>
+<li><strong>By commit time</strong> (<code>as_of</code>, RFC 3339): "what did we know at 9am?".
   It resolves to the last version committed at or before that instant.</li>
 <li><strong>In SQL</strong> via the <code>h5i()</code> table function, which accepts either form
-  (and snapshot names, see section 6) - so old and new states can meet in
+  (and snapshot names, see section 6), so old and new states can meet in
   one query.</li>
 </ul>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">v1_rows</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
@@ -248,7 +250,7 @@ as_of 2026-07-23T03:55:37.447296858+00:00: 800 rows</pre><div class="nb-html"><d
 <h2 id="4-a-restatement-and-the-version-it-did-not-destroy">4. A restatement, and the version it did not destroy<a class="headerlink" href="#4-a-restatement-and-the-version-it-did-not-destroy" title="Permanent link">#</a></h2>
 <p>First, a toy "backtest": the annualized mean daily return per symbol,
 computed straight off the live table. We record the head version alongside
-the result - this is the habit the whole recipe is arguing for.</p>
+the result; this is the habit the whole recipe is arguing for.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">backtest_mean_return</span><span class="p">(</span><span class="n">read_point</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
         <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
@@ -301,7 +303,7 @@ the result - this is the habit the whole recipe is arguing for.</p>
 <p>Now the vendor restates day-2 closes (a bad closing auction print, say,
 corrected by +0.25%). The idiomatic move is a <code>write()</code> of the full
 corrected panel with a note: <code>write</code> replaces the table contents <em>as a new
-version</em> - the pre-restatement table is still there, one integer away.</p>
+version</em>, and the pre-restatement table is still there, one integer away.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">df</span> <span class="o">=</span> <span class="n">prices</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 <span class="n">day2</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">()[</span><span class="mi">1</span><span class="p">]</span>
 <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">day2</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">]</span> <span class="o">*=</span> <span class="mf">1.0025</span>
@@ -313,7 +315,7 @@ version</em> - the pre-restatement table is still there, one integer away.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">restatement committed as version 4</pre></div></div>
 <p>What exactly changed? Join the two versions in one SQL statement. No
-export, no second database - <code>h5i()</code> puts both states in the same query.</p>
+export, no second database: <code>h5i()</code> puts both states in the same query.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
     <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
 <span class="s2">    SELECT new.ts, new.symbol,</span>
@@ -424,7 +426,7 @@ export, no second database - <code>h5i()</code> puts both states in the same que
   </tbody>
 </table>
 </div></div></div></div>
-<p>The restatement changes the backtest - slightly, silently, and
+<p>The restatement changes the backtest: slightly, silently, and
 irreversibly if you had overwritten a CSV. Here, re-running against the
 <em>pinned</em> version reproduces the original numbers exactly.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">result_after</span> <span class="o">=</span> <span class="n">backtest_mean_return</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
@@ -440,7 +442,7 @@ irreversibly if you had overwritten a CSV. Here, re-running against the
 max drift, re-run on version 3 : 0.00e+00  (bit-for-bit)</pre></div></div>
 <h2 id="5-restore-rollback-that-adds-history">5. <code>restore()</code>: rollback that adds history<a class="headerlink" href="#5-restore-rollback-that-adds-history" title="Permanent link">#</a></h2>
 <p>Suppose the restatement turns out to have been applied to the wrong day.
-<code>restore(version)</code> makes an old version the new head - as a <em>new commit</em>.
+<code>restore(version)</code> makes an old version the new head, as a <em>new commit</em>.
 Nothing is erased: the bad write stays in the log, attributable and
 diffable, which is exactly what you want when someone asks "who changed
 the price file last Tuesday?".</p>
@@ -515,7 +517,7 @@ the price file last Tuesday?".</p>
 <h2 id="6-named-snapshots-read-points-with-a-name">6. Named snapshots: read points with a name<a class="headerlink" href="#6-named-snapshots-read-points-with-a-name" title="Permanent link">#</a></h2>
 <p>Version numbers are precise but anonymous. <code>snapshot(name)</code> pins the
 current version of chosen tables under a name you can put in a run
-registry, an email, or a compliance report - and query directly from SQL.</p>
+registry, an email, or a compliance report, and query directly from SQL.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;model-run-2026-07-21&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;prices&quot;</span><span class="p">],</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;momentum study, run 42&quot;</span><span class="p">)</span>
 
 <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
@@ -560,8 +562,7 @@ registry, an email, or a compliance report - and query directly from SQL.</p>
   thing being rolled back.</li>
 <li>The habit that pays for all of it: <strong>record the version number next to
   every research result.</strong> Re-running pinned is then bit-for-bit
-  reproducible - see recipe <code>03_risk_and_production/02</code> for the full
-  pattern.</li>
+  reproducible; recipe <code>03_risk_and_production/02</code> has the full pattern.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>

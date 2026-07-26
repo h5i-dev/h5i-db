@@ -34,10 +34,10 @@ GROUP BY "symbol"
 
 !!! note "When to reach for it"
     For a query you write once, SQL is usually shorter and clearer. The
-    builder pays off when queries are **generated** — a factor library
-    sweeping windows and columns in a loop — where f-string SQL means quoting
-    bugs, and when you want a partially-built pipeline you can reuse and
-    extend. Both surfaces stay first-class; `.sql()` is the door between them.
+    builder pays off when queries are **generated** (a factor library sweeping
+    windows and columns in a loop), where f-string SQL means quoting bugs, and
+    when you want a partially-built pipeline you can reuse and extend. Neither
+    surface is second-class; `.sql()` is the door between them.
 
 ## Reading a table
 
@@ -52,13 +52,13 @@ Start a query. Pass at most one read point; passing two raises
 
 | Call | Reads |
 |---|---|
-| `db.table("trades")` | The bare table name — snapshot-bound for the query, so two references to it inside one query always agree |
+| `db.table("trades")` | The bare table name, snapshot-bound for the query, so two references to it inside one query always agree |
 | `db.table("trades", version=42)` | `h5i('trades', 42)` |
-| `db.table("trades", as_of="2026-07-01T00:00:00Z")` | `h5i('trades', '…')` — latest version committed at or before that instant |
+| `db.table("trades", as_of="2026-07-01T00:00:00Z")` | `h5i('trades', '…')`, the latest version committed at or before that instant |
 | `db.table("trades", snapshot="eod-2026-07-18")` | `h5i('trades', 'eod-…')` |
 
 Because pins lower to `h5i()`, a pinned builder query is bound at the source
-exactly like hand-written SQL — including under a research-mode pin.
+exactly like hand-written SQL, including under a research-mode pin.
 
 ## Verbs
 
@@ -77,7 +77,7 @@ a base for several queries.
 | `.unique()` | `SELECT DISTINCT` |
 | `.join(other, on=…, how=…)` | Join two frames |
 | `.join_asof(other, on=…, by=…)` | ASOF join via `asof_join` |
-| `.pipe(fn, *args)` | `fn(frame, *args)` — for reusable helpers |
+| `.pipe(fn, *args)` | `fn(frame, *args)`, for reusable helpers |
 
 Strings are column names wherever an expression is accepted, so
 `.group_by("symbol")` and `.group_by(col("symbol"))` are the same thing.
@@ -96,9 +96,9 @@ SELECT * EXCEPT ("price"), "price" * 2 AS "price"
 FROM "trades"
 ```
 
-The builder never reads the schema — that is what keeps it lazy — so a
-`replace` name that does not exist is caught by the engine, not at build
-time.
+The builder never reads the schema, which is what keeps it lazy, so a
+`replace` name that does not exist is caught by the engine rather than at
+build time.
 
 ### Terminal methods
 
@@ -108,7 +108,7 @@ time.
 | `.to_arrow()` / `.to_pandas()` / `.to_polars()` | The frame, converted |
 | `.sql()` | The generated SQL, as a string |
 | `.explain(analyze=False)` | `EXPLAIN` / `EXPLAIN ANALYZE` of it |
-| `.schema()` | Result schema via a `LIMIT 0` run — no data read |
+| `.schema()` | Result schema via a `LIMIT 0` run; no data read |
 
 `.collect()` takes the same guardrails as `db.sql()`: `max_rows` raises
 `LimitError` as soon as the result exceeds it, and `timeout` raises
@@ -140,7 +140,7 @@ when(col("price") > 100).then(lit(1)).otherwise(lit(0))
 
 !!! note "Operators mean what SQL means"
     Expressions compile to SQL and keep SQL's semantics, not Python's. Most
-    visibly, `/` between two integer columns is **integer** division —
+    visibly, `/` between two integer columns is **integer** division, so
     `col("size") / 4` truncates. Cast for true division:
     `col("size").cast("DOUBLE") / 4`. The rule is deliberate: the same
     expression must not mean one thing here and another in `db.sql()`.
@@ -158,8 +158,8 @@ Aggregates are methods: `.sum()`, `.mean()`, `.min()`, `.max()`, `.count()`,
 `count_star()`, `vwap(price, size)`, `wavg(weight, value)` and
 `time_bucket(interval, ts)` as functions.
 
-A `when(...).then(...)` chain is already a complete expression — a `CASE`
-with no `ELSE` yields NULL — so it can be aliased without `.otherwise()`.
+A `when(...).then(...)` chain is already a complete expression (a `CASE`
+with no `ELSE` yields NULL), so it can be aliased without `.otherwise()`.
 
 The idiomatic OHLCV query, built:
 
@@ -210,8 +210,8 @@ Unlike the [`rolling_avg` SQL sugar](../manual/sql.html), these carry a
 | `.rolling_mean` `.rolling_sum` `.rolling_min` `.rolling_max` | `avg` `sum` `min` `max` |
 | `.rolling_std` `.rolling_var` `.rolling_count` | `stddev` `var_samp` `count` |
 | `.rolling_mad` `.rolling_skew` `.rolling_kurt` | `mad` `skew` `kurt` |
-| `.rolling_rank` | `ts_rank` — percentile of the current value in the window |
-| `.rolling_idxmax` `.rolling_idxmin` | `idxmax` `idxmin` — 1-based position |
+| `.rolling_rank` | `ts_rank`, the percentile of the current value in the window |
+| `.rolling_idxmax` `.rolling_idxmin` | `idxmax` `idxmin`, 1-based position |
 | `.rolling_corr(other, …)` `.rolling_cov(other, …)` | `ts_corr` `ts_cov` |
 | `.ewma(alpha, order_by, partition_by)` | `ewma` |
 
@@ -222,14 +222,14 @@ so they take the bucket to compare within:
 |---|---|
 | `.cs_rank(partition_by)` | `cs_rank(x) OVER (PARTITION BY …)` |
 | `.cs_winsorize(lower, upper, partition_by)` | `cs_winsorize(x, lo, hi) OVER (…)` |
-| `.cs_demean(partition_by)` | `x - avg(x) OVER (…)` — plain SQL |
+| `.cs_demean(partition_by)` | `x - avg(x) OVER (…)`, plain SQL |
 | `.cs_zscore(partition_by)` | `(x - avg(x) OVER (…)) / stddev(x) OVER (…)` |
 
 For a raw window frame, `.over(partition_by=, order_by=, rows=, duration=)`
 applies to a single aggregate, where `rows` is a trailing count or a
 `(preceding, following)` pair with `None` for unbounded. SQL attaches `OVER`
 to one function call, so window each part of a compound expression
-separately — `col("a").sum().over(...) / count_star().over(...)`, not
+separately: `col("a").sum().over(...) / count_star().over(...)`, not
 `(col("a").sum() / count_star()).over(...)`, which is rejected.
 
 ## Joins
@@ -246,7 +246,7 @@ are part of the contract: reach a specific side with
     `SELECT *` over a join of two tables sharing a column name yields both
     copies. Project explicitly to avoid the ambiguity.
 
-Comparing one table at two pinned versions — the "same query across N
+Comparing one table at two pinned versions, the "same query across N
 versions" pattern:
 
 ```python
@@ -285,7 +285,7 @@ join_asof(other, on=None, by=None, direction="backward", tolerance=None,
 For each left row, take the most recent right row at or before it
 (`"backward"`) or the first at or after it (`"forward"`). The result is LEFT
 and 1:1 with the left side. `tolerance` is an integer in the time column's
-raw units — for a `timestamp[us]` column, `5000000` is five seconds.
+raw units; for a `timestamp[us]` column, `5000000` is five seconds.
 
 ```python
 db.table("trades").join_asof(db.table("quotes"), on="ts", by="symbol",
@@ -346,7 +346,7 @@ The generated SQL is deterministic, so it is safe to snapshot-test or diff.
 ## Escape hatch
 
 `sql_expr()` embeds a raw fragment anywhere an expression is accepted. Full
-SQL coverage through builder verbs is deliberately not a goal — reach for
+SQL coverage through builder verbs is deliberately not a goal, so reach for
 this rather than waiting for a method:
 
 ```python

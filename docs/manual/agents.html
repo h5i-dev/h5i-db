@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/agents.html">
   <link rel="icon" type="image/png" href="../_static/logo.png">
   <link rel="apple-touch-icon" href="../_static/logo.png">
 
@@ -16,6 +17,7 @@
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Agents &amp; automation · h5i-db docs">
   <meta property="og:description" content="The machine contract: structured output and errors, stable exit codes, resource limits as flags, and policy-gated review for AI agents and pipelines.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/agents.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Agents &amp; automation · h5i-db docs">
@@ -58,6 +60,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html" class="active">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -70,7 +73,7 @@
 <h1 id="agents-automation">Agents &amp; automation<a class="headerlink" href="#agents-automation" title="Permanent link">#</a></h1>
 <p>h5i-db needs no MCP server or custom protocol to be driven by AI agents,
 schedulers, or CI: agents use the same CLI and Python API as everyone else.
-What makes that safe is a deliberate machine contract — structured output,
+What makes that safe is a deliberate machine contract: structured output,
 structured errors, hard resource limits, and a write path that policy can
 gate behind human review.</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT symbol, vwap(price, size) FROM trades GROUP BY symbol&quot;</span><span class="w"> </span><span class="se">\</span>
@@ -87,11 +90,11 @@ gate behind human review.</p>
 <li><strong>Output</strong>: <code>--format json | jsonl | csv | arrow</code> on every command
   (<a href="cli.html#output-formats">formats</a>). <code>jsonl</code> is the natural choice for
   streaming consumers.</li>
-<li><strong>Errors</strong>: a single JSON envelope on stderr —
+<li><strong>Errors</strong>: a single JSON envelope on stderr,
   <code>{"code", "message", "retryable", "hint"}</code>. <code>code</code> is a stable identifier
   (<code>version_conflict</code>, <code>table_not_found</code>, <code>limit_exceeded</code>, …), <code>retryable</code>
-  says whether backing off and retrying can help, and <code>hint</code> is written to be
-  actionable.</li>
+  says whether backing off and retrying can help, and <code>hint</code> names the next
+  thing to try.</li>
 <li><strong>Exit codes</strong> are stable and branchable: <code>0</code> ok, <code>2</code> user error,
   <code>3</code> conflict, <code>4</code> limit exceeded, <code>5</code> internal
   (<a href="cli.html#errors-and-exit-codes">details</a>).</li>
@@ -121,7 +124,7 @@ gate behind human review.</p>
 <tr>
 <td><code>--max-rows N</code></td>
 <td><code>sql(max_rows=N)</code></td>
-<td>Stop as soon as the result exceeds N rows — a clean <code>limit_exceeded</code> error, never silent truncation</td>
+<td>Stop as soon as the result exceeds N rows, with a clean <code>limit_exceeded</code> error instead of silent truncation</td>
 </tr>
 <tr>
 <td><code>--timeout 30s</code></td>
@@ -162,10 +165,10 @@ was withheld:</p>
 </code></pre></div>
 
 <p>Nothing is lost, only withheld: the rows that did not fit are in that Parquet
-file. <code>H5I_DB_RESULT_DIR</code> moves where those land. Two properties worth relying
-on: output content never depends on whether stdout is a terminal, so a piped
-run produces the same bytes as an interactive one, and an explicit
-<code>--max-bytes</code> you pass yourself remains a hard <code>limit_exceeded</code> error rather
+file. <code>H5I_DB_RESULT_DIR</code> moves where those land. Two properties hold in this
+mode. Output content never depends on whether stdout is a terminal, so a piped
+run produces the same bytes as an interactive one. And an explicit
+<code>--max-bytes</code> you pass yourself stays a hard <code>limit_exceeded</code> error rather
 than a soft truncation.</p>
 <h2 id="policy-gated-review">Policy-gated review<a class="headerlink" href="#policy-gated-review" title="Permanent link">#</a></h2>
 <p>The <a href="concepts.html#the-mutation-policy">mutation policy</a> forces chosen
@@ -188,17 +191,17 @@ violating batch is refused with <code>data_policy_violation</code> before it can
 an agent can't quietly commit malformed rows.</p>
 <h2 id="patterns-that-work">Patterns that work<a class="headerlink" href="#patterns-that-work" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>Idempotent retries.</strong> Appends racing another writer raise
+<li><strong>Idempotent retries:</strong> appends racing another writer raise
   <code>version_conflict</code> (exit 3 / <code>ConflictError</code>, <code>retryable: true</code>). The CLI
   retries pure appends itself (<code>ingest --retries</code>, default 5); in Python,
   <code>append()</code> retries internally as well. For read-modify-write flows, pass
   <code>--expected-version</code> and re-derive on conflict rather than blindly retrying.</li>
-<li><strong>Pin what you read.</strong> Have agents record the version they computed from
+<li><strong>Pin what you read:</strong> have agents record the version they computed from
   (<code>versions</code>, or read via <code>h5i('t', v)</code>), so every downstream artifact is
-  attributable to an exact input state — see the cookbook's
+  attributable to an exact input state. The cookbook works this through in
   <a href="../cookbook/03_risk_and_production/02_reproducible_backtests.html">reproducible backtests</a>
-  and <a href="../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">paper-trading loop</a>.</li>
-<li><strong>Bound the pull, not the loop.</strong> A cutoff applied when the data leaves the
+  and the <a href="../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">paper-trading loop</a>.</li>
+<li><strong>Bound the pull, not the loop:</strong> a cutoff applied when the data leaves the
   database survives the trip into pandas, where nothing else can enforce it.
   <a href="cli.html#point-in-time-reads"><code>query --decision-time &lt;ts&gt;</code></a> hides rows
   stamped later and <code>--as-of</code> pins which commits exist; set
@@ -209,15 +212,15 @@ an agent can't quietly commit malformed rows.</p>
   re-runs a query at both read points and reports how much the answer moved.
   Read <code>vacuous</code> before the number: on a database with no arrival history the
   zero is arithmetic rather than evidence.</li>
-<li><strong>Orient in one call.</strong> <a href="cli.html#h5i-db-context"><code>context</code></a> answers what
+<li><strong>Orient in one call:</strong> <a href="cli.html#h5i-db-context"><code>context</code></a> answers what
   <code>tables</code>, <code>schema</code>, <code>sample</code> and <code>versions</code> answer, in one deterministic
   document that also names any staged plan and the operations policy gates.</li>
-<li><strong>Notes are for provenance.</strong> <code>--note</code> / <code>note=</code> lands in the version
+<li><strong>Notes are for provenance:</strong> <code>--note</code> / <code>note=</code> lands in the version
   manifest; make agents write <em>why</em> ("re-mark after vendor restatement,
   ticket DX-142"), and <code>versions</code> becomes your change log.</li>
-<li><strong>Incremental consumers use <code>tail</code>.</strong> Strictly ordered commits mean
+<li><strong>Incremental consumers use <code>tail</code>:</strong> strictly ordered commits mean
   "give me exactly the rows since version N" is
-  <a href="sql.html#tail"><code>tail('t', N)</code></a> — no timestamp cursors.</li>
+  <a href="sql.html#tail"><code>tail('t', N)</code></a>, with no timestamp cursors.</li>
 </ul>
     <nav class="page-nav"><a class="prev" href="../manual/sql.html"><span class="dir">← Previous</span><span class="pn-title">SQL reference</span></a><a class="next" href="../manual/operations.html"><span class="dir">Next →</span><span class="pn-title">Operations guide</span></a></nav>
   </article>

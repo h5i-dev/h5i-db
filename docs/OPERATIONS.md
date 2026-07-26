@@ -40,8 +40,8 @@ the right order and don't run destructive maintenance concurrently**.
 1. **Don't run `vacuum --apply` (or `drop-table`) during the backup window.**
    Vacuum is the only thing that deletes objects; a copy that races it can
    miss files it already indexed. Plain writers are safe to leave running.
-2. Copy in this order (older references first, `HEAD` before the objects it
-   references is the one order that is *wrong* — copy `HEAD` **first**, per
+2. Copy in this order (older references first; `HEAD` before the objects it
+   references is the one order that is *wrong*, so copy `HEAD` **first**, per
    table, then its immutable objects):
 
    ```bash
@@ -59,7 +59,7 @@ the right order and don't run destructive maintenance concurrently**.
 
    Why this order works: the copied `HEAD` names some sequence *S*. Every
    manifest `0..=S` and every segment they reference already existed when
-   `HEAD` was copied, and (with vacuum paused) nothing deletes them — so all
+   `HEAD` was copied, and (with vacuum paused) nothing deletes them, so all
    of them are present in the later copy steps. Commits that land *during*
    the backup produce manifests `> S`; they may be half-copied, which is
    harmless: they are unreachable from the copied `HEAD` and are exactly what
@@ -83,7 +83,7 @@ and run `h5i-db verify` per table. There is no replay/WAL step.
 
 Note that restoring an old backup rewinds *all* tables to the backup time;
 to rewind a single table inside a live database, prefer
-`h5i-db restore <db> <table> <version>` — that is what versioning is for.
+`h5i-db restore <db> <table> <version>`, which is what versioning is for.
 
 ---
 
@@ -100,7 +100,7 @@ Guidance:
   (`vacuum` then `vacuum --apply` on the same candidate list you inspected).
 - **Grace period** (default 3600 s): objects younger than this are never
   touched. Set it comfortably above your *longest* ingest or plan-prepare
-  duration — staged segments exist on disk before the commit that references
+  duration: staged segments exist on disk before the commit that references
   them, and a grace period shorter than a slow bulk load can delete a
   commit-in-progress out from under it.
 - **Cadence**: daily or weekly is plenty. Debris accrues only from crashed
@@ -129,7 +129,7 @@ plan time and protect them from vacuum until applied, discarded, or expired
 (TTL: **7 days**, `PLAN_TTL_SECONDS`).
 
 - List pending plans per table: `h5i-db plan list <db> <table>`.
-- Discard plans you won't apply (`plan discard`) — an applied-or-discarded
+- Discard plans you won't apply (`plan discard`). An applied-or-discarded
   plan's staged segments become vacuum candidates immediately; an abandoned
   plan holds its staged bytes for the full 7 days.
 - Applying a plan after the table head moved fails with a conflict (409 from
@@ -138,12 +138,13 @@ plan time and protect them from vacuum until applied, discarded, or expired
 ## Disk-usage math
 
 Nothing is ever deleted except by vacuum, and vacuum only deletes
-*unreachable* objects — every committed version pins its segments forever
+*unreachable* objects; every committed version pins its segments forever
 (version retention/GC is roadmap work). Practical consequences:
 
 - **Append-only tables**: disk ≈ total data ever appended, plus one manifest
   per commit. The manifest lists every live segment, so manifest overhead is
-  O(segments) per commit — another reason to compact and to batch appends.
+  O(segments) per commit, which is another reason to compact and to batch
+  appends.
 - **`replace-range` / `delete-range` / `compact` / `write`**: each rewrites
   or re-references segments; the *old* segments stay pinned by history. A
   daily full `write` of a 1 GiB table costs ~365 GiB/year until retention
@@ -154,8 +155,8 @@ Nothing is ever deleted except by vacuum, and vacuum only deletes
 ## Filesystem caveats
 
 - **Local ext4/xfs/apfs/NTFS**: the supported case. Durability relies on
-  fsync-before-`HEAD`-swap plus atomic rename — standard semantics on all of
-  these.
+  fsync-before-`HEAD`-swap plus atomic rename, which is standard semantics on
+  all of these.
 - **NFS and other network filesystems**: not recommended for multi-host
   access. Writer exclusion uses an OS-level `flock` on an open descriptor;
   its cross-host semantics depend on the NFS version and lock-daemon setup
@@ -175,9 +176,9 @@ Nothing is ever deleted except by vacuum, and vacuum only deletes
 
 ## Runbook: torn or corrupt HEAD
 
-**Should not happen** on a supported filesystem — `HEAD` is replaced by
-write-temp → fsync → rename → directory-fsync — so treat an occurrence as a
-signal of filesystem misbehavior (see caveats above), not routine wear.
+**Should not happen** on a supported filesystem: `HEAD` is replaced by
+write-temp → fsync → rename → directory-fsync. Treat an occurrence as a signal
+of filesystem misbehavior (see caveats above), not as routine wear.
 
 ### Symptoms
 
@@ -214,8 +215,8 @@ Find the table's UUID via the catalog: `h5i-db tables <db>` then match, or
    matches the blake3 of the parent file, and every segment `path` it lists
    exists with the recorded byte size. (This is exactly the check `verify`
    runs from `HEAD`; you are doing it from a candidate sequence instead.)
-3. **Rewrite HEAD** to point at that manifest — `HEAD` is four fields of
-   JSON; `manifest_checksum` must be the blake3 hex of the chosen manifest's
+3. **Rewrite HEAD** to point at that manifest. `HEAD` is four fields of JSON,
+   and `manifest_checksum` must be the blake3 hex of the chosen manifest's
    exact bytes:
 
    ```bash
@@ -233,6 +234,6 @@ Find the table's UUID via the catalog: `h5i-db tables <db>` then match, or
    before verify is clean.
 
 If no manifest verifies, restore the table from backup (above). Rolling
-`HEAD` back this way discards the commits after the recovery point — check
+`HEAD` back this way discards the commits after the recovery point; check
 `committed_at_ns` / `note` in the recovered manifest to know exactly where
 the table now stands.

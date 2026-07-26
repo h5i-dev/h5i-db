@@ -4,22 +4,24 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Exceptions · h5i-db docs</title>
-  <meta name="description" content="The typed error hierarchy: every h5i-db error carries a stable code, an actionable hint, and a retryable flag.">
+  <meta name="description" content="The typed error hierarchy: every h5i-db error carries a stable code, a hint you can act on, and a retryable flag.">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/api/exceptions.html">
   <link rel="icon" type="image/png" href="../_static/logo.png">
   <link rel="apple-touch-icon" href="../_static/logo.png">
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Exceptions · h5i-db docs">
-  <meta property="og:description" content="The typed error hierarchy: every h5i-db error carries a stable code, an actionable hint, and a retryable flag.">
+  <meta property="og:description" content="The typed error hierarchy: every h5i-db error carries a stable code, a hint you can act on, and a retryable flag.">
+  <meta property="og:url" content="https://db.h5i.dev/api/exceptions.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Exceptions · h5i-db docs">
-  <meta name="twitter:description" content="The typed error hierarchy: every h5i-db error carries a stable code, an actionable hint, and a retryable flag.">
+  <meta name="twitter:description" content="The typed error hierarchy: every h5i-db error carries a stable code, a hint you can act on, and a retryable flag.">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -58,6 +60,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html" class="active">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -73,9 +76,9 @@ instance carries the same structured envelope the CLI prints on stderr:</p>
 <div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
     <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;nope&quot;</span><span class="p">)</span>
 <span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">NotFoundError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-    <span class="n">e</span><span class="o">.</span><span class="n">code</span>        <span class="c1"># &quot;table_not_found&quot;   — stable, branchable identifier</span>
-    <span class="n">e</span><span class="o">.</span><span class="n">hint</span>        <span class="c1"># actionable suggestion (e.g. how to list tables)</span>
-    <span class="n">e</span><span class="o">.</span><span class="n">retryable</span>   <span class="c1"># False               — retrying without change won&#39;t help</span>
+    <span class="n">e</span><span class="o">.</span><span class="n">code</span>        <span class="c1"># &quot;table_not_found&quot;   (stable, branchable identifier)</span>
+    <span class="n">e</span><span class="o">.</span><span class="n">hint</span>        <span class="c1"># what to try next (e.g. how to list tables)</span>
+    <span class="n">e</span><span class="o">.</span><span class="n">retryable</span>   <span class="c1"># False               (retrying without a change won&#39;t help)</span>
 </code></pre></div>
 
 <p>Messages are formatted <code>"[{code}] {message} (hint: {hint})"</code>.</p>
@@ -139,7 +142,7 @@ instance carries the same structured envelope the CLI prints on stderr:</p>
 </table></div>
 <div class="admonition note">
 <p class="admonition-title"><code>h5i_db.TimeoutError</code> shadows the builtin</p>
-<p>It subclasses <code>H5iError</code>, <strong>not</strong> Python's builtin <code>TimeoutError</code> — catch
+<p>It subclasses <code>H5iError</code>, <strong>not</strong> Python's builtin <code>TimeoutError</code>, so catch
 <code>h5i_db.TimeoutError</code> (or <code>H5iError</code>) specifically.</p>
 </div>
 <h2 id="patterns">Patterns<a class="headerlink" href="#patterns" title="Permanent link">#</a></h2>
@@ -157,14 +160,14 @@ instance carries the same structured envelope the CLI prints on stderr:</p>
 
 <p><strong>Respect <code>retryable</code>:</strong> it encodes whether backing off can help.
 <code>ConflictError</code> and <code>TimeoutError</code> generally can be retried;
-<code>InvalidInputError</code> and <code>PolicyError</code> cannot — fix the call (or get the plan
+<code>InvalidInputError</code> and <code>PolicyError</code> cannot, so fix the call (or get the plan
 reviewed) instead.</p>
-<p><strong>Surface <code>hint</code>:</strong> hints are written to be shown — to a user, a log, or an
+<p><strong>Surface <code>hint</code>:</strong> hints are written to be shown to a user, a log, or an
 LLM agent deciding its next step. Don't swallow them.</p>
 <p><strong>Catch-all:</strong> <code>except h5i_db.H5iError</code> catches every h5i-db failure while
 letting genuine bugs (<code>TypeError</code>, …) propagate. A closed handle raises
 <code>H5iError</code> with <code>code == "closed"</code>.</p>
-    <nav class="page-nav"><a class="prev" href="../api/results-and-plans.html"><span class="dir">← Previous</span><span class="pn-title">QueryResult &amp; MutationPlan</span></a></nav>
+    <nav class="page-nav"><a class="prev" href="../api/results-and-plans.html"><span class="dir">← Previous</span><span class="pn-title">QueryResult &amp; MutationPlan</span></a><a class="next" href="../cookbook/index.html"><span class="dir">Next →</span><span class="pn-title">Cookbook</span></a></nav>
   </article>
 
   <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#hierarchy">Hierarchy</a></li><li><a href="#patterns">Patterns</a></li></ul></aside>

@@ -9,6 +9,7 @@
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
   <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars.html">
   <link rel="icon" type="image/png" href="../../_static/logo.png">
   <link rel="apple-touch-icon" href="../../_static/logo.png">
 
@@ -16,6 +17,7 @@
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="OHLCV bars from tick data · h5i-db docs">
   <meta property="og:description" content="Bar construction is the first transformation every tick dataset goes through, and it is where subtle bugs are born: wrong bucket boundaries, last picked by file order instead of event time, sessions split across UTC …">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="OHLCV bars from tick data · h5i-db docs">
@@ -57,7 +59,7 @@
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Market data engineering</div><ul><li><a href="../../cookbook/01_market_data_engineering/01_ohlcv_bars.html" class="active">OHLCV bars from tick data</a></li><li><a href="../../cookbook/01_market_data_engineering/02_vwap_twap_execution.html">VWAP, TWAP and execution benchmarks</a></li><li><a href="../../cookbook/01_market_data_engineering/03_gapfill_resample.html">Regular grids for irregular markets: gapfill and resample</a></li><li><a href="../../cookbook/01_market_data_engineering/04_asof_join_trades_quotes.html">ASOF joins: trades vs quotes, signing and spreads</a></li><li><a href="../../cookbook/01_market_data_engineering/05_corporate_actions.html">Corporate actions: split adjustment without losing the tape</a></li><li><a href="../../cookbook/01_market_data_engineering/06_point_in_time_fundamentals.html">Point-in-time fundamentals: killing lookahead bias with ASOF joins</a></li><li><a href="../../cookbook/01_market_data_engineering/07_tick_data_cleaning.html">Tick data cleaning: find it, preview the fix, keep the audit trail</a></li><li><a href="../../cookbook/01_market_data_engineering/08_nbbo_consolidation.html">NBBO consolidation: best bid/offer across fragmented venues</a></li></ul></div>
   </aside>
@@ -75,10 +77,10 @@
 <p>Bar construction is the first transformation every tick dataset goes
 through, and it is where subtle bugs are born: wrong bucket boundaries,
 <code>last</code> picked by file order instead of event time, sessions split across
-UTC midnights. h5i-db makes the whole pipeline one SQL statement -
+UTC midnights. h5i-db makes the whole pipeline one SQL statement, where
 <code>time_bucket</code> + ordered <code>first_value</code>/<code>last_value</code> + <code>vwap</code> stream over
-time-sorted Parquet segments without a sort step - and the resulting bar
-table is itself a versioned table you can persist, audit and time-travel.</p>
+time-sorted Parquet segments without a sort step. The resulting bar table
+is itself a versioned table you can persist, audit and time-travel.</p>
 <p>In this recipe we:</p>
 <ol>
 <li>roll a week of ticks into 1m/5m/1h bars,</li>
@@ -100,7 +102,7 @@ table is itself a versioned table you can persist, audit and time-travel.</p>
 <h2 id="1-load-a-week-of-ticks">1. Load a week of ticks<a class="headerlink" href="#1-load-a-week-of-ticks" title="Permanent link">#</a></h2>
 <p>~450k synthetic trades: 3 symbols, 5 sessions, U-shaped intraday activity
 and bid-ask bounce. The table is declared with <code>time_column="ts"</code> and a
-secondary sort on <code>symbol</code> - that physical ordering is what lets the bar
+secondary sort on <code>symbol</code>; that physical ordering is what lets the bar
 queries below stream instead of sort.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span>
     <span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">30_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span>
@@ -123,11 +125,11 @@ queries below stream instead of sort.</p>
 <h2 id="2-bars-at-any-width">2. Bars at any width<a class="headerlink" href="#2-bars-at-any-width" title="Permanent link">#</a></h2>
 <p>One statement per bar width. The idioms that matter:</p>
 <ul>
-<li><code>time_bucket('&lt;width&gt;', ts)</code> floors each tick to its bucket - widths like
-  <code>'1m'</code>, <code>'5m'</code>, <code>'1h'</code> (also <code>'1d'</code>, <code>'1mo'</code>, ...);</li>
+<li><code>time_bucket('&lt;width&gt;', ts)</code> floors each tick to its bucket, with widths
+  like <code>'1m'</code>, <code>'5m'</code>, <code>'1h'</code> (also <code>'1d'</code>, <code>'1mo'</code>, ...);</li>
 <li><code>first_value(price ORDER BY ts)</code> / <code>last_value(price ORDER BY ts)</code> inside
-  <code>GROUP BY</code> give open/close by <em>event time</em>, not by accident of row order -
-  no self-joins;</li>
+  <code>GROUP BY</code> give open/close by <em>event time</em> rather than by accident of row
+  order, with no self-joins;</li>
 <li><code>vwap(price, size)</code> is a native aggregate.</li>
 </ul>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">bar_query</span><span class="p">(</span><span class="n">width</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
@@ -254,7 +256,7 @@ queries below stream instead of sort.</p>
 <p><code>time_bucket</code> takes an optional third argument: an IANA timezone or an
 origin timestamp. <code>time_bucket('1d', ts, 'America/New_York')</code> cuts days at
 New York midnight (04:00/05:00 UTC depending on DST) instead of UTC
-midnight - the boundaries below differ by exactly the EDT offset. For a
+midnight; the boundaries below differ by exactly the EDT offset. For a
 13:30–20:00 UTC cash session both cuts happen to <em>group</em> ticks the same
 way, but the NY variant stays correct across DST transitions where a fixed
 UTC offset would drift by an hour.</p>
@@ -315,7 +317,7 @@ UTC offset would drift by an hour.</p>
 </table>
 </div></div></div></div>
 <p>Where the bucket choice changes the <em>numbers</em>, not just the labels, is any
-session that crosses UTC midnight - overnight futures, FX, crypto. A
+session that crosses UTC midnight: overnight futures, FX, crypto. A
 Globex-style session opens 18:00 New York (22:00 UTC), so a naive UTC day
 slices every session in two, and so does a New-York-midnight day. The fix
 is the origin form: <code>time_bucket('1d', ts, '&lt;session open&gt;')</code> aligns
@@ -446,10 +448,10 @@ sessions to make the difference concrete.</p>
 </table>
 </div></div></div></div>
 <p>Three sessions of 4,000 trades each: only the session-origin buckets
-recover them as three clean daily bars - the calendar-day schemes split
+recover them as three clean daily bars; the calendar-day schemes split
 every session across two buckets.</p>
 <h2 id="4-persist-bars-as-a-versioned-table">4. Persist bars as a versioned table<a class="headerlink" href="#4-persist-bars-as-a-versioned-table" title="Permanent link">#</a></h2>
-<p>Bars are a derived dataset you will rebuild - which is exactly what
+<p>Bars are a derived dataset you will rebuild, which is exactly what
 <code>db.write</code> is for: it <em>replaces</em> the table contents in one atomic commit
 while keeping every previous build in the version history. Rebuild the
 bars after a tick correction and the old bars remain queryable via
@@ -533,19 +535,19 @@ agree to float precision.</p>
 <ul>
 <li>Ticks to OHLCV+VWAP bars is one SQL statement: <code>time_bucket</code> +
   <code>first_value/last_value(... ORDER BY ts)</code> + <code>vwap</code>, streaming over
-  time-sorted storage - and it matches a pandas reference exactly.</li>
+  time-sorted storage, and it matches a pandas reference exactly.</li>
 <li><code>time_bucket</code>'s third argument does session alignment: an IANA timezone
   for DST-safe calendar days, an origin timestamp for overnight sessions
   that straddle midnight. Naive UTC days silently split Globex-style
   sessions in two.</li>
 <li>Derived bars belong in the database: <code>db.write</code> on <code>bars_5m</code> gives you
-  atomic rebuilds with the full build history retained - every downstream
-  consumer can pin the bar version it was computed from.</li>
+  atomic rebuilds with the full build history retained, so every
+  downstream consumer can pin the bar version it was computed from.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>
 </div>
-    <nav class="page-nav"><a class="prev" href="../../cookbook/00_fundamentals/08_maintenance.html"><span class="dir">← Previous</span><span class="pn-title">Maintenance: verify, compact, vacuum - keeping a versioned store healthy</span></a><a class="next" href="../../cookbook/01_market_data_engineering/02_vwap_twap_execution.html"><span class="dir">Next →</span><span class="pn-title">VWAP, TWAP and execution benchmarks</span></a></nav>
+    <nav class="page-nav"><a class="prev" href="../../cookbook/00_fundamentals/08_maintenance.html"><span class="dir">← Previous</span><span class="pn-title">Maintenance: verify, compact, and vacuum a versioned store</span></a><a class="next" href="../../cookbook/01_market_data_engineering/02_vwap_twap_execution.html"><span class="dir">Next →</span><span class="pn-title">VWAP, TWAP and execution benchmarks</span></a></nav>
   </article>
 
   <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-load-a-week-of-ticks">1. Load a week of ticks</a></li><li><a href="#2-bars-at-any-width">2. Bars at any width</a></li><li><a href="#3-session-aligned-daily-bars">3. Session-aligned daily bars</a></li><li><a href="#4-persist-bars-as-a-versioned-table">4. Persist bars as a versioned table</a></li><li><a href="#5-candlestick-view">5. Candlestick view</a></li><li><a href="#6-validate-against-pandas">6. Validate against pandas</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
