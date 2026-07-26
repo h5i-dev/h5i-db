@@ -1098,6 +1098,40 @@ async fn an_as_of_fork_skips_tables_that_did_not_exist_yet() {
     assert!(fork_db.resolve("quotes", ReadAt::Latest).await.is_err());
 }
 
+#[tokio::test]
+async fn an_as_of_before_all_history_is_refused_rather_than_silently_empty() {
+    // Left to itself this produces a fork that pins nothing, and the mistake
+    // only surfaces much later as a bare "table not found" from the query
+    // engine. Fail where the timestamp was typed.
+    let (_dir, db, _root) = db_with_trades().await;
+    let err = db
+        .create_fork("backtest", None, Some(1), Default::default())
+        .await
+        .unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("--as-of pins no version"), "{msg}");
+    assert!(db.fork_info("backtest").await.is_err(), "no fork was left behind");
+}
+
+#[tokio::test]
+async fn an_as_of_fork_of_an_empty_database_is_allowed() {
+    // Empty because the database is empty is a different thing from empty
+    // because the timestamp was wrong, and only the latter is a mistake.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("db")).await.unwrap();
+    let fork = db
+        .create_fork("scratch", None, Some(1), Default::default())
+        .await
+        .unwrap();
+    assert!(fork.pins.is_empty());
+    let fork_db = db.open_fork("scratch").await.unwrap();
+    fork_db
+        .create_table("features", trades_schema(), default_options())
+        .await
+        .unwrap();
+    assert_eq!(rows(&fork_db, "features").await, 0);
+}
+
 // ---------------------------------------------------------------------------
 // guards
 // ---------------------------------------------------------------------------

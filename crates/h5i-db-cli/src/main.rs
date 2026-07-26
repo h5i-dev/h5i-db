@@ -43,6 +43,33 @@ struct Cli {
     /// Output format.
     #[arg(long, global = true, value_enum, default_value = "table")]
     format: Format,
+
+    /// Run inside a fork (ROADMAP Part IX).
+    ///
+    /// Table names then resolve to the fork's own workspace first and fall
+    /// back to its pinned view of the base database, so a whole agent session
+    /// can be scoped to a fork by adding this one flag to every command.
+    /// Database-wide operations (snapshot, vacuum, retention, fork management)
+    /// refuse to run this way and say so.
+    #[arg(long, global = true)]
+    fork: Option<String>,
+}
+
+/// Open a database, scoped to a fork when one was named.
+async fn open_db(path: &std::path::Path, fork: Option<&str>) -> Result<Database> {
+    let db = Database::open(path).await?;
+    match fork {
+        Some(name) => db.open_fork(name).await,
+        None => Ok(db),
+    }
+}
+
+async fn open_db_ro(path: &std::path::Path, fork: Option<&str>) -> Result<Database> {
+    let db = Database::open_read_only(path).await?;
+    match fork {
+        Some(name) => db.open_fork(name).await,
+        None => Ok(db),
+    }
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -101,7 +128,7 @@ enum Command {
         target_segment_mb: u64,
     },
 
-    /// Drop a table and its data. Refuses if pinned by a snapshot.
+    /// Drop a table and its data. Refuses if pinned by a snapshot or a fork.
     DropTable {
         db: PathBuf,
         table: String,
@@ -266,6 +293,10 @@ enum Command {
     #[command(subcommand)]
     Snapshot(SnapshotCmd),
 
+    /// Fork management: writable workspaces over a pinned base.
+    #[command(subcommand)]
+    Fork(ForkCmd),
+
     /// Make a historical version current (history moves forward).
     Restore {
         db: PathBuf,
@@ -400,6 +431,14 @@ impl Command {
                 | SnapshotCmd::List { db }
                 | SnapshotCmd::Delete { db, .. } => db,
             }),
+            Fork(cmd) => Some(match cmd {
+                ForkCmd::Create { db, .. }
+                | ForkCmd::List { db }
+                | ForkCmd::Show { db, .. }
+                | ForkCmd::Diff { db, .. }
+                | ForkCmd::Promote { db, .. }
+                | ForkCmd::Drop { db, .. } => db,
+            }),
             Plan(cmd) => Some(match cmd {
                 PlanCmd::List { db, .. }
                 | PlanCmd::Show { db, .. }
@@ -443,6 +482,51 @@ enum SnapshotCmd {
         db: PathBuf,
         name: String,
     },
+}
+
+#[derive(Subcommand)]
+enum ForkCmd {
+    /// Create a fork: an O(1), zero-copy writable workspace over the current
+    /// (or a past) state of every table.
+    Create {
+        db: PathBuf,
+        name: String,
+        #[arg(long)]
+        note: Option<String>,
+        /// Pin each table at its last version committed at or before this
+        /// RFC3339 timestamp, giving a workspace over a frozen past. Tables
+        /// that did not exist then are not pinned.
+        #[arg(long)]
+        as_of: Option<String>,
+        /// Caller metadata as inline JSON, `@path`, or `-` for stdin. Carried
+        /// verbatim on the fork; h5i-db never interprets it.
+        #[arg(long)]
+        meta: Option<String>,
+    },
+    /// List forks with what each owns and what it holds back from reclamation.
+    List { db: PathBuf },
+    /// Show one fork's pins and metadata.
+    Show { db: PathBuf, name: String },
+    /// What a fork changed, computed from manifests alone (no segment reads).
+    Diff {
+        db: PathBuf,
+        name: String,
+        /// Restrict to one table.
+        #[arg(long)]
+        table: Option<String>,
+    },
+    /// Promote one of a fork's tables into the base database.
+    ///
+    /// Compare-and-swap against the version the fork was created from: the
+    /// first promote wins and a later one is rejected rather than merged.
+    Promote {
+        db: PathBuf,
+        name: String,
+        #[arg(long)]
+        table: String,
+    },
+    /// Delete a fork and everything it owns, releasing its pin.
+    Drop { db: PathBuf, name: String },
 }
 
 #[derive(Subcommand)]
@@ -756,6 +840,24 @@ fn research_pin(
     Ok(ResearchPin::at(at).with_event_time_cutoff_ns(cutoff_ns))
 }
 
+/// Read an argument that may be inline text, `@path`, or `-` for stdin.
+fn read_text_arg(arg: &str) -> Result<String> {
+    match arg {
+        "-" => {
+            let mut buf = String::new();
+            std::io::stdin()
+                .lock()
+                .read_to_string(&mut buf)
+                .map_err(|e| Error::io("stdin", e))?;
+            Ok(buf)
+        }
+        other if other.starts_with('@') => {
+            std::fs::read_to_string(&other[1..]).map_err(|e| Error::io(other[1..].to_string(), e))
+        }
+        inline => Ok(inline.to_string()),
+    }
+}
+
 /// Parse an RFC3339 instant into nanoseconds since the epoch.
 fn parse_rfc3339_ns(s: &str, flag: &str) -> Result<i64> {
     let ts = chrono::DateTime::parse_from_rfc3339(s)
@@ -796,6 +898,7 @@ fn read_aligned(
 
 async fn run(cli: Cli) -> Result<()> {
     let format = cli.format;
+    let fork = cli.fork.as_deref();
     match cli.command {
         Command::Init { db } => {
             Database::create(&db).await?;
@@ -845,7 +948,7 @@ async fn run(cli: Cli) -> Result<()> {
             } else {
                 schema
             };
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             let result = db
                 .create_table(
                     &table,
@@ -870,13 +973,13 @@ async fn run(cli: Cli) -> Result<()> {
                     "drop-table permanently deletes data; pass --yes to confirm",
                 ));
             }
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             db.drop_table(&table).await?;
             write_value(&serde_json::json!({"dropped": table}), format)
         }
 
         Command::Rename { db, from, to } => {
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             db.rename_table(&from, &to).await?;
             write_value(
                 &serde_json::json!({"renamed": {"from": from, "to": to}}),
@@ -890,7 +993,7 @@ async fn run(cli: Cli) -> Result<()> {
             stale_after,
         } => {
             let label = db.display().to_string();
-            let database = Database::open_read_only(&db).await?;
+            let database = open_db_ro(&db, fork).await?;
             let doc =
                 context::build(&database, &label, budget, stale_after.map(|d| d.as_secs())).await?;
             write_value(&doc, format)
@@ -902,7 +1005,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Tables { db } => {
-            let db = Database::open_read_only(&db).await?;
+            let db = open_db_ro(&db, fork).await?;
             let mut rows = Vec::new();
             for entry in db.list_tables().await? {
                 let resolved = db.resolve(&entry.name, ReadAt::Latest).await?;
@@ -920,7 +1023,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Schema { db, table } => {
-            let db = Database::open_read_only(&db).await?;
+            let db = open_db_ro(&db, fork).await?;
             let resolved = db.resolve(&table, ReadAt::Latest).await?;
             let fields: Vec<_> = resolved
                 .schema
@@ -953,7 +1056,7 @@ async fn run(cli: Cli) -> Result<()> {
             rows,
             version,
         } => {
-            let db = Database::open_read_only(&db).await?;
+            let db = open_db_ro(&db, fork).await?;
             let at = version.map(ReadAt::Version).unwrap_or(ReadAt::Latest);
             let resolved = db.resolve(&table, at).await?;
             let (batches, _) = db
@@ -993,7 +1096,7 @@ async fn run(cli: Cli) -> Result<()> {
             } else {
                 sql
             };
-            let db = Arc::new(Database::open_read_only(&db).await?);
+            let db = Arc::new(open_db_ro(&db, fork).await?);
             let options = SessionOptions {
                 memory_limit: memory_limit_mb.map(|m| m * 1024 * 1024),
                 spill_dir,
@@ -1130,7 +1233,7 @@ async fn run(cli: Cli) -> Result<()> {
             retries,
             write_flags,
         } => {
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             let resolved = db.resolve(&table, ReadAt::Latest).await?;
             let batches = read_aligned(&input, input_format, &resolved.schema, "ingest")?;
             let opts = write_flags.to_options();
@@ -1142,7 +1245,7 @@ async fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Versions { db, table } => {
-            let db = Database::open_read_only(&db).await?;
+            let db = open_db_ro(&db, fork).await?;
             let versions = db.list_versions(&table).await?;
             let rows: Vec<_> = versions
                 .iter()
@@ -1179,7 +1282,7 @@ async fn run(cli: Cli) -> Result<()> {
                 sql
             };
             let at = parse_read_at(&as_of)?;
-            let db = Arc::new(Database::open_read_only(&db).await?);
+            let db = Arc::new(open_db_ro(&db, fork).await?);
             let report = h5i_db_query::arrival_delta(
                 db,
                 &sql,
@@ -1198,16 +1301,16 @@ async fn run(cli: Cli) -> Result<()> {
                 tables,
                 note,
             } => {
-                let db = Database::open(&db).await?;
+                let db = open_db(&db, fork).await?;
                 let snap = db.create_snapshot(&name, &tables, note).await?;
                 write_value(&snap, format)
             }
             SnapshotCmd::List { db } => {
-                let db = Database::open_read_only(&db).await?;
+                let db = open_db_ro(&db, fork).await?;
                 write_value(&db.list_snapshots().await?, format)
             }
             SnapshotCmd::Delete { db, name } => {
-                let db = Database::open(&db).await?;
+                let db = open_db(&db, fork).await?;
                 db.delete_snapshot(&name).await?;
                 write_value(&serde_json::json!({"deleted": name}), format)
             }
@@ -1219,7 +1322,7 @@ async fn run(cli: Cli) -> Result<()> {
             version,
             write_flags,
         } => {
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             let result = db
                 .restore(&table, version, write_flags.to_options())
                 .await?;
@@ -1236,7 +1339,7 @@ async fn run(cli: Cli) -> Result<()> {
             plan,
             write_flags,
         } => {
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             let resolved = db.resolve(&table, ReadAt::Latest).await?;
             let (start, end) = parse_range(&resolved, &start, &end)?;
             let batches = match input {
@@ -1264,7 +1367,7 @@ async fn run(cli: Cli) -> Result<()> {
             plan,
             write_flags,
         } => {
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             let resolved = db.resolve(&table, ReadAt::Latest).await?;
             let (start, end) = parse_range(&resolved, &start, &end)?;
             if plan {
@@ -1282,7 +1385,7 @@ async fn run(cli: Cli) -> Result<()> {
 
         Command::Plan(cmd) => match cmd {
             PlanCmd::List { db, table } => {
-                let db = Database::open_read_only(&db).await?;
+                let db = open_db_ro(&db, fork).await?;
                 let plans = db.list_plans(&table).await?;
                 let rows: Vec<_> = plans
                     .iter()
@@ -1301,18 +1404,18 @@ async fn run(cli: Cli) -> Result<()> {
                 write_value(&rows, format)
             }
             PlanCmd::Show { db, table, plan_id } => {
-                let db = Database::open_read_only(&db).await?;
+                let db = open_db_ro(&db, fork).await?;
                 let plan = db.load_plan(&table, plan_id).await?;
                 print_plan(&plan, format)
             }
             PlanCmd::Apply { db, table, plan_id } => {
-                let db = Database::open(&db).await?;
+                let db = open_db(&db, fork).await?;
                 let plan = db.load_plan(&table, plan_id).await?;
                 let result = db.apply_plan(&plan).await?;
                 write_value(&result, format)
             }
             PlanCmd::Discard { db, table, plan_id } => {
-                let db = Database::open(&db).await?;
+                let db = open_db(&db, fork).await?;
                 db.discard_plan(&table, plan_id).await?;
                 write_value(&serde_json::json!({"discarded": plan_id}), format)
             }
@@ -1320,11 +1423,11 @@ async fn run(cli: Cli) -> Result<()> {
 
         Command::Policy(cmd) => match cmd {
             PolicyCmd::Show { db } => {
-                let db = Database::open_read_only(&db).await?;
+                let db = open_db_ro(&db, fork).await?;
                 write_value(&db.policy().await?, format)
             }
             PolicyCmd::Set { db, entries } => {
-                let db = Database::open(&db).await?;
+                let db = open_db(&db, fork).await?;
                 // Atomic read-modify-write; concurrent editors can't clobber
                 // each other's keys.
                 let policy = db
@@ -1351,7 +1454,7 @@ async fn run(cli: Cli) -> Result<()> {
 
         Command::DataPolicy(cmd) => match cmd {
             DataPolicyCmd::Get { db, table } => {
-                let db = Database::open_read_only(&db).await?;
+                let db = open_db_ro(&db, fork).await?;
                 // `null` when unset — a stable, machine-readable "no policy".
                 write_value(&db.data_policy(&table).await?, format)
             }
@@ -1371,14 +1474,72 @@ async fn run(cli: Cli) -> Result<()> {
                 };
                 let parsed: h5i_db_core::DataPolicy = serde_json::from_str(&text)
                     .map_err(|e| Error::invalid(format!("data-policy JSON: {e}")))?;
-                let db = Database::open(&db).await?;
+                let db = open_db(&db, fork).await?;
                 db.set_data_policy(&table, &parsed).await?;
                 write_value(&parsed, format)
             }
             DataPolicyCmd::Clear { db, table } => {
-                let db = Database::open(&db).await?;
+                let db = open_db(&db, fork).await?;
                 db.clear_data_policy(&table).await?;
                 write_value(&serde_json::json!({"cleared": table}), format)
+            }
+        },
+
+        Command::Fork(cmd) => match cmd {
+            ForkCmd::Create {
+                db,
+                name,
+                note,
+                as_of,
+                meta,
+            } => {
+                let as_of_ns = match as_of.as_deref() {
+                    Some(s) => Some(parse_rfc3339_ns(s, "--as-of")?),
+                    None => None,
+                };
+                let user_meta = match meta.as_deref() {
+                    None => serde_json::Map::new(),
+                    Some(arg) => {
+                        let text = read_text_arg(arg)?;
+                        match serde_json::from_str::<serde_json::Value>(&text)
+                            .map_err(|e| Error::invalid(format!("--meta JSON: {e}")))?
+                        {
+                            serde_json::Value::Object(m) => m,
+                            _ => {
+                                return Err(Error::invalid("--meta must be a JSON object"));
+                            }
+                        }
+                    }
+                };
+                // Deliberately the base handle: forks are not nested in v1, and
+                // `--fork x fork create y` should say so rather than guess.
+                let db = open_db(&db, fork).await?;
+                let created = db.create_fork(&name, note, as_of_ns, user_meta).await?;
+                write_value(&created, format)
+            }
+            ForkCmd::List { db } => {
+                let db = open_db_ro(&db, fork).await?;
+                write_value(&db.list_forks().await?, format)
+            }
+            ForkCmd::Show { db, name } => {
+                let db = open_db_ro(&db, fork).await?;
+                write_value(&db.fork_info(&name).await?, format)
+            }
+            ForkCmd::Diff { db, name, table } => {
+                let db = open_db_ro(&db, fork).await?;
+                write_value(&db.fork_diff(&name, table.as_deref()).await?, format)
+            }
+            ForkCmd::Promote { db, name, table } => {
+                let db = open_db(&db, fork).await?;
+                write_value(&db.promote(&name, &table).await?, format)
+            }
+            ForkCmd::Drop { db, name } => {
+                let db = open_db(&db, fork).await?;
+                let dropped = db.drop_fork(&name).await?;
+                write_value(
+                    &serde_json::json!({"dropped": name, "tables_deleted": dropped}),
+                    format,
+                )
             }
         },
 
@@ -1388,7 +1549,7 @@ async fn run(cli: Cli) -> Result<()> {
             target_mb,
             write_flags,
         } => {
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             let result = db
                 .compact_with(
                     &table,
@@ -1405,7 +1566,7 @@ async fn run(cli: Cli) -> Result<()> {
             grace_seconds,
             apply,
         } => {
-            let db = Database::open(&db).await?;
+            let db = open_db(&db, fork).await?;
             let report = db.vacuum(table.as_deref(), grace_seconds, apply).await?;
             write_value(&report, format)
         }
@@ -1417,15 +1578,15 @@ async fn run(cli: Cli) -> Result<()> {
         } => {
             let label = db.display().to_string();
             let database = if allow_mutations {
-                Database::open(&db).await?
+                open_db(&db, fork).await?
             } else {
-                Database::open_read_only(&db).await?
+                open_db_ro(&db, fork).await?
             };
             h5i_db_ui::serve(Arc::new(database), label, port, allow_mutations).await
         }
 
         Command::Verify { db, table, deep } => {
-            let db = Database::open_read_only(&db).await?;
+            let db = open_db_ro(&db, fork).await?;
             let report = db.verify(&table, deep).await?;
             if report.problems.is_empty() {
                 write_value(&report, format)

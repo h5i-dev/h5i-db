@@ -521,7 +521,8 @@ impl crate::database::Database {
         }
 
         let mut pins = BTreeMap::new();
-        for entry in self.list_tables().await? {
+        let base_tables = self.list_tables().await?;
+        for entry in base_tables.iter().cloned() {
             let sequence = match as_of_ns {
                 None => self.head(&entry.name, entry.table_id).await?.head.sequence,
                 Some(ts) => {
@@ -545,6 +546,19 @@ impl crate::database::Database {
                     manifest_checksum: self.manifest_checksum_at(entry.table_id, sequence).await?,
                 },
             );
+        }
+
+        // An `as_of` that predates the whole database pins nothing, and the
+        // resulting fork looks empty for reasons that surface much later as a
+        // bare "table not found". Say it here instead. (A database with no
+        // tables yet is a different thing and is allowed: that fork is empty
+        // because the database is.)
+        if as_of_ns.is_some() && pins.is_empty() && !base_tables.is_empty() {
+            return Err(Error::invalid(format!(
+                "--as-of pins no version of any of the {} table(s) in this database: the \
+                 timestamp precedes their oldest retained commit",
+                base_tables.len()
+            )));
         }
 
         // Fence before publishing the fork, not after: a reader that cannot
