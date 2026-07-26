@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>A crash-safe paper-trading loop with full order attribution · h5i-db docs</title>
-  <meta name="description" content="The hard part of a live loop is not the strategy - it is answering, a week later, &quot;why did we send that order?&quot;. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
+  <meta name="description" content="The hard part of a live loop is answering, a week later, &quot;why did we send that order?&quot;, not the strategy itself. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -15,11 +15,11 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="A crash-safe paper-trading loop with full order attribution · h5i-db docs">
-  <meta property="og:description" content="The hard part of a live loop is not the strategy - it is answering, a week later, &quot;why did we send that order?&quot;. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
+  <meta property="og:description" content="The hard part of a live loop is answering, a week later, &quot;why did we send that order?&quot;, not the strategy itself. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="A crash-safe paper-trading loop with full order attribution · h5i-db docs">
-  <meta name="twitter:description" content="The hard part of a live loop is not the strategy - it is answering, a week later, &quot;why did we send that order?&quot;. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
+  <meta name="twitter:description" content="The hard part of a live loop is answering, a week later, &quot;why did we send that order?&quot;, not the strategy itself. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -72,16 +72,16 @@
 <span class="sep">/</span>
 <span>A crash-safe paper-trading loop with full order attribution</span></div>
 <h1>A crash-safe paper-trading loop with full order attribution</h1>
-<p>The hard part of a live loop is not the strategy - it is answering, a week
-later, <em>"why did we send that order?"</em>. This recipe builds a sequential,
+<p>The hard part of a live loop is answering, a week later, <em>"why did we send
+that order?"</em>, not the strategy itself. This recipe builds a sequential,
 deterministic paper-trading loop where every stage is a versioned commit:
 each feed chunk is one <code>append</code> to <code>trades</code>, the signal is computed in SQL
 on exactly that head, and every order row <strong>stores the trades version
 (sequence number) that produced it</strong>. Attribution stops being forensics
-and becomes a join - and because <code>h5i('trades', v)</code> is O(1) time travel,
+and becomes a join, and because <code>h5i('trades', v)</code> is O(1) time travel,
 you can replay any order's exact signal input on demand.</p>
 <p>Crash safety comes for free: every commit is an atomic manifest swap, so a
-<code>kill -9</code> mid-write leaves the previous head fully consistent - the loop
+<code>kill -9</code> mid-write leaves the previous head fully consistent, and the loop
 restarts by asking the database where the feed stopped.</p>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
@@ -93,7 +93,7 @@ restarts by asking the database where the feed stopped.</p>
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_paper&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<h2 id="1-tables-feed-orders-positions-all-append-only">1. Tables: feed, orders, positions - all append-only<a class="headerlink" href="#1-tables-feed-orders-positions-all-append-only" title="Permanent link">#</a></h2>
+<h2 id="1-three-append-only-tables-feed-orders-positions">1. Three append-only tables: feed, orders, positions<a class="headerlink" href="#1-three-append-only-tables-feed-orders-positions" title="Permanent link">#</a></h2>
 <p>Three pure-append tables. Append-only is not just a style choice: it keeps
 the version chain compatible with <code>tail()</code> streaming reads, and it means
 the order blotter is tamper-evident by construction.</p>
@@ -133,7 +133,7 @@ the order blotter is tamper-evident by construction.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre>[&#x27;orders&#x27;, &#x27;positions&#x27;, &#x27;trades&#x27;]</pre></div></div>
 <h2 id="2-the-feed-and-the-signal">2. The feed and the signal<a class="headerlink" href="#2-the-feed-and-the-signal" title="Permanent link">#</a></h2>
-<p>One session of tick data for two names, chunked into 5-minute deliveries -
+<p>One session of tick data for two names, chunked into 5-minute deliveries,
 a deterministic stand-in for a live feed handler. The signal is a fast/slow
 EWMA crossover on 1-minute closes, computed entirely in SQL against
 whatever the <code>trades</code> head is at that moment: <code>time_bucket</code> builds the
@@ -165,7 +165,7 @@ bar per symbol.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">33,056 ticks -&gt; 78 five-minute deliveries</pre></div></div>
 <h2 id="3-the-event-loop-append-chunk-sql-signal-append-orders-mark">3. The event loop: append chunk → SQL signal → append orders → mark<a class="headerlink" href="#3-the-event-loop-append-chunk-sql-signal-append-orders-mark" title="Permanent link">#</a></h2>
-<p>Sequential and deterministic - no threads, no sleeps. Per chunk: one
+<p>Sequential and deterministic: no threads, no sleeps. Per chunk: one
 commit for the ticks, one signal query on that exact head, at most one
 commit for orders (a batch, never per-row), one for the marks. The commit
 dict returned by <code>append</code> hands us the sequence number we stamp on each
@@ -218,7 +218,7 @@ order. Long/flat logic: fast above slow → hold 100 shares, else flat.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">loop done: 78 chunks, 29 orders, final positions {&#x27;AAPL&#x27;: 0, &#x27;MSFT&#x27;: 100}, final equity -110.00 USD</pre></div></div>
 <h2 id="4-restart-recovery-the-database-is-the-checkpoint">4. Restart recovery: the database is the checkpoint<a class="headerlink" href="#4-restart-recovery-the-database-is-the-checkpoint" title="Permanent link">#</a></h2>
-<p>If the process dies anywhere in the loop, no partial state exists - each
+<p>If the process dies anywhere in the loop, no partial state exists: each
 commit either fully happened or didn't. On restart, the resume point is a
 query, not a checkpoint file that might itself be stale:</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">resume</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
@@ -248,8 +248,8 @@ query, not a checkpoint file that might itself be stale:</p>
 </div></div></div></div>
 <h2 id="5-order-attribution-replay-the-exact-signal-input">5. Order attribution: replay the exact signal input<a class="headerlink" href="#5-order-attribution-replay-the-exact-signal-input" title="Permanent link">#</a></h2>
 <p>Every order carries <code>data_version</code>. To audit one, point the <em>same</em> signal
-SQL at <code>h5i('trades', &lt;version&gt;)</code> - O(1) time travel to the head the loop
-saw - and confirm the decision. This is the difference between "we think
+SQL at <code>h5i('trades', &lt;version&gt;)</code>, O(1) time travel to the head the loop
+saw, and confirm the decision. This is the difference between "we think
 the signal said buy" and "here is the signal, recomputed from the exact
 bytes, saying buy".</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">last_order</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
@@ -282,8 +282,8 @@ recorded position after order: 0 - attribution verified</pre></div></div>
 <p>A downstream consumer (risk checks, an execution bridge) follows the order
 blotter with <code>tail('orders', after_version, poll_ms)</code>. Two production
 rules: <code>tail</code> requires a <strong>pure-append</strong> version chain (any write/delete/
-restore/compact in the range errors out - one reason our blotter is
-append-only), and it is <strong>unbounded</strong> - it blocks until <code>LIMIT</code> rows have
+restore/compact in the range errors out, one reason our blotter is
+append-only), and it is <strong>unbounded</strong>: it blocks until <code>LIMIT</code> rows have
 arrived, so always attach a LIMIT no larger than what you know is there,
 or a query timeout.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">overs</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;orders&quot;</span><span class="p">)</span>
@@ -360,7 +360,7 @@ or a query timeout.</p>
 <h2 id="7-session-wrap-up-equity-curve-and-blotter-hygiene">7. Session wrap-up: equity curve and blotter hygiene<a class="headerlink" href="#7-session-wrap-up-equity-curve-and-blotter-hygiene" title="Permanent link">#</a></h2>
 <p>The equity curve comes from the recorded marks. Then maintenance: a day of
 5-minute commits leaves ~78 small segments per table, so <code>compact()</code> merges
-them - as its own audited commit. (Note the trade-off: a compact commit
+them, as its own audited commit. (Note the trade-off: a compact commit
 breaks the pure-append chain for <code>tail()</code> ranges that span it, so compact
 <em>behind</em> your consumers' read positions.)</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
@@ -398,13 +398,13 @@ positions: 78 segments -&gt; 1 (v79, op=compact)</pre></div></div>
 <li>One chunk = one commit; the commit's sequence number stamped into each
   order row makes attribution a join and replay a <code>h5i('trades', v)</code> query.</li>
 <li>Atomic commits are the crash-safety story: <code>kill -9</code> mid-write leaves the
-  previous head intact, and the restart point is <code>SELECT max(ts)</code> - the
+  previous head intact, and the restart point is <code>SELECT max(ts)</code>, so the
   database is the checkpoint.</li>
 <li>Keep the blotter pure-append: it stays <code>tail()</code>-compatible for
   downstream consumers and tamper-evident for auditors. Always LIMIT (and
-  ideally timeout) a <code>tail()</code> read - it blocks until enough rows arrive.</li>
+  ideally timeout) a <code>tail()</code> read; it blocks until enough rows arrive.</li>
 <li>Batch orders per cycle (never per-row commits), and <code>compact()</code> after the
-  session - behind your readers - to merge the day's small segments.</li>
+  session (behind your readers) to merge the day's small segments.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>
@@ -412,7 +412,7 @@ positions: 78 segments -&gt; 1 (v79, op=compact)</pre></div></div>
     <nav class="page-nav"><a class="prev" href="../../cookbook/03_risk_and_production/04_data_quality_gates.html"><span class="dir">← Previous</span><span class="pn-title">Data-quality gates: staging, policy, and previewable remediation</span></a><a class="next" href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html"><span class="dir">Next →</span><span class="pn-title">Multi-writer coordination: optimistic locking, conflicts, and retries</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-tables-feed-orders-positions-all-append-only">1. Tables: feed, orders, positions - all append-only</a></li><li><a href="#2-the-feed-and-the-signal">2. The feed and the signal</a></li><li><a href="#3-the-event-loop-append-chunk-sql-signal-append-orders-mark">3. The event loop: append chunk → SQL signal → append orders → mark</a></li><li><a href="#4-restart-recovery-the-database-is-the-checkpoint">4. Restart recovery: the database is the checkpoint</a></li><li><a href="#5-order-attribution-replay-the-exact-signal-input">5. Order attribution: replay the exact signal input</a></li><li><a href="#6-the-reader-side-streaming-new-orders-with-tail">6. The reader side: streaming new orders with tail()</a></li><li><a href="#7-session-wrap-up-equity-curve-and-blotter-hygiene">7. Session wrap-up: equity curve and blotter hygiene</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-three-append-only-tables-feed-orders-positions">1. Three append-only tables: feed, orders, positions</a></li><li><a href="#2-the-feed-and-the-signal">2. The feed and the signal</a></li><li><a href="#3-the-event-loop-append-chunk-sql-signal-append-orders-mark">3. The event loop: append chunk → SQL signal → append orders → mark</a></li><li><a href="#4-restart-recovery-the-database-is-the-checkpoint">4. Restart recovery: the database is the checkpoint</a></li><li><a href="#5-order-attribution-replay-the-exact-signal-input">5. Order attribution: replay the exact signal input</a></li><li><a href="#6-the-reader-side-streaming-new-orders-with-tail">6. The reader side: streaming new orders with tail()</a></li><li><a href="#7-session-wrap-up-equity-curve-and-blotter-hygiene">7. Session wrap-up: equity curve and blotter hygiene</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

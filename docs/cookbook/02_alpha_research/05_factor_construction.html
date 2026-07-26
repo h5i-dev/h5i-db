@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Building a point-in-time factor library · h5i-db docs</title>
-  <meta name="description" content="Equity factors die by lookahead: a B/P ratio computed with a book value the market had not seen yet will backtest beautifully and trade terribly. This recipe builds three classic factors - value (B/P), momentum (12-1) …">
+  <meta name="description" content="Equity factors die by lookahead: a B/P ratio computed with a book value the market had not seen yet will backtest beautifully and trade terribly. This recipe builds three classic factors, value (B/P), momentum (12-1) …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -15,11 +15,11 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Building a point-in-time factor library · h5i-db docs">
-  <meta property="og:description" content="Equity factors die by lookahead: a B/P ratio computed with a book value the market had not seen yet will backtest beautifully and trade terribly. This recipe builds three classic factors - value (B/P), momentum (12-1) …">
+  <meta property="og:description" content="Equity factors die by lookahead: a B/P ratio computed with a book value the market had not seen yet will backtest beautifully and trade terribly. This recipe builds three classic factors, value (B/P), momentum (12-1) …">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Building a point-in-time factor library · h5i-db docs">
-  <meta name="twitter:description" content="Equity factors die by lookahead: a B/P ratio computed with a book value the market had not seen yet will backtest beautifully and trade terribly. This recipe builds three classic factors - value (B/P), momentum (12-1) …">
+  <meta name="twitter:description" content="Equity factors die by lookahead: a B/P ratio computed with a book value the market had not seen yet will backtest beautifully and trade terribly. This recipe builds three classic factors, value (B/P), momentum (12-1) …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -74,8 +74,8 @@
 <h1>Building a point-in-time factor library</h1>
 <p>Equity factors die by lookahead: a B/P ratio computed with a book value the
 market had not seen yet will backtest beautifully and trade terribly. This
-recipe builds three classic factors - value (B/P), momentum (12-1), and a
-quality proxy (revenue-growth stability) - with the fundamental data joined
+recipe builds three classic factors, value (B/P), momentum (12-1) and a
+quality proxy (revenue-growth stability), with the fundamental data joined
 <strong>as of its report date</strong> via h5i-db's <code>asof_join</code>, evaluates them with
 monthly ICs and quintile spreads, and persists the result as a versioned,
 snapshotted factor panel: the "factor library" pattern, where every rebuild
@@ -93,7 +93,7 @@ is a commit you can diff and pin.</p>
 </div>
 <h2 id="1-prices-and-fundamentals-as-separate-feeds">1. Prices and fundamentals as separate feeds<a class="headerlink" href="#1-prices-and-fundamentals-as-separate-feeds" title="Permanent link">#</a></h2>
 <p>50 synthetic names: ~3 years of daily prices, and 12 quarters of
-fundamentals where <code>ts</code> is the <strong>report</strong> (public availability) timestamp -
+fundamentals where <code>ts</code> is the <strong>report</strong> (public availability) timestamp,
 25–55 days after <code>period_end</code>, like real filings. Keeping the two feeds in
 separate tables with their own time semantics is what makes point-in-time
 joins possible at all.</p>
@@ -120,8 +120,8 @@ joins possible at all.</p>
 <p>Quality here = <em>stability</em> of quarterly revenue growth: the (negated) stddev
 of the last four quarter-over-quarter growth rates. Both the growth and its
 trailing stddev are window functions over the report-time series, so this is
-one SQL statement whose output we store as its own table, <code>fund_signals</code> -
-derived data is data, and it should be versioned like everything else.</p>
+one SQL statement whose output we store as its own table, <code>fund_signals</code>.
+Derived data is data, and it should be versioned like everything else.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">fund_sig</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    WITH g AS (</span>
@@ -163,8 +163,8 @@ derived data is data, and it should be versioned like everything else.</p>
 <h2 id="3-month-end-price-panel-with-momentum">3. Month-end price panel with momentum<a class="headerlink" href="#3-month-end-price-panel-with-momentum" title="Permanent link">#</a></h2>
 <p>Same pattern as the momentum recipe: <code>lag(21)/lag(252)</code> per symbol for 12-1
 momentum, sampled on the last trading day of each month via
-<code>time_bucket('1mo', ...)</code>. This panel also gets stored - <code>asof_join</code>
-operates on tables, and month-end observation dates are exactly the left
+<code>time_bucket('1mo', ...)</code>. This panel also gets stored, because <code>asof_join</code>
+operates on tables and month-end observation dates are exactly the left
 side we want fundamentals attached to.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">panel_tbl</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
@@ -221,7 +221,7 @@ side we want fundamentals attached to.</p>
 <p><code>asof_join('panel_me', 'fund_signals', 'ts', 'ts', 'symbol')</code>: for every
 month-end row, the latest fundamental row <strong>reported at or before</strong> that
 date, per symbol. No calendar arithmetic, no "shift the quarter by 45 days"
-heuristics - the report timestamp is the join key, so restatement lags are
+heuristics: the report timestamp is the join key, so restatement lags are
 handled by construction. <code>ts_right</code> shows exactly which filing each month
 used; months before a symbol's first report get NULLs, as they should.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">pit</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
@@ -369,7 +369,7 @@ makes them comparable and combinable.</p>
 </div></div></div></div>
 <h2 id="6-evaluation-information-coefficients-and-quintile-spreads">6. Evaluation: information coefficients and quintile spreads<a class="headerlink" href="#6-evaluation-information-coefficients-and-quintile-spreads" title="Permanent link">#</a></h2>
 <p>The IC is the monthly Spearman rank correlation between the factor value at
-month-end <em>t</em> and the return over month <em>t+1</em> - the signal is fully
+month-end <em>t</em> and the return over month <em>t+1</em>, so the signal is fully
 observable before the return begins. A |t-stat| above ~2 on the mean IC is
 the usual bar for "this factor predicts something".</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">close_piv</span> <span class="o">=</span> <span class="n">pit</span><span class="o">.</span><span class="n">pivot</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="s2">&quot;close&quot;</span><span class="p">)</span>
@@ -513,7 +513,7 @@ Q5 − Q1.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<p>Read the numbers for what they are - this is where synthetic data teaches
+<p>Read the numbers for what they are; this is where synthetic data teaches
 the most:</p>
 <ul>
 <li><strong>Momentum</strong> is genuinely positive (IC t ≈ 2.7, double-digit annualized
@@ -522,7 +522,7 @@ the most:</p>
 <li><strong>Value</strong> is a null, correctly: the cross-sectional B/P ranking is
   dominated by each name's static book/shares draw, which carries no
   information about future returns.</li>
-<li><strong>Quality</strong> is the trap. Its mean IC has |t| ≈ 3 - yet the factor is
+<li><strong>Quality</strong> is the trap. Its mean IC has |t| ≈ 3, yet the factor is
   built from <em>pure noise</em> (every name has identical revenue-growth vol by
   construction). The trailing 4-quarter window means this month's factor is
   nearly identical to last month's, so the ~18 monthly ICs are one or two
@@ -531,9 +531,9 @@ the most:</p>
   non-overlapping windows) before you believe any t-stat.</li>
 </ul>
 <p>The combo inherits the noise it averages in. On ~20-30 months, none of this
-would clear a research bar on real data - the pipeline, not the alphas, is
+would clear a research bar on real data; the pipeline, not the alphas, is
 the deliverable.</p>
-<h2 id="7-persist-the-panel-the-factor-library-pattern">7. Persist the panel - the factor library pattern<a class="headerlink" href="#7-persist-the-panel-the-factor-library-pattern" title="Permanent link">#</a></h2>
+<h2 id="7-persist-the-panel-the-factor-library-pattern">7. Persist the panel: the factor library pattern<a class="headerlink" href="#7-persist-the-panel-the-factor-library-pattern" title="Permanent link">#</a></h2>
 <p>The finished panel (raw factors + z-scores) becomes a <code>factor_panel</code> table,
 and the snapshot names the state of <em>every</em> table that produced it. Rebuild
 the library next month and you get a new version to diff; pin a paper or a
@@ -614,7 +614,7 @@ production model to the snapshot it was trained on.</p>
   windows (<code>lag</code>, <code>stddev ... OVER ROWS</code>, <code>time_bucket('1mo')</code>).</li>
 <li>The evaluation is honest on synthetic data: momentum works (drift is
   persistent by construction), value is a null, and quality's "significant"
-  t-stat is an overlapping-window artifact built from pure noise - the
+  t-stat is an overlapping-window artifact built from pure noise, the
   cheapest lesson in factor-research inference you will ever get.</li>
 <li>One <code>db.snapshot(...)</code> pins the <em>entire</em> input lineage of a factor build.
   "Which fundamentals produced the panel my model trained on?" becomes a
@@ -626,7 +626,7 @@ production model to the snapshot it was trained on.</p>
     <nav class="page-nav"><a class="prev" href="../../cookbook/02_alpha_research/04_realized_volatility.html"><span class="dir">← Previous</span><span class="pn-title">Realized volatility from ticks: signature plots, jumps, overnight risk</span></a><a class="next" href="../../cookbook/02_alpha_research/06_event_study.html"><span class="dir">Next →</span><span class="pn-title">Event studies: CARs with ASOF-aligned announcement dates</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-prices-and-fundamentals-as-separate-feeds">1. Prices and fundamentals as separate feeds</a></li><li><a href="#2-derived-fundamental-signals-per-report-date">2. Derived fundamental signals, per report date</a></li><li><a href="#3-month-end-price-panel-with-momentum">3. Month-end price panel with momentum</a></li><li><a href="#4-the-point-in-time-join">4. The point-in-time join</a></li><li><a href="#5-assemble-the-three-factors">5. Assemble the three factors</a></li><li><a href="#6-evaluation-information-coefficients-and-quintile-spreads">6. Evaluation: information coefficients and quintile spreads</a></li><li><a href="#7-persist-the-panel-the-factor-library-pattern">7. Persist the panel - the factor library pattern</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-prices-and-fundamentals-as-separate-feeds">1. Prices and fundamentals as separate feeds</a></li><li><a href="#2-derived-fundamental-signals-per-report-date">2. Derived fundamental signals, per report date</a></li><li><a href="#3-month-end-price-panel-with-momentum">3. Month-end price panel with momentum</a></li><li><a href="#4-the-point-in-time-join">4. The point-in-time join</a></li><li><a href="#5-assemble-the-three-factors">5. Assemble the three factors</a></li><li><a href="#6-evaluation-information-coefficients-and-quintile-spreads">6. Evaluation: information coefficients and quintile spreads</a></li><li><a href="#7-persist-the-panel-the-factor-library-pattern">7. Persist the panel: the factor library pattern</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Fixed income: versioned curve marks, restatements, carry &amp; rolldown · h5i-db docs</title>
-  <meta name="description" content="A rates desk&#x27;s core dataset is small but unforgiving: one par curve per mark date, and every number on it feeds risk, P&amp;L and client marks. The natural h5i-db layout is long format - (ts, tenoryears, yieldpct) - with …">
+  <meta name="description" content="A rates desk&#x27;s core dataset is small but unforgiving: one par curve per mark date, and every number on it feeds risk, P&amp;L and client marks. The natural h5i-db layout is long format, (ts, tenoryears, yieldpct), with one …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -15,11 +15,11 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Fixed income: versioned curve marks, restatements, carry &amp; rolldown · h5i-db docs">
-  <meta property="og:description" content="A rates desk&#x27;s core dataset is small but unforgiving: one par curve per mark date, and every number on it feeds risk, P&amp;L and client marks. The natural h5i-db layout is long format - (ts, tenoryears, yieldpct) - with …">
+  <meta property="og:description" content="A rates desk&#x27;s core dataset is small but unforgiving: one par curve per mark date, and every number on it feeds risk, P&amp;L and client marks. The natural h5i-db layout is long format, (ts, tenoryears, yieldpct), with one …">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Fixed income: versioned curve marks, restatements, carry &amp; rolldown · h5i-db docs">
-  <meta name="twitter:description" content="A rates desk&#x27;s core dataset is small but unforgiving: one par curve per mark date, and every number on it feeds risk, P&amp;L and client marks. The natural h5i-db layout is long format - (ts, tenoryears, yieldpct) - with …">
+  <meta name="twitter:description" content="A rates desk&#x27;s core dataset is small but unforgiving: one par curve per mark date, and every number on it feeds risk, P&amp;L and client marks. The natural h5i-db layout is long format, (ts, tenoryears, yieldpct), with one …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -74,15 +74,15 @@
 <h1>Fixed income: versioned curve marks, restatements, carry &amp; rolldown</h1>
 <p>A rates desk's core dataset is small but unforgiving: one par curve per
 mark date, and every number on it feeds risk, P&amp;L and client marks. The
-natural h5i-db layout is <em>long format</em> - <code>(ts, tenor_years, yield_pct)</code> -
+natural h5i-db layout is <em>long format</em>, <code>(ts, tenor_years, yield_pct)</code>,
 with one commit per mark date. That buys three things at once: SQL pivots
 for any curve analytics, a version per EOD mark set (the audit trail
 regulators actually ask about), and previewable restatements when a bad
 contributor slips through.</p>
-<p>We store 250 business days of curves - including one fat-fingered 10y mark
-we plant deliberately - run slope/curvature analytics, <em>find</em> the bad mark
-in SQL, restate it with <code>plan_replace_range</code>, and prove the pre-restatement
-view is still queryable forever.</p>
+<p>We store 250 business days of curves, including one fat-fingered 10y mark
+we plant deliberately, then run slope/curvature analytics, <em>find</em> the bad
+mark in SQL, restate it with <code>plan_replace_range</code>, and prove the
+pre-restatement view is still queryable forever.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 <span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
@@ -108,7 +108,7 @@ view is still queryable forever.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">vendor feed: 2,500 rows, bad 10y mark on 2025-12-16</pre></div></div>
 <h2 id="1-one-mark-date-one-commit">1. One mark date = one commit<a class="headerlink" href="#1-one-mark-date-one-commit" title="Permanent link">#</a></h2>
 <p>Each day's ten tenors are appended together: the commit <em>is</em> the mark set.
-<code>versions()</code> then reads as the desk's marking diary - sequence, rows, and a
+<code>versions()</code> then reads as the desk's marking diary: sequence, rows, and a
 note naming the mark date. (250 commits in a loop is fine; it is still one
 commit per publication event, the batching h5i-db expects.)</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
@@ -144,7 +144,7 @@ commit per publication event, the batching h5i-db expects.)</p>
 <h2 id="2-curve-analytics-as-sql-pivots">2. Curve analytics as SQL pivots<a class="headerlink" href="#2-curve-analytics-as-sql-pivots" title="Permanent link">#</a></h2>
 <p>Long format pivots cleanly with conditional aggregation: one row per mark
 date, one column per benchmark tenor. From there, the desk's standing time
-series are arithmetic - 2s10s slope, 2s5s10s butterfly (curvature), and a
+series are arithmetic: 2s10s slope, 2s5s10s butterfly (curvature), and a
 naive term-structure premium proxy (10y − 3m; a real term premium needs an
 expectations model, this is just the long-slope observable).</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">key_rates</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
@@ -299,14 +299,14 @@ all (tenor, date) pairs surfaces it immediately.</p>
 </table>
 </div></div></div></div>
 <p>The top two rows are the same tenor on consecutive dates with opposite
-signs - the signature of a bad print, not a market move.</p>
-<h2 id="4-restate-it-with-a-preview-a-note-and-full-history">4. Restate it - with a preview, a note, and full history<a class="headerlink" href="#4-restate-it-with-a-preview-a-note-and-full-history" title="Permanent link">#</a></h2>
+signs, the signature of a bad print rather than a market move.</p>
+<h2 id="4-restate-it-with-a-preview-a-note-and-full-history">4. Restate it, with a preview, a note, and full history<a class="headerlink" href="#4-restate-it-with-a-preview-a-note-and-full-history" title="Permanent link">#</a></h2>
 <p><code>plan_replace_range</code> stages the correction against the bad mark date
 (range bounds are raw microseconds in <code>ts</code> units; the end bound is
 exclusive, so <code>[day_us, day_us + 1)</code> captures exactly that day's ten rows
 since all ten share the same timestamp). We inspect the summary and
 samples <em>before</em> anything changes, then apply with a note. The desk never
-edits history - it appends a corrected version on top.</p>
+edits history; it appends a corrected version on top.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">day_us</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">bad_date</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
 <span class="n">corrected</span> <span class="o">=</span> <span class="n">clean_df</span><span class="p">[</span><span class="n">clean_df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">bad_date</span><span class="p">]</span>  <span class="c1"># the true marks for that day</span>
 
@@ -347,7 +347,7 @@ after (10y row):
   &#x27;note&#x27;: &#x27;restate 2025-12-16: 10y stale contributor, -25bp&#x27;}]</pre></div></div>
 <h2 id="5-point-in-time-what-did-risk-run-on-that-night">5. Point-in-time: what did risk run on that night?<a class="headerlink" href="#5-point-in-time-what-did-risk-run-on-that-night" title="Permanent link">#</a></h2>
 <p>The question that matters after any restatement: <em>which number did
-downstream consumers actually see?</em> Every version is still addressable -
+downstream consumers actually see?</em> Every version is still addressable:
 <code>h5i('curves', v)</code> in SQL joins the as-marked view against the restated
 head in one query. Overnight risk on the bad date ran on 4.05%; today's
 books show 3.80% for the same mark date.</p>
@@ -412,10 +412,10 @@ books show 3.80% for the same mark date.</p>
 <h2 id="6-carry-rolldown-from-the-latest-curve">6. Carry &amp; rolldown from the latest curve<a class="headerlink" href="#6-carry-rolldown-from-the-latest-curve" title="Permanent link">#</a></h2>
 <p>Standard unchanged-curve arithmetic for a 5y position over a 1y horizon,
 interpolating the stored tenors: <strong>rolldown</strong> is the yield pickup from
-aging 5y → 4y on today's curve; <strong>carry</strong> is the yield over 3m funding -
-negative here, since this simulated curve ends the year inverted at the
+aging 5y → 4y on today's curve; <strong>carry</strong> is the yield over 3m funding,
+negative here since this simulated curve ends the year inverted at the
 front. Both are yield-space approximations (multiply by duration for price
-space) - fine for a relative-value screen, not a P&amp;L forecast.</p>
+space), fine for a relative-value screen but not a P&amp;L forecast.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">latest</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
     <span class="s2">&quot;SELECT tenor_years, yield_pct FROM curves WHERE ts = (SELECT max(ts) FROM curves) ORDER BY tenor_years&quot;</span>
 <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
@@ -457,7 +457,7 @@ carry + roll:          -48.0 bp per year, curve unchanged</pre></div></div>
 <li>Long format <code>(ts, tenor_years, yield_pct)</code> + one commit per mark date
   turns the curve history into a versioned, SQL-queryable marking diary.</li>
 <li>Conditional-aggregation pivots and <code>lag()</code> windows cover the standing
-  analytics - slope, fly, day-over-day outlier detection - without ever
+  analytics (slope, fly, day-over-day outlier detection) without ever
   reshaping data outside the database.</li>
 <li>Restatements are <code>plan_replace_range</code>: microsecond range bounds
   (end-exclusive) select the mark date, the preview shows exactly what
@@ -465,7 +465,7 @@ carry + roll:          -48.0 bp per year, curve unchanged</pre></div></div>
 <li>Point-in-time is free: <code>h5i('curves', v)</code> joined against the head answers
   "what did risk run on that night?" with provenance, not archaeology.</li>
 <li>Carry/rolldown and similar curve math read naturally off the stored
-  tenors - the database serves marks, pandas does the interpolation.</li>
+  tenors: the database serves marks, pandas does the interpolation.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>
@@ -473,7 +473,7 @@ carry + roll:          -48.0 bp per year, curve unchanged</pre></div></div>
     <nav class="page-nav"><a class="prev" href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html"><span class="dir">← Previous</span><span class="pn-title">FX and crypto: 24/7 data without an exchange session</span></a><a class="next" href="../../cookbook/03_risk_and_production/10_performance_tuning.html"><span class="dir">Next →</span><span class="pn-title">Performance tuning: pruning, projection, commit granularity, caches</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-one-mark-date-one-commit">1. One mark date = one commit</a></li><li><a href="#2-curve-analytics-as-sql-pivots">2. Curve analytics as SQL pivots</a></li><li><a href="#3-find-the-bad-mark-with-a-window-function">3. Find the bad mark with a window function</a></li><li><a href="#4-restate-it-with-a-preview-a-note-and-full-history">4. Restate it - with a preview, a note, and full history</a></li><li><a href="#5-point-in-time-what-did-risk-run-on-that-night">5. Point-in-time: what did risk run on that night?</a></li><li><a href="#6-carry-rolldown-from-the-latest-curve">6. Carry &amp; rolldown from the latest curve</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-one-mark-date-one-commit">1. One mark date = one commit</a></li><li><a href="#2-curve-analytics-as-sql-pivots">2. Curve analytics as SQL pivots</a></li><li><a href="#3-find-the-bad-mark-with-a-window-function">3. Find the bad mark with a window function</a></li><li><a href="#4-restate-it-with-a-preview-a-note-and-full-history">4. Restate it, with a preview, a note, and full history</a></li><li><a href="#5-point-in-time-what-did-risk-run-on-that-night">5. Point-in-time: what did risk run on that night?</a></li><li><a href="#6-carry-rolldown-from-the-latest-curve">6. Carry &amp; rolldown from the latest curve</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

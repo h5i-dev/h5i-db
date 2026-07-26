@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EOD snapshots and the audit trail regulators actually ask for · h5i-db docs</title>
-  <meta name="description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot; - it is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
+  <meta name="description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot;. It is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -15,11 +15,11 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="EOD snapshots and the audit trail regulators actually ask for · h5i-db docs">
-  <meta property="og:description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot; - it is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
+  <meta property="og:description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot;. It is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="EOD snapshots and the audit trail regulators actually ask for · h5i-db docs">
-  <meta name="twitter:description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot; - it is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
+  <meta name="twitter:description" content="The question that arrives eighteen months later is never &quot;what is the price now&quot;. It is &quot;what did your systems know at the close of business on 2026-06-02?&quot;. If your answer involves restoring backup tapes, you have …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -73,13 +73,13 @@
 <span>EOD snapshots and the audit trail regulators actually ask for</span></div>
 <h1>EOD snapshots and the audit trail regulators actually ask for</h1>
 <p>The question that arrives eighteen months later is never "what is the price
-now" - it is <em>"what did your systems know at the close of business on
+now". It is <em>"what did your systems know at the close of business on
 2026-06-02?"</em>. If your answer involves restoring backup tapes, you have
 already lost the meeting. In h5i-db an end-of-day cut is a named snapshot:
 a checksummed pin of the table manifest, O(1) to create, addressable
 forever from SQL as <code>h5i('trades', 'eod-2026-06-02')</code>.</p>
-<p>This recipe builds a small EOD pipeline - append the day's feed, run
-data-quality checks, snapshot, log - then answers the regulator's question
+<p>This recipe builds a small EOD pipeline (append the day's feed, run
+data-quality checks, snapshot, log), then answers the regulator's question
 three ways, diffs two EOD cuts in SQL, and closes with integrity
 attestation (<code>verify(deep=True)</code>) and retention (<code>vacuum</code>).</p>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
@@ -96,7 +96,7 @@ attestation (<code>verify(deep=True)</code>) and retention (<code>vacuum</code>)
 <em>creation</em> only (<code>db.snapshot(name, tables=[...], note=...)</code>); listing
 snapshots is a CLI feature (<code>h5i-db snapshot list</code>). Production pipelines
 want the catalog queryable next to the data, so we keep our own
-<code>snapshot_log</code> table - each EOD run appends one row with the name, pinned
+<code>snapshot_log</code> table: each EOD run appends one row with the name, pinned
 sequence and manifest checksum returned by <code>snapshot()</code>. The log is itself
 versioned and append-only, which is exactly what an auditor wants a log
 to be.</p>
@@ -129,7 +129,7 @@ to be.</p>
 <h2 id="2-the-eod-pipeline-append-check-snapshot-log">2. The EOD pipeline: append, check, snapshot, log<a class="headerlink" href="#2-the-eod-pipeline-append-check-snapshot-log" title="Permanent link">#</a></h2>
 <p>Three simulated production days. Each day: one atomic <code>append</code> of the
 day's feed (with a note), a minimal data-quality gate (row count, price
-positivity, universe completeness), and - only if the gate passes - a named
+positivity, universe completeness), and, only if the gate passes, a named
 snapshot plus a log row. The snapshot dict returns, per table, the pinned
 version and a manifest checksum: cryptographic evidence of exactly what the
 name refers to.</p>
@@ -179,7 +179,7 @@ name refers to.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">2026-06-01: appended 62,504 rows as v1, checks {&#x27;rows&#x27;: 62504, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-01&#x27;
 2026-06-02: appended 64,059 rows as v2, checks {&#x27;rows&#x27;: 64059, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-02&#x27;
 2026-06-03: appended 68,714 rows as v3, checks {&#x27;rows&#x27;: 68714, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-03&#x27;</pre></div></div>
-<p>The snapshot dict itself - name, creation time, and per-table pins with
+<p>The snapshot dict itself: name, creation time, and per-table pins with
 checksums. This is what lands in the log:</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">last_snap</span>
 </pre></div>
@@ -234,7 +234,7 @@ checksums. This is what lands in the log:</p>
   </tbody>
 </table>
 </div></div></div></div>
-<h2 id="3-what-did-you-know-on-2026-06-02-three-ways-to-answer">3. "What did you know on 2026-06-02?" - three ways to answer<a class="headerlink" href="#3-what-did-you-know-on-2026-06-02-three-ways-to-answer" title="Permanent link">#</a></h2>
+<h2 id="3-what-did-you-know-on-2026-06-02-three-ways-to-answer">3. "What did you know on 2026-06-02?" Three ways to answer<a class="headerlink" href="#3-what-did-you-know-on-2026-06-02-three-ways-to-answer" title="Permanent link">#</a></h2>
 <p>The same read point is addressable by <strong>snapshot name</strong> (business meaning:
 the EOD cut), by <strong>version number</strong> (from the log's <code>pinned_sequence</code>), and
 by <strong>as-of commit time</strong> (wall-clock: "whatever was committed before T").
@@ -290,7 +290,7 @@ by version 2:     126,563 rows
 by as_of 2026-07-23T03:57:05.160769803+00:00: 126,563 rows</pre></div></div>
 <h2 id="4-diff-two-eod-cuts-in-one-sql-statement">4. Diff two EOD cuts in one SQL statement<a class="headerlink" href="#4-diff-two-eod-cuts-in-one-sql-statement" title="Permanent link">#</a></h2>
 <p>Because snapshots are relations, "what changed between the 2nd and the 3rd"
-is a join, not an ETL job - per symbol: rows added and where the last print
+is a join, not an ETL job: per symbol, rows added and where the last print
 moved.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
@@ -351,7 +351,7 @@ moved.</p>
 </div></div></div></div>
 <h2 id="5-integrity-attestation">5. Integrity attestation<a class="headerlink" href="#5-integrity-attestation" title="Permanent link">#</a></h2>
 <p><code>verify(deep=True)</code> re-reads every manifest and segment and checks the
-checksum chain - head to genesis. Combined with the manifest checksums
+checksum chain from head to genesis. Combined with the manifest checksums
 recorded in <code>snapshot_log</code>, this is an attestation you can hand over:
 the EOD cut named in the log resolves to a manifest whose checksum matches,
 and every byte under it verifies.</p>
@@ -372,8 +372,8 @@ and every byte under it verifies.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">checked 4 manifests, 6 segments, 2,850,204 bytes - no problems</pre></div></div>
 <h2 id="6-retention-vacuum-respects-history-and-snapshots">6. Retention: vacuum respects history and snapshots<a class="headerlink" href="#6-retention-vacuum-respects-history-and-snapshots" title="Permanent link">#</a></h2>
 <p><code>vacuum</code> reclaims storage that nothing references. Here every segment is
-still reachable - through the version chain and through the three EOD
-snapshots - so even an aggressive <code>grace_seconds=0</code> run deletes nothing,
+still reachable, through the version chain and through the three EOD
+snapshots, so even an aggressive <code>grace_seconds=0</code> run deletes nothing,
 and the oldest EOD cut remains readable afterwards. Snapshots are the
 retention policy: pin what you must keep, vacuum the rest.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;dry run:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
@@ -388,8 +388,8 @@ oldest EOD cut still readable: 62,504 rows</pre></div></div>
 <ul>
 <li>An EOD cut is <code>db.snapshot(name, tables=[...], note=...)</code>: O(1), no data
   copied, addressable from SQL forever as <code>h5i('table', 'name')</code>.</li>
-<li>"As known on date X" has three equivalent spellings - snapshot name,
-  version number, <code>as_of</code> commit time - and all resolve without replay.</li>
+<li>"As known on date X" has three equivalent spellings (snapshot name,
+  version number, <code>as_of</code> commit time) and all resolve without replay.</li>
 <li>The Python API doesn't list snapshots yet (the CLI does); an append-only
   <code>snapshot_log</code> table closes the gap and gives you a <em>queryable, versioned</em>
   catalog with the pinned sequence and manifest checksum per cut.</li>
@@ -402,7 +402,7 @@ oldest EOD cut still readable: 62,504 rows</pre></div></div>
     <nav class="page-nav"><a class="prev" href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html"><span class="dir">← Previous</span><span class="pn-title">Reproducible backtests: pin the data, not just the code</span></a><a class="next" href="../../cookbook/03_risk_and_production/04_data_quality_gates.html"><span class="dir">Next →</span><span class="pn-title">Data-quality gates: staging, policy, and previewable remediation</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-tables-the-feed-and-our-own-snapshot-log">1. Tables: the feed, and our own snapshot log</a></li><li><a href="#2-the-eod-pipeline-append-check-snapshot-log">2. The EOD pipeline: append, check, snapshot, log</a></li><li><a href="#3-what-did-you-know-on-2026-06-02-three-ways-to-answer">3. "What did you know on 2026-06-02?" - three ways to answer</a></li><li><a href="#4-diff-two-eod-cuts-in-one-sql-statement">4. Diff two EOD cuts in one SQL statement</a></li><li><a href="#5-integrity-attestation">5. Integrity attestation</a></li><li><a href="#6-retention-vacuum-respects-history-and-snapshots">6. Retention: vacuum respects history and snapshots</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-tables-the-feed-and-our-own-snapshot-log">1. Tables: the feed, and our own snapshot log</a></li><li><a href="#2-the-eod-pipeline-append-check-snapshot-log">2. The EOD pipeline: append, check, snapshot, log</a></li><li><a href="#3-what-did-you-know-on-2026-06-02-three-ways-to-answer">3. "What did you know on 2026-06-02?" Three ways to answer</a></li><li><a href="#4-diff-two-eod-cuts-in-one-sql-statement">4. Diff two EOD cuts in one SQL statement</a></li><li><a href="#5-integrity-attestation">5. Integrity attestation</a></li><li><a href="#6-retention-vacuum-respects-history-and-snapshots">6. Retention: vacuum respects history and snapshots</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

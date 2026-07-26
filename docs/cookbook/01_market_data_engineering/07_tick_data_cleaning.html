@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Tick data cleaning: find it, preview the fix, keep the audit trail · h5i-db docs</title>
-  <meta name="description" content="Raw vendor tick files arrive dirty: fat-finger prints 10x off, zero prices from feed glitches, duplicated blocks from replayed packets, after-hours junk. The dangerous part isn&#x27;t detection - it&#x27;s the fix: a script that …">
+  <meta name="description" content="Raw vendor tick files arrive dirty: fat-finger prints 10x off, zero prices from feed glitches, duplicated blocks from replayed packets, after-hours junk. The dangerous part is the fix, not the detection: a script that …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -15,11 +15,11 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Tick data cleaning: find it, preview the fix, keep the audit trail · h5i-db docs">
-  <meta property="og:description" content="Raw vendor tick files arrive dirty: fat-finger prints 10x off, zero prices from feed glitches, duplicated blocks from replayed packets, after-hours junk. The dangerous part isn&#x27;t detection - it&#x27;s the fix: a script that …">
+  <meta property="og:description" content="Raw vendor tick files arrive dirty: fat-finger prints 10x off, zero prices from feed glitches, duplicated blocks from replayed packets, after-hours junk. The dangerous part is the fix, not the detection: a script that …">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Tick data cleaning: find it, preview the fix, keep the audit trail · h5i-db docs">
-  <meta name="twitter:description" content="Raw vendor tick files arrive dirty: fat-finger prints 10x off, zero prices from feed glitches, duplicated blocks from replayed packets, after-hours junk. The dangerous part isn&#x27;t detection - it&#x27;s the fix: a script that …">
+  <meta name="twitter:description" content="Raw vendor tick files arrive dirty: fat-finger prints 10x off, zero prices from feed glitches, duplicated blocks from replayed packets, after-hours junk. The dangerous part is the fix, not the detection: a script that …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -74,7 +74,7 @@
 <h1>Tick data cleaning: find it, preview the fix, keep the audit trail</h1>
 <p>Raw vendor tick files arrive dirty: fat-finger prints 10x off, zero prices
 from feed glitches, duplicated blocks from replayed packets, after-hours
-junk. The dangerous part isn't detection - it's the <em>fix</em>: a script that
+junk. The dangerous part is the <em>fix</em>, not the detection: a script that
 UPDATEs ticks in place leaves you unable to say what changed, when, or how
 to undo it. h5i-db's answer is the plan/apply flow: every mutation is
 staged as a previewable plan (row counts, before/after samples), applied as
@@ -136,7 +136,7 @@ closes at 20:00).</p>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">dirty</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows including </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">dup_block</span><span class="p">)</span><span class="si">}</span><span class="s2"> duplicates and </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">after_hours</span><span class="p">)</span><span class="si">}</span><span class="s2"> after-hours prints&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">118,289 rows including 30 duplicates and 40 after-hours prints</pre></div></div>
-<p>Ingest day by day, one commit per vendor file - the commit boundary <em>is</em> the
+<p>Ingest day by day, one commit per vendor file; the commit boundary <em>is</em> the
 provenance boundary, and the notes say which file each version came from.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">TRADE_SCHEMA</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
     <span class="p">[</span>
@@ -158,9 +158,9 @@ provenance boundary, and the notes say which file each version came from.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">as-delivered head version: 2</pre></div></div>
 <h2 id="2-detection-one-query-per-defect-class">2. Detection, one query per defect class<a class="headerlink" href="#2-detection-one-query-per-defect-class" title="Permanent link">#</a></h2>
-<p>Zero prices are a plain predicate. Fat fingers stand out against a robust
-local reference - the 5-minute per-symbol median via
-<code>approx_percentile_cont</code> - rather than a mean the outlier itself drags
+<p>Zero prices are a plain predicate. Fat fingers stand out against a local
+reference that resists outliers, the 5-minute per-symbol median via
+<code>approx_percentile_cont</code>, rather than a mean the outlier itself drags
 around:</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT symbol, count(*) AS zero_price_prints FROM trades WHERE price &lt;= 0 GROUP BY symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 </pre></div>
@@ -326,11 +326,11 @@ around:</p>
   </tbody>
 </table>
 </div></div></div></div>
-<h2 id="3-fix-1-delete-the-after-hours-block-with-a-preview">3. Fix 1 - delete the after-hours block, with a preview<a class="headerlink" href="#3-fix-1-delete-the-after-hours-block-with-a-preview" title="Permanent link">#</a></h2>
+<h2 id="3-fix-1-delete-the-after-hours-block-with-a-preview">3. Fix 1: delete the after-hours block, with a preview<a class="headerlink" href="#3-fix-1-delete-the-after-hours-block-with-a-preview" title="Permanent link">#</a></h2>
 <p><code>plan_delete_range</code> stages the mutation without touching the table. The
 range is a raw <code>int64</code> window in the time column's unit (microseconds
 here). The summary and <code>before_sample</code> tell you exactly what would
-disappear - <em>review the blast radius before anything changes</em>.</p>
+disappear; <em>review the blast radius before anything changes</em>.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">OOH0</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 22:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1_000</span><span class="p">)</span>
 <span class="n">OOH1</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 23:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1_000</span><span class="p">)</span>
 
@@ -410,9 +410,9 @@ disappear - <em>review the blast radius before anything changes</em>.</p>
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 1,
  &#x27;committed_at_ns&#x27;: 1784778980130073702}</pre></div></div>
-<h2 id="4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2 - replace the polluted window with repaired data<a class="headerlink" href="#4-fix-2-replace-the-polluted-window-with-repaired-data" title="Permanent link">#</a></h2>
-<p>For the 15:00-15:15 window we don't want to delete - we want the <em>corrected</em>
-prints: fat fingers scaled back by 10, zero prices dropped, duplicates
+<h2 id="4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2: replace the polluted window with repaired data<a class="headerlink" href="#4-fix-2-replace-the-polluted-window-with-repaired-data" title="Permanent link">#</a></h2>
+<p>For the 15:00-15:15 window we want the <em>corrected</em> prints rather than a
+deletion: fat fingers scaled back by 10, zero prices dropped, duplicates
 collapsed. Pull the window, repair it in pandas, and stage a
 <code>plan_replace_range</code> with the repaired rows. The after/before samples make
 the correction reviewable line by line.</p>
@@ -569,7 +569,7 @@ the correction reviewable line by line.</p>
 </table>
 </div></div></div></div>
 <h2 id="5-the-audit-trail-every-correction-is-a-version">5. The audit trail: every correction is a version<a class="headerlink" href="#5-the-audit-trail-every-correction-is-a-version" title="Permanent link">#</a></h2>
-<p><code>versions()</code> reads like a changelog - which vendor file arrived when, what
+<p><code>versions()</code> reads like a changelog: which vendor file arrived when, what
 was deleted, what was replaced, each with a note. And because the
 as-delivered version is still addressable, "what exactly did we change?" is
 a SQL join between two versions of the same table, not an archaeology
@@ -655,7 +655,7 @@ project:</p>
 <h2 id="6-over-cleaned-restore-is-the-undo-button">6. Over-cleaned? <code>restore()</code> is the undo button<a class="headerlink" href="#6-over-cleaned-restore-is-the-undo-button" title="Permanent link">#</a></h2>
 <p>Suppose an eager second pass deletes a window that turns out to be
 legitimate volatility. Because the deletion is just another version,
-rolling back is <code>restore()</code> - which moves the head <em>forward</em> to a new
+rolling back is <code>restore()</code>, which moves the head <em>forward</em> to a new
 version with the old content. Nothing is ever lost, including the mistake
 itself.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">bad0</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-02 14:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1_000</span><span class="p">)</span>
@@ -682,8 +682,8 @@ rows after restore:    118213</pre><pre>[{&#x27;sequence&#x27;: 4,
   &#x27;rows&#x27;: 118213,
   &#x27;note&#x27;: &#x27;restore of version 4&#x27;}]</pre></div></div>
 <h2 id="7-lock-the-table-down-plans-only">7. Lock the table down: plans only<a class="headerlink" href="#7-lock-the-table-down-plans-only" title="Permanent link">#</a></h2>
-<p>On a shared research database you want <em>nobody</em> - junior, cron job, or
-LLM agent - running unreviewed destructive writes. <code>set_policy</code> gates the
+<p>On a shared research database you want <em>nobody</em> (junior, cron job, or
+LLM agent) running unreviewed destructive writes. <code>set_policy</code> gates the
 direct mutation paths; the plan/apply flow (which forces a previewable,
 noted, atomic commit) keeps working. A gated call raises <code>PolicyError</code>
 with a machine-readable code and a remediation hint:</p>
@@ -699,7 +699,7 @@ with a machine-readable code and a remediation hint:</p>
 
 blocked: code=policy_violation
 hint: run the write with --plan to preview it, review, then `h5i-db plan apply`; or relax the policy with `h5i-db policy set`</pre></div></div>
-<p>Pending plans are first-class objects too: they show up in <code>list_plans()</code>
+<p>Pending plans are durable objects too: they show up in <code>list_plans()</code>
 for teammates to review, survive process restarts, and expire after 7 days
 if never applied (vacuum won't collect segments a live plan references).</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">pending</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">bad0</span><span class="p">,</span> <span class="n">bad1</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;for review: is 14:00-14:10 real?&quot;</span><span class="p">)</span>
@@ -715,7 +715,7 @@ after discard: []</pre></div></div>
   hours, <code>approx_percentile_cont</code> medians for fat fingers, GROUP BY/HAVING
   for replayed packets.</li>
 <li><code>plan_delete_range</code> / <code>plan_replace_range</code> make corrections <em>reviewable
-  before they happen</em> - summary, before/after samples - then land them as
+  before they happen</em> (summary, before/after samples), then land them as
   atomic, noted commits. Ranges are raw microseconds of the time column.</li>
 <li>The version chain is the audit trail: as-delivered data stays queryable
   (<code>h5i('trades', v)</code>), diffs are SQL joins, and <code>restore()</code> undoes
@@ -729,7 +729,7 @@ after discard: []</pre></div></div>
     <nav class="page-nav"><a class="prev" href="../../cookbook/01_market_data_engineering/06_point_in_time_fundamentals.html"><span class="dir">← Previous</span><span class="pn-title">Point-in-time fundamentals: killing lookahead bias with ASOF joins</span></a><a class="next" href="../../cookbook/01_market_data_engineering/08_nbbo_consolidation.html"><span class="dir">Next →</span><span class="pn-title">NBBO consolidation: best bid/offer across fragmented venues</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-manufacture-a-dirty-vendor-drop">1. Manufacture a dirty vendor drop</a></li><li><a href="#2-detection-one-query-per-defect-class">2. Detection, one query per defect class</a></li><li><a href="#3-fix-1-delete-the-after-hours-block-with-a-preview">3. Fix 1 - delete the after-hours block, with a preview</a></li><li><a href="#4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2 - replace the polluted window with repaired data</a></li><li><a href="#5-the-audit-trail-every-correction-is-a-version">5. The audit trail: every correction is a version</a></li><li><a href="#6-over-cleaned-restore-is-the-undo-button">6. Over-cleaned? restore() is the undo button</a></li><li><a href="#7-lock-the-table-down-plans-only">7. Lock the table down: plans only</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-manufacture-a-dirty-vendor-drop">1. Manufacture a dirty vendor drop</a></li><li><a href="#2-detection-one-query-per-defect-class">2. Detection, one query per defect class</a></li><li><a href="#3-fix-1-delete-the-after-hours-block-with-a-preview">3. Fix 1: delete the after-hours block, with a preview</a></li><li><a href="#4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2: replace the polluted window with repaired data</a></li><li><a href="#5-the-audit-trail-every-correction-is-a-version">5. The audit trail: every correction is a version</a></li><li><a href="#6-over-cleaned-restore-is-the-undo-button">6. Over-cleaned? restore() is the undo button</a></li><li><a href="#7-lock-the-table-down-plans-only">7. Lock the table down: plans only</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

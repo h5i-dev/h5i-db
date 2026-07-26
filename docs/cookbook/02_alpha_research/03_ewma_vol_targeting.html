@@ -76,8 +76,8 @@
 on every risk desk, and h5i-db ships it as a native SQL window function:
 <code>ewma(x, alpha) OVER (...)</code>. This recipe estimates EWMA vol in SQL,
 cross-checks it against <code>pandas.ewm</code> to the last bit, then uses it the way
-practitioners actually do - scaling exposure to hold a constant 10%
-annualized risk target - and compares raw vs vol-targeted equity curves on
+practitioners actually do, scaling exposure to hold a constant 10%
+annualized risk target, and compares raw vs vol-targeted equity curves on
 real data.</p>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 <span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
@@ -91,7 +91,7 @@ real data.</p>
 </div>
 <h2 id="1-real-prices-and-a-portfolio-return-series-in-sql">1. Real prices, and a portfolio return series in SQL<a class="headerlink" href="#1-real-prices-and-a-portfolio-return-series-in-sql" title="Permanent link">#</a></h2>
 <p>Ten liquid names, daily, 2020–2026 (cached). Our traded asset is the
-equal-weight portfolio of the ten - a reasonable broad-equity proxy with a
+equal-weight portfolio of the ten, a reasonable broad-equity proxy with a
 proper covid drawdown and the 2022 bear market in-sample. Per-symbol simple
 returns come from <code>lag()</code> per partition; the equal-weight portfolio is just
 the cross-sectional average per day. We keep only days where all ten names
@@ -142,13 +142,13 @@ step is a clean single-table window query.</p>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">port</span><span class="o">.</span><span class="n">num_rows</span><span class="si">}</span><span class="s2"> daily portfolio returns&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">1630 daily portfolio returns</pre></div></div>
-<h2 id="2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary">2. EWMA variance in SQL - and the lambda/alpha dictionary<a class="headerlink" href="#2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary" title="Permanent link">#</a></h2>
+<h2 id="2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary">2. EWMA variance in SQL, and the lambda/alpha dictionary<a class="headerlink" href="#2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary" title="Permanent link">#</a></h2>
 <p>RiskMetrics writes the recursion as
 $\sigma_t^2 = \lambda\,\sigma_{t-1}^2 + (1-\lambda)\,r_t^2$ with
 $\lambda = 0.94$ for daily data. h5i-db's <code>ewma(x, alpha)</code> uses the smoothing
 weight on the <em>new</em> observation, so <strong>alpha = 1 − lambda = 0.06</strong>. Same
-recursion, opposite naming convention - a perennial source of off-by-one-
-convention bugs. The 0.94/0.06 pair implies a center of mass of
+recursion, opposite naming convention, and a perennial source of
+off-by-one-convention bugs. The 0.94/0.06 pair implies a center of mass of
 λ/(1−λ) ≈ 16 trading days; at other bar frequencies you would rescale
 (e.g. λ closer to 0.97 for weekly bars) rather than reuse 0.94 blindly.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">ewma_sql</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
@@ -208,7 +208,7 @@ convention bugs. The 0.94/0.06 pair implies a center of mass of
 </div></div></div></div>
 <h2 id="3-vol-targeting">3. Vol targeting<a class="headerlink" href="#3-vol-targeting" title="Permanent link">#</a></h2>
 <p>Target 10% annualized. Each day the position is scaled by
-<code>leverage_t = target_vol / ewma_vol_{t-1}</code> - <strong>yesterday's</strong> vol estimate
+<code>leverage_t = target_vol / ewma_vol_{t-1}</code>, so <strong>yesterday's</strong> vol estimate
 sizes today's exposure; using today's would leak the day's own squared
 return into its sizing. Leverage is capped at 2x (financing and mandate
 reality), and we charge 5 bps on each day's change in gross exposure so the
@@ -295,14 +295,14 @@ strategy pays for its own rebalancing.</p>
 <p>The mechanics show up exactly where theory says they should: realized vol of
 the targeted book lands near 10% (versus ~24% raw), and the max drawdown
 shrinks by roughly two-thirds because the strategy de-levers into vol
-spikes (covid 2020, the 2022 bear). The Sharpe improves modestly - vol
+spikes (covid 2020, the 2022 bear). The Sharpe improves modestly: vol
 targeting is primarily a <em>risk shaping</em> tool that exploits the negative
-vol/return correlation in equities; treat any Sharpe pickup as a bonus, not
-the objective.</p>
+vol/return correlation in equities, so treat any Sharpe pickup as a bonus
+rather than the objective.</p>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
 <li><code>ewma(ret*ret, 0.06) OVER (ORDER BY ts)</code> reproduces the RiskMetrics
-  recursion in one SQL window call - verified bit-exact against
+  recursion in one SQL window call, verified bit-exact against
   <code>pandas.ewm(alpha=0.06, adjust=False)</code>.</li>
 <li>Remember the dictionary: h5i-db's <code>alpha</code> = 1 − RiskMetrics <code>lambda</code>.
   Daily λ=0.94 → <code>ewma(x, 0.06)</code>, ~16-day center of mass; rescale for other
@@ -310,9 +310,9 @@ the objective.</p>
 <li>Size with <em>yesterday's</em> vol estimate. Same-day sizing is lookahead, and it
   flatters exactly the days that matter.</li>
 <li>On this sample, targeting held realized vol at ~10% and cut max drawdown
-  from ~32% to ~11% with a small Sharpe gain - the honest selling point of
-  vol targeting.</li>
-<li>Derived series (<code>port_returns</code>) live as first-class versioned tables, so
+  from ~32% to ~11% with a small Sharpe gain, which is the honest selling
+  point of vol targeting.</li>
+<li>Derived series (<code>port_returns</code>) live as ordinary versioned tables, so
   the whole risk pipeline is SQL-queryable and reproducible.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
@@ -321,7 +321,7 @@ the objective.</p>
     <nav class="page-nav"><a class="prev" href="../../cookbook/02_alpha_research/02_pairs_trading.html"><span class="dir">← Previous</span><span class="pn-title">Pairs trading with a version-pinned data spine</span></a><a class="next" href="../../cookbook/02_alpha_research/04_realized_volatility.html"><span class="dir">Next →</span><span class="pn-title">Realized volatility from ticks: signature plots, jumps, overnight risk</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-real-prices-and-a-portfolio-return-series-in-sql">1. Real prices, and a portfolio return series in SQL</a></li><li><a href="#2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary">2. EWMA variance in SQL - and the lambda/alpha dictionary</a></li><li><a href="#3-vol-targeting">3. Vol targeting</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-real-prices-and-a-portfolio-return-series-in-sql">1. Real prices, and a portfolio return series in SQL</a></li><li><a href="#2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary">2. EWMA variance in SQL, and the lambda/alpha dictionary</a></li><li><a href="#3-vol-targeting">3. Vol targeting</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">
