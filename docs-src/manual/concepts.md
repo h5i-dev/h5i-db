@@ -95,6 +95,54 @@ create, free to keep. Snapshots make backtests reproducible ("run against
 `eod-2026-07-18`, forever") and answer audit questions ("what did we know at
 close on date X?"). A table pinned by a snapshot cannot be dropped.
 
+## Forks
+
+A snapshot pins a version so you can *read* it later. A **fork** pins one and
+lets you write on top:
+
+```console
+$ h5i-db fork create market.db agent-01
+$ h5i-db ingest market.db features out.parquet --fork agent-01
+```
+
+Creating a fork writes one small JSON object and copies no data. The first
+write to an existing table's name inside the fork copies that table's
+*manifest* — a list of segment metadata, kilobytes — into a new table, so the
+fork's rows are its own while the base's segments stay shared. Twenty agents
+forking a 50 GB dataset store 50 GB once plus whatever each of them writes.
+
+Because a fork's tables are ordinary tables, they contend with nothing: two
+agents writing "the same" table in two forks are writing two different tables.
+Reads resolve through the pin rather than through the head, so a fork neither
+sees nor is disturbed by commits landing on the base meanwhile.
+
+Work comes back with `promote`, which replaces one base table with the fork's
+version if the base has not moved since the fork was made:
+
+```console
+$ h5i-db fork diff market.db agent-01
+$ h5i-db fork promote market.db agent-01 --table features
+$ h5i-db fork drop market.db agent-02
+```
+
+The first promote wins and later ones are rejected rather than merged: the
+conflict unit is the whole table. There is no row-level merge, on purpose —
+speculative work is mostly discarded, and `drop` is the common ending.
+
+A fork pins the base versions it reads, so those versions cannot be expired
+while it lives; `fork list` shows how much each is holding back. Dropping the
+fork releases it.
+
+`--as-of` forks the past instead of the present:
+
+```console
+$ h5i-db fork create market.db backtest --as-of 2026-03-01T00:00:00Z
+```
+
+That gives a workspace where the base is frozen at a past instant but you can
+still materialise features, intermediate results, and scratch tables — the
+writable counterpart of a read-only historical pin.
+
 ## Previewable mutations: plan / apply
 
 Destructive operations (`delete-range`, `replace-range`) can run in two modes:

@@ -61,6 +61,23 @@ fixed order and tells you what it dropped.
    you might repeat. A retry after an ambiguous failure then returns the commit
    that already happened instead of appending the rows twice.
 
+## Trying something you might throw away
+
+Work that may not survive belongs in a fork, not in the base database. A fork
+is a writable workspace pinned to the current state; creating one copies no
+data, and several can run against the same dataset at once without contending.
+
+```bash
+h5i-db fork create market.db agent-01
+h5i-db ingest market.db features out.parquet --fork agent-01   # base untouched
+h5i-db fork drop market.db agent-01                            # or promote it
+```
+
+Every data command takes `--fork <name>`. Keep it if it worked
+(`fork diff`, then `fork promote --table <t>`, which is first-commit-wins and
+must not be retried on conflict); drop it if it did not.
+→ [references/forks.md](references/forks.md)
+
 ## Backtesting: let the database withhold the future
 
 Do not filter the future out in SQL — you will forget once, and a leaked
@@ -83,6 +100,7 @@ are visible — so a restatement that arrived later stays invisible too.
 (time travel, ASOF joins, `time_bucket`, `vwap`, `ewma`) ·
 [mutations and safety net](references/mutations.md) ·
 [research mode and leakage](references/research-mode.md) ·
+[forks and parallel work](references/forks.md) ·
 [Python](references/python.md)
 
 Everything needed for the work above is in this directory and in

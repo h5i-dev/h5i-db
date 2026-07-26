@@ -12,9 +12,10 @@
 //! fixture rather than the docs — but `demo`, which is self-contained, is run
 //! end to end.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_h5i-db")
@@ -95,8 +96,26 @@ fn extract(path: &Path) -> Vec<Invocation> {
 
 /// The subcommand path, e.g. `["snapshot", "create"]`. Nested subcommands are
 /// two words; everything else is one.
+/// Whether `cmd` has subcommands of its own, asked of the binary rather than
+/// kept in a list here.
+///
+/// This used to be a hardcoded array, which made the drift-detector itself a
+/// source of drift: a new command group was simply not checked, and its
+/// documented flags silently validated against the wrong help text.
+fn is_nested(cmd: &str) -> bool {
+    static CACHE: OnceLock<Mutex<BTreeMap<String, bool>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut cache = cache.lock().unwrap();
+    if let Some(known) = cache.get(cmd) {
+        return *known;
+    }
+    let nested = help_for(&[cmd.to_string()])
+        .is_some_and(|h| h.contains("Commands:") || h.contains("<COMMAND>"));
+    cache.insert(cmd.to_string(), nested);
+    nested
+}
+
 fn subcommand(tokens: &[String]) -> Vec<String> {
-    const NESTED: [&str; 4] = ["snapshot", "plan", "policy", "data-policy"];
     let words: Vec<&String> = tokens
         .iter()
         .skip(1) // "h5i-db"
@@ -109,11 +128,19 @@ fn subcommand(tokens: &[String]) -> Vec<String> {
     if first.starts_with('<') {
         return Vec::new();
     }
-    if NESTED.contains(&first.as_str()) {
-        words.iter().take(2).map(|s| s.to_string()).collect()
-    } else {
-        vec![first.to_string()]
+    // Walk as deep as the binary actually nests, so flags are always checked
+    // against the help text of the command that would receive them.
+    let mut sub = vec![first.to_string()];
+    while is_nested(&sub.join(" ")) {
+        let Some(next) = words.get(sub.len()) else {
+            break;
+        };
+        if next.starts_with('<') {
+            break;
+        }
+        sub.push(next.to_string());
     }
+    sub
 }
 
 fn help_for(sub: &[String]) -> Option<String> {
