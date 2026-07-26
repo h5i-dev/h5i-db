@@ -50,6 +50,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use futures::stream::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -255,14 +256,18 @@ pub async fn list(backend: &Backend) -> Result<Vec<Fork>> {
     let metas = backend
         .list(&object_store::path::Path::from(layout::FORK_PREFIX))
         .await?;
-    let mut out = Vec::with_capacity(metas.len());
-    for meta in metas {
-        let bytes = backend.get(&meta.location).await?;
-        let fork: Fork = serde_json::from_slice(&bytes)
-            .map_err(|e| Error::corruption(meta.location.as_ref(), format!("fork parse: {e}")))?;
-        fork.verify(meta.location.as_ref())?;
-        out.push(fork);
-    }
+    let mut out: Vec<Fork> = futures::stream::iter(metas)
+        .map(|meta| async move {
+            let bytes = backend.get(&meta.location).await?;
+            let fork: Fork = serde_json::from_slice(&bytes).map_err(|e| {
+                Error::corruption(meta.location.as_ref(), format!("fork parse: {e}"))
+            })?;
+            fork.verify(meta.location.as_ref())?;
+            Ok::<_, Error>(fork)
+        })
+        .buffer_unordered(crate::backend::METADATA_FETCH_CONCURRENCY)
+        .try_collect()
+        .await?;
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }
@@ -347,15 +352,18 @@ pub async fn list_entries(backend: &Backend, fork_name: &str) -> Result<Vec<Fork
     let metas = backend
         .list(&layout::fork_catalog_prefix(fork_name))
         .await?;
-    let mut out = Vec::with_capacity(metas.len());
-    for meta in metas {
-        let bytes = backend.get(&meta.location).await?;
-        let entry: ForkTableEntry = serde_json::from_slice(&bytes).map_err(|e| {
-            Error::corruption(meta.location.as_ref(), format!("fork catalog parse: {e}"))
-        })?;
-        entry.verify(meta.location.as_ref())?;
-        out.push(entry);
-    }
+    let mut out: Vec<ForkTableEntry> = futures::stream::iter(metas)
+        .map(|meta| async move {
+            let bytes = backend.get(&meta.location).await?;
+            let entry: ForkTableEntry = serde_json::from_slice(&bytes).map_err(|e| {
+                Error::corruption(meta.location.as_ref(), format!("fork catalog parse: {e}"))
+            })?;
+            entry.verify(meta.location.as_ref())?;
+            Ok::<_, Error>(entry)
+        })
+        .buffer_unordered(crate::backend::METADATA_FETCH_CONCURRENCY)
+        .try_collect()
+        .await?;
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }
@@ -687,13 +695,13 @@ impl crate::database::Database {
             // table whose data is gone.
             remove_entry(self.backend(), &fork.name, &fe.name).await?;
             self.backend().heads.remove(fe.table_id).await?;
-            for meta in self
+            let objects = self
                 .backend()
                 .list(&layout::table_prefix(fe.table_id))
-                .await?
-            {
-                self.backend().delete(&meta.location).await?;
-            }
+                .await?;
+            self.backend()
+                .delete_many(objects.into_iter().map(|m| m.location).collect())
+                .await?;
         }
         delete(self.backend(), name).await?;
         Ok(dropped)

@@ -666,13 +666,13 @@ impl Database {
             };
             crate::fork::remove_entry(&self.backend, &fork.name, name).await?;
             self.backend.heads.remove(fe.table_id).await?;
-            for meta in self
+            let objects = self
                 .backend
                 .list(&layout::table_prefix(fe.table_id))
-                .await?
-            {
-                self.backend.delete(&meta.location).await?;
-            }
+                .await?;
+            self.backend
+                .delete_many(objects.into_iter().map(|m| m.location).collect())
+                .await?;
             return Ok(());
         }
 
@@ -701,9 +701,9 @@ impl Database {
             .backend
             .list(&layout::table_prefix(entry.table_id))
             .await?;
-        for meta in objects {
-            self.backend.delete(&meta.location).await?;
-        }
+        self.backend
+            .delete_many(objects.into_iter().map(|m| m.location).collect())
+            .await?;
         Ok(())
     }
 
@@ -880,6 +880,17 @@ impl Database {
     /// concurrent commits cannot affect it.
     pub async fn resolve(&self, name: &str, at: ReadAt) -> Result<ResolvedTable> {
         let entry = self.entry(name).await?;
+        self.resolve_entry(entry, at).await
+    }
+
+    /// [`Self::resolve`] for a caller that already holds the catalog entry.
+    ///
+    /// A query session lists the whole catalog and then resolves each table,
+    /// so resolving by name re-fetched, re-parsed and re-verified the very
+    /// object the listing just produced — once per table, on every query.
+    pub async fn resolve_entry(&self, entry: CatalogEntry, at: ReadAt) -> Result<ResolvedTable> {
+        let name = entry.name.clone();
+        let name = name.as_str();
         let (head_seq, head_checksum) = self.effective_head(name, &entry).await?;
 
         // The retention floor is read only by the arms that bound a read
@@ -2641,6 +2652,9 @@ impl Database {
                 .backend
                 .list(&layout::table_prefix(entry.table_id))
                 .await?;
+            // Collected and deleted in one batch below: deleting inside the
+            // scan cost a round trip per object.
+            let mut doomed: Vec<ObjPath> = Vec::new();
             for meta in objects {
                 report.scanned_objects += 1;
                 let loc = meta.location.as_ref();
@@ -2667,11 +2681,12 @@ impl Database {
                     report.candidates.push(loc.to_string());
                     report.candidate_bytes += meta.size;
                     if apply {
-                        self.backend.delete(&meta.location).await?;
-                        report.deleted += 1;
+                        doomed.push(meta.location.clone());
                     }
                 }
             }
+            report.deleted += doomed.len();
+            self.backend.delete_many(doomed).await?;
         }
 
         // Orphaned table directories (3.4): a crashed create_table or a
@@ -2718,15 +2733,17 @@ impl Database {
                 if !all_old {
                     continue;
                 }
+                let mut doomed: Vec<ObjPath> = Vec::new();
                 for meta in metas {
                     report.scanned_objects += 1;
                     report.candidates.push(meta.location.as_ref().to_string());
                     report.candidate_bytes += meta.size;
                     if apply {
-                        self.backend.delete(&meta.location).await?;
-                        report.deleted += 1;
+                        doomed.push(meta.location);
                     }
                 }
+                report.deleted += doomed.len();
+                self.backend.delete_many(doomed).await?;
             }
         }
         Ok(report)

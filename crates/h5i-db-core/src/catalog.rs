@@ -3,6 +3,7 @@
 //! One JSON object per table under `catalog/tables/<hash-of-name>.json`.
 //! The raw name lives inside the JSON; renames are a catalog edit only.
 
+use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -92,19 +93,29 @@ pub async fn remove_entry(backend: &Backend, name: &str) -> Result<()> {
 }
 
 /// List all catalog entries (names are read from inside the JSON objects).
+///
+/// Fetched with bounded concurrency: the entries are independent objects, and
+/// a serial loop made this cost one round trip per table. It is on the
+/// per-query path (a query session registers every table before planning), so
+/// on a wide catalog the latency was paid by every statement.
 pub async fn list_entries(backend: &Backend) -> Result<Vec<CatalogEntry>> {
     let metas = backend
         .list(&object_store::path::Path::from(layout::CATALOG_PREFIX))
         .await?;
-    let mut out = Vec::with_capacity(metas.len());
-    for meta in metas {
-        let bytes = backend.get(&meta.location).await?;
-        let entry: CatalogEntry = serde_json::from_slice(&bytes).map_err(|e| {
-            Error::corruption(meta.location.as_ref(), format!("catalog parse: {e}"))
-        })?;
-        entry.verify(meta.location.as_ref())?;
-        out.push(entry);
-    }
+    let mut out: Vec<CatalogEntry> = stream::iter(metas)
+        .map(|meta| async move {
+            let bytes = backend.get(&meta.location).await?;
+            let entry: CatalogEntry = serde_json::from_slice(&bytes).map_err(|e| {
+                Error::corruption(meta.location.as_ref(), format!("catalog parse: {e}"))
+            })?;
+            entry.verify(meta.location.as_ref())?;
+            Ok::<_, Error>(entry)
+        })
+        .buffer_unordered(crate::backend::METADATA_FETCH_CONCURRENCY)
+        .try_collect()
+        .await?;
+    // `buffer_unordered` gives no ordering guarantee, and callers rely on this
+    // being sorted by name.
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }

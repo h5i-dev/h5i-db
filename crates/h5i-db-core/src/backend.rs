@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures::StreamExt;
 use futures::TryStreamExt;
 use futures::future::BoxFuture;
 use object_store::{
@@ -302,6 +303,16 @@ pub struct MetaLockGuard {
 // backend
 // ---------------------------------------------------------------------------
 
+/// How many independent metadata objects to fetch at once when listing.
+///
+/// Listings (catalog entries, snapshots, forks) fetch one small JSON object
+/// per item, and those fetches are independent. Serially they cost one round
+/// trip each, which on a wide catalog dominates query startup; concurrently
+/// they cost roughly one. Bounded rather than unlimited so a database with
+/// thousands of tables cannot open thousands of sockets or file descriptors
+/// at once.
+pub const METADATA_FETCH_CONCURRENCY: usize = 32;
+
 /// A database's storage backend.
 #[derive(Debug, Clone)]
 pub struct Backend {
@@ -396,6 +407,30 @@ impl Backend {
             Err(object_store::Error::NotFound { .. }) => Ok(()),
             Err(e) => Err(Error::ObjectStore(e)),
         }
+    }
+
+    /// Delete many objects, using the store's batch path where it has one.
+    ///
+    /// `delete_stream` lets object stores coalesce (S3 takes 1000 keys per
+    /// request) and lets local stores overlap syscalls; deleting serially made
+    /// `drop_table` cost one round trip per object, which on a table with many
+    /// segments is minutes of pure latency for a metadata operation.
+    ///
+    /// Missing objects are not an error: deletion is idempotent here because
+    /// callers re-run it after a partial failure.
+    pub async fn delete_many(&self, paths: Vec<ObjPath>) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let stream = futures::stream::iter(paths.into_iter().map(Ok)).boxed();
+        let mut results = self.store.delete_stream(stream);
+        while let Some(result) = results.next().await {
+            match result {
+                Ok(_) | Err(object_store::Error::NotFound { .. }) => {}
+                Err(e) => return Err(Error::ObjectStore(e)),
+            }
+        }
+        Ok(())
     }
 
     /// List object metadata under a prefix.
