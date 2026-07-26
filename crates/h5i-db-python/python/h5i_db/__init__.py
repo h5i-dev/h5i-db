@@ -27,6 +27,7 @@ compiles to the same SQL surface (see :mod:`h5i_db.dataframe`)::
 
 from __future__ import annotations
 
+import datetime
 import json
 from dataclasses import dataclass
 from typing import Any, Iterable, Optional, Sequence, Union
@@ -87,6 +88,52 @@ def _schema_ipc(schema: pa.Schema) -> bytes:
     with pa.ipc.new_stream(sink, schema):
         pass
     return sink.getvalue().to_pybytes()
+
+
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def _datetime_to_ns(dt: datetime.datetime) -> int:
+    """Exact nanoseconds since the epoch for an aware ``datetime``.
+
+    Done with integer arithmetic on the timedelta rather than
+    ``dt.timestamp() * 1e9``: a float64 holds 53 bits of mantissa, and a
+    present-day instant in nanoseconds needs 61, so the obvious spelling
+    silently rounds by a few hundred nanoseconds. That is enough to land a
+    cutoff on the wrong side of a commit and hand back a different version of
+    the world, which is the kind of wrong that looks like a data bug for a day.
+    """
+    delta = dt - _EPOCH
+    return (delta.days * 86_400 + delta.seconds) * 1_000_000_000 + delta.microseconds * 1_000
+
+
+def _as_of_ns(value: Optional[Union[str, int, datetime.datetime]]) -> Optional[int]:
+    """Normalise a decision instant to nanoseconds since the epoch.
+
+    A naive ``datetime`` is read as UTC rather than as local time: these
+    timestamps select data, and silently applying the machine's timezone would
+    move the cutoff by hours depending on where the code ran.
+    """
+    if value is None:
+        return value
+    # bool is an int subclass, and `as_of=True` is never what anyone meant.
+    if isinstance(value, bool):
+        raise InvalidInputError("as_of must be a string, datetime, or int ns; got bool")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, datetime.datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=datetime.timezone.utc)
+        return _datetime_to_ns(dt)
+    if isinstance(value, str):
+        text = value.replace("Z", "+00:00")
+        try:
+            dt = datetime.datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise InvalidInputError(f"as_of {value!r} is not an RFC3339 timestamp") from exc
+        if not dt.tzinfo:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return _datetime_to_ns(dt)
+    raise InvalidInputError(f"as_of must be a string, datetime, or int ns; got {type(value).__name__}")
 
 
 class QueryResult:
@@ -369,6 +416,81 @@ class Database:
         return json.loads(
             self._native.arrival_delta(query, version, as_of, snapshot, tolerance)
         )
+
+    # -- forks ---------------------------------------------------------------
+
+    def create_fork(
+        self,
+        name: str,
+        note: Optional[str] = None,
+        as_of: Optional[Union[str, int, "datetime.datetime"]] = None,
+        meta: Optional[dict] = None,
+    ) -> dict:
+        """Create a writable workspace over a pinned view of every table.
+
+        Costs one small metadata object and copies no data, so one dataset can
+        back many parallel agents. ``as_of`` (an RFC3339 string, a datetime, or
+        nanoseconds since the epoch) pins each table at its last version
+        committed at or before that instant, giving a workspace over a frozen
+        past; tables that did not exist then are not pinned. Note that strings
+        and datetimes carry microsecond resolution while commits are stamped in
+        nanoseconds -- pass an int of nanoseconds when you need to name one
+        exact commit rather than a moment.
+
+        ``meta`` is carried verbatim and never interpreted -- use it to tie a
+        fork back to whatever run or hypothesis produced it.
+        """
+        return json.loads(
+            self._native.create_fork(
+                name,
+                note,
+                _as_of_ns(as_of),
+                json.dumps(meta) if meta is not None else None,
+            )
+        )
+
+    def fork(self, name: str) -> "Database":
+        """A handle scoped to ``name``.
+
+        Table lookups then resolve to the fork's own tables first and fall back
+        to its pinned view of the base, so existing code runs unchanged inside
+        a fork. Writes to a base table's name transparently copy-on-write into
+        the fork; the base is never modified.
+        """
+        forked = Database.__new__(Database)
+        forked._native = self._native.open_fork(name)
+        forked.path = self.path
+        return forked
+
+    @property
+    def fork_name(self) -> Optional[str]:
+        """The fork this handle is scoped to, or ``None`` on a base handle."""
+        return self._native.fork_name()
+
+    def forks(self) -> list[dict]:
+        """Every fork, with what it owns and what it holds back from
+        reclamation (``bytes_pinned``)."""
+        return json.loads(self._native.list_forks())
+
+    def fork_info(self, name: str) -> dict:
+        return json.loads(self._native.fork_info(name))
+
+    def fork_diff(self, name: str, table: Optional[str] = None) -> dict:
+        """What a fork changed, computed from manifests alone."""
+        return json.loads(self._native.fork_diff(name, table))
+
+    def promote(self, fork: str, table: str) -> dict:
+        """Promote one of a fork's tables into the base database.
+
+        Compare-and-swap against the version the fork was created from: the
+        first promote wins, and a later one raises rather than merging. The
+        conflict unit is the whole table.
+        """
+        return json.loads(self._native.promote(fork, table))
+
+    def drop_fork(self, name: str) -> int:
+        """Delete a fork and everything it owns; returns the table count."""
+        return self._native.drop_fork(name)
 
     # -- maintenance ----------------------------------------------------------
 

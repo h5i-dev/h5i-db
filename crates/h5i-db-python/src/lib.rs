@@ -145,12 +145,19 @@ fn to_py_err(e: Error) -> PyErr {
             .unwrap_or_default()
     );
     let err = match code {
-        "database_not_found" | "table_not_found" | "version_not_found" | "snapshot_not_found" => {
-            NotFoundError::new_err(msg)
-        }
-        "database_exists" | "table_exists" | "version_conflict" | "lock_timeout" => {
-            ConflictError::new_err(msg)
-        }
+        "database_not_found"
+        | "table_not_found"
+        | "version_not_found"
+        | "snapshot_not_found"
+        | "fork_not_found" => NotFoundError::new_err(msg),
+        "database_exists"
+        | "table_exists"
+        | "version_conflict"
+        | "lock_timeout"
+        | "fork_exists"
+        // A lost promote is a conflict in the ordinary sense — someone else
+        // committed first — so it must be catchable as one.
+        | "promote_conflict" => ConflictError::new_err(msg),
         "invalid_input"
         | "unsupported"
         | "schema_mismatch"
@@ -682,6 +689,90 @@ impl NativeDatabase {
             db.create_snapshot(&name, &tables, note).await
         })?;
         to_json(&snap)
+    }
+
+    // -- forks (ROADMAP Part IX) ---------------------------------------
+
+    #[pyo3(signature = (name, note = None, as_of_ns = None, meta_json = None))]
+    fn create_fork(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        note: Option<String>,
+        as_of_ns: Option<i64>,
+        meta_json: Option<String>,
+    ) -> PyResult<String> {
+        let name = name.to_string();
+        let user_meta = match meta_json {
+            None => serde_json::Map::new(),
+            Some(text) => match serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|e| to_py_err(Error::invalid(format!("fork metadata JSON: {e}"))))?
+            {
+                serde_json::Value::Object(m) => m,
+                _ => {
+                    return Err(to_py_err(Error::invalid(
+                        "fork metadata must be a JSON object",
+                    )));
+                }
+            },
+        };
+        let fork = self.block(py, None, move |db| async move {
+            db.create_fork(&name, note, as_of_ns, user_meta).await
+        })?;
+        to_json(&fork)
+    }
+
+    /// A handle scoped to a fork. Shares this handle's runtime; closing one
+    /// does not close the other.
+    fn open_fork(&self, py: Python<'_>, name: &str) -> PyResult<Self> {
+        let runtime = self.inner()?.runtime.clone();
+        let name = name.to_string();
+        let forked = self.block(py, None, move |db| async move { db.open_fork(&name).await })?;
+        Ok(Self {
+            inner: Mutex::new(Some(Inner {
+                db: Arc::new(forked),
+                runtime,
+            })),
+        })
+    }
+
+    fn list_forks(&self, py: Python<'_>) -> PyResult<String> {
+        let forks = self.block(py, None, move |db| async move { db.list_forks().await })?;
+        to_json(&forks)
+    }
+
+    fn fork_info(&self, py: Python<'_>, name: &str) -> PyResult<String> {
+        let name = name.to_string();
+        let fork = self.block(py, None, move |db| async move { db.fork_info(&name).await })?;
+        to_json(&fork)
+    }
+
+    #[pyo3(signature = (name, table = None))]
+    fn fork_diff(&self, py: Python<'_>, name: &str, table: Option<String>) -> PyResult<String> {
+        let name = name.to_string();
+        let diff = self.block(py, None, move |db| async move {
+            db.fork_diff(&name, table.as_deref()).await
+        })?;
+        to_json(&diff)
+    }
+
+    fn promote(&self, py: Python<'_>, fork: &str, table: &str) -> PyResult<String> {
+        let fork = fork.to_string();
+        let table = table.to_string();
+        let result = self.block(py, None, move |db| async move {
+            db.promote(&fork, &table).await
+        })?;
+        to_json(&result)
+    }
+
+    fn drop_fork(&self, py: Python<'_>, name: &str) -> PyResult<usize> {
+        let name = name.to_string();
+        self.block(py, None, move |db| async move { db.drop_fork(&name).await })
+    }
+
+    /// The fork this handle is scoped to, or `None` on a base handle.
+    fn fork_name(&self, _py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.inner()?.db.fork_name().map(|s| s.to_string()))
     }
 
     fn restore(&self, py: Python<'_>, name: &str, version: u64) -> PyResult<String> {
