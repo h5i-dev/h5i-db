@@ -131,6 +131,31 @@ pub enum Error {
         actual: u64,
     },
 
+    #[error("fork {name:?} not found")]
+    ForkNotFound {
+        name: String,
+        /// Closest existing fork name, when the lookup looked like a typo.
+        did_you_mean: Option<String>,
+    },
+
+    #[error("fork {name:?} already exists")]
+    ForkExists { name: String },
+
+    #[error(
+        "cannot promote table {table:?} from fork {fork:?}: base moved from version \
+         {base} to {actual} since the fork was created{compaction_note}"
+    )]
+    PromoteConflict {
+        fork: String,
+        table: String,
+        /// Version the fork was created from — the compare-and-swap expectation.
+        base: u64,
+        actual: u64,
+        /// Filled in when every intervening base commit was a compaction, i.e.
+        /// the base's *contents* did not actually change.
+        compaction_note: String,
+    },
+
     #[error("schema mismatch: {detail}")]
     SchemaMismatch { detail: String },
 
@@ -203,6 +228,9 @@ impl Error {
             Error::VersionNotFound { .. } => "version_not_found",
             Error::SnapshotNotFound { .. } => "snapshot_not_found",
             Error::VersionConflict { .. } => "version_conflict",
+            Error::ForkNotFound { .. } => "fork_not_found",
+            Error::ForkExists { .. } => "fork_exists",
+            Error::PromoteConflict { .. } => "promote_conflict",
             Error::SchemaMismatch { .. } => "schema_mismatch",
             Error::SortOrderViolation { .. } => "sort_order_violation",
             Error::InvalidInput { .. } => "invalid_input",
@@ -238,6 +266,10 @@ impl Error {
                 | Error::ObjectStore(_)
                 | Error::Io { .. }
         )
+        // PromoteConflict is deliberately NOT retryable: the losing fork's work
+        // was computed against a base that no longer exists, so re-running the
+        // same promote can only fail again. The recovery is to re-fork and
+        // re-run the analysis, which is a new operation, not a retry.
     }
 
     /// A one-line actionable hint, when one exists.
@@ -257,6 +289,14 @@ impl Error {
             Error::SnapshotNotFound { .. } => {
                 Some("run `h5i-db snapshot list <db>` to list snapshots".into())
             }
+            Error::ForkNotFound { .. } => Some("run `h5i-db fork list <db>` to list forks".into()),
+            Error::ForkExists { .. } => {
+                Some("pick another fork name, or drop the existing one with `h5i-db fork drop`".into())
+            }
+            Error::PromoteConflict { fork, table, .. } => Some(format!(
+                "main advanced under this fork; re-fork from the current head and re-run, \
+                 or inspect what changed with `h5i-db fork diff <db> {fork} --table {table}`"
+            )),
             Error::SortOrderViolation { .. } => Some(
                 "append requires input sorted by the time column with min >= current table max; \
                  use `write` or sort the input"
@@ -284,7 +324,8 @@ impl Error {
     pub fn did_you_mean(&self) -> Option<&str> {
         match self {
             Error::TableNotFound { did_you_mean, .. }
-            | Error::SnapshotNotFound { did_you_mean, .. } => did_you_mean.as_deref(),
+            | Error::SnapshotNotFound { did_you_mean, .. }
+            | Error::ForkNotFound { did_you_mean, .. } => did_you_mean.as_deref(),
             _ => None,
         }
     }
@@ -347,6 +388,36 @@ impl Error {
                 format!("h5i-db versions <db> {table}"),
                 "another writer committed first; re-read the head before retrying",
             )],
+            Error::ForkNotFound { name, did_you_mean } => {
+                let mut actions = Vec::new();
+                if let Some(guess) = did_you_mean {
+                    actions.push(NextAction::new(
+                        format!("h5i-db fork show <db> {guess}"),
+                        format!("{name:?} does not exist; {guess:?} is the closest name"),
+                    ));
+                }
+                actions.push(NextAction::new(
+                    "h5i-db fork list <db>",
+                    "list the forks that do exist",
+                ));
+                actions
+            }
+            // Ordered by what an agent should actually do: look, then discard.
+            // Discarding is the common case — most speculative branches lose.
+            Error::PromoteConflict { fork, table, .. } => vec![
+                NextAction::new(
+                    format!("h5i-db fork diff <db> {fork} --table {table}"),
+                    "see what this fork changed before deciding whether to redo it",
+                ),
+                NextAction::new(
+                    format!("h5i-db versions <db> {table}"),
+                    "see what landed on main since the fork was created",
+                ),
+                NextAction::new(
+                    format!("h5i-db fork drop <db> {fork}"),
+                    "discard the fork; its base is stale and its result cannot be promoted",
+                ),
+            ],
             Error::VersionNotFound { table, .. } => vec![NextAction::new(
                 format!("h5i-db versions <db> {table}"),
                 "list the versions that are still retained",
@@ -387,7 +458,9 @@ impl Error {
 
     pub fn exit_category(&self) -> ExitCategory {
         match self {
-            Error::VersionConflict { .. } | Error::LockTimeout { .. } => ExitCategory::Conflict,
+            Error::VersionConflict { .. }
+            | Error::LockTimeout { .. }
+            | Error::PromoteConflict { .. } => ExitCategory::Conflict,
             Error::LimitExceeded { .. } | Error::Timeout { .. } => ExitCategory::Limit,
             Error::Corruption { .. } | Error::Internal { .. } => ExitCategory::Internal,
             Error::ObjectStore(_)
@@ -449,6 +522,16 @@ impl Error {
         Error::SnapshotNotFound { name, did_you_mean }
     }
 
+    /// A missing fork, suggesting the closest existing name.
+    pub fn fork_not_found_among<'a>(
+        name: impl Into<String>,
+        existing: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let name = name.into();
+        let did_you_mean = nearest_name(&name, existing);
+        Error::ForkNotFound { name, did_you_mean }
+    }
+
     pub fn io(path: impl fmt::Display, source: std::io::Error) -> Self {
         Error::Io {
             path: path.to_string(),
@@ -483,6 +566,18 @@ mod tests {
                 table: "t".into(),
                 expected: 1,
                 actual: 2,
+            },
+            Error::ForkNotFound {
+                name: "f".into(),
+                did_you_mean: Some("fork".into()),
+            },
+            Error::ForkExists { name: "f".into() },
+            Error::PromoteConflict {
+                fork: "agent-01".into(),
+                table: "t".into(),
+                base: 3,
+                actual: 5,
+                compaction_note: String::new(),
             },
             Error::SchemaMismatch { detail: "d".into() },
             Error::SortOrderViolation {

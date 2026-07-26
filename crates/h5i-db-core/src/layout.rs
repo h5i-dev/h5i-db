@@ -10,11 +10,18 @@
 //!     manifests/<seq zero-padded>.json  # one immutable manifest per version
 //!     segments/<segment-uuid>.parquet   # immutable data
 //!   snapshots/<hash-of-name>.json       # name -> {table uuid: version}
+//!   forks/<hash-of-name>.json           # name -> {table uuid: pinned version}
+//!   catalog/forks/<hash-of-fork>/<hash-of-name>.json   # fork-scoped catalog
 //! ```
 //!
-//! User-supplied strings (table and snapshot names) are stored *inside* the
-//! JSON objects and hashed for path components, so raw user input never
+//! User-supplied strings (table, snapshot, and fork names) are stored *inside*
+//! the JSON objects and hashed for path components, so raw user input never
 //! becomes a filesystem path.
+//!
+//! A fork owns no storage of its own: its tables are ordinary tables under
+//! `tables/<uuid>/`, reached through the fork-scoped catalog instead of the
+//! global one (see `fork.rs`). That is what keeps the commit, locking, and
+//! vacuum paths fork-oblivious.
 
 use object_store::path::Path as ObjPath;
 use uuid::Uuid;
@@ -22,10 +29,37 @@ use uuid::Uuid;
 pub const FORMAT_FILE: &str = "FORMAT";
 pub const CATALOG_PREFIX: &str = "catalog/tables";
 pub const SNAPSHOT_PREFIX: &str = "snapshots";
+pub const FORK_PREFIX: &str = "forks";
+pub const FORK_CATALOG_PREFIX: &str = "catalog/forks";
 
 /// Current database format version and the minimum reader that understands it.
+///
+/// `FORMAT_VERSION` stamps *manifests and HEADs*. Forks deliberately did not
+/// change either — a fork's tables are ordinary tables — so this stays at 1 and
+/// a v1 reader keeps reading everything a fork-capable writer produces inside a
+/// fork-free database.
 pub const FORMAT_VERSION: u32 = 1;
 pub const MIN_READER_VERSION: u32 = 1;
+
+/// Database-level reader capability of *this* binary, recorded in `FORMAT` as
+/// `min_reader_version` when a feature needs it.
+///
+/// Separate from `FORMAT_VERSION` because the two answer different questions:
+/// `FORMAT_VERSION` is "what shape are the objects", `READER_VERSION` is "what
+/// must a reader understand about the database as a whole".
+pub const READER_VERSION: u32 = 2;
+
+/// `min_reader_version` a database is raised to the first time a fork is
+/// created.
+///
+/// This is a **fence, not a migration**: no existing object is rewritten. It
+/// exists because a fork is an extra GC root, and a reader that cannot see
+/// `forks/` would happily raise a retention floor past a fork's pin and vacuum
+/// away segments the fork still reads. Refusing to open is the only safe
+/// response for such a reader, and the fence is sticky (dropping every fork
+/// does not lower it) because the danger is the reader's blindness, not the
+/// forks' presence.
+pub const FORK_MIN_READER_VERSION: u32 = 2;
 
 /// Manifest sequence numbers are zero-padded to 12 digits so lexicographic
 /// object listing equals numeric ordering.
@@ -95,6 +129,24 @@ pub fn snapshot_path(name: &str) -> ObjPath {
     ObjPath::from(format!("{SNAPSHOT_PREFIX}/{}.json", hash_name(name)))
 }
 
+pub fn fork_path(name: &str) -> ObjPath {
+    ObjPath::from(format!("{FORK_PREFIX}/{}.json", hash_name(name)))
+}
+
+/// Prefix holding one fork's catalog entries. Hashing the fork name keeps the
+/// same "user strings never become path components" rule as everywhere else.
+pub fn fork_catalog_prefix(fork_name: &str) -> ObjPath {
+    ObjPath::from(format!("{FORK_CATALOG_PREFIX}/{}", hash_name(fork_name)))
+}
+
+pub fn fork_catalog_entry_path(fork_name: &str, table_name: &str) -> ObjPath {
+    ObjPath::from(format!(
+        "{FORK_CATALOG_PREFIX}/{}/{}.json",
+        hash_name(fork_name),
+        hash_name(table_name)
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +160,35 @@ mod tests {
         let s = snapshot_path(evil);
         assert!(s.as_ref().starts_with("snapshots/"));
         assert!(!s.as_ref().contains(".."));
+        let f = fork_path(evil);
+        assert!(f.as_ref().starts_with("forks/"));
+        assert!(!f.as_ref().contains(".."));
+        // Both components of a fork catalog path are hashed, so a hostile
+        // fork name cannot escape into another fork's namespace either.
+        let fc = fork_catalog_entry_path(evil, evil);
+        assert!(fc.as_ref().starts_with("catalog/forks/"));
+        assert!(!fc.as_ref().contains(".."));
+    }
+
+    #[test]
+    fn fork_catalog_entries_live_under_their_fork_prefix() {
+        let prefix = fork_catalog_prefix("agent-01").as_ref().to_string();
+        let entry = fork_catalog_entry_path("agent-01", "trades");
+        assert!(entry.as_ref().starts_with(&prefix));
+        // Distinct forks never share a catalog prefix, so listing one fork's
+        // tables can never surface another's.
+        assert_ne!(prefix, fork_catalog_prefix("agent-02").as_ref().to_string());
+        // The same table name in two forks maps to two different objects.
+        assert_ne!(entry, fork_catalog_entry_path("agent-02", "trades"));
+    }
+
+    #[test]
+    fn fork_namespace_is_disjoint_from_the_global_catalog() {
+        // A fork's catalog objects must never be picked up by a listing of the
+        // global table catalog (that listing drives vacuum and `tables`).
+        let fork_entry = fork_catalog_entry_path("f", "trades");
+        assert!(!fork_entry.as_ref().starts_with(&format!("{CATALOG_PREFIX}/")));
+        assert!(fork_entry.as_ref().starts_with(FORK_CATALOG_PREFIX));
     }
 
     #[test]

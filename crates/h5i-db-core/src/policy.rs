@@ -49,7 +49,10 @@ impl MutationPolicy {
     /// Check whether `op` may run directly; error tells the caller to plan.
     pub fn check_direct(&self, op: OpKind) -> Result<()> {
         let allowed = match op {
-            OpKind::Create | OpKind::EvolveSchema => true,
+            // Promote does not reach this gate: it has its own review surface
+            // (`fork diff`) and its own compare-and-swap, and it never runs
+            // through the direct-mutation write path.
+            OpKind::Create | OpKind::EvolveSchema | OpKind::Promote => true,
             OpKind::Write => self.direct_write,
             OpKind::Append => self.direct_append,
             OpKind::ReplaceRange => self.direct_replace,

@@ -175,6 +175,14 @@ pub struct Database {
     backend: Backend,
     read_only: bool,
     commit_hook: Option<CommitHook>,
+    /// When set, every table lookup runs inside this fork: the fork's catalog
+    /// shadows the global one, and base tables resolve at their pinned version
+    /// instead of their head (ROADMAP Part IX).
+    ///
+    /// A handle, not a mode flag — `open_fork` returns a *new* `Database`, so a
+    /// caller can hold base and fork handles side by side and neither can
+    /// accidentally write through the other.
+    fork: Option<Arc<crate::fork::Fork>>,
 }
 
 impl std::fmt::Debug for Database {
@@ -182,6 +190,7 @@ impl std::fmt::Debug for Database {
         f.debug_struct("Database")
             .field("backend", &self.backend)
             .field("read_only", &self.read_only)
+            .field("fork", &self.fork.as_ref().map(|f| &f.name))
             .finish()
     }
 }
@@ -225,6 +234,7 @@ impl Database {
             backend,
             read_only: false,
             commit_hook: None,
+            fork: None,
         })
     }
 
@@ -251,6 +261,7 @@ impl Database {
             backend,
             read_only: false,
             commit_hook: None,
+            fork: None,
         })
     }
 
@@ -273,16 +284,20 @@ impl Database {
             })?;
         let format: FormatFile = serde_json::from_slice(&bytes)
             .map_err(|e| Error::corruption(layout::FORMAT_FILE, format!("parse: {e}")))?;
-        if format.min_reader_version > layout::FORMAT_VERSION {
+        // Compared against READER_VERSION, not FORMAT_VERSION: the question
+        // here is "can this binary reason about the whole database", which is
+        // what a fork's extra GC root changes (layout.rs).
+        if format.min_reader_version > layout::READER_VERSION {
             return Err(Error::FormatTooNew {
                 found: format.min_reader_version,
-                supported: layout::FORMAT_VERSION,
+                supported: layout::READER_VERSION,
             });
         }
         let db = Self {
             backend,
             read_only,
             commit_hook: None,
+            fork: None,
         };
         if !read_only {
             crate::transaction::recover(&db).await?;
@@ -302,16 +317,20 @@ impl Database {
             })?;
         let format: FormatFile = serde_json::from_slice(&bytes)
             .map_err(|e| Error::corruption(layout::FORMAT_FILE, format!("parse: {e}")))?;
-        if format.min_reader_version > layout::FORMAT_VERSION {
+        // Compared against READER_VERSION, not FORMAT_VERSION: the question
+        // here is "can this binary reason about the whole database", which is
+        // what a fork's extra GC root changes (layout.rs).
+        if format.min_reader_version > layout::READER_VERSION {
             return Err(Error::FormatTooNew {
                 found: format.min_reader_version,
-                supported: layout::FORMAT_VERSION,
+                supported: layout::READER_VERSION,
             });
         }
         let db = Self {
             backend,
             read_only,
             commit_hook: None,
+            fork: None,
         };
         if !read_only {
             crate::transaction::recover(&db).await?;
@@ -410,6 +429,68 @@ impl Database {
         self.read_only
     }
 
+    // ------------------------------------------------------------------
+    // fork handles (ROADMAP Part IX)
+    // ------------------------------------------------------------------
+
+    /// Open a handle scoped to a fork. Table lookups then check the fork's
+    /// catalog first and fall back to the fork's *pinned* view of the base.
+    ///
+    /// The returned handle shares this one's backend and read-only flag, so
+    /// `open_read_only(..).open_fork(..)` is a read-only fork view.
+    pub async fn open_fork(&self, fork_name: &str) -> Result<Self> {
+        let fork = crate::fork::load(&self.backend, fork_name).await?;
+        Ok(Self {
+            backend: self.backend.clone(),
+            read_only: self.read_only,
+            commit_hook: self.commit_hook.clone(),
+            fork: Some(Arc::new(fork)),
+        })
+    }
+
+    /// A handle on the base database, dropping any fork scope.
+    pub fn base(&self) -> Self {
+        Self {
+            backend: self.backend.clone(),
+            read_only: self.read_only,
+            commit_hook: self.commit_hook.clone(),
+            fork: None,
+        }
+    }
+
+    /// The fork this handle is scoped to, if any.
+    pub fn fork(&self) -> Option<&crate::fork::Fork> {
+        self.fork.as_deref()
+    }
+
+    pub fn fork_name(&self) -> Option<&str> {
+        self.fork.as_ref().map(|f| f.name.as_str())
+    }
+
+    /// Raise the database's recorded `min_reader_version`, never lowering it.
+    ///
+    /// Callers must hold the metadata lock. Idempotent: re-running after the
+    /// fence is already in place rewrites nothing.
+    pub(crate) async fn raise_min_reader_version(&self, required: u32) -> Result<bool> {
+        let path = layout::format_path();
+        let bytes = self
+            .backend
+            .get_opt(&path)
+            .await?
+            .ok_or_else(|| Error::corruption(layout::FORMAT_FILE, "FORMAT missing"))?;
+        let mut format: FormatFile = serde_json::from_slice(&bytes)
+            .map_err(|e| Error::corruption(layout::FORMAT_FILE, format!("parse: {e}")))?;
+        if format.min_reader_version >= required {
+            return Ok(false);
+        }
+        format.min_reader_version = required;
+        self.backend
+            .put(&path, serde_json::to_vec_pretty(&format)?.into())
+            .await?;
+        self.backend.sync_objects(&[path]).await?;
+        Ok(true)
+    }
+
     /// Install a fault-injection hook (used by crash-safety tests).
     pub fn set_commit_hook(&mut self, hook: CommitHook) {
         self.commit_hook = Some(hook);
@@ -422,7 +503,7 @@ impl Database {
         Ok(())
     }
 
-    fn ensure_writable(&self, op: &str) -> Result<()> {
+    pub(crate) fn ensure_writable(&self, op: &str) -> Result<()> {
         if self.read_only {
             return Err(Error::ReadOnly { op: op.into() });
         }
@@ -445,7 +526,11 @@ impl Database {
         // check-then-put window, and `create_entry` below is additionally an
         // atomic create-if-absent as defense in depth.
         let _meta = self.backend.meta_lock().await?;
-        if catalog::load_entry(&self.backend, name).await?.is_some() {
+        // Uniqueness is checked against the *visible* namespace, which inside a
+        // fork means the fork's own tables plus the base tables it pins. Two
+        // forks may each hold a table called `features`; they are different
+        // tables and never collide.
+        if self.entry(name).await.is_ok() {
             return Err(Error::TableExists { name: name.into() });
         }
         let table_id = Uuid::new_v4();
@@ -483,15 +568,35 @@ impl Database {
             .commit_manifest_locked(name, table_id, None, &mut manifest, 0)
             .await?;
 
-        let entry = CatalogEntry {
-            name: name.to_string(),
-            table_id,
-            created_at_ns: spec.created_at_ns,
-            spec_revision: spec.schema_revision,
-            checksum: String::new(),
+        // Registration last, and into the fork's catalog when we are in one:
+        // a table created inside a fork is invisible to the base database and
+        // to base `vacuum`, which is what makes 20 agents' scratch tables cost
+        // main nothing.
+        match &self.fork {
+            Some(fork) => {
+                let entry = crate::fork::ForkTableEntry {
+                    name: name.to_string(),
+                    table_id,
+                    created_at_ns: spec.created_at_ns,
+                    spec_revision: spec.schema_revision,
+                    origin: None,
+                    checksum: String::new(),
+                }
+                .seal()?;
+                crate::fork::create_entry(&self.backend, &fork.name, &entry).await?;
+            }
+            None => {
+                let entry = CatalogEntry {
+                    name: name.to_string(),
+                    table_id,
+                    created_at_ns: spec.created_at_ns,
+                    spec_revision: spec.schema_revision,
+                    checksum: String::new(),
+                }
+                .seal()?;
+                catalog::create_entry(&self.backend, &entry).await?;
+            }
         }
-        .seal()?;
-        catalog::create_entry(&self.backend, &entry).await?;
         Ok(result)
     }
 
@@ -502,13 +607,55 @@ impl Database {
         // additionally takes the table's writer lock so it cannot interleave
         // with an in-flight commit.
         let _meta = self.backend.meta_lock().await?;
+        self.drop_table_locked(name).await
+    }
+
+    /// `drop_table` while the caller already holds the metadata lock.
+    pub(crate) async fn drop_table_locked(&self, name: &str) -> Result<()> {
         let entry = self.entry(name).await?;
+
+        if let Some(fork) = &self.fork {
+            // Inside a fork, only the fork's own tables can be dropped.
+            // Dropping a shadow is the "undo my edits to this table" move: the
+            // name reverts to the pinned base view. Dropping a *base* table
+            // from a fork would need a tombstone in the fork catalog, which
+            // buys nothing an agent asked for — say so instead of guessing.
+            let Some(fe) = crate::fork::load_entry(&self.backend, &fork.name, name).await? else {
+                return Err(Error::Unsupported {
+                    detail: format!(
+                        "table {name:?} belongs to the base database; a fork cannot drop it \
+                         (drop only tables the fork created or shadowed)"
+                    ),
+                });
+            };
+            crate::fork::remove_entry(&self.backend, &fork.name, name).await?;
+            self.backend.heads.remove(fe.table_id).await?;
+            for meta in self
+                .backend
+                .list(&layout::table_prefix(fe.table_id))
+                .await?
+            {
+                self.backend.delete(&meta.location).await?;
+            }
+            return Ok(());
+        }
+
         // Refuse to drop a table pinned by any snapshot.
         for snap in snapshot::list(&self.backend).await? {
             if snap.entries.contains_key(&entry.table_id) {
                 return Err(Error::invalid(format!(
                     "table {name:?} is pinned by snapshot {:?}; delete the snapshot first",
                     snap.name
+                )));
+            }
+        }
+        // …or by any fork. Same rule, same reason: a pin is a GC root, and
+        // dropping under one would strand a live workspace's reads.
+        for f in crate::fork::list(&self.backend).await? {
+            if f.pins.contains_key(&entry.table_id) {
+                return Err(Error::invalid(format!(
+                    "table {name:?} is pinned by fork {:?}; drop the fork first",
+                    f.name
                 )));
             }
         }
@@ -540,11 +687,53 @@ impl Database {
         Ok(())
     }
 
+    /// Tables visible through this handle: the global catalog on a base
+    /// handle, or the fork's own tables layered over its pinned base tables.
     pub async fn list_tables(&self) -> Result<Vec<CatalogEntry>> {
-        catalog::list_entries(&self.backend).await
+        let Some(fork) = &self.fork else {
+            return catalog::list_entries(&self.backend).await;
+        };
+        let mut by_name: BTreeMap<String, CatalogEntry> = BTreeMap::new();
+        for base in catalog::list_entries(&self.backend).await? {
+            // Only pinned tables. A table created on main *after* the fork is
+            // deliberately invisible: a fork is a frozen base, and a name
+            // appearing mid-run would make its reads unreproducible.
+            if fork.pin(base.table_id).is_some() {
+                by_name.insert(base.name.clone(), base);
+            }
+        }
+        // Fork-owned entries win: a shadow replaces the base table it shadows.
+        for fe in crate::fork::list_entries(&self.backend, &fork.name).await? {
+            by_name.insert(fe.name.clone(), fe.to_catalog_entry()?);
+        }
+        Ok(by_name.into_values().collect())
+    }
+
+    /// The fork catalog entry backing `name`, if this handle is in a fork and
+    /// the fork owns that name.
+    pub(crate) async fn fork_entry(&self, name: &str) -> Result<Option<crate::fork::ForkTableEntry>> {
+        match &self.fork {
+            None => Ok(None),
+            Some(fork) => crate::fork::load_entry(&self.backend, &fork.name, name).await,
+        }
     }
 
     async fn entry(&self, name: &str) -> Result<CatalogEntry> {
+        if let Some(fork) = &self.fork {
+            if let Some(fe) = crate::fork::load_entry(&self.backend, &fork.name, name).await? {
+                return fe.to_catalog_entry();
+            }
+            if let Some(base) = catalog::load_entry(&self.backend, name).await?
+                && fork.pin(base.table_id).is_some()
+            {
+                return Ok(base);
+            }
+            let existing = self.list_tables().await.unwrap_or_default();
+            return Err(Error::table_not_found_among(
+                name,
+                existing.iter().map(|e| e.name.as_str()),
+            ));
+        }
         if let Some(entry) = catalog::load_entry(&self.backend, name).await? {
             return Ok(entry);
         }
@@ -559,7 +748,24 @@ impl Database {
         ))
     }
 
-    async fn spec(&self, table_id: Uuid, revision: u32) -> Result<TableSpec> {
+    /// Reject an operation that only makes sense on the base database.
+    ///
+    /// These are the database-global roots (snapshots, retention, policy) plus
+    /// fork management itself. Allowing them through a fork handle would let a
+    /// speculative workspace mutate state its siblings depend on — precisely
+    /// the coupling forks exist to remove.
+    pub(crate) fn ensure_base(&self, op: &str) -> Result<()> {
+        if let Some(fork) = &self.fork {
+            return Err(Error::invalid(format!(
+                "{op} operates on the whole database and is not available inside fork {:?}; \
+                 run it on the base database",
+                fork.name
+            )));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn spec(&self, table_id: Uuid, revision: u32) -> Result<TableSpec> {
         let path = layout::spec_path(table_id, revision);
         let bytes = self
             .backend
@@ -576,7 +782,7 @@ impl Database {
     // version resolution
     // ------------------------------------------------------------------
 
-    async fn head(&self, name: &str, table_id: Uuid) -> Result<HeadState> {
+    pub(crate) async fn head(&self, name: &str, table_id: Uuid) -> Result<HeadState> {
         self.backend
             .heads
             .read(table_id)
@@ -605,16 +811,37 @@ impl Database {
         VersionManifest::from_bytes(&bytes, path.as_ref())
     }
 
+    /// The version this handle treats as "latest" for a table, plus the
+    /// checksum that anchors trust in it.
+    ///
+    /// On a base handle that is the table's HEAD. Inside a fork, for a *base*
+    /// table, it is the fork's pin — which is why a fork's reads neither
+    /// observe nor contend with concurrent commits on main, and why a fork can
+    /// look into the past but never into its own future. A fork-owned table
+    /// (shadow or locally created) has its own HEAD and takes the normal path.
+    pub(crate) async fn effective_head(
+        &self,
+        name: &str,
+        entry: &CatalogEntry,
+    ) -> Result<(u64, String)> {
+        if let Some(fork) = &self.fork
+            && let Some(pin) = fork.pin(entry.table_id)
+        {
+            return Ok((pin.sequence, pin.manifest_checksum.clone()));
+        }
+        let head = self.head(name, entry.table_id).await?;
+        Ok((head.head.sequence, head.head.manifest_checksum))
+    }
+
     /// Resolve a table at a given read point. The returned view is immutable:
     /// concurrent commits cannot affect it.
     pub async fn resolve(&self, name: &str, at: ReadAt) -> Result<ResolvedTable> {
         let entry = self.entry(name).await?;
-        let head = self.head(name, entry.table_id).await?;
-        let head_seq = head.head.sequence;
+        let (head_seq, head_checksum) = self.effective_head(name, &entry).await?;
         let retention_floor = self.retention_min_seq(entry.table_id).await?;
 
         let (sequence, verify_checksum) = match &at {
-            ReadAt::Latest => (head_seq, Some(head.head.manifest_checksum.clone())),
+            ReadAt::Latest => (head_seq, Some(head_checksum.clone())),
             ReadAt::Version(v) => {
                 if *v < retention_floor || *v > head_seq {
                     return Err(Error::VersionNotFound {
@@ -657,7 +884,7 @@ impl Database {
         // one-hop slice of the chain that `verify` walks in full (3.6).
         let verify_checksum = match verify_checksum {
             Some(c) => Some(c),
-            None if sequence == head_seq => Some(head.head.manifest_checksum.clone()),
+            None if sequence == head_seq => Some(head_checksum.clone()),
             None => {
                 self.manifest_at(entry.table_id, sequence + 1)
                     .await?
@@ -726,7 +953,9 @@ impl Database {
 
     pub async fn list_versions(&self, name: &str) -> Result<Vec<VersionSummary>> {
         let entry = self.entry(name).await?;
-        let head = self.head(name, entry.table_id).await?;
+        // Clamped to the *effective* head, so a fork's version list stops at
+        // its pin rather than leaking commits main made after the fork.
+        let (head_seq, _) = self.effective_head(name, &entry).await?;
         let retention_floor = self.retention_min_seq(entry.table_id).await?;
         let metas = self
             .backend
@@ -735,7 +964,7 @@ impl Database {
         let mut sequences: Vec<u64> = metas
             .iter()
             .filter_map(|m| layout::manifest_sequence_from_path(&m.location))
-            .filter(|s| *s >= retention_floor && *s <= head.head.sequence)
+            .filter(|s| *s >= retention_floor && *s <= head_seq)
             .collect();
         sequences.sort_unstable();
         let mut out = Vec::with_capacity(sequences.len());
@@ -780,7 +1009,7 @@ impl Database {
     }
 
     /// Commit while the caller already holds the database metadata lock.
-    async fn commit_manifest_locked(
+    pub(crate) async fn commit_manifest_locked(
         &self,
         name: &str,
         table_id: Uuid,
@@ -1003,6 +1232,147 @@ impl Database {
         }
     }
 
+    /// Resolve a name for writing, materializing a copy-on-write shadow when
+    /// this handle is in a fork and the name still points at the pinned base.
+    ///
+    /// This is the single place a fork's write path diverges from the base's.
+    /// After it returns, every caller is holding an ordinary `CatalogEntry` for
+    /// an ordinary table and the rest of the write path is fork-oblivious.
+    pub(crate) async fn entry_for_write(&self, name: &str) -> Result<CatalogEntry> {
+        let entry = self.entry(name).await?;
+        let Some(fork) = &self.fork else {
+            return Ok(entry);
+        };
+        // A pin keyed by this table_id means the name still resolves to the
+        // base; anything else is already fork-owned and writable in place.
+        if fork.pin(entry.table_id).is_none() {
+            return Ok(entry);
+        }
+        self.materialize_shadow(name, &entry).await
+    }
+
+    /// Create the copy-on-write shadow backing `name` inside the current fork.
+    ///
+    /// Copies the pinned base manifest — a list of segment *metadata* — into a
+    /// fresh `table_id`. No Parquet byte moves: the shadow's segments are the
+    /// base's segments, referenced by path, kept alive by the fork's pin (see
+    /// `fork.rs` for the refinement invariant this establishes).
+    async fn materialize_shadow(&self, name: &str, base: &CatalogEntry) -> Result<CatalogEntry> {
+        let fork = self
+            .fork
+            .as_ref()
+            .ok_or_else(|| Error::internal("materialize_shadow outside a fork"))?;
+        let _meta = self.backend.meta_lock().await?;
+        // Re-check under the lock: a concurrent writer in this same fork may
+        // have materialized it already, and two shadows for one name would
+        // silently split the fork's history.
+        if let Some(existing) = crate::fork::load_entry(&self.backend, &fork.name, name).await? {
+            return existing.to_catalog_entry();
+        }
+        let pin = fork.pin(base.table_id).ok_or_else(|| {
+            Error::internal(format!("fork {:?} does not pin table {name:?}", fork.name))
+        })?;
+
+        // Trust the pin before copying from it: a mismatch here means the base
+        // manifest changed under an immutable reference, which must never be
+        // propagated into a new table.
+        let base_path = layout::manifest_path(base.table_id, pin.sequence);
+        let base_bytes = self
+            .backend
+            .get_opt(&base_path)
+            .await?
+            .ok_or_else(|| Error::corruption(base_path.as_ref(), "pinned manifest missing"))?;
+        let actual = crate::util::checksum_hex(&base_bytes);
+        if actual != pin.manifest_checksum {
+            return Err(Error::corruption(
+                base_path.as_ref(),
+                format!(
+                    "fork {:?} pins version {} with checksum {}, found {actual}",
+                    fork.name, pin.sequence, pin.manifest_checksum
+                ),
+            ));
+        }
+        let base_manifest = VersionManifest::from_bytes(&base_bytes, base_path.as_ref())?;
+
+        let table_id = Uuid::new_v4();
+
+        // The shadow's spec is the base's spec at the pinned schema revision,
+        // re-keyed to the new table. Only that one revision is copied: every
+        // manifest the shadow will ever hold is at that revision or later.
+        let mut spec = self
+            .spec(base.table_id, base_manifest.schema_revision)
+            .await?;
+        spec.table_id = table_id;
+        spec.checksum = String::new();
+        spec.checksum = spec.compute_checksum()?;
+        let spec_path = layout::spec_path(table_id, spec.schema_revision);
+        self.backend
+            .put(&spec_path, serde_json::to_vec_pretty(&spec)?.into())
+            .await?;
+        self.backend.sync_objects(&[spec_path]).await?;
+
+        // Version 0 of the shadow *is* the pinned base version's content.
+        let mut manifest = base_manifest.clone();
+        manifest.table_id = table_id;
+        manifest.sequence = 0;
+        manifest.parent = None;
+        manifest.parent_checksum = None;
+        manifest.op = OpKind::Create;
+        manifest.execution_mode = Some("direct".to_string());
+        manifest.plan_hash = None;
+        manifest.note = Some(format!(
+            "fork {:?}: shadow of {name:?} at base version {}",
+            fork.name, pin.sequence
+        ));
+        // Provenance in an immutable object, so it outlives the fork itself.
+        manifest.user_meta.insert(
+            crate::fork::FORKED_FROM_META_KEY.to_string(),
+            serde_json::json!({
+                "fork": fork.name,
+                "base_table_id": base.table_id,
+                "base_sequence": pin.sequence,
+                "base_manifest_checksum": pin.manifest_checksum,
+            }),
+        );
+
+        // The inherited set must satisfy the refinement invariant by
+        // construction; assert it rather than assume it, because this is one
+        // of only two places a cross-table segment path is ever introduced.
+        let own_prefix = format!("{}/", layout::table_prefix(table_id));
+        let base_paths: BTreeSet<String> = base_manifest
+            .segments
+            .iter()
+            .map(|s| s.path.clone())
+            .collect();
+        crate::fork::check_refinement(
+            &own_prefix,
+            &base_paths,
+            manifest.segments.iter().map(|s| s.path.as_str()),
+        )?;
+
+        manifest.recompute_rollups();
+        self.commit_manifest_locked(name, table_id, None, &mut manifest, 0)
+            .await?;
+
+        let entry = crate::fork::ForkTableEntry {
+            name: name.to_string(),
+            table_id,
+            created_at_ns: crate::util::monotonic_commit_ts(None),
+            spec_revision: spec.schema_revision,
+            origin: Some(crate::fork::ForkOrigin {
+                base_table_id: base.table_id,
+                base_sequence: pin.sequence,
+                base_manifest_checksum: pin.manifest_checksum.clone(),
+            }),
+            checksum: String::new(),
+        }
+        .seal()?;
+        // Catalog entry last: a crash before this leaves an unreachable table
+        // directory (collectible), never a half-registered shadow.
+        crate::fork::create_entry(&self.backend, &fork.name, &entry).await?;
+        entry.to_catalog_entry()
+    }
+
     async fn write_prologue(
         &self,
         name: &str,
@@ -1013,7 +1383,7 @@ impl Database {
         // Policy gate: direct mutations may be forbidden per operation; the
         // reviewed plan/apply path (commit_planned) is always allowed.
         crate::policy::load(&self.backend).await?.check_direct(op)?;
-        let entry = self.entry(name).await?;
+        let entry = self.entry_for_write(name).await?;
         let head = self.head(name, entry.table_id).await?;
         if let Some(expected) = opts.expected_version
             && head.head.sequence != expected
@@ -1846,6 +2216,9 @@ impl Database {
         note: Option<String>,
     ) -> Result<Snapshot> {
         self.ensure_writable("snapshot")?;
+        // A snapshot is a database-global GC root; taking one from inside a
+        // speculative workspace would pin tables main cannot see.
+        self.ensure_base("snapshot")?;
         validate_table_name(name)?;
         // Snapshot creation is a catalog-level mutation (3.5): serialized so
         // the name-uniqueness check and the store cannot interleave (the
@@ -1928,15 +2301,29 @@ impl Database {
         let target_encoded = (target / 3).max(1);
         let small_threshold = (target_encoded / 2).max(1);
 
+        // Only segments this table owns are eligible. On a base table that is
+        // every segment; on a fork's shadow it excludes the ones inherited from
+        // the base, which makes "compaction never copies base bytes" a rule
+        // rather than a happy accident of the size threshold (ROADMAP IX).
+        // Rewriting an inherited segment would also duplicate it into the fork
+        // for no gain: it is already target-sized, and the base copy stays
+        // pinned regardless.
+        let own_prefix = format!("{}/", layout::table_prefix(entry.table_id));
+        let (owned, inherited): (Vec<SegmentMeta>, Vec<SegmentMeta>) = parent_manifest
+            .segments
+            .iter()
+            .cloned()
+            .partition(|s| crate::fork::is_own_segment(&own_prefix, &s.path));
+
         // Order segments by time (unknown ranges last) and find runs of
         // small segments.
-        let mut ordered: Vec<SegmentMeta> = parent_manifest.segments.clone();
+        let mut ordered: Vec<SegmentMeta> = owned;
         ordered.sort_by_key(|s| s.time_range.map(|(min, _)| min).unwrap_or(i64::MAX));
 
         let mut groups: Vec<Vec<SegmentMeta>> = Vec::new();
         let mut current: Vec<SegmentMeta> = Vec::new();
         let mut current_bytes = 0u64;
-        let mut untouched: Vec<SegmentMeta> = Vec::new();
+        let mut untouched: Vec<SegmentMeta> = inherited;
         let close_current = |current: &mut Vec<SegmentMeta>,
                              untouched: &mut Vec<SegmentMeta>,
                              groups: &mut Vec<Vec<SegmentMeta>>| {
@@ -2058,6 +2445,11 @@ impl Database {
         if apply {
             self.ensure_writable("vacuum")?;
         }
+        // Vacuum reasons about reachability across the whole database, so it
+        // runs from the base handle and treats every fork as a root. A fork's
+        // own debris is reclaimed by `fork drop`, which deletes its tables
+        // outright — there is no partial-reclamation story to get subtly wrong.
+        self.ensure_base("vacuum")?;
         let all_entries = self.list_tables().await?;
         let entries = match table {
             Some(t) => vec![self.entry(t).await?],
@@ -2155,10 +2547,21 @@ impl Database {
         // object in it is past the grace period (an in-flight create has
         // young objects).
         if table.is_none() {
-            let cataloged: BTreeSet<Uuid> = all_entries.iter().map(|e| e.table_id).collect();
+            let mut cataloged: BTreeSet<Uuid> = all_entries.iter().map(|e| e.table_id).collect();
             let mut pinned: BTreeSet<Uuid> = BTreeSet::new();
             for snap in snapshot::list(&self.backend).await? {
                 pinned.extend(snap.entries.keys().copied());
+            }
+            // Fork-owned tables are deliberately absent from the global
+            // catalog — that is what keeps them invisible to main. Without
+            // this they would read as orphaned directories and be deleted:
+            // reachability must be computed over every catalog that exists,
+            // not just the global one.
+            for f in crate::fork::list(&self.backend).await? {
+                pinned.extend(f.pins.keys().copied());
+                for fe in crate::fork::list_entries(&self.backend, &f.name).await? {
+                    cataloged.insert(fe.table_id);
+                }
             }
             let mut by_table: BTreeMap<Uuid, Vec<object_store::ObjectMeta>> = BTreeMap::new();
             for meta in self.backend.list(&ObjPath::from("tables")).await? {
@@ -2201,6 +2604,7 @@ impl Database {
         let entry = self.entry(name).await?;
         let head = self.head(name, entry.table_id).await?;
         let retention_floor = self.retention_min_seq(entry.table_id).await?;
+        let fork_entry = self.fork_entry(name).await?;
         let mut report = VerifyReport {
             table: name.to_string(),
             head_sequence: head.head.sequence,
@@ -2268,6 +2672,41 @@ impl Database {
                     }
                 }
             }
+
+            // Inside a fork, a shadow's manifest is the one place in the
+            // system that references another table's storage. Re-derive the
+            // refinement invariant here rather than trusting that the two
+            // writers who can introduce such a path got it right: a violation
+            // is silent until the base vacuums, and then it is data loss.
+            if let Some(fe) = &fork_entry
+                && let Some(origin) = &fe.origin
+            {
+                let own_prefix = format!("{}/", layout::table_prefix(entry.table_id));
+                let base_paths: BTreeSet<String> = self
+                    .manifest_at(origin.base_table_id, origin.base_sequence)
+                    .await?
+                    .segments
+                    .iter()
+                    .map(|s| s.path.clone())
+                    .collect();
+                if let Err(e) = crate::fork::check_refinement(
+                    &own_prefix,
+                    &base_paths,
+                    manifest.segments.iter().map(|s| s.path.as_str()),
+                ) {
+                    report.problems.push(format!("version {seq}: {e}"));
+                }
+                // The pin is what keeps those inherited segments alive, so a
+                // base floor above it means they are already collectible.
+                let base_floor = self.retention_min_seq(origin.base_table_id).await?;
+                if base_floor > origin.base_sequence {
+                    report.problems.push(format!(
+                        "base table retention floor {base_floor} is above this fork's pinned \
+                         version {}; inherited segments are no longer protected",
+                        origin.base_sequence
+                    ));
+                }
+            }
         }
         Ok(report)
     }
@@ -2277,10 +2716,10 @@ impl Database {
 // helpers
 // ---------------------------------------------------------------------------
 
-fn validate_table_name(name: &str) -> Result<()> {
+pub(crate) fn validate_table_name(name: &str) -> Result<()> {
     if name.is_empty() || name.len() > 256 {
         return Err(Error::invalid(
-            "table/snapshot names must be 1..=256 characters",
+            "table/snapshot/fork names must be 1..=256 characters",
         ));
     }
     Ok(())

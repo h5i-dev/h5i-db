@@ -14,6 +14,7 @@ pub mod data_policy;
 pub mod database;
 pub mod error;
 pub mod evolution;
+pub mod fork;
 pub mod incremental;
 pub mod layout;
 pub mod manifest;
@@ -35,6 +36,9 @@ pub use database::{
     ScanOptions, ScanReport, VacuumReport, VerifyReport, VersionSummary, WriteOptions,
 };
 pub use error::{Error, ExitCategory, NextAction, Result, nearest_name};
+pub use fork::{
+    Fork, ForkDiff, ForkOrigin, ForkPin, ForkTableDiff, ForkTableEntry, ForkTableKind, PromoteResult,
+};
 pub use manifest::{ColumnStats, Head, OpKind, SegmentMeta, VersionManifest};
 pub use plan::{MutationPlan, PlanSummary};
 pub use policy::MutationPolicy;

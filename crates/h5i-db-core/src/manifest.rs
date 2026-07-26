@@ -21,6 +21,10 @@ pub enum OpKind {
     Restore,
     Compact,
     EvolveSchema,
+    /// A fork's table promoted into the base (ROADMAP Part IX). Recorded
+    /// distinctly because "these rows arrived from a speculative workspace" is
+    /// exactly the provenance an auditor of an agent-written table wants.
+    Promote,
 }
 
 impl std::fmt::Display for OpKind {
@@ -34,6 +38,7 @@ impl std::fmt::Display for OpKind {
             OpKind::Restore => "restore",
             OpKind::Compact => "compact",
             OpKind::EvolveSchema => "evolve_schema",
+            OpKind::Promote => "promote",
         };
         f.write_str(s)
     }
