@@ -530,7 +530,11 @@ impl Database {
         // fork means the fork's own tables plus the base tables it pins. Two
         // forks may each hold a table called `features`; they are different
         // tables and never collide.
-        if self.entry(name).await.is_ok() {
+        //
+        // `entry_opt`, not `entry`: the expected answer here is "absent", and
+        // `entry` would build a did-you-mean suggestion out of the whole
+        // catalog to describe a miss the caller is happy about.
+        if self.entry_opt(name).await?.is_some() {
             return Err(Error::TableExists { name: name.into() });
         }
         let table_id = Uuid::new_v4();
@@ -721,30 +725,34 @@ impl Database {
         }
     }
 
-    async fn entry(&self, name: &str) -> Result<CatalogEntry> {
-        if let Some(fork) = &self.fork {
-            if let Some(fe) = crate::fork::load_entry(&self.backend, &fork.name, name).await? {
-                return fe.to_catalog_entry();
-            }
-            if let Some(base) = catalog::load_entry(&self.backend, name).await?
-                && fork.pin(base.table_id).is_some()
-            {
-                return Ok(base);
-            }
-            let existing = self.list_tables().await.unwrap_or_default();
-            return Err(Error::table_not_found_among(
-                name,
-                existing.iter().map(|e| e.name.as_str()),
-            ));
+    /// Resolve a name in this handle's visible namespace, or `None`.
+    ///
+    /// Kept separate from [`Self::entry`] because a *miss* is not always a
+    /// failure: `create_table` expects one, and the did-you-mean listing
+    /// `entry` pays for on the error path would make creating a table O(all
+    /// tables) — quadratic over a batch of creates.
+    pub(crate) async fn entry_opt(&self, name: &str) -> Result<Option<CatalogEntry>> {
+        let Some(fork) = &self.fork else {
+            return catalog::load_entry(&self.backend, name).await;
+        };
+        if let Some(fe) = crate::fork::load_entry(&self.backend, &fork.name, name).await? {
+            return Ok(Some(fe.to_catalog_entry()?));
         }
-        if let Some(entry) = catalog::load_entry(&self.backend, name).await? {
+        if let Some(base) = catalog::load_entry(&self.backend, name).await?
+            && fork.pin(base.table_id).is_some()
+        {
+            return Ok(Some(base));
+        }
+        Ok(None)
+    }
+
+    async fn entry(&self, name: &str) -> Result<CatalogEntry> {
+        if let Some(entry) = self.entry_opt(name).await? {
             return Ok(entry);
         }
         // Miss: pay one catalog listing to turn "not found" into "did you mean
         // …". Only the error path does this, so the hit path is unchanged.
-        let existing = catalog::list_entries(&self.backend)
-            .await
-            .unwrap_or_default();
+        let existing = self.list_tables().await.unwrap_or_default();
         Err(Error::table_not_found_among(
             name,
             existing.iter().map(|e| e.name.as_str()),
