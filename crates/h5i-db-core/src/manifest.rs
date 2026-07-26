@@ -90,6 +90,23 @@ pub struct SegmentMeta {
 }
 
 impl SegmentMeta {
+    /// Whether *every* row of this segment falls inside `[start, end)`.
+    ///
+    /// The counterpart to [`Self::overlaps_time`]: that answers "might this
+    /// segment have rows in the range", this answers "does it have anything
+    /// else". A range mutation can drop a covered segment outright instead of
+    /// downloading and decoding it only to filter every row away.
+    ///
+    /// A segment with no recorded time range is never covered — absence of
+    /// bounds is not proof of containment.
+    pub fn covered_by_time(&self, start: i64, end: i64) -> bool {
+        match self.time_range {
+            None => false,
+            // `time_range` is inclusive of max, the window is exclusive of end.
+            Some((seg_min, seg_max)) => seg_min >= start && seg_max < end,
+        }
+    }
+
     /// Whether this segment can contain rows in `[start, end)` (time units of
     /// the table's time column). Segments without a time range never prune.
     pub fn overlaps_time(&self, start: Option<i64>, end: Option<i64>) -> bool {
@@ -212,6 +229,47 @@ impl Head {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn covered_by_time_requires_total_containment() {
+        // Inclusive max against an exclusive end is the whole subtlety here:
+        // a segment ending exactly at `end` still has a row at `end`, which
+        // survives the deletion, so it is NOT covered.
+        assert!(seg(10, 19).covered_by_time(10, 20));
+        assert!(seg(11, 18).covered_by_time(10, 20));
+        assert!(!seg(10, 20).covered_by_time(10, 20));
+        assert!(!seg(9, 19).covered_by_time(10, 20));
+        // Straddling either edge leaves rows behind.
+        assert!(!seg(5, 15).covered_by_time(10, 20));
+        assert!(!seg(15, 25).covered_by_time(10, 20));
+        // Disjoint is not covered either (it is also not overlapping).
+        assert!(!seg(30, 40).covered_by_time(10, 20));
+    }
+
+    #[test]
+    fn a_segment_without_bounds_is_never_covered() {
+        // No recorded range means we cannot prove containment, and guessing
+        // wrong here silently deletes rows that should have survived.
+        let mut s = seg(0, 0);
+        s.time_range = None;
+        assert!(!s.covered_by_time(i64::MIN, i64::MAX));
+        // …and it always reads as overlapping, so it is rewritten, not dropped.
+        assert!(s.overlaps_time(Some(10), Some(20)));
+    }
+
+    #[test]
+    fn covered_implies_overlapping() {
+        // The mutation path tests `overlaps` first and `covered` second, so a
+        // covered segment that did not report overlapping would be silently
+        // kept instead of deleted.
+        for (min, max) in [(10, 19), (10, 10), (18, 19)] {
+            let s = seg(min, max);
+            assert!(
+                !s.covered_by_time(10, 20) || s.overlaps_time(Some(10), Some(20)),
+                "segment ({min},{max}) is covered but not overlapping"
+            );
+        }
+    }
 
     fn seg(min: i64, max: i64) -> SegmentMeta {
         SegmentMeta {

@@ -2022,12 +2022,29 @@ impl Database {
         let next_seq = head.head.sequence + 1;
         let mut kept: Vec<SegmentMeta> = Vec::new();
         let mut boundary: Vec<SegmentMeta> = Vec::new();
+        let mut dropped_whole = 0usize;
         for seg in &parent_manifest.segments {
-            if seg.overlaps_time(Some(start), Some(end)) {
-                boundary.push(seg.clone());
-            } else {
+            if !seg.overlaps_time(Some(start), Some(end)) {
+                // Entirely outside the range: carried over untouched.
                 kept.push(seg.clone());
+            } else if seg.covered_by_time(start, end) {
+                // Entirely *inside* it: every row is being replaced, so the
+                // segment simply stops being referenced. It used to be read
+                // and Parquet-decoded in full here, then filtered to zero
+                // rows — for a wide range that is the whole table's bytes
+                // moved to produce nothing.
+                dropped_whole += 1;
+            } else {
+                // Straddles a boundary: must be rewritten minus the range.
+                boundary.push(seg.clone());
             }
+        }
+        if dropped_whole > 0 {
+            tracing::debug!(
+                table = name,
+                segments = dropped_whole,
+                "range mutation dropped fully-covered segments without reading them"
+            );
         }
 
         // Rewrite boundary segments minus the range, then add new data.

@@ -397,6 +397,88 @@ async fn append_strictness() {
 }
 
 #[tokio::test]
+async fn delete_range_never_reads_segments_it_deletes_whole() {
+    // A segment lying entirely inside the deleted window contributes no rows
+    // to the result, so reading it is pure waste — and at the default 128 MiB
+    // segment size, deleting a wide range used to move the whole table's bytes
+    // through Parquet decode to produce nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("db");
+    std::fs::create_dir_all(&root).unwrap();
+    let plain = Backend::local(&root).unwrap();
+    let counter = Arc::new(CountingStore::new(plain.store.clone()));
+    let db = Database::create_with_backend(Backend {
+        store: counter.clone(),
+        heads: plain.heads,
+        base_url: plain.base_url,
+        local_root: plain.local_root,
+    })
+    .await
+    .unwrap();
+    db.create_table("t", trades_schema(), small_segment_options())
+        .await
+        .unwrap();
+
+    // Ten segments, one per append, each covering a disjoint decade of time.
+    for i in 0..10i64 {
+        db.append(
+            "t",
+            vec![trades_batch(
+                &[i * 10, i * 10 + 1, i * 10 + 2],
+                &["A", "B", "A"],
+                &[1.0, 2.0, 3.0],
+            )],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    let before = db.resolve("t", ReadAt::Latest).await.unwrap();
+    assert_eq!(
+        before.manifest.segments.len(),
+        10,
+        "expected one per append"
+    );
+
+    // [10, 60) fully covers the segments for decades 1..=5 and touches none
+    // partially, so nothing needs rewriting at all.
+    counter.take();
+    db.delete_range("t", 10, 60, WriteOptions::default())
+        .await
+        .unwrap();
+    let reads = counter.take();
+
+    let after = db.resolve("t", ReadAt::Latest).await.unwrap();
+    assert_eq!(after.manifest.segments.len(), 5, "5 segments should remain");
+    let (rows, _) = db
+        .scan("t", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        total_rows(&rows),
+        15,
+        "3 rows in each of 5 surviving decades"
+    );
+    // Every surviving row must be outside the deleted window.
+    for b in &rows {
+        for v in h5i_db_core::segment::time_values_i64(b, "ts").unwrap() {
+            assert!(
+                !(10..60).contains(&v),
+                "row at {v} should have been deleted"
+            );
+        }
+    }
+
+    // The whole mutation is metadata: a handful of catalog/manifest/spec reads
+    // and not one Parquet segment.
+    assert!(
+        reads <= 8,
+        "delete of 5 fully-covered segments cost {reads} object reads; it is \
+         downloading segments it only intends to drop"
+    );
+}
+
+#[tokio::test]
 async fn replace_and_delete_range_share_untouched_segments() {
     let (_dir, db) = fresh_db().await;
     db.create_table("t", trades_schema(), small_segment_options())
