@@ -3,18 +3,18 @@
 **A fast, fully versioned, embedded time-series database for quant research.
 Written in Rust.**
 
-- **Blazing fast on time-series shape.** Over 4.5× faster than DuckDB and Polars
+- **Built for time-series shape:** over 4.5× faster than DuckDB and Polars
   for OHLCV+VWAP rollups on 20M rows, with full SQL via DataFusion.
-- **Immutable & versioned.** Every write is an atomic commit; any past version
+- **Immutable and versioned:** every write is an atomic commit; any past version
   reads in O(1), so a bad ingest is one `restore` away from undone.
-- **Rich time-series SQL.** ASOF join, timezone-aware `time_bucket`,
+- **Time-series SQL:** ASOF join, timezone-aware `time_bucket`,
   gapfill/resample, rolling windows, `vwap`, `ewma`.
-- **Point-in-time reads.** Pin a read point and the data you pull is bounded by
+- **Point-in-time reads:** pin a read point and the data you pull is bounded by
   it, so the frame that reaches pandas cannot contain rows from after the
   decision instant. `arrival-delta` measures what a later restatement changed.
-- **Agent-Friendly Deisgn.** Previewable mutations, policy gates,
+- **Agent-friendly design:** previewable mutations, policy gates,
   fail-closed data constraints, crash-safe commits, and an audit trail.
-- **Embedded.** One directory, no server, no daemon. Apache-2.0.
+- **Embedded:** one directory, no server, no daemon. Apache-2.0.
 
 📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
 [Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) · [Agent skill](skills/h5i-db/SKILL.md)
@@ -105,30 +105,30 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ## Why it's fast
 
-- **Manifest pruning.** Every version's manifest carries per-segment time
+- **Manifest pruning:** every version's manifest carries per-segment time
   ranges and column min/max. Narrow queries prune whole segments before a
   single file is opened.
-- **Declared sort order.** Segments are stored time-sorted and the query
+- **Declared sort order:** segments are stored time-sorted and the query
   layer tells DataFusion so. OHLCV rollups stream instead of sorting 20M rows
   first (every baseline pays that sort), and the ASOF join is sort-free.
-- **Immutable segments.** Footer metadata is cached unconditionally (sound
+- **Immutable segments:** footer metadata is cached unconditionally (sound
   because segments never change), cutting ~40% off warm scans.
-- **Version-aware aggregate states.** OHLCV/VWAP rollups persist mergeable
+- **Version-aware aggregate states:** OHLCV/VWAP rollups persist mergeable
   states per immutable segment; re-queries merge states in milliseconds
   instead of recomputing, scanning only newly appended segments.
-- **No kernel heroics.** Generic scans and aggregations run on stock
+- **No kernel heroics:** generic scans and aggregations run on stock
   DataFusion and tie the best engines; h5i-db only adds structure where
-  time-series shape makes it structurally faster.
+  time-series shape makes that structure pay.
 
 ---
 
 ## Why for agents
 
-- **Reproducible inputs.** Every read resolves to a version, so "which data did
+- **Reproducible inputs:** every read resolves to a version, so "which data did
 this run see" has an answer, and re-running against that version is O(1) rather
 than an archaeology project.
 
-- **Point-in-time pulls.** A read point can be pinned on two axes: event time
+- **Point-in-time pulls:** a read point can be pinned on two axes: event time
 (`--decision-time`) and arrival (`--as-of`). The frame you hand to pandas is
 then bounded at the source, which is the only place a bound survives the trip
 into Python. `arrival-delta` measures, after the fact, how much of a result
@@ -138,11 +138,11 @@ depended on data that arrived later.
 every query and spills the rest to Parquet, reporting the true row count and
 where the withheld rows live.
 
-- **One call to get oriented.** `h5i-db context <db>` returns every table's
+- **One call to get oriented:** `h5i-db context <db>` returns every table's
 schema, size, time range and head version, the operations policy gates, and
 any plan already staged.
 
-- **Errors that can be acted on.** The stderr envelope carries `next_actions`
+- **Errors that can be acted on:** the stderr envelope carries `next_actions`
 (runnable commands), `did_you_mean` for typos, and a `retryable` flag.
 
 - **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
@@ -155,14 +155,14 @@ writer at every step.
 
 ## When *not* to use h5i-db
 
-- **Distributed, multi-terabyte warehouses.** Single-node and embedded by
+- **Distributed, multi-terabyte warehouses:** single-node and embedded by
   design. Reach for ClickHouse, Snowflake or a lakehouse.
-- **OLTP or high-concurrency serving.** One writer at a time, no row-level
+- **OLTP or high-concurrency serving:** one writer at a time, no row-level
   MVCC, no interactive transactions. Use Postgres.
-- **Sub-microsecond tick capture.** The write cadence this is built for is
+- **Sub-microsecond tick capture:** the write cadence this is built for is
   minute bars, end-of-day, and vendor files, not the capture layer itself.
   That is kdb+ territory.
-- **Databases with no time column.** The whole design assumes a time index;
+- **Databases with no time column:** the whole design assumes a time index;
   without one you lose pruning, the ASOF join, and point-in-time reads.
 
 ---
