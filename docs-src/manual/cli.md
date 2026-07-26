@@ -426,6 +426,47 @@ Pin table versions under a name.
 | `snapshot list <db>` | List snapshots |
 | `snapshot delete <db> <name>` | Delete a snapshot (the versions it pinned remain readable by number) |
 
+### `h5i-db fork`
+
+Writable workspaces over a pinned base, for running several lines of work
+against one dataset at once. See [Forks](concepts.html#forks) for the model.
+
+| Subcommand | Meaning |
+|---|---|
+| `fork create <db> <name>` | Pin every table and open a workspace; `--note`, `--as-of`, `--meta` supported |
+| `fork list <db>` | Every fork, with what it owns (`bytes_own`) and what it holds back (`bytes_pinned`) |
+| `fork show <db> <name>` | One fork's pins and metadata |
+| `fork diff <db> <name>` | What the fork changed, from manifests alone; `--table` to narrow |
+| `fork promote <db> <name> --table <t>` | Land one of its tables on the base |
+| `fork drop <db> <name>` | Delete the fork and everything it owns |
+
+```console
+$ h5i-db fork create market.db agent-01 --note "hypothesis 1"
+$ h5i-db ingest market.db features out.parquet --fork agent-01
+$ h5i-db query market.db "SELECT count(*) FROM features" --fork agent-01
+$ h5i-db fork diff market.db agent-01
+$ h5i-db fork promote market.db agent-01 --table features
+$ h5i-db fork drop market.db agent-01
+```
+
+`fork create` accepts `--as-of <rfc3339>` to pin the past instead of the
+present, and `--meta` (inline JSON, `@file`, or `-`) to record whatever ties
+the fork back to the run that made it.
+
+**The `--fork` flag.** Every data command takes `--fork <name>` and then reads
+and writes inside that workspace, so an existing script runs unchanged against
+a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`,
+`fork create`) refuse it and say so: they move state a fork's siblings depend
+on.
+
+**Promotion conflicts.** `fork promote` compare-and-swaps against the version
+the fork started from. If the base moved, it exits 3 with
+`code: "promote_conflict"` and `retryable: false` — retrying cannot help,
+because the work was computed against a base that no longer exists. Re-fork
+and re-run, or drop the fork. When every intervening base commit was a
+compaction, the message says so, since the base's *contents* did not actually
+change.
+
 ---
 
 ## Maintenance & tools

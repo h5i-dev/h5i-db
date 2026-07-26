@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use h5i_db_core::{
-    Database, Error, ReadAt, ScanOptions, StorageOptions, TableOptions, WriteOptions,
+    Backend, Database, Error, ReadAt, ScanOptions, StorageOptions, TableOptions, WriteOptions,
 };
 
 fn trades_schema() -> SchemaRef {
@@ -64,6 +64,100 @@ async fn fresh_db() -> (tempfile::TempDir, Database) {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::create(&dir.path().join("db")).await.unwrap();
     (dir, db)
+}
+
+/// An `ObjectStore` that forwards everything and counts the reads.
+///
+/// Exists so a cost assertion can be exact instead of statistical: "this
+/// operation reads a constant number of objects" is a claim about the
+/// algorithm, and wall-clock is a poor and flaky proxy for it.
+#[derive(Debug)]
+struct CountingStore {
+    inner: Arc<dyn object_store::ObjectStore>,
+    reads: AtomicUsize,
+}
+
+impl CountingStore {
+    fn new(inner: Arc<dyn object_store::ObjectStore>) -> Self {
+        Self {
+            inner,
+            reads: AtomicUsize::new(0),
+        }
+    }
+    /// Read and reset the counter.
+    fn take(&self) -> usize {
+        self.reads.swap(0, Ordering::SeqCst)
+    }
+}
+
+impl std::fmt::Display for CountingStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "CountingStore({})", self.inner)
+    }
+}
+
+#[async_trait::async_trait]
+impl object_store::ObjectStore for CountingStore {
+    async fn put_opts(
+        &self,
+        location: &object_store::path::Path,
+        payload: object_store::PutPayload,
+        opts: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &object_store::path::Path,
+        opts: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &object_store::path::Path,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: futures::stream::BoxStream<
+            'static,
+            object_store::Result<object_store::path::Path>,
+        >,
+    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::path::Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> futures::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.list(prefix)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+        options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
 }
 
 fn total_rows(batches: &[RecordBatch]) -> usize {
@@ -300,6 +394,88 @@ async fn append_strictness() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::VersionConflict { .. }), "{err}");
+}
+
+#[tokio::test]
+async fn delete_range_never_reads_segments_it_deletes_whole() {
+    // A segment lying entirely inside the deleted window contributes no rows
+    // to the result, so reading it is pure waste — and at the default 128 MiB
+    // segment size, deleting a wide range used to move the whole table's bytes
+    // through Parquet decode to produce nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("db");
+    std::fs::create_dir_all(&root).unwrap();
+    let plain = Backend::local(&root).unwrap();
+    let counter = Arc::new(CountingStore::new(plain.store.clone()));
+    let db = Database::create_with_backend(Backend {
+        store: counter.clone(),
+        heads: plain.heads,
+        base_url: plain.base_url,
+        local_root: plain.local_root,
+    })
+    .await
+    .unwrap();
+    db.create_table("t", trades_schema(), small_segment_options())
+        .await
+        .unwrap();
+
+    // Ten segments, one per append, each covering a disjoint decade of time.
+    for i in 0..10i64 {
+        db.append(
+            "t",
+            vec![trades_batch(
+                &[i * 10, i * 10 + 1, i * 10 + 2],
+                &["A", "B", "A"],
+                &[1.0, 2.0, 3.0],
+            )],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    let before = db.resolve("t", ReadAt::Latest).await.unwrap();
+    assert_eq!(
+        before.manifest.segments.len(),
+        10,
+        "expected one per append"
+    );
+
+    // [10, 60) fully covers the segments for decades 1..=5 and touches none
+    // partially, so nothing needs rewriting at all.
+    counter.take();
+    db.delete_range("t", 10, 60, WriteOptions::default())
+        .await
+        .unwrap();
+    let reads = counter.take();
+
+    let after = db.resolve("t", ReadAt::Latest).await.unwrap();
+    assert_eq!(after.manifest.segments.len(), 5, "5 segments should remain");
+    let (rows, _) = db
+        .scan("t", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        total_rows(&rows),
+        15,
+        "3 rows in each of 5 surviving decades"
+    );
+    // Every surviving row must be outside the deleted window.
+    for b in &rows {
+        for v in h5i_db_core::segment::time_values_i64(b, "ts").unwrap() {
+            assert!(
+                !(10..60).contains(&v),
+                "row at {v} should have been deleted"
+            );
+        }
+    }
+
+    // The whole mutation is metadata: a handful of catalog/manifest/spec reads
+    // and not one Parquet segment.
+    assert!(
+        reads <= 8,
+        "delete of 5 fully-covered segments cost {reads} object reads; it is \
+         downloading segments it only intends to drop"
+    );
 }
 
 #[tokio::test]
@@ -787,6 +963,55 @@ async fn corruption_is_detected_and_named() {
         }
         other => panic!("expected corruption, got {other}"),
     }
+}
+
+#[tokio::test]
+async fn create_table_reads_a_constant_number_of_objects() {
+    // `create_table` must not read the catalog to decide a name is free — one
+    // addressed lookup answers that. The failure mode this guards is subtle:
+    // resolving the name through the *error-reporting* path, which lists every
+    // catalog entry to build a "did you mean …" suggestion for a miss the
+    // caller is perfectly happy about. That turns a batch of N creates into
+    // O(N^2) object reads while every functional test still passes.
+    //
+    // Counted rather than timed on purpose. The timing version of this test
+    // was written first and did not catch the real regression at N=160: the
+    // linear term was still buried in filesystem noise. Operation counts have
+    // no noise to hide in.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("db");
+    std::fs::create_dir_all(&root).unwrap();
+    let plain = Backend::local(&root).unwrap();
+    let counter = Arc::new(CountingStore::new(plain.store.clone()));
+    let db = Database::create_with_backend(Backend {
+        store: counter.clone(),
+        heads: plain.heads,
+        base_url: plain.base_url,
+        local_root: plain.local_root,
+    })
+    .await
+    .unwrap();
+
+    const BATCH: usize = 30;
+    let make = async |from: usize| {
+        for i in from..from + BATCH {
+            db.create_table(&format!("t{i:04}"), trades_schema(), default_options())
+                .await
+                .unwrap();
+        }
+    };
+
+    make(0).await;
+    let early = counter.take();
+    // Same work again, now against a catalog 30 tables deeper.
+    make(BATCH).await;
+    let late = counter.take();
+
+    assert_eq!(
+        early, late,
+        "creating {BATCH} tables cost {early} object reads on an empty catalog but {late} on \
+         a catalog of {BATCH}; create_table is scanning the catalog instead of addressing it"
+    );
 }
 
 #[tokio::test]

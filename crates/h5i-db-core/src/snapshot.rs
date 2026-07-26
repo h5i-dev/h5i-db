@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use futures::stream::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -99,15 +100,20 @@ pub async fn list(backend: &Backend) -> Result<Vec<Snapshot>> {
     let metas = backend
         .list(&object_store::path::Path::from(layout::SNAPSHOT_PREFIX))
         .await?;
-    let mut out = Vec::with_capacity(metas.len());
-    for meta in metas {
-        let bytes = backend.get(&meta.location).await?;
-        let snap: Snapshot = serde_json::from_slice(&bytes).map_err(|e| {
-            Error::corruption(meta.location.as_ref(), format!("snapshot parse: {e}"))
-        })?;
-        snap.verify(meta.location.as_ref())?;
-        out.push(snap);
-    }
+    // Concurrent for the same reason as the table catalog: independent small
+    // objects, and this runs on every retention change and every drop.
+    let mut out: Vec<Snapshot> = futures::stream::iter(metas)
+        .map(|meta| async move {
+            let bytes = backend.get(&meta.location).await?;
+            let snap: Snapshot = serde_json::from_slice(&bytes).map_err(|e| {
+                Error::corruption(meta.location.as_ref(), format!("snapshot parse: {e}"))
+            })?;
+            snap.verify(meta.location.as_ref())?;
+            Ok::<_, Error>(snap)
+        })
+        .buffer_unordered(crate::backend::METADATA_FETCH_CONCURRENCY)
+        .try_collect()
+        .await?;
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
 }

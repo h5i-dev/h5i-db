@@ -139,6 +139,9 @@ impl Database {
                 op: "set_retention".into(),
             });
         }
+        // Retention moves a database-global reachability anchor that a fork's
+        // siblings depend on; it is not a fork-scoped decision.
+        self.ensure_base("set_retention")?;
         // Serialized with other metadata mutations; also keeps the
         // snapshot-pin check race-free against concurrent snapshot creation.
         let _meta = self.backend().meta_lock().await?;
@@ -189,6 +192,21 @@ impl Database {
                     "snapshot {:?} pins version {} of table {name:?}, below the requested \
                          floor {target}; delete the snapshot first",
                     snap.name, se.sequence
+                )));
+            }
+        }
+        // Fork pins are the same kind of root and win for the same reason —
+        // with more at stake. A fork's shadow tables reference base segments
+        // directly, so letting the floor pass a fork's pin would make the next
+        // vacuum delete segments a live workspace still reads (ROADMAP IX).
+        for f in crate::fork::list(self.backend()).await? {
+            if let Some(pin) = f.pins.get(&table_id)
+                && pin.sequence < target
+            {
+                return Err(Error::invalid(format!(
+                    "fork {:?} pins version {} of table {name:?}, below the requested \
+                         floor {target}; drop the fork first",
+                    f.name, pin.sequence
                 )));
             }
         }

@@ -820,10 +820,12 @@ async fn resolve_all_at(db: &Arc<Database>, at: ReadAt) -> DfResult<Vec<Resolved
         .list_tables()
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    // `resolve_entry`, not `resolve`: the listing above already produced these
+    // catalog entries, and resolving by name would re-read every one of them.
     futures::future::try_join_all(
         tables
-            .iter()
-            .map(|entry| db.resolve(&entry.name, at.clone())),
+            .into_iter()
+            .map(|entry| db.resolve_entry(entry, at.clone())),
     )
     .await
     .map_err(|e| DataFusionError::External(Box::new(e)))

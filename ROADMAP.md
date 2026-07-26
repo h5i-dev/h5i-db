@@ -976,7 +976,10 @@ was added the same day from an ecosystem check of the maintained metric
 libraries (`quantstats` active; `empyrical` unmaintained since ~2020, fork
 `empyrical-reloaded`; `skfolio` / `Riskfolio-Lib` for optimization;
 `pypbo` for backtest-overfitting probability) — re-verify maintenance status
-before depending on any of them.
+before depending on any of them. VII-B7 was added 2026-07-26 from a source
+study of `~/Ref/Riskfolio-Lib` (v7.3.0), which confirmed the buy-don't-build
+boundary for optimization/shrinkage while surfacing the small
+order-statistic slice that belongs in the engine.
 
 **Framing.** Both engines converge on the same lesson from opposite
 directions: their most valuable machinery exists to fake, in application
@@ -1038,6 +1041,7 @@ that already exists; none needs an external calendar dataset.
 | VII-B4 | **Lookback widening + `window_safe`.** Two plan-time properties. (1) Widen-then-trim: derive each rolling expression's required lookback statically and extend the scanned time range by the union lookback, trimming before emit, so a time-filtered rolling query is correct at the range edge (qlib `get_extended_window_size`, `base.py:222-235`, returns an exact `(left, right)` pad and represents *future* refs as a right pad; zipline computes union-`extra_rows` per leaf and per-consumer `offset` truncation, `graph.py:302-457`). This is the D6 planning rule. (2) `window_safe`: an expression-level flag making adjustment-correctness a type property; rolling windows over `adjust()`-ed prices are rejected unless the input is adjustment-invariant (returns, ratios), because composing windows over restated levels is silently wrong (zipline raises `NonWindowSafeInput`, `term.py:610-614`, `errors.py:517-528`). Depends on VII-A1. | qlib `base.py:222-235`, `ops.py:764-824`; zipline `pipeline/graph.py:302-457`, `term.py:95, 610-614` | A rolling query over `WHERE ts >= t0` equals the unfiltered query sliced to `>= t0` (no silent warmup truncation, property-tested); N overlapping windows over one table plan a single widened scan (verified via `--stats` bytes); a windowed aggregate over a non-invariant adjusted level errors with an explanation, and over returns passes. |
 | VII-B5 | **Volatility & liquidity estimators (SQL-side).** Two families of per-bucket estimators that need bar/tick shape rather than a returns series, and that no SQL engine ships. (1) OHLC volatility: Parkinson, Garman-Klass, Rogers-Satchell, Yang-Zhang — pure per-bucket OHLC arithmetic, so they extend the existing OHLCV rollup and are mergeable-aggregate-state eligible exactly like `vwap`. (2) Realized-variance family (realized variance, bipower variation, a noise-robust two-scale variant) and liquidity/microstructure measures (Amihud illiquidity, Roll effective spread, Kyle's lambda, order-flow imbalance, VPIN) — all windowed aggregations over trades/quotes. These are the "metrics" most often hand-rolled in pandas per notebook, and they belong beside `vwap`, not in the companion layer. | Ecosystem gap (no maintained SQL/engine implementation); standard estimator literature | Each estimator matches a reference implementation on a golden OHLCV/tick fixture; the OHLC family registers as P3-cache-eligible aggregate states and a warm re-query reuses states; documented tick-data preconditions (which need trades vs quotes) so a wrong-input call errors rather than returning a plausible number. |
 | VII-B6 | **Label generation & stationarity transforms (SQL-side).** Triple-barrier first-touch labeling (profit target / stop / time horizon, whichever is hit first) expressed over the horizon-join machinery rather than a pandas loop — this is the concrete consumer that justifies **D5 HORIZON JOIN**. Plus fractional differentiation as a fixed-width weighted window (a stationarity transform, hence a window function). Both are numerical methods, not metrics, and both are per-row over full tables, so they are engine work by the layering rule. | López de Prado labeling/transform lineage; D5 (QuestDB 9.3.3 horizon join) | Triple-barrier labels match a reference pandas implementation including simultaneous-touch tie-breaking (documented and deterministic); labeling a large table streams in bounded memory; fracdiff weights are computed once per (d, width) and the transform matches reference output; both refuse to run under a `--decision-time` pin without an explicit opt-in, since they read forward in time by construction. |
+| VII-B7 | **Tail-risk and drawdown aggregates (SQL-side, 2026-07-26).** Order-statistic risk measures as mergeable UDAFs with rolling UDWF forms: `var_hist(x, alpha)` and `cvar_hist(x, alpha)` (historical VaR / expected shortfall), `semi_deviation(x)`, `lpm(x, mar, p)` (lower partial moments: the Sortino/Omega denominators), plus the drawdown family (`max_drawdown`, `avg_drawdown`, `ulcer_index`) as ordered-pass window functions over a cumulative-return level (the `ewma` execution shape). Pure sorting/cumsum math, no linear algebra. The engine-tier justification is form, not speed: the value is `GROUP BY`/`PARTITION BY` reachability (per-symbol, per-regime CVaR in one statement; a rolling 252-bar CVaR as a window function) over scan-scale tables, which a post-query returns-series library structurally cannot express. The single-series scalar versions stay delegated per VII-D2. `var_hist` subsumes the rolling `quantile` gap named in VII-B1. Explicitly excluded (buy, don't build): EVaR/RLVaR/EDaR/RLDaR (solver-bound: exponential/power cones), the range variants (VRG/CVRG/TGRG…), and L-moment CRMs. | Riskfolio-Lib `riskfolio/src/RiskFunctions.py` source study (v7.3.0, 2026-07-26): ~35 of its 44 risk measures are pure numpy order statistics with no cvxpy dependency; its `tests/test_portfolio.py` doubles as a numerical oracle | Each aggregate matches the Riskfolio-Lib reference on a full-mantissa golden returns fixture (the P3 float lesson); rolling forms match a pandas `rolling().apply()` reference; the quantile interpolation rule is pinned and documented, not "whatever the sort gives"; minimum-observation rules error rather than emit garbage (CVaR requires at least one tail observation, `ceil(alpha·n) ≥ 1`); drawdown functions document their input contract (level vs. return series) and require an explicit ordering; cookbook page `03_risk_and_production/01_var_expected_shortfall` is rewritten on top of the new functions instead of hand-rolled SQL. |
 
 ## Tier VII-C — Refinements folded into existing items
 
@@ -1066,12 +1070,13 @@ writing its own Sharpe). What is *not* commodity is anything whose input is
 **many runs** or **raw microstructure**, because both are things only a
 versioned store can hand you and a returns-series library structurally
 cannot see. VII-D1 is the differentiated item; VII-B5/B6 are the
-microstructure half, deliberately placed in the engine tier.
+microstructure half and VII-B7 the grouped/rolling risk half, deliberately
+placed in the engine tier.
 
 | # | Item | Rationale | Acceptance criteria |
 |---|------|-----------|---------------------|
 | VII-D1 | **Overfitting statistics wired to the run ledger** (the flagship of this tier). Deflated Sharpe Ratio, minimum track record length, Probability of Backtest Overfitting (CSCV), effective number of independent trials, and multiple-testing corrections (White's Reality Check, Hansen's SPA). | Every one of these requires the **number of independent trials** that produced the winning strategy. In practice that number is guessed or omitted, because nothing records how many backtests were run — the run ledger (#14) records exactly it, and V-D1's stability sweep produces the trial × time-slice matrix CSCV consumes. This is a statistic nobody else can compute *honestly*, which is a stronger claim than computing it faster. The math is thin (`pypbo` is a single-purpose research repo); the value is the wiring. | DSR/MinTRL match published reference values on the source papers' worked examples; the trial count is read from the ledger rather than passed by hand, and a run not in the ledger is refused rather than silently counted as one trial; CSCV consumes the sweep matrix with shared sub-results deduped by `(commit, query)`; a deliberately overfit strategy set yields DSR ≈ 0 / high PBO and a robust one does not. |
-| VII-D2 | **Version-attributed tearsheet.** Standard ratios (Sharpe, Sortino, Calmar, Omega, CAGR, volatility, drawdown table, VaR/CVaR, tail ratio, win rate, profit factor, capture ratios, Kelly, ulcer index, alpha/beta, rolling variants) **delegated** to `quantstats` / `empyrical-reloaded`; statistical tests (ADF, KPSS, Hurst, variance ratio, Ljung-Box) delegated to `statsmodels` / `arch`. h5i-db's contribution is the header: the data version SHA, the arrival/decision-time pins, and the embargo the numbers were computed under. | "A Sharpe you can cite" — plain quantstats cannot say which data produced its number. Wrapping keeps the metric surface at zero maintenance while the provenance line is the part only this project can write. | Report header carries version SHA + both pin axes + embargo, and regenerating from the same SHA reproduces byte-identical numbers; ratio values match the wrapped library exactly (we are not a second implementation); the wrapper is generic over `f(returns) -> scalar` so a new metric needs no plumbing (zipline's `ReturnsStatistic` shape). |
+| VII-D2 | **Version-attributed tearsheet.** Standard ratios (Sharpe, Sortino, Calmar, Omega, CAGR, volatility, drawdown table, VaR/CVaR, tail ratio, win rate, profit factor, capture ratios, Kelly, ulcer index, alpha/beta, rolling variants) **delegated** to `quantstats` / `empyrical-reloaded` (single-series scalar form only; grouped/rolling SQL forms of the tail-risk subset are engine work, VII-B7); statistical tests (ADF, KPSS, Hurst, variance ratio, Ljung-Box) delegated to `statsmodels` / `arch`. h5i-db's contribution is the header: the data version SHA, the arrival/decision-time pins, and the embargo the numbers were computed under. | "A Sharpe you can cite" — plain quantstats cannot say which data produced its number. Wrapping keeps the metric surface at zero maintenance while the provenance line is the part only this project can write. | Report header carries version SHA + both pin axes + embargo, and regenerating from the same SHA reproduces byte-identical numbers; ratio values match the wrapped library exactly (we are not a second implementation); the wrapper is generic over `f(returns) -> scalar` so a new metric needs no plumbing (zipline's `ReturnsStatistic` shape). |
 | VII-D3 | **Factor evaluation report.** Information coefficient and rank IC per date, ICIR, IC decay across horizons, quantile-bucket forward returns and the top-minus-bottom spread, factor autocorrelation, and turnover. Computation is cross-sectional SQL (VII-B2) plus horizon joins (D5); this item is the summarization and rendering. | The alphalens/qlib overlap, and the natural consumer of VII-B2 — the IC decay curve is one query rather than a per-horizon loop. Both reference projects ship this and both compute it in pandas; we can push the heavy half into SQL. | IC/rank-IC match qlib's `SigAnaRecord` output on a golden fixture; the decay curve is produced by a single horizon-join query (verified in the plan, not a Python loop); quantile spreads reproduce alphalens semantics incl. NaN/mask handling. |
 | VII-D4 | **Validation splitters.** Purged K-fold cross-validation with embargo and combinatorial purged CV (CPCV) — index arithmetic with no data access. **Must share code and embargo semantics with the walk-forward span planner** (VII-C), not duplicate them. | Numerical methods rather than metrics, and the natural companion to walk-forward: both answer "which spans may this fold see". Duplicating embargo logic in two places is how the two drift apart. | Purged folds contain no observation whose label horizon overlaps a test fold (property-tested); CPCV path count matches the reference combinatorics; a leaking split is rejected with the offending indices named; splitter and span planner share one embargo implementation. **Interface decision (defer to #14):** if the run ledger exposes walk-forward as a CLI verb, the shared span/embargo core moves to Rust for agent reachability and Python keeps only the sklearn-shaped wrapper. |
 
@@ -1307,6 +1312,199 @@ user already knows; explicitly *not* ArcticDB's `q[q["x"] > 1]` style):
 This Part is additive and must not block Part VII engine work: the
 builder wraps whatever operator surface exists at the time, and grows
 with it.
+
+---
+
+# Part IX — Fork: multi-agent writable workspaces (2026-07-26)
+
+**Decision.** Build `fork` as **catalog aliasing plus pins**, not as
+branched table histories. A fork never writes to a base table: it gets a
+fork-scoped catalog, a GC pin on the base versions it was created from,
+and, on first write to a base name, a **copy-on-write shadow table** (a
+new `table_id` whose first manifest is a copy of the pinned base
+manifest: O(#segments) of JSON, zero data movement). The branch pointer
+is the catalog; the branch itself is an ordinary table, so every
+existing codepath (commit, flock, vacuum, retention, time-travel,
+compaction) applies to it unchanged. Verbs: `fork create / diff /
+promote / drop`. **No merge**: promote is a table-granularity
+compare-and-swap into main. Fork-and-discard is the dominant agent path
+and stays O(1).
+
+**Positioning.** The "embedded × analytical × local × branch"
+intersection is empty. *BranchBench* (arXiv 2604.17180, Columbia DAPLab;
+verified 2026-07-26, lifting the Part V ⚠ on existence) defines the
+workload (agentic speculative branching: fork per hypothesis, discard
+losers, promote winners) and benchmarked only server systems (Neon,
+DoltgreSQL, TigerData, Xata, Postgres baselines); no embedded entrant
+exists. DuckLake chose OCC over branching (⚠ open feature request,
+Discussion #194, unverified). h5i-db's answer is neither `cp -r`
+(O(data), no shared GC, no diff) nor OCC (conflicts *during* work):
+workspaces are disjoint by construction, so agents conflict only at
+promote, and explicitly.
+
+## Design rules (the load-bearing wall)
+
+1. **A branch is a table; the catalog is the branch pointer.** `HEAD`
+   stays the *only* mutable object per table (`layout.rs:8`). No
+   fork-scoped HEAD namespaces, ever: a second mutable object per table
+   dir would make every manifest-listing codepath branch-aware.
+2. **The fork object is a `Snapshot` superset and a GC root.** Layout:
+   `forks/<hash>.json` (pins `{table_id → sequence + manifest_checksum}`
+   plus a freeform `user_meta` blob) and
+   `catalog/forks/<hash>/tables/<hash>.json` for fork-scoped entries.
+   Retention (`retention.rs` floor checks) and `drop_table`
+   (`database.rs:507`) consult forks exactly as they consult snapshots.
+3. **Refinement invariant.** A shadow manifest may reference only (a)
+   segments in its own dir, or (b) segments listed in the pinned base
+   manifest. (b) is GC-safe because the pin holds the base retention
+   floor, so those segments stay inside base vacuum's referenced set for
+   the fork's lifetime. Enforced at the only two points where a
+   cross-table path can enter a manifest — shadow materialization and
+   promote — and re-derived by `verify`. *(Corrected during
+   implementation: the original plan said "enforced at commit time",
+   which would have cost two extra object reads on every fork write to
+   re-check a property that holds inductively. Later commits can only
+   add own-prefix segments or carry forward already-checked ones.)*
+4. **FORMAT bump is a fence, not a migration.** `FORMAT` goes to 2 on
+   first fork creation so pre-fork binaries refuse to open rather than
+   raising retention floors past pins they cannot see. No existing
+   object is rewritten.
+5. **Conflict unit is the table; policy is CAS, first-commit-wins.**
+   Promote commits the shadow head into main with `expected_version` =
+   the fork's pinned base sequence (the field already exists:
+   `database.rs:108`, checked at `database.rs:1018`). The loser gets a
+   clean version conflict: drop, or re-fork and re-run. This is the
+   V-E2 vocabulary made structural.
+6. **Fork-mode compact filters to `created_by_sequence > fork base`.**
+   "Compact never copies base bytes" becomes a rule, not an emergent
+   property of the small-segment threshold.
+7. **Reads never touch HEAD.** Fork reads resolve name → pin → manifest
+   by direct path, so they cannot observe (or contend with) concurrent
+   main writers.
+
+## Tier IX-A — Fork core
+
+| # | Item | Acceptance criteria |
+|---|------|---------------------|
+| IX-A1 | **Fork object + pin integration.** `fork create <name> [--as-of TS]` (pins via `as_of_sequence`, `database.rs:696`); read path through the fork (two-level catalog, pinned manifests). A read-only fork is already a named, frozen, multi-table as-of view. | Retention floor refuses to rise above a fork pin; `drop_table` refuses on fork-pinned tables; `vacuum` after a main compact deletes nothing a live fork reads (fixture: fork, compact main, vacuum, fork still scans byte-identical results). A format-1 binary refuses to open a DB containing a fork. `put_if_absent` create: racing same-name creators get one winner, one clean error. |
+| IX-A2 | **Fork-scoped catalog + `drop` + `list`.** Tables created in a fork live under the fork catalog; `fork drop` deletes fork-owned tables first, fork object (the pin) last; `fork list` shows age, pinned bytes, tables created/shadowed. | Fork-created tables are invisible to the main catalog and to main `vacuum`'s table listing. Kill mid-drop: the fork stays pinned and re-running `fork drop` completes (idempotent, resumable). Pinned-bytes accounting matches `du` on a fixture. |
+| IX-A3 | **COW shadow-on-write + invariant enforcement.** First write to a base name creates the shadow (manifest copy at `sequence: 0`, `parent: None`, provenance under a namespaced `user_meta` key — **no new manifest field was needed**); later commits are ordinary. | Zero parquet bytes copied at shadow creation (asserted on bytes written). N concurrent forks writing the same logical table produce zero writer-lock contention (each holds its own `table_id` flock). Any manifest violating the refinement invariant is rejected where the path is introduced; `verify` detects a violating fixture. |
+| IX-A4 | **`fork diff`.** Catalog diff (created / shadowed / dropped names) plus per-shadow segment-set diff via `segments_by_checksum()`, rows/bytes deltas, schema-revision changes. | Diff reads manifests only (no segment I/O, asserted). Output stable and machine-readable (JSON), so an agent can gate promote on it. |
+| IX-A5 | **`fork promote --table T`.** Hardlink (local FS) or backend copy of the shadow's own-dir segments into the base dir, then commit the shadow head manifest as base's next version, `OpKind::Promote`, `expected_version` = pinned base sequence. | First promote wins; second gets a version conflict, not a partial merge. Main never contains cross-dir segment refs (fsck after promote + fork drop). When every intervening base commit is `OpKind::Compact`, the error names it and suggests rebase-over-compaction (the rebase itself may land as a fast-follow). Hardlink path does zero byte copies on one filesystem. |
+
+## Costs accepted, stated honestly
+
+- **Deferred reclamation.** Live forks hold retention floors down, so a
+  compacted main temporarily stores old + new bytes until forks drop
+  (same tradeoff as snapshots today; `fork list` pinned-bytes is the
+  visibility valve).
+- **Promote is O(#segments) metadata ops**, not pure metadata (hardlinks
+  locally, server-side copy on object stores). Promote is the rare
+  verb; keeping vacuum fork-ignorant is worth it.
+- **Shadow history restarts at sequence 0**; time-travel across the fork
+  point is a two-hop walk through the recorded origin. Within a fork,
+  time travel *below* the pin works normally (the base's history is still
+  the base's history), and reads above it are `VersionNotFound` — a fork
+  can look back but never forward.
+- **Fork-per-agent is the assumed mapping.** Two agents sharing one fork
+  fall back to today's single-writer-per-table semantics.
+
+## Do NOT build
+
+- **No 3-way merge, no row-level conflict resolution.** That is Dolt's
+  decade. The conflict unit is the table and the policy is CAS; write
+  that down instead of pretending promote is not a merge.
+- **No `--embargo` on forks.** A sliding "now" ceiling cannot be
+  enforced once a fork writes derived tables (the guarantee would have
+  to police every write path forever). Look-ahead protection stays with
+  research-mode's read-only pins; revisit only on observed demand.
+- **No global content-addressed segment pool as a fork prerequisite.**
+  It is a layout migration that makes GC reachability global and taxes
+  databases that never fork. Revisit for cross-table dedup on its own
+  evidence, not for this.
+- **No fork-of-fork in v1.** Base = main only; nesting multiplies the
+  promote/GC paths before the primitive has users.
+- **No run-ledger coupling.** Neither feature exists yet; the
+  `user_meta` blob is the loose join point, and correlation can live in
+  the ledger later.
+
+## Cross-references (Part IX ⇄ existing parts)
+
+- IX-A1 ⇄ **snapshot machinery** (`snapshot.rs`, `retention.rs`): the
+  fork object is a `Snapshot` superset; pins reuse the floor-refusal and
+  drop-refusal checks verbatim.
+- IX-A5 ⇄ **`CommitOptions.expected_version`** (`database.rs:108`): the
+  promote CAS is an existing field, not new machinery.
+- Part IX ⇄ **V-E2**: supersedes V-E2's "CLI/skill workflow, not an
+  engine concept" for the fork lifecycle; fork → explore →
+  commit/abort + first-commit-wins is now engine substrate, and the
+  review-UI verification gate sits on top of `fork diff`.
+- Part IX ⇄ **research-mode (Part VI dual-axis)**: `fork --as-of` is the
+  writable counterpart of the read-only pin ("a workspace over a frozen
+  base you can write into"); the pin machinery is shared.
+- IX-A3 ⇄ **VII-B factor workload**: the shadow table is where an agent
+  materializes per-hypothesis features; N hypotheses share one base with
+  zero copies and zero contention.
+
+## Build order
+
+1. **IX-A1** — pins + read path; ships a named multi-table as-of view
+   on its own.
+2. **IX-A2** — writable workspace via fork-created tables, before any
+   COW exists.
+3. **IX-A3** — COW shadows + the invariant (the correctness core).
+4. **IX-A4** — diff (agents gate on it; drop is already covered by A2).
+5. **IX-A5** — promote, last: rarest verb, only one touching main.
+
+Each step is independently shippable; nothing in Part IX blocks or is
+blocked by Parts VII/VIII (different subsystem: catalog/GC, not query
+surface).
+
+## Part IX implementation status (2026-07-26, branch `support-fork-quant`)
+
+**Delivered: IX-A1 … IX-A5 complete**, plus CLI and Python surfaces.
+`crates/h5i-db-core/src/fork.rs` (types, storage, operations),
+fork-awareness in `database.rs` (`open_fork`, `entry`, `list_tables`,
+`effective_head`, `entry_for_write`, `materialize_shadow`,
+`drop_table`, `verify`), pin checks in `retention.rs`, `h5i-db fork
+create|list|show|diff|promote|drop` plus a global `--fork` flag, and
+`Database.create_fork/fork/forks/fork_diff/promote/drop_fork` in Python.
+Tests: 16 unit + 43 core integration + 10 CLI e2e + 12 Python.
+
+**Three things the design got wrong, found by building it:**
+
+1. **"Vacuum's code does not change" was false, and dangerously so.**
+   Vacuum's orphaned-table-directory sweep (`database.rs`, the
+   `table.is_none()` branch) collects any `tables/<uuid>/` not in the
+   *global* catalog. Fork-owned tables are deliberately absent from it —
+   that is what makes them invisible to main — so the sweep deleted every
+   fork's shadow and scratch tables outright. The reachability roots had
+   to grow to cover every fork catalog. Verified by mutation: reverting
+   that fix makes `vacuum_never_collects_a_forks_own_tables` fail with a
+   missing HEAD. The lesson generalizes: *"which catalog"* was an
+   unstated assumption in every reachability computation, not just the
+   one the design predicted.
+2. **The FORMAT bump had to be a new axis, not a version increment.**
+   Raising `FORMAT_VERSION` would have stamped every *manifest* as v2 and
+   locked v1 readers out of fork-free databases. The fence needed its own
+   constant (`READER_VERSION` / `FORK_MIN_READER_VERSION`) applied only to
+   the database-level `min_reader_version`, leaving manifests at v1.
+3. **The refinement invariant did not belong at commit time** (see design
+   rule 3).
+
+**Two bugs the tests caught in adjacent code**, both in the Python
+bindings: `promote_conflict` fell through to the base `H5iError` instead
+of `ConflictError`, and `as_of` via `datetime` lost ~hundreds of ns to
+float64 rounding (`dt.timestamp() * 1e9` needs 61 mantissa bits), enough
+to land a cutoff on the wrong side of a commit.
+
+**Deferred as designed:** `--embargo` on forks, fork-of-fork, run-ledger
+coupling, global content-addressed segment pool, row-level merge. Also
+not built: dropping a *base* table from inside a fork (would need a
+tombstone in the fork catalog; refused with a clear message instead), and
+rebase-over-compaction for a promote blocked only by layout changes — the
+condition is detected and named in the error, but the caller still
+re-forks by hand.
 
 ## Part VIII implementation status (2026-07-25, branch `data-frame-lazy-run`)
 
