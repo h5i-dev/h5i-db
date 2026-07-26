@@ -58,6 +58,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html" class="active">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -70,7 +71,7 @@
 <h1 id="dataframe-builder">DataFrame builder<a class="headerlink" href="#dataframe-builder" title="Permanent link">#</a></h1>
 <p><code>db.table(...)</code> starts a <strong>lazy</strong> query you build up with methods instead of
 writing a SQL string. Nothing runs until a terminal method like <code>.collect()</code>.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span>
 
 <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="s2">&quot;2026-07-01T00:00:00Z&quot;</span><span class="p">)</span>
    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">([</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">]))</span>
@@ -93,10 +94,10 @@ produced:</p>
 <div class="admonition note">
 <p class="admonition-title">When to reach for it</p>
 <p>For a query you write once, SQL is usually shorter and clearer. The
-builder pays off when queries are <strong>generated</strong> — a factor library
-sweeping windows and columns in a loop — where f-string SQL means quoting
-bugs, and when you want a partially-built pipeline you can reuse and
-extend. Both surfaces stay first-class; <code>.sql()</code> is the door between them.</p>
+builder pays off when queries are <strong>generated</strong> (a factor library sweeping
+windows and columns in a loop), where f-string SQL means quoting bugs, and
+when you want a partially-built pipeline you can reuse and extend. Neither
+surface is second-class; <code>.sql()</code> is the door between them.</p>
 </div>
 <h2 id="reading-a-table">Reading a table<a class="headerlink" href="#reading-a-table" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="databasetable"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">table</span></code><a class="headerlink" href="#databasetable" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">LazyFrame</span>
@@ -114,7 +115,7 @@ extend. Both surfaces stay first-class; <code>.sql()</code> is the door between 
 <tbody>
 <tr>
 <td><code>db.table("trades")</code></td>
-<td>The bare table name — snapshot-bound for the query, so two references to it inside one query always agree</td>
+<td>The bare table name, snapshot-bound for the query, so two references to it inside one query always agree</td>
 </tr>
 <tr>
 <td><code>db.table("trades", version=42)</code></td>
@@ -122,7 +123,7 @@ extend. Both surfaces stay first-class; <code>.sql()</code> is the door between 
 </tr>
 <tr>
 <td><code>db.table("trades", as_of="2026-07-01T00:00:00Z")</code></td>
-<td><code>h5i('trades', '…')</code> — latest version committed at or before that instant</td>
+<td><code>h5i('trades', '…')</code>, the latest version committed at or before that instant</td>
 </tr>
 <tr>
 <td><code>db.table("trades", snapshot="eod-2026-07-18")</code></td>
@@ -131,7 +132,7 @@ extend. Both surfaces stay first-class; <code>.sql()</code> is the door between 
 </tbody>
 </table></div>
 <p>Because pins lower to <code>h5i()</code>, a pinned builder query is bound at the source
-exactly like hand-written SQL — including under a research-mode pin.</p>
+exactly like hand-written SQL, including under a research-mode pin.</p>
 </div></section><h2 id="verbs">Verbs<a class="headerlink" href="#verbs" title="Permanent link">#</a></h2>
 <p>Every verb returns a <strong>new</strong> frame, so a partial pipeline is safe to reuse as
 a base for several queries.</p>
@@ -185,7 +186,7 @@ a base for several queries.</p>
 </tr>
 <tr>
 <td><code>.pipe(fn, *args)</code></td>
-<td><code>fn(frame, *args)</code> — for reusable helpers</td>
+<td><code>fn(frame, *args)</code>, for reusable helpers</td>
 </tr>
 </tbody>
 </table></div>
@@ -202,9 +203,9 @@ overwrite one:</p>
 <span class="k">FROM</span><span class="w"> </span><span class="ss">&quot;trades&quot;</span>
 </code></pre></div>
 
-<p>The builder never reads the schema — that is what keeps it lazy — so a
-<code>replace</code> name that does not exist is caught by the engine, not at build
-time.</p>
+<p>The builder never reads the schema, which is what keeps it lazy, so a
+<code>replace</code> name that does not exist is caught by the engine rather than at
+build time.</p>
 <section class="api-member"><h3 id="terminal-methods">Terminal methods<a class="headerlink" href="#terminal-methods" title="Permanent link">#</a></h3><div class="api-body">
 <div class="table-wrap"><table>
 <thead>
@@ -232,7 +233,7 @@ time.</p>
 </tr>
 <tr>
 <td><code>.schema()</code></td>
-<td>Result schema via a <code>LIMIT 0</code> run — no data read</td>
+<td>Result schema via a <code>LIMIT 0</code> run; no data read</td>
 </tr>
 </tbody>
 </table></div>
@@ -243,7 +244,7 @@ time.</p>
 <p><code>col(name)</code> references a column, <code>lit(value)</code> a constant. The name is one
 identifier and is never split on <code>.</code>, so a column really named <code>a.b</code> works;
 pass <code>col("price", relation="l")</code> to qualify a side of a join.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">when</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">when</span>
 
 <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span>              <span class="c1"># arithmetic</span>
 <span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">100</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">5</span><span class="p">)</span>   <span class="c1"># &amp; | ~ , not and/or/not</span>
@@ -264,7 +265,7 @@ tighter than <code>&gt;</code>, so the comparisons need parentheses.</p>
 <div class="admonition note">
 <p class="admonition-title">Operators mean what SQL means</p>
 <p>Expressions compile to SQL and keep SQL's semantics, not Python's. Most
-visibly, <code>/</code> between two integer columns is <strong>integer</strong> division —
+visibly, <code>/</code> between two integer columns is <strong>integer</strong> division, so
 <code>col("size") / 4</code> truncates. Cast for true division:
 <code>col("size").cast("DOUBLE") / 4</code>. The rule is deliberate: the same
 expression must not mean one thing here and another in <code>db.sql()</code>.</p>
@@ -280,10 +281,10 @@ always quoted so case survives (<code>col("Symbol")</code> finds a field named
 <code>.ceil()</code>, <code>.coalesce(...)</code>, <code>.greatest(...)</code>, <code>.least(...)</code>. Plus
 <code>count_star()</code>, <code>vwap(price, size)</code>, <code>wavg(weight, value)</code> and
 <code>time_bucket(interval, ts)</code> as functions.</p>
-<p>A <code>when(...).then(...)</code> chain is already a complete expression — a <code>CASE</code>
-with no <code>ELSE</code> yields NULL — so it can be aliased without <code>.otherwise()</code>.</p>
+<p>A <code>when(...).then(...)</code> chain is already a complete expression (a <code>CASE</code>
+with no <code>ELSE</code> yields NULL), so it can be aliased without <code>.otherwise()</code>.</p>
 <p>The idiomatic OHLCV query, built:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
 
 <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;5m&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
@@ -340,11 +341,11 @@ with no <code>ELSE</code> yields NULL — so it can be aliased without <code>.ot
 </tr>
 <tr>
 <td><code>.rolling_rank</code></td>
-<td><code>ts_rank</code> — percentile of the current value in the window</td>
+<td><code>ts_rank</code>, the percentile of the current value in the window</td>
 </tr>
 <tr>
 <td><code>.rolling_idxmax</code> <code>.rolling_idxmin</code></td>
-<td><code>idxmax</code> <code>idxmin</code> — 1-based position</td>
+<td><code>idxmax</code> <code>idxmin</code>, 1-based position</td>
 </tr>
 <tr>
 <td><code>.rolling_corr(other, …)</code> <code>.rolling_cov(other, …)</code></td>
@@ -376,7 +377,7 @@ so they take the bucket to compare within:</p>
 </tr>
 <tr>
 <td><code>.cs_demean(partition_by)</code></td>
-<td><code>x - avg(x) OVER (…)</code> — plain SQL</td>
+<td><code>x - avg(x) OVER (…)</code>, plain SQL</td>
 </tr>
 <tr>
 <td><code>.cs_zscore(partition_by)</code></td>
@@ -388,7 +389,7 @@ so they take the bucket to compare within:</p>
 applies to a single aggregate, where <code>rows</code> is a trailing count or a
 <code>(preceding, following)</code> pair with <code>None</code> for unbounded. SQL attaches <code>OVER</code>
 to one function call, so window each part of a compound expression
-separately — <code>col("a").sum().over(...) / count_star().over(...)</code>, not
+separately: <code>col("a").sum().over(...) / count_star().over(...)</code>, not
 <code>(col("a").sum() / count_star()).over(...)</code>, which is rejected.</p>
 <h2 id="joins">Joins<a class="headerlink" href="#joins" title="Permanent link">#</a></h2>
 <p><code>.join()</code> renders both sides as subqueries aliased <code>l</code> and <code>r</code>. Those aliases
@@ -402,9 +403,9 @@ are part of the contract: reach a specific side with
 <p><code>SELECT *</code> over a join of two tables sharing a column name yields both
 copies. Project explicitly to avoid the ambiguity.</p>
 </div>
-<p>Comparing one table at two pinned versions — the "same query across N
+<p>Comparing one table at two pinned versions, the "same query across N
 versions" pattern:</p>
-<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">mean_px</span><span class="p">(</span><span class="n">version</span><span class="p">):</span>
+<div class="highlight"><pre><span></span><code><span class="k">def</span> <span class="nf">mean_px</span><span class="p">(</span><span class="n">version</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
               <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
               <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;px&quot;</span><span class="p">)))</span>
@@ -435,7 +436,7 @@ versions" pattern:</p>
 <p>For each left row, take the most recent right row at or before it
 (<code>"backward"</code>) or the first at or after it (<code>"forward"</code>). The result is LEFT
 and 1:1 with the left side. <code>tolerance</code> is an integer in the time column's
-raw units — for a <code>timestamp[us]</code> column, <code>5000000</code> is five seconds.</p>
+raw units; for a <code>timestamp[us]</code> column, <code>5000000</code> is five seconds.</p>
 <div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">join_asof</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">),</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span>
                              <span class="n">tolerance</span><span class="o">=</span><span class="mi">5_000_000</span><span class="p">)</span>
 </code></pre></div>
@@ -486,9 +487,9 @@ naming that column, as it would be for a DataFrame.</p>
 <p>The generated SQL is deterministic, so it is safe to snapshot-test or diff.</p>
 <h2 id="escape-hatch">Escape hatch<a class="headerlink" href="#escape-hatch" title="Permanent link">#</a></h2>
 <p><code>sql_expr()</code> embeds a raw fragment anywhere an expression is accepted. Full
-SQL coverage through builder verbs is deliberately not a goal — reach for
+SQL coverage through builder verbs is deliberately not a goal, so reach for
 this rather than waiting for a method:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">sql_expr</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">sql_expr</span>
 
 <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>

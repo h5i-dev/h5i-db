@@ -1,6 +1,6 @@
 ---
 title: Exceptions
-description: "The typed error hierarchy: every h5i-db error carries a stable code, an actionable hint, and a retryable flag."
+description: "The typed error hierarchy: every h5i-db error carries a stable code, a hint you can act on, and a retryable flag."
 order: 3
 ---
 
@@ -13,9 +13,9 @@ instance carries the same structured envelope the CLI prints on stderr:
 try:
     db.read("nope")
 except h5i_db.NotFoundError as e:
-    e.code        # "table_not_found"   — stable, branchable identifier
-    e.hint        # actionable suggestion (e.g. how to list tables)
-    e.retryable   # False               — retrying without change won't help
+    e.code        # "table_not_found"   (stable, branchable identifier)
+    e.hint        # what to try next (e.g. how to list tables)
+    e.retryable   # False               (retrying without a change won't help)
 ```
 
 Messages are formatted `"[{code}] {message} (hint: {hint})"`.
@@ -37,7 +37,7 @@ Everything subclasses `H5iError`, which subclasses `Exception`:
 | `StorageError` | Underlying storage / IO / encoding failure | `storage`, `io`, `arrow`, `parquet`, `metadata` |
 
 !!! note "`h5i_db.TimeoutError` shadows the builtin"
-    It subclasses `H5iError`, **not** Python's builtin `TimeoutError` — catch
+    It subclasses `H5iError`, **not** Python's builtin `TimeoutError`, so catch
     `h5i_db.TimeoutError` (or `H5iError`) specifically.
 
 ## Patterns
@@ -58,10 +58,10 @@ except h5i_db.InvalidInputError as e:
 
 **Respect `retryable`:** it encodes whether backing off can help.
 `ConflictError` and `TimeoutError` generally can be retried;
-`InvalidInputError` and `PolicyError` cannot — fix the call (or get the plan
+`InvalidInputError` and `PolicyError` cannot, so fix the call (or get the plan
 reviewed) instead.
 
-**Surface `hint`:** hints are written to be shown — to a user, a log, or an
+**Surface `hint`:** hints are written to be shown to a user, a log, or an
 LLM agent deciding its next step. Don't swallow them.
 
 **Catch-all:** `except h5i_db.H5iError` catches every h5i-db failure while

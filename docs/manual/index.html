@@ -58,6 +58,7 @@
     </div>
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../manual/index.html" class="active">Overview</a></li><li><a href="../manual/installation.html">Installation</a></li><li><a href="../manual/quickstart.html">Quickstart</a></li><li><a href="../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../manual/concepts.html">Core concepts</a></li><li><a href="../manual/cli.html">CLI reference</a></li><li><a href="../manual/sql.html">SQL reference</a></li><li><a href="../manual/agents.html">Agents &amp; automation</a></li><li><a href="../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../api/index.html">Overview</a></li><li><a href="../api/database.html">Database</a></li><li><a href="../api/dataframe.html">DataFrame builder</a></li><li><a href="../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../api/exceptions.html">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../cookbook/index.html">Cookbook</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -68,14 +69,14 @@
 <span class="sep">/</span>
 <span>Overview</span></div>
 <h1 id="h5i-db-documentation">h5i-db documentation<a class="headerlink" href="#h5i-db-documentation" title="Permanent link">#</a></h1>
-<p class="doc-lede">h5i-db is a high-performance analytical database for quantitative
+<p class="doc-lede">h5i-db is a fast analytical database for quantitative
 finance and time-series workloads: an embedded, versioned store with DataFusion SQL,
-native ASOF joins, and previewable mutations — written in Rust, driven from the CLI
-or Python, designed to be safe in the hands of AI agents.</p>
+native ASOF joins, and previewable mutations. It is written in Rust, driven from the
+CLI or Python, and built to be safe in the hands of AI agents.</p>
 
 <div class="doc-divider"></div>
 
-<p>A database is a <strong>single directory on disk</strong> — like SQLite or DuckDB, there is no
+<p>A database is a <strong>single directory on disk</strong>: like SQLite or DuckDB, there is no
 server process. Data lives in immutable, time-sorted Parquet segments; every write is
 an atomic commit that produces a new <strong>version</strong>, and any past version stays readable
 forever:</p>
@@ -84,7 +85,7 @@ forever:</p>
 <span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT symbol, vwap(price, size) FROM trades GROUP BY symbol&quot;</span>
 </code></pre></div>
 
-<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">h5i_db</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="s2">&quot;market.db&quot;</span><span class="p">)</span>
 <span class="n">df</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM h5i(&#39;trades&#39;, 42)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>   <span class="c1"># time travel</span>
@@ -92,27 +93,27 @@ forever:</p>
 
 <h2 id="what-makes-it-different">What makes it different<a class="headerlink" href="#what-makes-it-different" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>Time-series SQL, natively.</strong> Full SQL through DataFusion, plus <code>asof_join</code>,
-  <code>time_bucket</code>, <code>vwap</code>, <code>ewma</code>, <code>gapfill</code>, and friends. Storage is time-sorted
-  and declares it, so bucketed aggregations stream instead of sorting.</li>
-<li><strong>Every write is a version.</strong> Immutable segments and per-version manifests make
+<li><strong>Time-series SQL, natively:</strong> full SQL through DataFusion, plus <code>asof_join</code>,
+  <code>time_bucket</code>, <code>vwap</code>, <code>ewma</code>, and <code>gapfill</code>. Storage is time-sorted and
+  declares it, so bucketed aggregations stream instead of sorting.</li>
+<li><strong>Every write is a version:</strong> immutable segments and per-version manifests make
   version reads O(1) and <code>as_of</code> lookups O(log V). Named snapshots pin exact
-  versions across tables, keeping backtests reproducible forever.</li>
-<li><strong>Previewable mutations.</strong> Deletes and range replacements can be staged as
-  <strong>plans</strong>: exact affected-row counts and before/after samples first, a
-  metadata-only <code>apply</code> second. A mutation policy can <em>require</em> this flow.</li>
-<li><strong>Crash-safe by construction.</strong> fsync-before-swap, checksums on every object,
+  versions across tables, so a backtest stays reproducible.</li>
+<li><strong>Previewable mutations:</strong> deletes and range replacements can be staged as
+  <strong>plans</strong>. You get exact affected-row counts and before/after samples first,
+  then a metadata-only <code>apply</code>. A mutation policy can <em>require</em> this flow.</li>
+<li><strong>Crash-safe by construction:</strong> fsync-before-swap, checksums on every object,
   and a manifest hash chain. The old head survives a crash at any step.</li>
-<li><strong>Agent-ready by contract.</strong> Machine-readable output formats, structured
+<li><strong>Agent-ready by contract:</strong> machine-readable output formats, structured
   errors with a <code>retryable</code> flag, stable exit codes, and resource limits as
-  flags — the same CLI and API humans use, safe to hand to automation.</li>
+  flags. It is the same CLI and API humans use, safe to hand to automation.</li>
 </ul>
 <h2 id="finding-your-way-around">Finding your way around<a class="headerlink" href="#finding-your-way-around" title="Permanent link">#</a></h2>
 <div class="card-grid">
   <a class="card" href="quickstart.html">
     <span class="card-no">MANUAL</span>
     <span class="card-title">Quickstart</span>
-    <span class="card-desc">A working database in five commands — CLI and Python side by side.</span>
+    <span class="card-desc">A working database in five commands, CLI and Python side by side.</span>
   </a>
   <a class="card" href="concepts.html">
     <span class="card-no">MANUAL</span>
@@ -137,7 +138,7 @@ forever:</p>
   <a class="card" href="../cookbook/">
     <span class="card-no">TUTORIALS</span>
     <span class="card-title">Cookbook</span>
-    <span class="card-desc">36 executed notebooks: fundamentals, market data engineering, alpha research, risk &amp; production.</span>
+    <span class="card-desc">37 executed notebooks: fundamentals, market data engineering, alpha research, risk &amp; production.</span>
   </a>
 </div>
 
@@ -148,7 +149,7 @@ forever:</p>
 <li>Coming from pandas/Polars research code? The
   <a href="../cookbook/#00_fundamentals">Cookbook fundamentals</a> teach the database
   concepts through market-data examples.</li>
-<li>Running it in production? Read the <a href="operations.html">Operations guide</a> —
+<li>Running it in production? The <a href="operations.html">Operations guide</a> covers
   backup, vacuum, compaction, and the recovery runbook.</li>
 <li>Wiring it into an agent or pipeline? See
   <a href="agents.html">Agents &amp; automation</a> for the machine contract.</li>

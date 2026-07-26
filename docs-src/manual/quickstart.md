@@ -1,14 +1,14 @@
 ---
 title: Quickstart
-description: From nothing to a queried, versioned market database in five commands — CLI and Python.
+description: From nothing to a queried, versioned market database in five commands, from the CLI or Python.
 order: 2
 ---
 
 # Quickstart
 
 Five minutes from an empty directory to time-series SQL with time travel. The
-CLI and the Python library drive the same engine and the same on-disk format —
-pick either, or mix freely.
+CLI and the Python library drive the same engine and the same on-disk format,
+so pick either, or mix freely.
 
 ## CLI
 
@@ -20,7 +20,7 @@ $ h5i-db ingest market.db trades ticks.parquet
 $ h5i-db query market.db "SELECT symbol, vwap(price, size) AS vwap FROM trades GROUP BY symbol"
 ```
 
-`init` creates the database — a plain directory, no server. `create-table`
+`init` creates the database: a plain directory, no server. `create-table`
 infers the schema from an existing Parquet/CSV/Arrow file (or takes explicit
 JSON via `--schema`); `--time-column` declares the time axis, which is what
 makes pruning and the time-series operators work. `ingest` appends the file's
@@ -106,10 +106,10 @@ plan.apply()                 # or plan.discard()
 !!! note "Raw time units in Python"
     SQL takes RFC3339 strings, but the Python range APIs
     (`plan_delete_range`, `read(time_start=…)`) take **raw integers in the
-    time column's unit** — microseconds for `timestamp[us]`. See
+    time column's unit**, microseconds for `timestamp[us]`. See
     [Core concepts](concepts.html#the-time-axis).
 
-Errors are typed and machine-actionable:
+Errors are typed, with a code you can branch on:
 
 ```python
 try:
@@ -120,9 +120,9 @@ except h5i_db.ConflictError as e:     # another writer won the race
 
 ## Where next
 
-- [Core concepts](concepts.html) — what a version, segment, snapshot, and plan
+- [Core concepts](concepts.html): what a version, segment, snapshot, and plan
   actually are.
-- [SQL reference](sql.html) — `h5i()`, `asof_join`, `time_bucket`, `gapfill`,
+- [SQL reference](sql.html): `h5i()`, `asof_join`, `time_bucket`, `gapfill`,
   and the rest of the function library.
-- The [Cookbook quickstart notebook](../cookbook/00_fundamentals/01_quickstart.html)
-  — this page as an executed notebook on real data.
+- The [Cookbook quickstart notebook](../cookbook/00_fundamentals/01_quickstart.html),
+  which is this page as an executed notebook on real data.

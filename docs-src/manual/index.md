@@ -6,14 +6,14 @@ order: 0
 
 # h5i-db documentation
 
-<p class="doc-lede">h5i-db is a high-performance analytical database for quantitative
+<p class="doc-lede">h5i-db is a fast analytical database for quantitative
 finance and time-series workloads: an embedded, versioned store with DataFusion SQL,
-native ASOF joins, and previewable mutations — written in Rust, driven from the CLI
-or Python, designed to be safe in the hands of AI agents.</p>
+native ASOF joins, and previewable mutations. It is written in Rust, driven from the
+CLI or Python, and built to be safe in the hands of AI agents.</p>
 
 <div class="doc-divider"></div>
 
-A database is a **single directory on disk** — like SQLite or DuckDB, there is no
+A database is a **single directory on disk**: like SQLite or DuckDB, there is no
 server process. Data lives in immutable, time-sorted Parquet segments; every write is
 an atomic commit that produces a new **version**, and any past version stays readable
 forever:
@@ -33,20 +33,20 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
 
 ## What makes it different
 
-- **Time-series SQL, natively.** Full SQL through DataFusion, plus `asof_join`,
-  `time_bucket`, `vwap`, `ewma`, `gapfill`, and friends. Storage is time-sorted
-  and declares it, so bucketed aggregations stream instead of sorting.
-- **Every write is a version.** Immutable segments and per-version manifests make
+- **Time-series SQL, natively:** full SQL through DataFusion, plus `asof_join`,
+  `time_bucket`, `vwap`, `ewma`, and `gapfill`. Storage is time-sorted and
+  declares it, so bucketed aggregations stream instead of sorting.
+- **Every write is a version:** immutable segments and per-version manifests make
   version reads O(1) and `as_of` lookups O(log V). Named snapshots pin exact
-  versions across tables, keeping backtests reproducible forever.
-- **Previewable mutations.** Deletes and range replacements can be staged as
-  **plans**: exact affected-row counts and before/after samples first, a
-  metadata-only `apply` second. A mutation policy can *require* this flow.
-- **Crash-safe by construction.** fsync-before-swap, checksums on every object,
+  versions across tables, so a backtest stays reproducible.
+- **Previewable mutations:** deletes and range replacements can be staged as
+  **plans**. You get exact affected-row counts and before/after samples first,
+  then a metadata-only `apply`. A mutation policy can *require* this flow.
+- **Crash-safe by construction:** fsync-before-swap, checksums on every object,
   and a manifest hash chain. The old head survives a crash at any step.
-- **Agent-ready by contract.** Machine-readable output formats, structured
+- **Agent-ready by contract:** machine-readable output formats, structured
   errors with a `retryable` flag, stable exit codes, and resource limits as
-  flags — the same CLI and API humans use, safe to hand to automation.
+  flags. It is the same CLI and API humans use, safe to hand to automation.
 
 ## Finding your way around
 
@@ -54,7 +54,7 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
   <a class="card" href="quickstart.html">
     <span class="card-no">MANUAL</span>
     <span class="card-title">Quickstart</span>
-    <span class="card-desc">A working database in five commands — CLI and Python side by side.</span>
+    <span class="card-desc">A working database in five commands, CLI and Python side by side.</span>
   </a>
   <a class="card" href="concepts.html">
     <span class="card-no">MANUAL</span>
@@ -79,7 +79,7 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
   <a class="card" href="../cookbook/">
     <span class="card-no">TUTORIALS</span>
     <span class="card-title">Cookbook</span>
-    <span class="card-desc">36 executed notebooks: fundamentals, market data engineering, alpha research, risk &amp; production.</span>
+    <span class="card-desc">37 executed notebooks: fundamentals, market data engineering, alpha research, risk &amp; production.</span>
   </a>
 </div>
 
@@ -90,7 +90,7 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
 - Coming from pandas/Polars research code? The
   [Cookbook fundamentals](../cookbook/#00_fundamentals) teach the database
   concepts through market-data examples.
-- Running it in production? Read the [Operations guide](operations.html) —
+- Running it in production? The [Operations guide](operations.html) covers
   backup, vacuum, compaction, and the recovery runbook.
 - Wiring it into an agent or pipeline? See
   [Agents & automation](agents.html) for the machine contract.

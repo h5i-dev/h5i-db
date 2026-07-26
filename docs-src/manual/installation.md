@@ -8,7 +8,7 @@ order: 1
 
 h5i-db ships as two installable artifacts backed by the same Rust core: the
 `h5i-db` command-line tool and the `h5i_db` Python library. Install either or
-both — they read and write the same database directories.
+both; they read and write the same database directories.
 
 ## CLI
 
@@ -32,9 +32,9 @@ import h5i_db
 print(h5i_db.__version__)
 ```
 
-The wheel bundles the native engine — no separate CLI install needed. The only
-required dependency is `pyarrow >= 14`; `to_pandas()` and `to_polars()` work
-when pandas/Polars are present.
+The wheel bundles the native engine, so no separate CLI install is needed. The
+only required dependency is `pyarrow >= 14`; `to_pandas()` and `to_polars()`
+work when pandas/Polars are present.
 
 ## Build from source
 
@@ -49,7 +49,7 @@ $ maturin develop -m crates/h5i-db-python/Cargo.toml --release   # Python module
 !!! note "Filesystem requirements"
     Crash-safety relies on POSIX `fsync` and atomic rename. Keep databases on a
     local filesystem (ext4, xfs, apfs, NTFS). On WSL2 use the Linux side
-    (`~/data/…`), not `/mnt/c`. Network filesystems are not recommended — see
+    (`~/data/…`), not `/mnt/c`. Network filesystems are not recommended; see
     the [Operations guide](operations.html#filesystem-caveats).
 
 ## Verifying the install
