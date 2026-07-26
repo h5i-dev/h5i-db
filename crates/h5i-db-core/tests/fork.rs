@@ -15,8 +15,8 @@ use std::sync::Arc;
 use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use h5i_db_core::{
-    Database, Error, ForkTableKind, ReadAt, RetentionCut, ScanOptions, StorageOptions, TableOptions,
-    WriteOptions,
+    Database, Error, ForkTableKind, ReadAt, RetentionCut, ScanOptions, StorageOptions,
+    TableOptions, WriteOptions,
 };
 
 // ---------------------------------------------------------------------------
@@ -171,14 +171,20 @@ async fn prices(db: &Database, table: &str) -> Vec<f64> {
 async fn creating_a_fork_copies_no_data() {
     let (_dir, db, root) = db_with_trades().await;
     let before = parquet_files(&root);
-    let fork = db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    let fork = db
+        .create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let after = parquet_files(&root);
     assert_eq!(
         before.len(),
         after.len(),
         "fork creation must not write a single segment"
     );
-    assert_eq!(parquet_bytes(&root), before.iter().map(|(_, b)| b).sum::<u64>());
+    assert_eq!(
+        parquet_bytes(&root),
+        before.iter().map(|(_, b)| b).sum::<u64>()
+    );
     assert_eq!(fork.pins.len(), 1, "the one base table must be pinned");
     assert_eq!(fork.pins.values().next().unwrap().sequence, 1);
 }
@@ -186,7 +192,9 @@ async fn creating_a_fork_copies_no_data() {
 #[tokio::test]
 async fn writing_in_a_fork_copies_no_base_parquet() {
     let (_dir, db, root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let base_bytes = parquet_bytes(&root);
 
     let fork_db = db.open_fork("agent-01").await.unwrap();
@@ -264,7 +272,9 @@ async fn forks_writing_the_same_table_name_do_not_collide() {
 #[tokio::test]
 async fn a_fork_never_sees_the_future_of_its_base() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
 
     // Main races ahead.
@@ -285,7 +295,15 @@ async fn a_fork_never_sees_the_future_of_its_base() {
     // …and the version list stops at the pin rather than leaking main's commits.
     let versions = fork_db.list_versions("trades").await.unwrap();
     assert_eq!(versions.last().unwrap().sequence, 1);
-    assert_eq!(db.list_versions("trades").await.unwrap().last().unwrap().sequence, 2);
+    assert_eq!(
+        db.list_versions("trades")
+            .await
+            .unwrap()
+            .last()
+            .unwrap()
+            .sequence,
+        2
+    );
 }
 
 #[tokio::test]
@@ -299,7 +317,9 @@ async fn a_fork_can_read_its_pinned_tables_history_but_not_past_it() {
     .await
     .unwrap();
     // Pin at v2, then let main move to v3.
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     db.append(
         "trades",
         vec![trades_batch(&[500], &["D"], &[5.0])],
@@ -326,7 +346,9 @@ async fn a_fork_can_read_its_pinned_tables_history_but_not_past_it() {
 #[tokio::test]
 async fn a_fork_does_not_see_tables_created_on_main_after_it() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     db.create_table("quotes", trades_schema(), default_options())
         .await
         .unwrap();
@@ -346,7 +368,9 @@ async fn a_fork_does_not_see_tables_created_on_main_after_it() {
 #[tokio::test]
 async fn tables_created_inside_a_fork_are_invisible_to_main() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .create_table("features", trades_schema(), default_options())
@@ -377,21 +401,33 @@ async fn tables_created_inside_a_fork_are_invisible_to_main() {
 async fn two_forks_may_each_hold_a_table_of_the_same_new_name() {
     let (_dir, db, _root) = db_with_trades().await;
     for n in ["a", "b"] {
-        db.create_fork(n, None, None, Default::default()).await.unwrap();
+        db.create_fork(n, None, None, Default::default())
+            .await
+            .unwrap();
         let f = db.open_fork(n).await.unwrap();
         f.create_table("features", trades_schema(), default_options())
             .await
             .unwrap();
         f.write(
             "features",
-            vec![trades_batch(&[1], &["F"], &[if n == "a" { 1.0 } else { 2.0 }])],
+            vec![trades_batch(
+                &[1],
+                &["F"],
+                &[if n == "a" { 1.0 } else { 2.0 }],
+            )],
             WriteOptions::default(),
         )
         .await
         .unwrap();
     }
-    assert_eq!(prices(&db.open_fork("a").await.unwrap(), "features").await, vec![1.0]);
-    assert_eq!(prices(&db.open_fork("b").await.unwrap(), "features").await, vec![2.0]);
+    assert_eq!(
+        prices(&db.open_fork("a").await.unwrap(), "features").await,
+        vec![1.0]
+    );
+    assert_eq!(
+        prices(&db.open_fork("b").await.unwrap(), "features").await,
+        vec![2.0]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +437,9 @@ async fn two_forks_may_each_hold_a_table_of_the_same_new_name() {
 #[tokio::test]
 async fn vacuum_never_collects_segments_a_fork_still_reads() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     let before = prices(&fork_db, "trades").await;
 
@@ -425,7 +463,11 @@ async fn vacuum_never_collects_segments_a_fork_still_reads() {
         report.deleted
     );
     let v = fork_db.verify("trades", true).await.unwrap();
-    assert!(v.problems.is_empty(), "verify after vacuum: {:?}", v.problems);
+    assert!(
+        v.problems.is_empty(),
+        "verify after vacuum: {:?}",
+        v.problems
+    );
 }
 
 #[tokio::test]
@@ -434,7 +476,9 @@ async fn vacuum_never_collects_a_forks_own_tables() {
     // is exactly what makes them look like orphaned directories to the sweep
     // that reclaims crashed `create_table`s.
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .create_table("features", trades_schema(), default_options())
@@ -459,8 +503,16 @@ async fn vacuum_never_collects_a_forks_own_tables() {
 
     db.vacuum(None, 0, true).await.unwrap();
 
-    assert_eq!(rows(&fork_db, "features").await, 2, "fork-created table was vacuumed");
-    assert_eq!(rows(&fork_db, "trades").await, 4, "fork shadow was vacuumed");
+    assert_eq!(
+        rows(&fork_db, "features").await,
+        2,
+        "fork-created table was vacuumed"
+    );
+    assert_eq!(
+        rows(&fork_db, "trades").await,
+        4,
+        "fork shadow was vacuumed"
+    );
     for t in ["features", "trades"] {
         let v = fork_db.verify(t, true).await.unwrap();
         assert!(v.problems.is_empty(), "{t}: {:?}", v.problems);
@@ -470,7 +522,9 @@ async fn vacuum_never_collects_a_forks_own_tables() {
 #[tokio::test]
 async fn retention_refuses_to_expire_a_version_a_fork_pins() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     for i in 0..3 {
         db.append(
             "trades",
@@ -498,7 +552,9 @@ async fn retention_refuses_to_expire_a_version_a_fork_pins() {
 #[tokio::test]
 async fn dropping_a_base_table_is_refused_while_a_fork_pins_it() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let err = db.drop_table("trades").await.unwrap_err();
     assert!(format!("{err}").contains("pinned by fork"), "{err}");
     db.drop_fork("agent-01").await.unwrap();
@@ -518,7 +574,9 @@ async fn a_fork_pinning_an_old_version_holds_the_floor_there() {
         .unwrap();
     }
     // Fork at v5 (head), then let main advance further.
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     db.append(
         "trades",
         vec![trades_batch(&[800], &["Y"], &[8.0])],
@@ -554,7 +612,9 @@ async fn the_first_fork_raises_the_min_reader_version_and_the_fence_is_sticky() 
     };
     assert_eq!(read_fence(), 1, "a fork-free database stays readable by v1");
 
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     assert_eq!(
         read_fence(),
         2,
@@ -578,7 +638,10 @@ async fn a_database_demanding_a_newer_reader_is_refused() {
     std::fs::write(&path, serde_json::to_vec_pretty(&v).unwrap()).unwrap();
 
     let err = Database::open(&root).await.unwrap_err();
-    assert!(matches!(err, Error::FormatTooNew { found: 99, .. }), "{err:?}");
+    assert!(
+        matches!(err, Error::FormatTooNew { found: 99, .. }),
+        "{err:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -603,7 +666,9 @@ async fn compacting_in_a_fork_never_rewrites_inherited_segments() {
         .await
         .unwrap();
     }
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let base_bytes = parquet_bytes(&root);
 
     let fork_db = db.open_fork("agent-01").await.unwrap();
@@ -619,7 +684,10 @@ async fn compacting_in_a_fork_never_rewrites_inherited_segments() {
     }
     let before_compact = parquet_bytes(&root);
     let rows_before = rows(&fork_db, "trades").await;
-    fork_db.compact("trades", WriteOptions::default()).await.unwrap();
+    fork_db
+        .compact("trades", WriteOptions::default())
+        .await
+        .unwrap();
 
     // Compaction rewrote only what the fork wrote. If inherited segments had
     // been merged, the fork would have duplicated the base's bytes into its
@@ -646,7 +714,9 @@ async fn compacting_main_leaves_forks_reading_the_old_layout() {
         .await
         .unwrap();
     }
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     let before = prices(&fork_db, "trades").await;
 
@@ -672,7 +742,9 @@ async fn compacting_main_leaves_forks_reading_the_old_layout() {
 #[tokio::test]
 async fn diff_reports_what_the_fork_added_and_what_it_shares() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .append(
@@ -696,7 +768,10 @@ async fn diff_reports_what_the_fork_added_and_what_it_shares() {
     assert_eq!(shadow.rows_base, 3);
     assert_eq!(shadow.rows_fork, 4);
     assert_eq!(shadow.segments_added, 1, "one appended segment");
-    assert_eq!(shadow.segments_shared, 1, "the base segment, shared not copied");
+    assert_eq!(
+        shadow.segments_shared, 1,
+        "the base segment, shared not copied"
+    );
     assert_eq!(shadow.segments_removed, 0);
     assert!(!shadow.base_moved);
 
@@ -709,7 +784,9 @@ async fn diff_reports_what_the_fork_added_and_what_it_shares() {
 #[tokio::test]
 async fn diff_flags_a_base_that_moved_and_names_compaction_when_that_is_all_it_was() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .append(
@@ -739,9 +816,14 @@ async fn diff_flags_a_base_that_moved_and_names_compaction_when_that_is_all_it_w
 #[tokio::test]
 async fn diff_of_an_untouched_table_is_empty_rather_than_an_error() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let d = db.fork_diff("agent-01", Some("trades")).await.unwrap();
-    assert!(d.tables.is_empty(), "a fork that wrote nothing changed nothing");
+    assert!(
+        d.tables.is_empty(),
+        "a fork that wrote nothing changed nothing"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -751,7 +833,9 @@ async fn diff_of_an_untouched_table_is_empty_rather_than_an_error() {
 #[tokio::test]
 async fn promote_lands_the_forks_rows_on_main() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .append(
@@ -778,7 +862,9 @@ async fn promote_lands_the_forks_rows_on_main() {
 #[tokio::test]
 async fn promote_links_rather_than_copying_on_one_filesystem() {
     let (_dir, db, root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .append(
@@ -792,7 +878,10 @@ async fn promote_links_rather_than_copying_on_one_filesystem() {
 
     let result = db.promote("agent-01", "trades").await.unwrap();
 
-    assert_eq!(result.bytes_copied, 0, "promote copied bytes instead of linking");
+    assert_eq!(
+        result.bytes_copied, 0,
+        "promote copied bytes instead of linking"
+    );
     assert_eq!(
         parquet_inodes(&root),
         inodes_before,
@@ -804,11 +893,17 @@ async fn promote_links_rather_than_copying_on_one_filesystem() {
 async fn promote_is_first_commit_wins() {
     let (_dir, db, _root) = db_with_trades().await;
     for n in ["agent-a", "agent-b"] {
-        db.create_fork(n, None, None, Default::default()).await.unwrap();
+        db.create_fork(n, None, None, Default::default())
+            .await
+            .unwrap();
         let f = db.open_fork(n).await.unwrap();
         f.append(
             "trades",
-            vec![trades_batch(&[400], &["C"], &[if n == "agent-a" { 4.0 } else { 5.0 }])],
+            vec![trades_batch(
+                &[400],
+                &["C"],
+                &[if n == "agent-a" { 4.0 } else { 5.0 }],
+            )],
             WriteOptions::default(),
         )
         .await
@@ -842,7 +937,9 @@ async fn a_promote_blocked_only_by_compaction_says_so() {
         .await
         .unwrap();
     }
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .append(
@@ -873,7 +970,9 @@ async fn a_promote_blocked_only_by_compaction_says_so() {
 #[tokio::test]
 async fn promoting_a_fork_created_table_is_a_catalog_move() {
     let (_dir, db, root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .create_table("features", trades_schema(), default_options())
@@ -893,7 +992,11 @@ async fn promoting_a_fork_created_table_is_a_catalog_move() {
     assert_eq!(result.kind, ForkTableKind::Created);
     assert_eq!(result.segments_linked, 0);
     assert_eq!(result.bytes_copied, 0);
-    assert_eq!(parquet_bytes(&root), bytes_before, "a catalog move moved data");
+    assert_eq!(
+        parquet_bytes(&root),
+        bytes_before,
+        "a catalog move moved data"
+    );
 
     assert_eq!(rows(&db, "features").await, 2);
     // It left the fork, so the fork no longer offers it.
@@ -907,7 +1010,9 @@ async fn promoting_a_fork_created_table_is_a_catalog_move() {
 #[tokio::test]
 async fn promoting_onto_an_occupied_name_is_refused() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .create_table("features", trades_schema(), default_options())
@@ -925,7 +1030,9 @@ async fn promoting_onto_an_occupied_name_is_refused() {
 #[tokio::test]
 async fn promoting_a_table_the_fork_never_touched_is_refused() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let err = db.promote("agent-01", "trades").await.unwrap_err();
     assert!(format!("{err}").contains("does not own"), "{err}");
 }
@@ -935,7 +1042,9 @@ async fn main_holds_no_reference_into_fork_storage_after_promote_and_drop() {
     // The fsck-grade assertion: once the fork is gone, nothing main reads may
     // live under a directory that went with it.
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .append(
@@ -961,7 +1070,11 @@ async fn main_holds_no_reference_into_fork_storage_after_promote_and_drop() {
     let v = db.verify("trades", true).await.unwrap();
     assert!(v.problems.is_empty(), "{:?}", v.problems);
     db.vacuum(None, 0, true).await.unwrap();
-    assert_eq!(rows(&db, "trades").await, 4, "vacuum broke main after promote");
+    assert_eq!(
+        rows(&db, "trades").await,
+        4,
+        "vacuum broke main after promote"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -972,7 +1085,9 @@ async fn main_holds_no_reference_into_fork_storage_after_promote_and_drop() {
 async fn dropping_a_fork_reclaims_its_storage_and_releases_the_pin() {
     let (_dir, db, root) = db_with_trades().await;
     let base_bytes = parquet_bytes(&root);
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .append(
@@ -1002,7 +1117,9 @@ async fn dropping_a_fork_reclaims_its_storage_and_releases_the_pin() {
 #[tokio::test]
 async fn dropping_a_shadow_inside_a_fork_reverts_to_the_base_view() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     fork_db
         .append(
@@ -1023,7 +1140,9 @@ async fn dropping_a_shadow_inside_a_fork_reverts_to_the_base_view() {
 #[tokio::test]
 async fn a_fork_cannot_drop_a_base_table() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     let err = fork_db.drop_table("trades").await.unwrap_err();
     assert!(matches!(err, Error::Unsupported { .. }), "{err:?}");
@@ -1110,7 +1229,10 @@ async fn an_as_of_before_all_history_is_refused_rather_than_silently_empty() {
         .unwrap_err();
     let msg = format!("{err}");
     assert!(msg.contains("--as-of pins no version"), "{msg}");
-    assert!(db.fork_info("backtest").await.is_err(), "no fork was left behind");
+    assert!(
+        db.fork_info("backtest").await.is_err(),
+        "no fork was left behind"
+    );
 }
 
 #[tokio::test]
@@ -1139,7 +1261,9 @@ async fn an_as_of_fork_of_an_empty_database_is_allowed() {
 #[tokio::test]
 async fn fork_names_are_unique() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let err = db
         .create_fork("agent-01", None, None, Default::default())
         .await
@@ -1150,7 +1274,9 @@ async fn fork_names_are_unique() {
 #[tokio::test]
 async fn a_missing_fork_suggests_the_closest_name() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let err = db.fork_info("agent-02").await.unwrap_err();
     match &err {
         Error::ForkNotFound { did_you_mean, .. } => {
@@ -1164,13 +1290,21 @@ async fn a_missing_fork_suggests_the_closest_name() {
 #[tokio::test]
 async fn database_wide_operations_are_refused_inside_a_fork() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
 
     // No fork of a fork, and no reaching for the global roots from inside one.
     for err in [
-        fork_db.create_fork("nested", None, None, Default::default()).await.unwrap_err(),
-        fork_db.create_snapshot("snap", &[], None).await.unwrap_err(),
+        fork_db
+            .create_fork("nested", None, None, Default::default())
+            .await
+            .unwrap_err(),
+        fork_db
+            .create_snapshot("snap", &[], None)
+            .await
+            .unwrap_err(),
         fork_db.vacuum(None, 0, true).await.unwrap_err(),
         fork_db
             .set_retention("trades", RetentionCut::KeepLast(1), None)
@@ -1190,7 +1324,9 @@ async fn database_wide_operations_are_refused_inside_a_fork() {
 #[tokio::test]
 async fn a_read_only_handle_stays_read_only_inside_a_fork() {
     let (_dir, db, root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let ro = Database::open_read_only(&root).await.unwrap();
     let ro_fork = ro.open_fork("agent-01").await.unwrap();
 
@@ -1209,7 +1345,9 @@ async fn a_read_only_handle_stays_read_only_inside_a_fork() {
 #[tokio::test]
 async fn a_shadow_is_materialized_once_no_matter_how_many_writes() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("agent-01", None, None, Default::default()).await.unwrap();
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
     for i in 0..5 {
         fork_db
@@ -1232,7 +1370,9 @@ async fn a_shadow_is_materialized_once_no_matter_how_many_writes() {
 #[tokio::test]
 async fn fork_list_reports_what_each_fork_owns_and_pins() {
     let (_dir, db, _root) = db_with_trades().await;
-    db.create_fork("idle", None, None, Default::default()).await.unwrap();
+    db.create_fork("idle", None, None, Default::default())
+        .await
+        .unwrap();
     db.create_fork("busy", Some("has work".into()), None, Default::default())
         .await
         .unwrap();
@@ -1254,7 +1394,10 @@ async fn fork_list_reports_what_each_fork_owns_and_pins() {
 
     assert_eq!(idle.tables_created, 0);
     assert_eq!(idle.tables_shadowed, 0);
-    assert_eq!(idle.bytes_own, 0, "an idle fork costs no storage of its own");
+    assert_eq!(
+        idle.bytes_own, 0,
+        "an idle fork costs no storage of its own"
+    );
     assert!(idle.bytes_pinned > 0, "but it does hold the base back");
 
     assert_eq!(busy.tables_shadowed, 1);

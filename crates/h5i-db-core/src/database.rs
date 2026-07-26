@@ -711,7 +711,10 @@ impl Database {
 
     /// The fork catalog entry backing `name`, if this handle is in a fork and
     /// the fork owns that name.
-    pub(crate) async fn fork_entry(&self, name: &str) -> Result<Option<crate::fork::ForkTableEntry>> {
+    pub(crate) async fn fork_entry(
+        &self,
+        name: &str,
+    ) -> Result<Option<crate::fork::ForkTableEntry>> {
         match &self.fork {
             None => Ok(None),
             Some(fork) => crate::fork::load_entry(&self.backend, &fork.name, name).await,

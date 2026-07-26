@@ -94,7 +94,14 @@ fn create_list_and_show_report_the_forks_shape() {
 
     let created = ok_json(&run(
         &[
-            "fork", "create", "m.db", "agent-01", "--note", "hypothesis 1", "--format", "json",
+            "fork",
+            "create",
+            "m.db",
+            "agent-01",
+            "--note",
+            "hypothesis 1",
+            "--format",
+            "json",
         ],
         cwd,
     ));
@@ -178,7 +185,10 @@ fn diff_then_promote_then_the_loser_conflicts() {
     let cwd = dir.path();
     bootstrap(cwd);
     for (fork, csv) in [("agent-a", "v2.csv"), ("agent-b", "v3.csv")] {
-        ok_json(&run(&["fork", "create", "m.db", fork, "--format", "json"], cwd));
+        ok_json(&run(
+            &["fork", "create", "m.db", fork, "--format", "json"],
+            cwd,
+        ));
         ok_json(&run(
             &[
                 "ingest", "m.db", "trades", csv, "--mode", "append", "--fork", fork, "--format",
@@ -362,7 +372,10 @@ fn an_as_of_before_all_history_fails_where_it_was_typed() {
     ));
     assert_eq!(env["code"], "invalid_input");
     assert!(
-        env["message"].as_str().unwrap().contains("--as-of pins no version"),
+        env["message"]
+            .as_str()
+            .unwrap()
+            .contains("--as-of pins no version"),
         "{env}"
     );
 }
@@ -395,13 +408,22 @@ fn fork_metadata_is_carried_verbatim() {
     // Non-object metadata is rejected rather than silently wrapped.
     let env = err_envelope(&run(
         &[
-            "fork", "create", "m.db", "agent-02", "--meta", r#""just a string""#, "--format",
+            "fork",
+            "create",
+            "m.db",
+            "agent-02",
+            "--meta",
+            r#""just a string""#,
+            "--format",
             "json",
         ],
         cwd,
     ));
     assert!(
-        env["message"].as_str().unwrap().contains("must be a JSON object"),
+        env["message"]
+            .as_str()
+            .unwrap()
+            .contains("must be a JSON object"),
         "{env}"
     );
 }
@@ -445,7 +467,10 @@ fn promoting_a_fork_created_table_moves_it_to_main() {
         cwd,
     ));
     assert_eq!(promoted["kind"], "created");
-    assert_eq!(promoted["segments_linked"], 0, "a catalog move links nothing");
+    assert_eq!(
+        promoted["segments_linked"], 0,
+        "a catalog move links nothing"
+    );
     assert_eq!(promoted["bytes_copied"], 0);
 
     let on_main = ok_json(&run(&["tables", "m.db", "--format", "json"], cwd));

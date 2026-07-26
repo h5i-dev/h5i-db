@@ -37,7 +37,8 @@ pub use database::{
 };
 pub use error::{Error, ExitCategory, NextAction, Result, nearest_name};
 pub use fork::{
-    Fork, ForkDiff, ForkOrigin, ForkPin, ForkTableDiff, ForkTableEntry, ForkTableKind, PromoteResult,
+    Fork, ForkDiff, ForkOrigin, ForkPin, ForkTableDiff, ForkTableEntry, ForkTableKind,
+    PromoteResult,
 };
 pub use manifest::{ColumnStats, Head, OpKind, SegmentMeta, VersionManifest};
 pub use plan::{MutationPlan, PlanSummary};

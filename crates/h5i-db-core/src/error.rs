@@ -290,9 +290,9 @@ impl Error {
                 Some("run `h5i-db snapshot list <db>` to list snapshots".into())
             }
             Error::ForkNotFound { .. } => Some("run `h5i-db fork list <db>` to list forks".into()),
-            Error::ForkExists { .. } => {
-                Some("pick another fork name, or drop the existing one with `h5i-db fork drop`".into())
-            }
+            Error::ForkExists { .. } => Some(
+                "pick another fork name, or drop the existing one with `h5i-db fork drop`".into(),
+            ),
             Error::PromoteConflict { fork, table, .. } => Some(format!(
                 "main advanced under this fork; re-fork from the current head and re-run, \
                  or inspect what changed with `h5i-db fork diff <db> {fork} --table {table}`"

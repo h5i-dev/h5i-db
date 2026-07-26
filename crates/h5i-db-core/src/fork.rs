@@ -343,7 +343,9 @@ pub async fn remove_entry(backend: &Backend, fork_name: &str, table_name: &str) 
 }
 
 pub async fn list_entries(backend: &Backend, fork_name: &str) -> Result<Vec<ForkTableEntry>> {
-    let metas = backend.list(&layout::fork_catalog_prefix(fork_name)).await?;
+    let metas = backend
+        .list(&layout::fork_catalog_prefix(fork_name))
+        .await?;
     let mut out = Vec::with_capacity(metas.len());
     for meta in metas {
         let bytes = backend.get(&meta.location).await?;
@@ -582,7 +584,11 @@ impl crate::database::Database {
     }
 
     /// Checksum of a table's manifest at an exact sequence.
-    pub(crate) async fn manifest_checksum_at(&self, table_id: Uuid, sequence: u64) -> Result<String> {
+    pub(crate) async fn manifest_checksum_at(
+        &self,
+        table_id: Uuid,
+        sequence: u64,
+    ) -> Result<String> {
         let path = layout::manifest_path(table_id, sequence);
         let bytes = self
             .backend()
@@ -734,8 +740,16 @@ impl crate::database::Database {
         let base_manifest = self
             .manifest_at(origin.base_table_id, origin.base_sequence)
             .await?;
-        let base_paths: BTreeSet<&str> = base_manifest.segments.iter().map(|s| s.path.as_str()).collect();
-        let fork_paths: BTreeSet<&str> = fork_manifest.segments.iter().map(|s| s.path.as_str()).collect();
+        let base_paths: BTreeSet<&str> = base_manifest
+            .segments
+            .iter()
+            .map(|s| s.path.as_str())
+            .collect();
+        let fork_paths: BTreeSet<&str> = fork_manifest
+            .segments
+            .iter()
+            .map(|s| s.path.as_str())
+            .collect();
 
         let segments_added = fork_manifest
             .segments
@@ -746,14 +760,21 @@ impl crate::database::Database {
         let segments_removed = base_paths.difference(&fork_paths).count();
 
         let base_head = self
-            .head(&fork.pins[&origin.base_table_id].table_name, origin.base_table_id)
+            .head(
+                &fork.pins[&origin.base_table_id].table_name,
+                origin.base_table_id,
+            )
             .await?
             .head
             .sequence;
         let base_moved = base_head != origin.base_sequence;
         let compaction_only = base_moved
             && self
-                .intervening_commits_are_compaction(origin.base_table_id, origin.base_sequence, base_head)
+                .intervening_commits_are_compaction(
+                    origin.base_table_id,
+                    origin.base_sequence,
+                    base_head,
+                )
                 .await?;
 
         Ok(ForkTableDiff {
@@ -843,7 +864,11 @@ impl crate::database::Database {
         let base_head = base_head_state.head.sequence;
         if base_head != origin.base_sequence {
             let compaction_only = self
-                .intervening_commits_are_compaction(origin.base_table_id, origin.base_sequence, base_head)
+                .intervening_commits_are_compaction(
+                    origin.base_table_id,
+                    origin.base_sequence,
+                    base_head,
+                )
                 .await?;
             return Err(Error::PromoteConflict {
                 fork: fork.name,
@@ -1187,8 +1212,12 @@ mod tests {
     fn refinement_rejects_another_forks_segment() {
         let base: BTreeSet<String> = BTreeSet::new();
         assert!(
-            check_refinement("tables/shadow/", &base, ["tables/other-fork/segments/x.parquet"])
-                .is_err()
+            check_refinement(
+                "tables/shadow/",
+                &base,
+                ["tables/other-fork/segments/x.parquet"]
+            )
+            .is_err()
         );
     }
 

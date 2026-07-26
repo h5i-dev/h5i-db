@@ -1358,8 +1358,13 @@ promote, and explicitly.
    segments in its own dir, or (b) segments listed in the pinned base
    manifest. (b) is GC-safe because the pin holds the base retention
    floor, so those segments stay inside base vacuum's referenced set for
-   the fork's lifetime. Enforced at commit time in fork mode; checked by
-   `verify`/fsck. Vacuum's code does not change.
+   the fork's lifetime. Enforced at the only two points where a
+   cross-table path can enter a manifest — shadow materialization and
+   promote — and re-derived by `verify`. *(Corrected during
+   implementation: the original plan said "enforced at commit time",
+   which would have cost two extra object reads on every fork write to
+   re-check a property that holds inductively. Later commits can only
+   add own-prefix segments or carry forward already-checked ones.)*
 4. **FORMAT bump is a fence, not a migration.** `FORMAT` goes to 2 on
    first fork creation so pre-fork binaries refuse to open rather than
    raising retention floors past pins they cannot see. No existing
@@ -1383,7 +1388,7 @@ promote, and explicitly.
 |---|------|---------------------|
 | IX-A1 | **Fork object + pin integration.** `fork create <name> [--as-of TS]` (pins via `as_of_sequence`, `database.rs:696`); read path through the fork (two-level catalog, pinned manifests). A read-only fork is already a named, frozen, multi-table as-of view. | Retention floor refuses to rise above a fork pin; `drop_table` refuses on fork-pinned tables; `vacuum` after a main compact deletes nothing a live fork reads (fixture: fork, compact main, vacuum, fork still scans byte-identical results). A format-1 binary refuses to open a DB containing a fork. `put_if_absent` create: racing same-name creators get one winner, one clean error. |
 | IX-A2 | **Fork-scoped catalog + `drop` + `list`.** Tables created in a fork live under the fork catalog; `fork drop` deletes fork-owned tables first, fork object (the pin) last; `fork list` shows age, pinned bytes, tables created/shadowed. | Fork-created tables are invisible to the main catalog and to main `vacuum`'s table listing. Kill mid-drop: the fork stays pinned and re-running `fork drop` completes (idempotent, resumable). Pinned-bytes accounting matches `du` on a fixture. |
-| IX-A3 | **COW shadow-on-write + invariant enforcement.** First write to a base name creates the shadow (manifest copy, `sequence: 1`, `parent: None`, new optional `forked_from` provenance field); later commits are ordinary. | Zero parquet bytes copied at shadow creation (asserted on bytes written). N concurrent forks writing the same logical table produce zero writer-lock contention (each holds its own `table_id` flock). Commit-time rejection of any manifest violating the refinement invariant; fsck detects a violating fixture. |
+| IX-A3 | **COW shadow-on-write + invariant enforcement.** First write to a base name creates the shadow (manifest copy at `sequence: 0`, `parent: None`, provenance under a namespaced `user_meta` key — **no new manifest field was needed**); later commits are ordinary. | Zero parquet bytes copied at shadow creation (asserted on bytes written). N concurrent forks writing the same logical table produce zero writer-lock contention (each holds its own `table_id` flock). Any manifest violating the refinement invariant is rejected where the path is introduced; `verify` detects a violating fixture. |
 | IX-A4 | **`fork diff`.** Catalog diff (created / shadowed / dropped names) plus per-shadow segment-set diff via `segments_by_checksum()`, rows/bytes deltas, schema-revision changes. | Diff reads manifests only (no segment I/O, asserted). Output stable and machine-readable (JSON), so an agent can gate promote on it. |
 | IX-A5 | **`fork promote --table T`.** Hardlink (local FS) or backend copy of the shadow's own-dir segments into the base dir, then commit the shadow head manifest as base's next version, `OpKind::Promote`, `expected_version` = pinned base sequence. | First promote wins; second gets a version conflict, not a partial merge. Main never contains cross-dir segment refs (fsck after promote + fork drop). When every intervening base commit is `OpKind::Compact`, the error names it and suggests rebase-over-compaction (the rebase itself may land as a fast-follow). Hardlink path does zero byte copies on one filesystem. |
 
@@ -1396,8 +1401,11 @@ promote, and explicitly.
 - **Promote is O(#segments) metadata ops**, not pure metadata (hardlinks
   locally, server-side copy on object stores). Promote is the rare
   verb; keeping vacuum fork-ignorant is worth it.
-- **Shadow history restarts at sequence 1**; time-travel across the fork
-  point is a two-hop walk through `forked_from`.
+- **Shadow history restarts at sequence 0**; time-travel across the fork
+  point is a two-hop walk through the recorded origin. Within a fork,
+  time travel *below* the pin works normally (the base's history is still
+  the base's history), and reads above it are `VersionNotFound` — a fork
+  can look back but never forward.
 - **Fork-per-agent is the assumed mapping.** Two agents sharing one fork
   fall back to today's single-writer-per-table semantics.
 
@@ -1451,6 +1459,52 @@ promote, and explicitly.
 Each step is independently shippable; nothing in Part IX blocks or is
 blocked by Parts VII/VIII (different subsystem: catalog/GC, not query
 surface).
+
+## Part IX implementation status (2026-07-26, branch `support-fork-quant`)
+
+**Delivered: IX-A1 … IX-A5 complete**, plus CLI and Python surfaces.
+`crates/h5i-db-core/src/fork.rs` (types, storage, operations),
+fork-awareness in `database.rs` (`open_fork`, `entry`, `list_tables`,
+`effective_head`, `entry_for_write`, `materialize_shadow`,
+`drop_table`, `verify`), pin checks in `retention.rs`, `h5i-db fork
+create|list|show|diff|promote|drop` plus a global `--fork` flag, and
+`Database.create_fork/fork/forks/fork_diff/promote/drop_fork` in Python.
+Tests: 16 unit + 43 core integration + 10 CLI e2e + 12 Python.
+
+**Three things the design got wrong, found by building it:**
+
+1. **"Vacuum's code does not change" was false, and dangerously so.**
+   Vacuum's orphaned-table-directory sweep (`database.rs`, the
+   `table.is_none()` branch) collects any `tables/<uuid>/` not in the
+   *global* catalog. Fork-owned tables are deliberately absent from it —
+   that is what makes them invisible to main — so the sweep deleted every
+   fork's shadow and scratch tables outright. The reachability roots had
+   to grow to cover every fork catalog. Verified by mutation: reverting
+   that fix makes `vacuum_never_collects_a_forks_own_tables` fail with a
+   missing HEAD. The lesson generalizes: *"which catalog"* was an
+   unstated assumption in every reachability computation, not just the
+   one the design predicted.
+2. **The FORMAT bump had to be a new axis, not a version increment.**
+   Raising `FORMAT_VERSION` would have stamped every *manifest* as v2 and
+   locked v1 readers out of fork-free databases. The fence needed its own
+   constant (`READER_VERSION` / `FORK_MIN_READER_VERSION`) applied only to
+   the database-level `min_reader_version`, leaving manifests at v1.
+3. **The refinement invariant did not belong at commit time** (see design
+   rule 3).
+
+**Two bugs the tests caught in adjacent code**, both in the Python
+bindings: `promote_conflict` fell through to the base `H5iError` instead
+of `ConflictError`, and `as_of` via `datetime` lost ~hundreds of ns to
+float64 rounding (`dt.timestamp() * 1e9` needs 61 mantissa bits), enough
+to land a cutoff on the wrong side of a commit.
+
+**Deferred as designed:** `--embargo` on forks, fork-of-fork, run-ledger
+coupling, global content-addressed segment pool, row-level merge. Also
+not built: dropping a *base* table from inside a fork (would need a
+tombstone in the fork catalog; refused with a clear message instead), and
+rebase-over-compaction for a promote blocked only by layout changes — the
+condition is detected and named in the error, but the caller still
+re-forks by hand.
 
 ## Part VIII implementation status (2026-07-25, branch `data-frame-lazy-run`)
 

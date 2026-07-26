@@ -187,7 +187,11 @@ mod tests {
         // A fork's catalog objects must never be picked up by a listing of the
         // global table catalog (that listing drives vacuum and `tables`).
         let fork_entry = fork_catalog_entry_path("f", "trades");
-        assert!(!fork_entry.as_ref().starts_with(&format!("{CATALOG_PREFIX}/")));
+        assert!(
+            !fork_entry
+                .as_ref()
+                .starts_with(&format!("{CATALOG_PREFIX}/"))
+        );
         assert!(fork_entry.as_ref().starts_with(FORK_CATALOG_PREFIX));
     }
 
