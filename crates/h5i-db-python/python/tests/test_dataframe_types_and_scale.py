@@ -426,10 +426,22 @@ def test_a_memory_budget_turns_an_overrun_into_a_typed_error():
         assert err.code == "limit_exceeded"
         # The same query completes when the budget is realistic.
         assert len(heavy.collect(memory_limit=256 * 1024 * 1024)) == TOTAL
-        # And an aggregation is bounded the same way.
-        grouped = db.table("t").group_by("px").agg(count_star().alias("n"))
+
+        # And an aggregation is bounded the same way. Group on `ts`, which is
+        # unique per row, rather than on a low-cardinality column.
+        #
+        # The budget is split across DataFusion partitions, and the partition
+        # count defaults to the host's CPU count -- so both the per-partition
+        # allowance AND the per-partition group state shrink as 1/cores. What
+        # decides the outcome is the *ratio* between them, and that ratio is
+        # only stable when it is far from 1. Grouping on a 997-value column put
+        # it at roughly 1:1, which made this assertion depend on the core count
+        # of whatever machine ran it: it passed on 1, 4 and 8 cores and failed
+        # on 2 (the standard CI runner size). TOTAL groups puts the requirement
+        # an order of magnitude over the budget at any partition count.
+        grouped = db.table("t").group_by("ts").agg(count_star().alias("n"))
         _raises(h5i_db.LimitError, grouped.collect, 64 * 1024)
-        assert len(grouped.collect(memory_limit=256 * 1024 * 1024)) == 997
+        assert len(grouped.collect(memory_limit=256 * 1024 * 1024)) == TOTAL
 
 
 def test_a_deadline_cancels_a_query_that_would_not_finish():
