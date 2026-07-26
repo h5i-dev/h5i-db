@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import html
 import json
 import re
@@ -231,7 +232,70 @@ def write_llms_index(manual, api, cookbook_groups, cookbook_index, skip_cookbook
         "full benchmark setup and results.",
     ]
     out.append("")
+
+    out.append("## Related projects")
+    out += [
+        "- [h5i](https://h5i.dev/): the sibling project from the same authors. An auditable "
+        "workspace layer for AI coding agents: isolated Git worktrees, sandbox policy, prompt "
+        "and model provenance, and a neutral verifier, all stored under `refs/h5i/*`.",
+        "- [h5i docs index](https://h5i.dev/llms.txt): the structured, link-first index for the "
+        "h5i manual, guides, and engineering blog.",
+    ]
+    out.append("")
     (OUT / "llms.txt").write_text("\n".join(out))
+
+
+# ── sitemap.xml / robots.txt (search-engine discovery) ───────────
+# db.h5i.dev is a subdomain with no inbound links from h5i.dev's visible
+# navigation, so crawlers reach it through these two files (plus the
+# `Sitemap:` line cross-submitted from https://h5i.dev/robots.txt).
+
+# Landing page first, then section indexes, then leaf pages.
+SITEMAP_PRIORITY = {"": "1.0", "manual/index.html": "0.9",
+                    "api/index.html": "0.9", "cookbook/index.html": "0.8",
+                    "demo/": "0.4", "demo/ui/": "0.4"}
+
+# Hand-maintained pages that build() does not generate but index.html links to.
+SITEMAP_EXTRA = ["", "demo/", "demo/ui/"]
+
+
+def write_sitemap(pages: "list[Page]") -> None:
+    """Write docs/sitemap.xml listing the landing page and every built page."""
+    today = datetime.date.today().isoformat()
+    out = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for url in SITEMAP_EXTRA + [p.url for p in pages]:
+        priority = SITEMAP_PRIORITY.get(url, "0.7")
+        out += ["  <url>",
+                f"    <loc>{BASE_URL}{url}</loc>",
+                f"    <lastmod>{today}</lastmod>",
+                "    <changefreq>weekly</changefreq>",
+                f"    <priority>{priority}</priority>",
+                "  </url>"]
+    out += ["</urlset>", ""]
+    (OUT / "sitemap.xml").write_text("\n".join(out))
+
+
+# Answer-engine crawlers are opted in explicitly, matching h5i.dev/robots.txt.
+AI_CRAWLERS = ["GPTBot", "OAI-SearchBot", "ChatGPT-User", "ClaudeBot", "Claude-User",
+               "anthropic-ai", "PerplexityBot", "Perplexity-User", "Google-Extended",
+               "Applebot-Extended", "CCBot"]
+
+
+def write_robots() -> None:
+    """Write docs/robots.txt pointing crawlers at the sitemap and llms.txt."""
+    out = ["# robots.txt for db.h5i.dev",
+           "# Everyone is welcome, including AI answer engines and search crawlers.",
+           "User-agent: *", "Allow: /", ""]
+    out.append("# Explicit opt-in for AI / answer-engine crawlers (AEO).")
+    for bot in AI_CRAWLERS:
+        out += [f"User-agent: {bot}", "Allow: /"]
+    out += ["",
+            f"Sitemap: {BASE_URL}sitemap.xml",
+            f"# LLM-friendly index: {BASE_URL}llms.txt",
+            f"# Full docs as one markdown file: {BASE_URL}llms-full.txt",
+            ""]
+    (OUT / "robots.txt").write_text("\n".join(out))
 
 
 def write_llms_full(manual, api):
@@ -475,6 +539,7 @@ def render_page(page: Page, template: str, sidebar: str, breadcrumb: str,
         "{{title}}": html.escape(page.title),
         "{{description}}": html.escape(page.description),
         "{{root}}": root,
+        "{{canonical}}": f"{BASE_URL}{page.url}",
         "{{active_manual}}": 'class="active"' if page.section == "manual" else "",
         "{{active_api}}": 'class="active"' if page.section == "api" else "",
         "{{active_cookbook}}": 'class="active"' if page.section == "cookbook" else "",
@@ -698,10 +763,14 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
                      None if skip_cookbook else cookbook_index, skip_cookbook)
     write_llms_full(manual_pages, api_pages)
 
+    # ── sitemap.xml / robots.txt (search-engine discovery) ───────
+    write_sitemap(ordered)
+    write_robots()
+
     n_nb = len(cookbook_pages)
     print(f"built {len(ordered)} pages "
           f"({len(manual_pages)} manual, {len(api_pages)} api, {n_nb} cookbook) "
-          f"+ llms.txt, llms-full.txt -> {OUT}")
+          f"+ llms.txt, llms-full.txt, sitemap.xml, robots.txt -> {OUT}")
 
 
 def main() -> None:

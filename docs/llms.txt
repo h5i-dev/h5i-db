@@ -75,3 +75,7 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [GitHub repository](https://github.com/h5i-dev/h5i-db): source, issues, and README.
 - [Design document](https://github.com/h5i-dev/h5i-db/blob/main/DESIGN.md): storage engine and query-layer internals.
 - [Benchmark methodology](https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md): full benchmark setup and results.
+
+## Related projects
+- [h5i](https://h5i.dev/): the sibling project from the same authors. An auditable workspace layer for AI coding agents: isolated Git worktrees, sandbox policy, prompt and model provenance, and a neutral verifier, all stored under `refs/h5i/*`.
+- [h5i docs index](https://h5i.dev/llms.txt): the structured, link-first index for the h5i manual, guides, and engineering blog.
