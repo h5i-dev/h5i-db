@@ -98,6 +98,28 @@ pub(crate) struct StagedCommit {
     pub(crate) segments_added: usize,
     pub(crate) segments_deduped: usize,
     pub(crate) lease: Option<ObjPath>,
+    /// Captured in the staging phase so the commit — which runs inside the
+    /// database-wide metadata lock — need not re-read what staging just read.
+    pub(crate) known: CommitInputs,
+}
+
+/// Objects the caller already holds, so the commit does not re-read them.
+///
+/// The commit runs inside the database-wide metadata lock, so anything it
+/// fetches there is not merely a round trip — it is a round trip every other
+/// writer in the database is queued behind. `write_prologue` has already loaded
+/// the spec and the parent manifest a moment earlier; handing them down turns
+/// two GETs plus two full manifest/spec deserializations per commit into zero.
+///
+/// Each field is validated before use (revision and sequence must match what
+/// the commit actually needs) and falls back to a read when it does not, so a
+/// stale or absent hint costs correctness nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct CommitInputs {
+    /// `max_segments_per_manifest` for the revision being committed.
+    pub(crate) segment_limit: Option<usize>,
+    /// `committed_at_ns` of the parent manifest.
+    pub(crate) parent_committed_at_ns: Option<i64>,
 }
 
 /// Options common to write-path operations.
@@ -569,7 +591,17 @@ impl Database {
         };
         manifest.recompute_rollups();
         let result = self
-            .commit_manifest_locked(name, table_id, None, &mut manifest, 0)
+            .commit_manifest_locked(
+                name,
+                table_id,
+                None,
+                &mut manifest,
+                0,
+                CommitInputs {
+                    segment_limit: Some(spec.max_segments_per_manifest),
+                    parent_committed_at_ns: None,
+                },
+            )
             .await?;
 
         // Registration last, and into the fork's catalog when we are in one:
@@ -849,11 +881,16 @@ impl Database {
     pub async fn resolve(&self, name: &str, at: ReadAt) -> Result<ResolvedTable> {
         let entry = self.entry(name).await?;
         let (head_seq, head_checksum) = self.effective_head(name, &entry).await?;
-        let retention_floor = self.retention_min_seq(entry.table_id).await?;
 
+        // The retention floor is read only by the arms that bound a read
+        // against it. `Latest` — the default, and the hottest read in the
+        // system — does not, and most tables have no RETENTION.json at all, so
+        // fetching it unconditionally spent a round trip per scan on an object
+        // that is usually a 404.
         let (sequence, verify_checksum) = match &at {
             ReadAt::Latest => (head_seq, Some(head_checksum.clone())),
             ReadAt::Version(v) => {
+                let retention_floor = self.retention_min_seq(entry.table_id).await?;
                 if *v < retention_floor || *v > head_seq {
                     return Err(Error::VersionNotFound {
                         table: name.into(),
@@ -864,6 +901,7 @@ impl Database {
                 (*v, None)
             }
             ReadAt::AsOf(ts) => {
+                let retention_floor = self.retention_min_seq(entry.table_id).await?;
                 let seq = self
                     .as_of_sequence(entry.table_id, retention_floor, head_seq, *ts)
                     .await?;
@@ -1008,6 +1046,7 @@ impl Database {
         parent: Option<&HeadState>,
         manifest: &mut VersionManifest,
         segments_added: usize,
+        known: CommitInputs,
     ) -> Result<CommitResult> {
         // Serialize every writer at the database level. Per-table HEAD CAS is
         // still the authority, while this outer lock lets a multi-table
@@ -1015,7 +1054,7 @@ impl Database {
         // before any ordinary writer can interleave. Object-store transactions
         // are rejected (their metadata guard is intentionally a no-op).
         let _meta = self.backend.meta_lock().await?;
-        self.commit_manifest_locked(name, table_id, parent, manifest, segments_added)
+        self.commit_manifest_locked(name, table_id, parent, manifest, segments_added, known)
             .await
     }
 
@@ -1027,14 +1066,17 @@ impl Database {
         parent: Option<&HeadState>,
         manifest: &mut VersionManifest,
         segments_added: usize,
+        known: CommitInputs,
     ) -> Result<CommitResult> {
         // Segment-count guard rails.
-        let spec_limit = {
+        let spec_limit = match known.segment_limit {
+            Some(limit) => limit,
             // spec may not exist yet during create_table's v0 commit
-            self.spec(table_id, manifest.schema_revision)
+            None => self
+                .spec(table_id, manifest.schema_revision)
                 .await
                 .map(|s| s.max_segments_per_manifest)
-                .unwrap_or(crate::spec::SEGMENT_COUNT_HARD_DEFAULT)
+                .unwrap_or(crate::spec::SEGMENT_COUNT_HARD_DEFAULT),
         };
         if manifest.segments.len() > spec_limit {
             return Err(Error::LimitExceeded {
@@ -1056,10 +1098,14 @@ impl Database {
         if let Some(p) = parent {
             manifest.parent = Some(p.head.sequence);
             manifest.parent_checksum = Some(p.head.manifest_checksum.clone());
-            let parent_committed = self
-                .manifest_at(table_id, p.head.sequence)
-                .await?
-                .committed_at_ns;
+            let parent_committed = match known.parent_committed_at_ns {
+                Some(ts) => ts,
+                None => {
+                    self.manifest_at(table_id, p.head.sequence)
+                        .await?
+                        .committed_at_ns
+                }
+            };
             manifest.committed_at_ns = crate::util::monotonic_commit_ts(Some(parent_committed));
         } else {
             manifest.committed_at_ns = crate::util::monotonic_commit_ts(None);
@@ -1186,6 +1232,7 @@ impl Database {
                 Some(&head),
                 &mut manifest,
                 plan.summary.segments_added,
+                CommitInputs::default(),
             )
             .await?;
         res.segments_deduped = plan.summary.segments_reused;
@@ -1362,8 +1409,18 @@ impl Database {
         )?;
 
         manifest.recompute_rollups();
-        self.commit_manifest_locked(name, table_id, None, &mut manifest, 0)
-            .await?;
+        self.commit_manifest_locked(
+            name,
+            table_id,
+            None,
+            &mut manifest,
+            0,
+            CommitInputs {
+                segment_limit: Some(spec.max_segments_per_manifest),
+                parent_committed_at_ns: None,
+            },
+        )
+        .await?;
 
         let entry = crate::fork::ForkTableEntry {
             name: name.to_string(),
@@ -1459,8 +1516,18 @@ impl Database {
             &spec,
         );
         manifest.segments = parent_manifest.segments.clone();
-        self.commit_manifest_locked(name, entry.table_id, Some(&head), &mut manifest, 0)
-            .await
+        self.commit_manifest_locked(
+            name,
+            entry.table_id,
+            Some(&head),
+            &mut manifest,
+            0,
+            CommitInputs {
+                segment_limit: None,
+                parent_committed_at_ns: Some(parent_manifest.committed_at_ns),
+            },
+        )
+        .await
     }
 
     // ------------------------------------------------------------------
@@ -1529,6 +1596,10 @@ impl Database {
             manifest,
             segments_added: added,
             segments_deduped: deduped,
+            known: CommitInputs {
+                segment_limit: Some(spec.max_segments_per_manifest),
+                parent_committed_at_ns: Some(parent_manifest.committed_at_ns),
+            },
             lease,
         })
     }
@@ -1679,6 +1750,10 @@ impl Database {
             manifest,
             segments_added: added,
             segments_deduped: deduped,
+            known: CommitInputs {
+                segment_limit: Some(spec.max_segments_per_manifest),
+                parent_committed_at_ns: Some(parent_manifest.committed_at_ns),
+            },
             lease,
         })
     }
@@ -1691,6 +1766,7 @@ impl Database {
                 Some(&staged.head),
                 &mut staged.manifest,
                 staged.segments_added,
+                staged.known,
             )
             .await;
         self.release_staging(staged.lease).await;
@@ -1981,7 +2057,17 @@ impl Database {
         let added = rewritten.len() - deduped;
         manifest.segments.extend(rewritten);
         let mut res = self
-            .commit_manifest(name, entry.table_id, Some(&head), &mut manifest, added)
+            .commit_manifest(
+                name,
+                entry.table_id,
+                Some(&head),
+                &mut manifest,
+                added,
+                CommitInputs {
+                    segment_limit: Some(spec.max_segments_per_manifest),
+                    parent_committed_at_ns: Some(parent_manifest.committed_at_ns),
+                },
+            )
             .await?;
         res.segments_deduped = deduped;
         self.release_staging(lease).await;
@@ -2022,8 +2108,18 @@ impl Database {
         );
         manifest.schema_revision = target.schema_revision;
         manifest.segments = target.segments;
-        self.commit_manifest(name, entry.table_id, Some(&head), &mut manifest, 0)
-            .await
+        self.commit_manifest(
+            name,
+            entry.table_id,
+            Some(&head),
+            &mut manifest,
+            0,
+            CommitInputs {
+                segment_limit: Some(spec.max_segments_per_manifest),
+                parent_committed_at_ns: Some(parent_manifest.committed_at_ns),
+            },
+        )
+        .await
     }
 
     // ------------------------------------------------------------------
@@ -2423,7 +2519,17 @@ impl Database {
             )));
         }
         let res = self
-            .commit_manifest(name, entry.table_id, Some(&head), &mut manifest, added)
+            .commit_manifest(
+                name,
+                entry.table_id,
+                Some(&head),
+                &mut manifest,
+                added,
+                CommitInputs {
+                    segment_limit: Some(spec.max_segments_per_manifest),
+                    parent_committed_at_ns: Some(parent_manifest.committed_at_ns),
+                },
+            )
             .await?;
         self.release_staging(lease).await;
         Ok(res)
@@ -2616,11 +2722,48 @@ impl Database {
         let head = self.head(name, entry.table_id).await?;
         let retention_floor = self.retention_min_seq(entry.table_id).await?;
         let fork_entry = self.fork_entry(name).await?;
+
         let mut report = VerifyReport {
             table: name.to_string(),
             head_sequence: head.head.sequence,
             ..Default::default()
         };
+
+        // Inside a fork, a shadow's manifest is the one place in the system
+        // that references another table's storage. Re-derive the refinement
+        // invariant below rather than trusting that the two writers who can
+        // introduce such a path got it right: a violation is silent until the
+        // base vacuums, and then it is data loss.
+        //
+        // Both inputs are loop-invariant — the origin is fixed for the whole
+        // table — so they are built once here. Rebuilding them per version
+        // re-read the base manifest and the base retention floor once for
+        // every retained version of the shadow.
+        let mut shadow_base: Option<(String, BTreeSet<String>)> = None;
+        if let Some(origin) = fork_entry.as_ref().and_then(|fe| fe.origin.as_ref()) {
+            let base_paths: BTreeSet<String> = self
+                .manifest_at(origin.base_table_id, origin.base_sequence)
+                .await?
+                .segments
+                .iter()
+                .map(|s| s.path.clone())
+                .collect();
+            shadow_base = Some((
+                format!("{}/", layout::table_prefix(entry.table_id)),
+                base_paths,
+            ));
+            // The pin is what keeps those inherited segments alive, so a base
+            // floor above it means they are already collectible. One check per
+            // table, not per version.
+            let base_floor = self.retention_min_seq(origin.base_table_id).await?;
+            if base_floor > origin.base_sequence {
+                report.problems.push(format!(
+                    "base table retention floor {base_floor} is above this fork's pinned \
+                     version {}; inherited segments are no longer protected",
+                    origin.base_sequence
+                ));
+            }
+        }
 
         // Verify manifests: checksum chain from head backwards.
         let mut expected_checksum = Some(head.head.manifest_checksum.clone());
@@ -2689,34 +2832,14 @@ impl Database {
             // refinement invariant here rather than trusting that the two
             // writers who can introduce such a path got it right: a violation
             // is silent until the base vacuums, and then it is data loss.
-            if let Some(fe) = &fork_entry
-                && let Some(origin) = &fe.origin
-            {
-                let own_prefix = format!("{}/", layout::table_prefix(entry.table_id));
-                let base_paths: BTreeSet<String> = self
-                    .manifest_at(origin.base_table_id, origin.base_sequence)
-                    .await?
-                    .segments
-                    .iter()
-                    .map(|s| s.path.clone())
-                    .collect();
-                if let Err(e) = crate::fork::check_refinement(
-                    &own_prefix,
-                    &base_paths,
+            if let Some((own_prefix, base_paths)) = &shadow_base
+                && let Err(e) = crate::fork::check_refinement(
+                    own_prefix,
+                    base_paths,
                     manifest.segments.iter().map(|s| s.path.as_str()),
-                ) {
-                    report.problems.push(format!("version {seq}: {e}"));
-                }
-                // The pin is what keeps those inherited segments alive, so a
-                // base floor above it means they are already collectible.
-                let base_floor = self.retention_min_seq(origin.base_table_id).await?;
-                if base_floor > origin.base_sequence {
-                    report.problems.push(format!(
-                        "base table retention floor {base_floor} is above this fork's pinned \
-                         version {}; inherited segments are no longer protected",
-                        origin.base_sequence
-                    ));
-                }
+                )
+            {
+                report.problems.push(format!("version {seq}: {e}"));
             }
         }
         Ok(report)

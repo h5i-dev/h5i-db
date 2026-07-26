@@ -55,6 +55,7 @@ use uuid::Uuid;
 
 use crate::Backend;
 use crate::catalog::CatalogEntry;
+use crate::database::CommitInputs;
 use crate::error::{Error, Result};
 use crate::layout;
 
@@ -525,14 +526,27 @@ impl crate::database::Database {
         let mut pins = BTreeMap::new();
         let base_tables = self.list_tables().await?;
         for entry in base_tables.iter().cloned() {
-            let sequence = match as_of_ns {
-                None => self.head(&entry.name, entry.table_id).await?.head.sequence,
+            // HEAD already carries the checksum of the manifest it points at,
+            // so pinning the current version needs no manifest read at all.
+            // Re-deriving it made "fork create copies nothing" true of bytes
+            // written and false of bytes read: one full manifest per table.
+            let (sequence, checksum) = match as_of_ns {
+                None => {
+                    let head = self.head(&entry.name, entry.table_id).await?;
+                    (head.head.sequence, head.head.manifest_checksum)
+                }
                 Some(ts) => {
                     match self
                         .resolve(&entry.name, crate::database::ReadAt::AsOf(ts))
                         .await
                     {
-                        Ok(resolved) => resolved.manifest.sequence,
+                        Ok(resolved) => {
+                            let seq = resolved.manifest.sequence;
+                            // An as-of pin lands on an arbitrary past version,
+                            // whose checksum no root of trust holds, so this
+                            // one genuinely has to be computed.
+                            (seq, self.manifest_checksum_at(entry.table_id, seq).await?)
+                        }
                         // The table has no version at or before `ts`: it did
                         // not exist yet, so the fork does not pin it.
                         Err(Error::VersionNotFound { .. }) => continue,
@@ -545,7 +559,7 @@ impl crate::database::Database {
                 ForkPin {
                     table_name: entry.name.clone(),
                     sequence,
-                    manifest_checksum: self.manifest_checksum_at(entry.table_id, sequence).await?,
+                    manifest_checksum: checksum,
                 },
             );
         }
@@ -955,6 +969,7 @@ impl crate::database::Database {
                 Some(&base_head_state),
                 &mut manifest,
                 linked,
+                CommitInputs::default(),
             )
             .await?;
 
