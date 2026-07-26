@@ -1308,6 +1308,145 @@ This Part is additive and must not block Part VII engine work: the
 builder wraps whatever operator surface exists at the time, and grows
 with it.
 
+---
+
+# Part IX — Fork: multi-agent writable workspaces (2026-07-26)
+
+**Decision.** Build `fork` as **catalog aliasing plus pins**, not as
+branched table histories. A fork never writes to a base table: it gets a
+fork-scoped catalog, a GC pin on the base versions it was created from,
+and, on first write to a base name, a **copy-on-write shadow table** (a
+new `table_id` whose first manifest is a copy of the pinned base
+manifest: O(#segments) of JSON, zero data movement). The branch pointer
+is the catalog; the branch itself is an ordinary table, so every
+existing codepath (commit, flock, vacuum, retention, time-travel,
+compaction) applies to it unchanged. Verbs: `fork create / diff /
+promote / drop`. **No merge**: promote is a table-granularity
+compare-and-swap into main. Fork-and-discard is the dominant agent path
+and stays O(1).
+
+**Positioning.** The "embedded × analytical × local × branch"
+intersection is empty. *BranchBench* (arXiv 2604.17180, Columbia DAPLab;
+verified 2026-07-26, lifting the Part V ⚠ on existence) defines the
+workload (agentic speculative branching: fork per hypothesis, discard
+losers, promote winners) and benchmarked only server systems (Neon,
+DoltgreSQL, TigerData, Xata, Postgres baselines); no embedded entrant
+exists. DuckLake chose OCC over branching (⚠ open feature request,
+Discussion #194, unverified). h5i-db's answer is neither `cp -r`
+(O(data), no shared GC, no diff) nor OCC (conflicts *during* work):
+workspaces are disjoint by construction, so agents conflict only at
+promote, and explicitly.
+
+## Design rules (the load-bearing wall)
+
+1. **A branch is a table; the catalog is the branch pointer.** `HEAD`
+   stays the *only* mutable object per table (`layout.rs:8`). No
+   fork-scoped HEAD namespaces, ever: a second mutable object per table
+   dir would make every manifest-listing codepath branch-aware.
+2. **The fork object is a `Snapshot` superset and a GC root.** Layout:
+   `forks/<hash>.json` (pins `{table_id → sequence + manifest_checksum}`
+   plus a freeform `user_meta` blob) and
+   `catalog/forks/<hash>/tables/<hash>.json` for fork-scoped entries.
+   Retention (`retention.rs` floor checks) and `drop_table`
+   (`database.rs:507`) consult forks exactly as they consult snapshots.
+3. **Refinement invariant.** A shadow manifest may reference only (a)
+   segments in its own dir, or (b) segments listed in the pinned base
+   manifest. (b) is GC-safe because the pin holds the base retention
+   floor, so those segments stay inside base vacuum's referenced set for
+   the fork's lifetime. Enforced at commit time in fork mode; checked by
+   `verify`/fsck. Vacuum's code does not change.
+4. **FORMAT bump is a fence, not a migration.** `FORMAT` goes to 2 on
+   first fork creation so pre-fork binaries refuse to open rather than
+   raising retention floors past pins they cannot see. No existing
+   object is rewritten.
+5. **Conflict unit is the table; policy is CAS, first-commit-wins.**
+   Promote commits the shadow head into main with `expected_version` =
+   the fork's pinned base sequence (the field already exists:
+   `database.rs:108`, checked at `database.rs:1018`). The loser gets a
+   clean version conflict: drop, or re-fork and re-run. This is the
+   V-E2 vocabulary made structural.
+6. **Fork-mode compact filters to `created_by_sequence > fork base`.**
+   "Compact never copies base bytes" becomes a rule, not an emergent
+   property of the small-segment threshold.
+7. **Reads never touch HEAD.** Fork reads resolve name → pin → manifest
+   by direct path, so they cannot observe (or contend with) concurrent
+   main writers.
+
+## Tier IX-A — Fork core
+
+| # | Item | Acceptance criteria |
+|---|------|---------------------|
+| IX-A1 | **Fork object + pin integration.** `fork create <name> [--as-of TS]` (pins via `as_of_sequence`, `database.rs:696`); read path through the fork (two-level catalog, pinned manifests). A read-only fork is already a named, frozen, multi-table as-of view. | Retention floor refuses to rise above a fork pin; `drop_table` refuses on fork-pinned tables; `vacuum` after a main compact deletes nothing a live fork reads (fixture: fork, compact main, vacuum, fork still scans byte-identical results). A format-1 binary refuses to open a DB containing a fork. `put_if_absent` create: racing same-name creators get one winner, one clean error. |
+| IX-A2 | **Fork-scoped catalog + `drop` + `list`.** Tables created in a fork live under the fork catalog; `fork drop` deletes fork-owned tables first, fork object (the pin) last; `fork list` shows age, pinned bytes, tables created/shadowed. | Fork-created tables are invisible to the main catalog and to main `vacuum`'s table listing. Kill mid-drop: the fork stays pinned and re-running `fork drop` completes (idempotent, resumable). Pinned-bytes accounting matches `du` on a fixture. |
+| IX-A3 | **COW shadow-on-write + invariant enforcement.** First write to a base name creates the shadow (manifest copy, `sequence: 1`, `parent: None`, new optional `forked_from` provenance field); later commits are ordinary. | Zero parquet bytes copied at shadow creation (asserted on bytes written). N concurrent forks writing the same logical table produce zero writer-lock contention (each holds its own `table_id` flock). Commit-time rejection of any manifest violating the refinement invariant; fsck detects a violating fixture. |
+| IX-A4 | **`fork diff`.** Catalog diff (created / shadowed / dropped names) plus per-shadow segment-set diff via `segments_by_checksum()`, rows/bytes deltas, schema-revision changes. | Diff reads manifests only (no segment I/O, asserted). Output stable and machine-readable (JSON), so an agent can gate promote on it. |
+| IX-A5 | **`fork promote --table T`.** Hardlink (local FS) or backend copy of the shadow's own-dir segments into the base dir, then commit the shadow head manifest as base's next version, `OpKind::Promote`, `expected_version` = pinned base sequence. | First promote wins; second gets a version conflict, not a partial merge. Main never contains cross-dir segment refs (fsck after promote + fork drop). When every intervening base commit is `OpKind::Compact`, the error names it and suggests rebase-over-compaction (the rebase itself may land as a fast-follow). Hardlink path does zero byte copies on one filesystem. |
+
+## Costs accepted, stated honestly
+
+- **Deferred reclamation.** Live forks hold retention floors down, so a
+  compacted main temporarily stores old + new bytes until forks drop
+  (same tradeoff as snapshots today; `fork list` pinned-bytes is the
+  visibility valve).
+- **Promote is O(#segments) metadata ops**, not pure metadata (hardlinks
+  locally, server-side copy on object stores). Promote is the rare
+  verb; keeping vacuum fork-ignorant is worth it.
+- **Shadow history restarts at sequence 1**; time-travel across the fork
+  point is a two-hop walk through `forked_from`.
+- **Fork-per-agent is the assumed mapping.** Two agents sharing one fork
+  fall back to today's single-writer-per-table semantics.
+
+## Do NOT build
+
+- **No 3-way merge, no row-level conflict resolution.** That is Dolt's
+  decade. The conflict unit is the table and the policy is CAS; write
+  that down instead of pretending promote is not a merge.
+- **No `--embargo` on forks.** A sliding "now" ceiling cannot be
+  enforced once a fork writes derived tables (the guarantee would have
+  to police every write path forever). Look-ahead protection stays with
+  research-mode's read-only pins; revisit only on observed demand.
+- **No global content-addressed segment pool as a fork prerequisite.**
+  It is a layout migration that makes GC reachability global and taxes
+  databases that never fork. Revisit for cross-table dedup on its own
+  evidence, not for this.
+- **No fork-of-fork in v1.** Base = main only; nesting multiplies the
+  promote/GC paths before the primitive has users.
+- **No run-ledger coupling.** Neither feature exists yet; the
+  `user_meta` blob is the loose join point, and correlation can live in
+  the ledger later.
+
+## Cross-references (Part IX ⇄ existing parts)
+
+- IX-A1 ⇄ **snapshot machinery** (`snapshot.rs`, `retention.rs`): the
+  fork object is a `Snapshot` superset; pins reuse the floor-refusal and
+  drop-refusal checks verbatim.
+- IX-A5 ⇄ **`CommitOptions.expected_version`** (`database.rs:108`): the
+  promote CAS is an existing field, not new machinery.
+- Part IX ⇄ **V-E2**: supersedes V-E2's "CLI/skill workflow, not an
+  engine concept" for the fork lifecycle; fork → explore →
+  commit/abort + first-commit-wins is now engine substrate, and the
+  review-UI verification gate sits on top of `fork diff`.
+- Part IX ⇄ **research-mode (Part VI dual-axis)**: `fork --as-of` is the
+  writable counterpart of the read-only pin ("a workspace over a frozen
+  base you can write into"); the pin machinery is shared.
+- IX-A3 ⇄ **VII-B factor workload**: the shadow table is where an agent
+  materializes per-hypothesis features; N hypotheses share one base with
+  zero copies and zero contention.
+
+## Build order
+
+1. **IX-A1** — pins + read path; ships a named multi-table as-of view
+   on its own.
+2. **IX-A2** — writable workspace via fork-created tables, before any
+   COW exists.
+3. **IX-A3** — COW shadows + the invariant (the correctness core).
+4. **IX-A4** — diff (agents gate on it; drop is already covered by A2).
+5. **IX-A5** — promote, last: rarest verb, only one touching main.
+
+Each step is independently shippable; nothing in Part IX blocks or is
+blocked by Parts VII/VIII (different subsystem: catalog/GC, not query
+surface).
+
 ## Part VIII implementation status (2026-07-25, branch `data-frame-lazy-run`)
 
 | # | State | Notes |
