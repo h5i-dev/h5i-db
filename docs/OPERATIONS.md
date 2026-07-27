@@ -48,7 +48,7 @@ the right order and don't run destructive maintenance concurrently**.
    DB=/data/market.db BK=/backup/market.db-$(date +%F)
    mkdir -p "$BK"
    cp "$DB/FORMAT" "$BK/"
-   cp -r "$DB/catalog" "$DB/snapshots" "$BK/" 2>/dev/null || true
+   cp -r "$DB/catalog" "$DB/snapshots" "$DB/forks" "$BK/" 2>/dev/null || true
    for t in "$DB"/tables/*/; do
      b="$BK/tables/$(basename "$t")"; mkdir -p "$b"
      cp "$t/HEAD" "$b/"                        # 1. pin the version to back up
@@ -94,6 +94,12 @@ unreachable objects: segments referenced by no committed manifest and no
 live mutation plan, manifests above `HEAD` (crashed-writer leftovers), and
 `*.lock` / `HEAD.tmp.*` debris. Without `--apply` it is a dry run.
 
+Vacuum runs from the base database and treats every fork as a root: it
+consults every fork's pins and every fork's catalog, so a fork's tables and
+the base segments its shadows reference are never candidates. It refuses to
+run through a `--fork` handle, because reachability is a database-wide
+question.
+
 Guidance:
 
 - **Always review a dry run first** in scripted maintenance
@@ -108,6 +114,40 @@ Guidance:
   workload generates almost none.
 - **Never run two `vacuum --apply` concurrently**, and don't run it during
   backups (above).
+
+## Forks
+
+A fork is a named, writable workspace over a pinned view of the database. It
+costs one small JSON object and copies no data: its tables are ordinary
+tables, and the versions it forked from are shared by reference. Three things
+follow that an operator needs to know.
+
+**A fork is a GC root.** Its pin holds the base's retention floor down, so
+`set-retention` refuses to expire a version a fork pins, and `drop-table`
+refuses on a table a fork pins. Both name the fork in the error. The fix is
+always to promote or drop that fork, never to force the floor.
+
+**Forks nest.** `fork create <db> <child> --fork <parent>` creates a fork
+inside a fork, and a child pins its parent's tables the same way a top-level
+fork pins the database's. Dropping a parent that a child still pins is refused
+and names the children; `fork drop` one level at a time, or drop the whole
+subtree. Depth is capped at 32.
+
+**`FORK_INDEX.json` is a cache.** It sits at the database root and answers
+"which forks pin what" in one read instead of one per fork. It is rebuilt from
+the fork objects whenever it disagrees with them, so it is safe to delete at
+any time and **does not need to be backed up**: a restore without it simply
+rebuilds it on first use. Every other object is authoritative.
+
+Routine checks:
+
+```bash
+h5i-db fork list <db>       # age, tables owned, bytes_own, bytes_pinned
+h5i-db fork diff <db> <f>   # what it changed (manifests only, no segments)
+```
+
+Abandoned forks are the usual cause of a database that will not shrink; see
+Disk-usage math below.
 
 ## Compaction
 
@@ -151,6 +191,34 @@ Nothing is ever deleted except by vacuum, and vacuum only deletes
   exists.
 - Quick audit: `du -sh <db>/tables/*/segments` vs.
   `h5i-db tables <db>` row counts shows how much is history vs. head.
+
+### "Vacuum ran and disk did not shrink"
+
+The usual answer is a fork. Reclamation is *deferred*, not lost: a live fork
+pins the versions it forked from, the retention floor cannot rise past them,
+and so the segments they reference stay reachable, including the
+pre-compaction copies of segments main has since rewritten. Main pays nothing
+for a fork until main tries to reclaim.
+
+```bash
+h5i-db fork list <db>   # bytes_pinned per fork
+```
+
+`bytes_pinned` is everything in the pinned version, so it is an **upper
+bound** on what dropping that fork could release, not a measure of waste:
+main's current head usually shares most of those bytes. Two forks pinning the
+same version each report it, so the column does not sum.
+
+Order of operations to actually reclaim:
+
+1. `h5i-db fork drop <db> <name>` (or promote it first, if the work is
+   wanted). Nested forks must go from the leaves up.
+2. `h5i-db set-retention …`, now free to move past the released pin.
+3. `h5i-db vacuum <db> --apply`.
+
+A fork's *own* tables are not vacuumed piecemeal: debris inside them is
+reclaimed wholesale when the fork is dropped, which is why an abandoned fork
+costs more than an active one.
 
 ## Filesystem caveats
 

@@ -1293,6 +1293,39 @@ class LazyFrame:
         source = f"h5i({quote_string(name)}, {arg})"
         return cls(db, _Query(source, base_table=name, base_pin=(key, value)))
 
+    @classmethod
+    def _from_forks(
+        cls, db, name: str, forks: Optional[Sequence[str]] = None
+    ) -> "LazyFrame":
+        if not isinstance(name, str) or not name:
+            raise _invalid("table name must be a non-empty string")
+        if forks is None:
+            source = f"forks({quote_string(name)})"
+        else:
+            if isinstance(forks, str):
+                raise _invalid(
+                    "forks must be a sequence of fork names; pass ['a'] rather than 'a'"
+                )
+            names = list(forks)
+            if not names:
+                raise _invalid(
+                    "forks must name at least one fork; pass forks=None to read every fork"
+                )
+            for f in names:
+                if not isinstance(f, str) or not f:
+                    raise _invalid(f"fork names must be non-empty strings, got {f!r}")
+                if "," in f:
+                    raise _invalid(
+                        f"fork name {f!r} contains a comma, which separates the list"
+                    )
+            source = f"forks({quote_string(name)}, {quote_string(','.join(names))})"
+        # `base_table` stays None on purpose. It marks a frame that is still a
+        # plain table, which lets `join_asof` lower to the `asof_join` table
+        # function by *name* — and that function would read the base table,
+        # silently dropping the union across forks. Leaving it unset makes the
+        # existing guard refuse instead.
+        return cls(db, _Query(source))
+
     def _next(self, query: _Query) -> "LazyFrame":
         return LazyFrame(self._db, query)
 
@@ -1789,7 +1822,11 @@ class GroupBy:
         return self.agg(count_star().alias(name))
 
 
+#: Column naming the fork each row of a cross-fork scan came from.
+FORK_COLUMN = "__fork"
+
 __all__ = [
+    "FORK_COLUMN",
     "Expr",
     "GroupBy",
     "LazyFrame",

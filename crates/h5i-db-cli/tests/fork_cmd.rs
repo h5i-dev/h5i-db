@@ -305,7 +305,6 @@ fn database_wide_commands_refuse_the_fork_flag() {
     for args in [
         vec!["vacuum", "m.db", "--apply"],
         vec!["snapshot", "create", "m.db", "snap"],
-        vec!["fork", "create", "m.db", "nested"],
     ] {
         let mut a = args.clone();
         a.extend_from_slice(&["--fork", "agent-01", "--format", "json"]);
@@ -316,6 +315,18 @@ fn database_wide_commands_refuse_the_fork_flag() {
             "{args:?} should refuse inside a fork, got: {msg}"
         );
     }
+
+    // `fork create` is *not* one of them any more: forking inside a fork nests
+    // (ROADMAP X-C1) rather than reaching for a database-wide root.
+    let nested = ok_json(&run(
+        &[
+            "fork", "create", "m.db", "nested", "--fork", "agent-01", "--format", "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(nested["name"], "nested");
+    assert_eq!(nested["parent"], "agent-01");
+    assert_eq!(nested["depth"], 1);
 }
 
 #[test]
@@ -489,4 +500,87 @@ fn promoting_a_fork_created_table_moves_it_to_main() {
     ));
     let still = ok_json(&run(&["tables", "m.db", "--format", "json"], cwd));
     assert_eq!(still.as_array().unwrap().len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// batch verbs (ROADMAP Part X, X-B1)
+// ---------------------------------------------------------------------------
+
+/// `--count` makes the wide fanout one command. The single-fork output shape
+/// is deliberately unchanged by its presence: without the flag the command
+/// still returns one object, not a list of one.
+#[test]
+fn fork_create_count_makes_a_numbered_fanout_and_drop_takes_many_names() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    bootstrap(cwd);
+
+    let created = ok_json(&run(
+        &[
+            "fork", "create", "m.db", "sim", "--count", "5", "--format", "json",
+        ],
+        cwd,
+    ));
+    let created = created.as_array().expect("--count returns a list");
+    assert_eq!(created.len(), 5);
+    assert_eq!(created[0]["name"], "sim-0000");
+    assert_eq!(created[4]["name"], "sim-0004");
+    // Every fork of one base pins the same versions.
+    for f in created {
+        assert_eq!(f["pins"], created[0]["pins"]);
+    }
+
+    // Without --count the shape is a single object, exactly as before.
+    let one = ok_json(&run(
+        &["fork", "create", "m.db", "solo", "--format", "json"],
+        cwd,
+    ));
+    assert_eq!(one["name"], "solo");
+    assert!(one.as_array().is_none(), "one fork must not become a list");
+
+    // Drop several at once.
+    let dropped = ok_json(&run(
+        &[
+            "fork", "drop", "m.db", "sim-0000", "sim-0001", "sim-0002", "--format", "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(
+        dropped["dropped"],
+        serde_json::json!(["sim-0000", "sim-0001", "sim-0002"])
+    );
+    let left = ok_json(&run(&["fork", "list", "m.db", "--format", "json"], cwd));
+    let names: Vec<&str> = left
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["sim-0003", "sim-0004", "solo"]);
+}
+
+/// A name that is not there stops the batch and is named in the error, rather
+/// than being skipped so the caller believes it deleted more than it did.
+#[test]
+fn fork_drop_reports_a_name_that_does_not_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path();
+    bootstrap(cwd);
+    ok_json(&run(
+        &["fork", "create", "m.db", "real", "--format", "json"],
+        cwd,
+    ));
+
+    let env = err_envelope(&run(
+        &["fork", "drop", "m.db", "real", "ghost", "--format", "json"],
+        cwd,
+    ));
+    assert!(env["message"].as_str().unwrap().contains("ghost"), "{env}");
+    // The one before the failure really was dropped.
+    assert!(
+        ok_json(&run(&["fork", "list", "m.db", "--format", "json"], cwd))
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }

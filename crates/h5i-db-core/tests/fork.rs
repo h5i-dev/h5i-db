@@ -925,8 +925,13 @@ async fn promote_is_first_commit_wins() {
     assert!(!err.next_actions().is_empty());
 }
 
+/// Part IX detected this case and refused it, telling the caller to re-fork.
+/// Part X (X-B3) replays the fork's work onto the new layout instead, because
+/// compaction changes where rows live and not which rows there are. The diff
+/// still flags the movement — it is now a "this will rebase" signal rather
+/// than a "this will fail" one.
 #[tokio::test]
-async fn a_promote_blocked_only_by_compaction_says_so() {
+async fn a_promote_blocked_only_by_compaction_is_rebased_not_refused() {
     let (_dir, db, _root) = db_with_trades().await;
     for i in 0..6 {
         db.append(
@@ -957,14 +962,25 @@ async fn a_promote_blocked_only_by_compaction_says_so() {
         .unwrap();
     assert_eq!(compacted.op, "compact");
 
-    let err = db.promote("agent-01", "trades").await.unwrap_err();
-    let msg = format!("{err}");
-    assert!(
-        msg.contains("compaction"),
-        "a spurious conflict must name itself: {msg}"
-    );
+    // The diff sees the movement and classifies it as layout-only.
     let d = db.fork_diff("agent-01", Some("trades")).await.unwrap();
+    assert!(d.tables[0].base_moved);
     assert!(d.tables[0].base_moved_by_compaction_only);
+
+    // And the promote goes through, rebased onto the compacted layout.
+    let result = db.promote("agent-01", "trades").await.unwrap();
+    assert!(
+        result.rebased_from.is_some(),
+        "a compaction-only conflict should be rebased, not lost"
+    );
+    // Main holds its own rows plus the fork's one addition.
+    let after = prices(&db, "trades").await;
+    assert_eq!(after.len(), 10, "3 seeded + 6 appended + 1 from the fork");
+    assert!(after.contains(&9.9), "the fork's row should have landed");
+    assert!(
+        db.verify("trades", true).await.unwrap().problems.is_empty(),
+        "a rebased promote must leave the base structurally sound"
+    );
 }
 
 #[tokio::test]
@@ -1295,12 +1311,10 @@ async fn database_wide_operations_are_refused_inside_a_fork() {
         .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
 
-    // No fork of a fork, and no reaching for the global roots from inside one.
+    // No reaching for the global roots from inside a fork. (Forking *is* now
+    // allowed from here — see the nested-fork tests — because a child pins its
+    // parent's tables rather than touching anything database-wide.)
     for err in [
-        fork_db
-            .create_fork("nested", None, None, Default::default())
-            .await
-            .unwrap_err(),
         fork_db
             .create_snapshot("snap", &[], None)
             .await

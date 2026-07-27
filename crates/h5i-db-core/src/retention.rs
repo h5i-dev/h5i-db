@@ -199,16 +199,16 @@ impl Database {
         // with more at stake. A fork's shadow tables reference base segments
         // directly, so letting the floor pass a fork's pin would make the next
         // vacuum delete segments a live workspace still reads (ROADMAP IX).
-        for f in crate::fork::list(self.backend()).await? {
-            if let Some(pin) = f.pins.get(&table_id)
-                && pin.sequence < target
-            {
-                return Err(Error::invalid(format!(
-                    "fork {:?} pins version {} of table {name:?}, below the requested \
-                         floor {target}; drop the fork first",
-                    f.name, pin.sequence
-                )));
-            }
+        //
+        // Asked of the index rather than of every fork object (Part X, X-A1),
+        // so this check costs the same at one fork and at a thousand.
+        if let Some((fork_name, sequence)) =
+            self.fork_index().await?.first_pin_below(table_id, target)
+        {
+            return Err(Error::invalid(format!(
+                "fork {fork_name:?} pins version {sequence} of table {name:?}, below the \
+                 requested floor {target}; drop the fork first"
+            )));
         }
 
         let floor = RetentionFloor {

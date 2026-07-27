@@ -12,7 +12,12 @@
 //!   snapshots/<hash-of-name>.json       # name -> {table uuid: version}
 //!   forks/<hash-of-name>.json           # name -> {table uuid: pinned version}
 //!   catalog/forks/<hash-of-fork>/<hash-of-name>.json   # fork-scoped catalog
+//!   FORK_INDEX.json                     # derived cache over the two above
 //! ```
+//!
+//! Everything here is authoritative except `FORK_INDEX.json`, which is a
+//! rebuildable cache (see `fork_index.rs`): it may be deleted at any time and
+//! need not be backed up.
 //!
 //! User-supplied strings (table, snapshot, and fork names) are stored *inside*
 //! the JSON objects and hashed for path components, so raw user input never
@@ -31,6 +36,15 @@ pub const CATALOG_PREFIX: &str = "catalog/tables";
 pub const SNAPSHOT_PREFIX: &str = "snapshots";
 pub const FORK_PREFIX: &str = "forks";
 pub const FORK_CATALOG_PREFIX: &str = "catalog/forks";
+
+/// The fork visibility index (ROADMAP Part X, X-A1).
+///
+/// A **derived cache**, never a source of truth: it answers "which forks pin
+/// this table, and which tables do forks own" in one read instead of one read
+/// per fork. It lives at the root rather than under `forks/` on purpose —
+/// putting it inside the prefix whose listing validates it would make the
+/// index part of its own input. Deleting it is always safe.
+pub const FORK_INDEX_FILE: &str = "FORK_INDEX.json";
 
 /// Current database format version and the minimum reader that understands it.
 ///
@@ -131,6 +145,10 @@ pub fn snapshot_path(name: &str) -> ObjPath {
 
 pub fn fork_path(name: &str) -> ObjPath {
     ObjPath::from(format!("{FORK_PREFIX}/{}.json", hash_name(name)))
+}
+
+pub fn fork_index_path() -> ObjPath {
+    ObjPath::from(FORK_INDEX_FILE)
 }
 
 /// Prefix holding one fork's catalog entries. Hashing the fork name keeps the

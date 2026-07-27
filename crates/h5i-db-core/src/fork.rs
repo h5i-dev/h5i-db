@@ -68,12 +68,29 @@ use crate::layout;
 /// survives in an immutable object even if the fork is later dropped.
 pub const FORKED_FROM_META_KEY: &str = "h5i.forked_from";
 
-/// One pinned base table inside a fork.
+/// One pinned table inside a fork.
+///
+/// "Base" means *the thing this fork forked from*, which is the database for a
+/// top-level fork and the parent fork for a nested one (ROADMAP X-C1). The pin
+/// is keyed by table id and does not care which, because a fork's tables are
+/// ordinary tables.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ForkPin {
     pub table_name: String,
     pub sequence: u64,
     pub manifest_checksum: String,
+    /// Schema revision and creation time of the pinned table, carried so a
+    /// fork can build a catalog entry for a name without reading anything.
+    ///
+    /// Both are `Option` with `skip_serializing_if`, which is what keeps the
+    /// addition compatible with fork objects written before nested forks
+    /// existed: an old object round-trips to identical bytes, so its checksum
+    /// still verifies. Absent means "fall back to the global catalog", which
+    /// is where a top-level fork's tables have always been found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_revision: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_ns: Option<i64>,
 }
 
 /// A fork: a named, pinned, writable workspace.
@@ -87,7 +104,17 @@ pub struct Fork {
     /// creation). Recorded for provenance; the pins themselves are the truth.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_of_ns: Option<i64>,
-    /// base table UUID → pinned version.
+    /// The fork this one was created inside, if any (ROADMAP X-C1).
+    ///
+    /// `None` = forked from the base database. Recorded for lineage and for
+    /// the drop guard; the pins are still the truth about what is held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Distance from the base database: 0 for a top-level fork. Absent on
+    /// forks written before nesting existed, which are all top-level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
+    /// pinned table UUID → pinned version.
     pub pins: BTreeMap<Uuid, ForkPin>,
     /// Caller-owned metadata. Deliberately unstructured: it is the loose join
     /// point for a future run ledger, so the two features need not be designed
@@ -117,11 +144,38 @@ impl Fork {
         Ok(())
     }
 
-    /// The pinned version of a base table, if this fork pins it.
+    /// The pinned version of a table, if this fork pins it.
     pub fn pin(&self, table_id: Uuid) -> Option<&ForkPin> {
         self.pins.get(&table_id)
     }
+
+    /// The pinned table backing a *name*.
+    ///
+    /// Name resolution inside a fork has to work for tables the fork's parent
+    /// owns as well as tables the database owns, and only the pin knows which
+    /// table id a name meant at fork time — the global catalog would answer
+    /// with the base table a parent had already shadowed.
+    pub fn pin_by_name(&self, name: &str) -> Option<(Uuid, &ForkPin)> {
+        self.pins
+            .iter()
+            .find(|(_, p)| p.table_name == name)
+            .map(|(id, p)| (*id, p))
+    }
+
+    /// Depth below the base database; 0 for a top-level fork.
+    pub fn depth(&self) -> u32 {
+        self.depth.unwrap_or(0)
+    }
 }
+
+/// How deep forks may nest.
+///
+/// MCTS runs deep and narrow — BranchBench parameterises it at depth 25 — so
+/// the cap is set above the workload it exists for rather than at it. It is a
+/// runaway guard, not a design limit: reads cost the same at depth 32 as at
+/// depth 1 because a shadow manifest names its segments by path and never
+/// walks a chain.
+pub const MAX_FORK_DEPTH: u32 = 32;
 
 /// Where a shadow table came from. Absent on tables created inside the fork.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -239,9 +293,39 @@ pub async fn create(backend: &Backend, fork: &Fork) -> Result<()> {
     backend.sync_objects(&[path]).await
 }
 
+/// Store many new forks, then fsync them in one pass.
+///
+/// Two things make this cheaper than a `create` loop, and both are about
+/// round trips rather than bytes: the puts are issued concurrently, and the
+/// durability barrier is taken once for the whole batch instead of once per
+/// fork. At a thousand branches the second dominates.
+pub async fn create_many(backend: &Backend, forks: &[Fork]) -> Result<()> {
+    let paths: Vec<object_store::path::Path> = futures::stream::iter(forks)
+        .map(|fork| async move {
+            let path = layout::fork_path(&fork.name);
+            let bytes = serde_json::to_vec_pretty(fork)?;
+            if !backend.put_if_absent(&path, bytes.into()).await? {
+                return Err(Error::ForkExists {
+                    name: fork.name.clone(),
+                });
+            }
+            Ok::<_, Error>(path)
+        })
+        .buffer_unordered(crate::backend::METADATA_FETCH_CONCURRENCY)
+        .try_collect()
+        .await?;
+    backend.sync_objects(&paths).await
+}
+
 /// Overwrite an existing fork object (metadata edits). Callers must hold the
 /// database metadata lock.
+///
+/// Drops the fork index first. The index reuses an entry when the object is
+/// still there at the same size, which an in-place edit can defeat — and the
+/// failure mode is a pin the index no longer reports, which is the one that
+/// loses data. Invalidating costs one rebuild and removes the whole question.
 pub async fn store(backend: &Backend, fork: &Fork) -> Result<()> {
+    crate::fork_index::invalidate(backend).await?;
     let path = layout::fork_path(&fork.name);
     let bytes = serde_json::to_vec_pretty(fork)?;
     backend.put(&path, bytes.into()).await?;
@@ -269,20 +353,6 @@ pub async fn list(backend: &Backend) -> Result<Vec<Fork>> {
         .try_collect()
         .await?;
     out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(out)
-}
-
-/// Every base sequence pinned by any fork, per table. Used by retention and
-/// `drop_table` exactly the way snapshot pins are.
-pub async fn pins_by_table(backend: &Backend) -> Result<BTreeMap<Uuid, Vec<(String, u64)>>> {
-    let mut out: BTreeMap<Uuid, Vec<(String, u64)>> = BTreeMap::new();
-    for fork in list(backend).await? {
-        for (table_id, pin) in &fork.pins {
-            out.entry(*table_id)
-                .or_default()
-                .push((fork.name.clone(), pin.sequence));
-        }
-    }
     Ok(out)
 }
 
@@ -335,7 +405,10 @@ pub async fn create_entry(
 
 /// Overwrite a fork catalog entry (spec-revision bumps). Callers must hold the
 /// database metadata lock.
+///
+/// Invalidates the fork index for the same reason [`store`] does.
 pub async fn store_entry(backend: &Backend, fork_name: &str, entry: &ForkTableEntry) -> Result<()> {
+    crate::fork_index::invalidate(backend).await?;
     let path = layout::fork_catalog_entry_path(fork_name, &entry.name);
     let bytes = serde_json::to_vec_pretty(entry)?;
     backend.put(&path, bytes.into()).await?;
@@ -480,6 +553,11 @@ pub struct PromoteResult {
     pub segments_linked: usize,
     /// Bytes that had to be *copied* because the backend could not link them.
     pub bytes_copied: u64,
+    /// Set when the base had moved but only by compaction, and the fork's work
+    /// was replayed onto the new layout rather than rejected (ROADMAP X-B3).
+    /// The value is the base version the fork originally forked from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebased_from: Option<u64>,
 }
 
 /// A fork as reported by `fork list`, with the numbers that decide whether it
@@ -521,14 +599,79 @@ impl crate::database::Database {
         as_of_ns: Option<i64>,
         user_meta: serde_json::Map<String, serde_json::Value>,
     ) -> Result<Fork> {
+        let mut created = self
+            .create_forks(
+                std::slice::from_ref(&name.to_string()),
+                note,
+                as_of_ns,
+                user_meta,
+            )
+            .await?;
+        Ok(created.pop().expect("one name in, one fork out"))
+    }
+
+    /// Create many forks over **one** resolution of the base (ROADMAP X-B1).
+    ///
+    /// Every fork of the same base at the same instant pins the same versions,
+    /// so resolving that pin set once and stamping it onto N objects is the
+    /// whole optimisation: a thousand forks cost one pass over the catalog
+    /// instead of a thousand. This is the shape agentic simulation produces —
+    /// a wide star of short-lived branches off one root.
+    ///
+    /// All-or-nothing on *validation*: every name is checked for availability
+    /// under the metadata lock before anything is written, so the ordinary
+    /// "one of these already exists" case writes nothing. Writing itself is
+    /// not transactional — a crash part-way leaves some forks created, each
+    /// individually complete and droppable.
+    pub async fn create_forks(
+        &self,
+        names: &[String],
+        note: Option<String>,
+        as_of_ns: Option<i64>,
+        user_meta: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Vec<Fork>> {
         self.ensure_writable("fork create")?;
-        // No fork-of-fork in v1: nesting multiplies the promote and GC paths
-        // before the primitive has users (ROADMAP IX "Do NOT build").
-        self.ensure_base("fork create")?;
-        crate::database::validate_table_name(name)?;
+        // Nesting is allowed (ROADMAP X-C1, superseding IX's "no fork-of-fork
+        // in v1"): the pin set is keyed by table id, so a child pinning its
+        // parent's tables is the same mechanism pointed one level down. The
+        // depth cap is a runaway guard, not a design limit.
+        let depth = match self.fork() {
+            None => 0,
+            Some(parent) => {
+                let depth = parent.depth() + 1;
+                if depth > MAX_FORK_DEPTH {
+                    return Err(Error::invalid(format!(
+                        "fork {:?} is already {} levels below the database, and \
+                         MAX_FORK_DEPTH is {MAX_FORK_DEPTH}; promote or drop part of this \
+                         chain before forking deeper",
+                        parent.name,
+                        parent.depth()
+                    )));
+                }
+                depth
+            }
+        };
+        if names.is_empty() {
+            return Err(Error::invalid("fork create needs at least one name"));
+        }
+        for name in names {
+            crate::database::validate_table_name(name)?;
+        }
+        // A repeated name would race itself: the first write wins and the
+        // second reports ForkExists for a fork this very call created, which
+        // reads as a spurious conflict.
+        let unique: BTreeSet<&String> = names.iter().collect();
+        if unique.len() != names.len() {
+            return Err(Error::invalid(
+                "fork create was given the same name twice; fork names must be distinct",
+            ));
+        }
+
         let _meta = self.backend().meta_lock().await?;
-        if load_opt(self.backend(), name).await?.is_some() {
-            return Err(Error::ForkExists { name: name.into() });
+        for name in names {
+            if load_opt(self.backend(), name).await?.is_some() {
+                return Err(Error::ForkExists { name: name.clone() });
+            }
         }
 
         let mut pins = BTreeMap::new();
@@ -568,6 +711,12 @@ impl crate::database::Database {
                     table_name: entry.name.clone(),
                     sequence,
                     manifest_checksum: checksum,
+                    // Free here: the catalog entry is already in hand, so a
+                    // fork records enough to resolve the name later without
+                    // consulting any catalog — which is what lets a nested
+                    // fork resolve a table its parent owns.
+                    spec_revision: Some(entry.spec_revision),
+                    created_at_ns: Some(entry.created_at_ns),
                 },
             );
         }
@@ -591,18 +740,48 @@ impl crate::database::Database {
         self.raise_min_reader_version(layout::FORK_MIN_READER_VERSION)
             .await?;
 
-        let fork = Fork {
-            name: name.to_string(),
-            created_at_ns: crate::util::monotonic_commit_ts(None),
-            note,
-            as_of_ns,
-            pins,
-            user_meta,
-            checksum: String::new(),
+        let created_at_ns = crate::util::monotonic_commit_ts(None);
+        let forks = names
+            .iter()
+            .map(|name| {
+                Fork {
+                    name: name.clone(),
+                    created_at_ns,
+                    note: note.clone(),
+                    as_of_ns,
+                    parent: self.fork_name().map(|s| s.to_string()),
+                    // Kept `None` at depth 0 so a top-level fork serialises
+                    // byte-identically to one written before nesting existed.
+                    depth: (depth > 0).then_some(depth),
+                    pins: pins.clone(),
+                    user_meta: user_meta.clone(),
+                    checksum: String::new(),
+                }
+                .seal()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        create_many(self.backend(), &forks).await?;
+        Ok(forks)
+    }
+
+    /// `count` forks named `prefix-0000`, `prefix-0001`, … over one resolution
+    /// of the base.
+    ///
+    /// The zero-padded suffix keeps name order equal to creation order, which
+    /// matters because every listing in the system sorts by name.
+    pub async fn fork_many(
+        &self,
+        prefix: &str,
+        count: usize,
+        note: Option<String>,
+        as_of_ns: Option<i64>,
+        user_meta: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Vec<Fork>> {
+        if count == 0 {
+            return Err(Error::invalid("fork_many needs a count of at least 1"));
         }
-        .seal()?;
-        create(self.backend(), &fork).await?;
-        Ok(fork)
+        let names: Vec<String> = (0..count).map(|i| format!("{prefix}-{i:04}")).collect();
+        self.create_forks(&names, note, as_of_ns, user_meta).await
     }
 
     /// Checksum of a table's manifest at an exact sequence.
@@ -622,6 +801,17 @@ impl crate::database::Database {
 
     pub async fn fork_info(&self, name: &str) -> Result<Fork> {
         load(self.backend(), name).await
+    }
+
+    /// Every fork's name, in name order.
+    ///
+    /// Answered from the visibility index (Part X, X-A1), so this costs one
+    /// read rather than one per fork — which is what makes "query across every
+    /// fork" a reasonable thing to ask for at a thousand of them. Use
+    /// [`Self::list_forks`] when the sizes and table counts are wanted too;
+    /// that one reads a manifest per table per fork.
+    pub async fn fork_names(&self) -> Result<Vec<String>> {
+        Ok(self.fork_index().await?.forks.into_keys().collect())
     }
 
     /// Every fork with the numbers that decide whether to keep it: what it
@@ -685,7 +875,102 @@ impl crate::database::Database {
         self.ensure_writable("fork drop")?;
         self.ensure_base("fork drop")?;
         let _meta = self.backend().meta_lock().await?;
+        self.drop_fork_locked(name).await
+    }
+
+    /// Drop many forks under one metadata lock (ROADMAP X-B1).
+    ///
+    /// Pruning is the other half of the branch-mutate-evaluate loop: an agent
+    /// that forked a thousand hypotheses discards most of them, and taking the
+    /// database metadata lock a thousand times to do it is the wrong shape.
+    ///
+    /// Each fork is dropped in the same order a single drop uses, so the crash
+    /// story is unchanged: re-running completes, and a partially dropped fork
+    /// is always still pinned rather than unpinned with live tables. A name
+    /// that does not exist stops the batch — silently skipping it would hide a
+    /// typo in a list the caller believes it deleted.
+    pub async fn drop_forks(&self, names: &[String]) -> Result<usize> {
+        self.ensure_writable("fork drop")?;
+        self.ensure_base("fork drop")?;
+        let _meta = self.backend().meta_lock().await?;
+        let mut dropped = 0usize;
+        for name in names {
+            dropped += self.drop_fork_locked(name).await?;
+        }
+        Ok(dropped)
+    }
+
+    /// Drop a fork and everything nested below it, dependents first.
+    ///
+    /// The subtree is discovered by *dependency* rather than by the recorded
+    /// parent name, which is the criterion that actually matters: a child that
+    /// forked before its parent shadowed anything pins only base tables, so
+    /// nothing of the parent's is holding it up and dropping the parent alone
+    /// is safe. This drops what would otherwise be refused, in the order that
+    /// keeps every intermediate state recoverable.
+    pub async fn drop_fork_tree(&self, name: &str) -> Result<usize> {
+        self.ensure_writable("fork drop")?;
+        self.ensure_base("fork drop")?;
+        let _meta = self.backend().meta_lock().await?;
+
+        // Post-order: collect the subtree, then drop deepest-first, so a fork
+        // is never removed while something still pins its tables.
+        let mut order: Vec<String> = Vec::new();
+        let mut stack = vec![name.to_string()];
+        while let Some(current) = stack.pop() {
+            if order.contains(&current) {
+                continue;
+            }
+            stack.extend(self.forks_depending_on(&current).await?);
+            order.push(current);
+        }
+        order.reverse();
+
+        let mut dropped = 0usize;
+        for fork_name in order {
+            dropped += self.drop_fork_locked(&fork_name).await?;
+        }
+        Ok(dropped)
+    }
+
+    /// Forks holding a pin on a table `name` owns — its children, in the only
+    /// sense that constrains deletion.
+    async fn forks_depending_on(&self, name: &str) -> Result<Vec<String>> {
+        let index = self.fork_index().await?;
+        let Some(me) = index.forks.get(name) else {
+            return Ok(Vec::new());
+        };
+        let owned: BTreeSet<Uuid> = me.owned.values().map(|t| t.table_id).collect();
+        if owned.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(index
+            .forks
+            .iter()
+            .filter(|(other, f)| {
+                other.as_str() != name && f.pins.keys().any(|id| owned.contains(id))
+            })
+            .map(|(n, _)| n.clone())
+            .collect())
+    }
+
+    /// [`Self::drop_fork`] with the metadata lock already held.
+    async fn drop_fork_locked(&self, name: &str) -> Result<usize> {
         let fork = load(self.backend(), name).await?;
+        // A nested fork's shadows reference their parent's segments by path,
+        // exactly as a top-level fork's reference the base's. Deleting the
+        // parent's tables under a live child is therefore the same data loss
+        // the retention floor and `drop_table` guards exist to prevent, so it
+        // is refused for the same reason (ROADMAP X-C1).
+        let dependents = self.forks_depending_on(name).await?;
+        if !dependents.is_empty() {
+            return Err(Error::invalid(format!(
+                "fork {name:?} has {} fork(s) nested below it ({}); drop those first, or \
+                 use a recursive drop to remove the whole subtree",
+                dependents.len(),
+                dependents.join(", ")
+            )));
+        }
         let entries = list_entries(self.backend(), &fork.name).await?;
         let dropped = entries.len();
         for fe in entries {
@@ -884,6 +1169,17 @@ impl crate::database::Database {
         let base_name = fork.pins[&origin.base_table_id].table_name.clone();
         let base_head_state = self.head(&base_name, origin.base_table_id).await?;
         let base_head = base_head_state.head.sequence;
+        let own_prefix = format!("{}/", layout::table_prefix(fe.table_id));
+        let pinned_manifest = self
+            .manifest_at(origin.base_table_id, origin.base_sequence)
+            .await?;
+
+        // A base that moved is normally a lost race. There is exactly one
+        // exception, and X-B3 is about taking it: if every intervening commit
+        // was a compaction then the base's *rows* are unchanged and only their
+        // physical layout moved, so the fork's work can be replayed onto the
+        // new layout instead of being thrown away.
+        let mut rebased_from = None;
         if base_head != origin.base_sequence {
             let compaction_only = self
                 .intervening_commits_are_compaction(
@@ -892,47 +1188,91 @@ impl crate::database::Database {
                     base_head,
                 )
                 .await?;
-            return Err(Error::PromoteConflict {
-                fork: fork.name,
-                table: table.to_string(),
-                base: origin.base_sequence,
-                actual: base_head,
-                compaction_note: if compaction_only {
-                    " (every intervening commit was a compaction, so the base's contents \
-                     did not change; re-fork and re-run to promote onto the new layout)"
-                        .to_string()
-                } else {
-                    String::new()
-                },
-            });
+            // Replay is a metadata operation only while the fork still holds
+            // every row it inherited: then the promoted table is "the base as
+            // it is now, plus what the fork added". A fork that *removed*
+            // inherited rows cannot be rebased from metadata, because a
+            // compacted segment may merge rows it deleted with rows it kept,
+            // and nothing short of reading the data says which.
+            let fork_paths: BTreeSet<&str> = fork_manifest
+                .segments
+                .iter()
+                .map(|s| s.path.as_str())
+                .collect();
+            let keeps_every_inherited_row = pinned_manifest
+                .segments
+                .iter()
+                .all(|s| fork_paths.contains(s.path.as_str()));
+
+            if compaction_only && keeps_every_inherited_row {
+                rebased_from = Some(origin.base_sequence);
+            } else {
+                return Err(Error::PromoteConflict {
+                    fork: fork.name,
+                    table: table.to_string(),
+                    base: origin.base_sequence,
+                    actual: base_head,
+                    compaction_note: if compaction_only {
+                        " (every intervening commit was a compaction, so the base's contents \
+                         did not change — but this fork dropped rows it inherited, so its \
+                         edits cannot be replayed onto the new layout automatically; re-fork \
+                         and re-run)"
+                            .to_string()
+                    } else {
+                        String::new()
+                    },
+                });
+            }
         }
 
-        // --- move the fork's own segments into the base table ----------
-        let own_prefix = format!("{}/", layout::table_prefix(fe.table_id));
-        let base_paths: BTreeSet<String> = self
-            .manifest_at(origin.base_table_id, origin.base_sequence)
-            .await?
+        // Re-check the invariant before writing into the base: this is the
+        // other place a cross-table path could enter a manifest, and the base
+        // is the one table where a dangling reference is unrecoverable.
+        //
+        // Checked on the fork's manifest as it stands, against the version it
+        // forked from — the paths as they are *now*, before anything moves.
+        // (The rebased set needs no such check: it is the base's own current
+        // segments plus segments moved into the base's directory, so every
+        // path in it is already the base's.)
+        let pinned_paths: BTreeSet<String> = pinned_manifest
             .segments
             .iter()
             .map(|s| s.path.clone())
             .collect();
-        // Re-check the invariant before writing into the base: this is the
-        // other place a cross-table path could enter a manifest, and the base
-        // is the one table where a dangling reference is unrecoverable.
         check_refinement(
             &own_prefix,
-            &base_paths,
+            &pinned_paths,
             fork_manifest.segments.iter().map(|s| s.path.as_str()),
         )?;
+
+        // --- move the fork's own segments into the base table ----------
+        //
+        // What the fork inherits comes from the base version being committed
+        // onto: the pinned one normally, the current one when rebasing.
+        let inherit_from = if rebased_from.is_some() {
+            self.manifest_at(origin.base_table_id, base_head).await?
+        } else {
+            pinned_manifest
+        };
 
         let new_sequence = base_head + 1;
         let mut segments = Vec::with_capacity(fork_manifest.segments.len());
         let mut linked = 0usize;
         let mut bytes_copied = 0u64;
+
+        if rebased_from.is_some() {
+            // The rebased result is the compacted base verbatim, plus the
+            // fork's own segments appended. The fork's stale copies of the
+            // pre-compaction segments are dropped: they hold the same rows the
+            // new layout does.
+            segments.extend(inherit_from.segments.iter().cloned());
+        }
         for seg in &fork_manifest.segments {
             if !is_own_segment(&own_prefix, &seg.path) {
-                // Inherited: already a base segment at a base path.
-                segments.push(seg.clone());
+                if rebased_from.is_none() {
+                    // Inherited: already a base segment at a base path.
+                    segments.push(seg.clone());
+                }
                 continue;
             }
             let from = object_store::path::Path::from(seg.path.as_str());
@@ -955,10 +1295,17 @@ impl crate::database::Database {
         manifest.execution_mode = Some("direct".to_string());
         manifest.plan_hash = None;
         manifest.segments = segments;
-        manifest.note = Some(format!(
-            "promoted from fork {:?} (fork version {})",
-            fork.name, fork_head_state.head.sequence
-        ));
+        manifest.note = Some(match rebased_from {
+            None => format!(
+                "promoted from fork {:?} (fork version {})",
+                fork.name, fork_head_state.head.sequence
+            ),
+            Some(from) => format!(
+                "promoted from fork {:?} (fork version {}), rebased from base version \
+                 {from} onto {base_head} across compaction",
+                fork.name, fork_head_state.head.sequence
+            ),
+        });
         manifest.user_meta.insert(
             FORKED_FROM_META_KEY.to_string(),
             serde_json::json!({
@@ -966,6 +1313,10 @@ impl crate::database::Database {
                 "fork_table_id": fe.table_id,
                 "fork_sequence": fork_head_state.head.sequence,
                 "base_sequence": origin.base_sequence,
+                // Present only on a rebase, so the audit trail distinguishes
+                // "committed onto the version it forked from" from "replayed
+                // onto a newer layout of the same rows".
+                "rebased_onto": rebased_from.map(|_| base_head),
             }),
         );
         manifest.recompute_rollups();
@@ -989,6 +1340,7 @@ impl crate::database::Database {
             rows: manifest.rows,
             segments_linked: linked,
             bytes_copied,
+            rebased_from,
         })
     }
 
@@ -1001,25 +1353,52 @@ impl crate::database::Database {
         fe: &ForkTableEntry,
         manifest: &crate::manifest::VersionManifest,
     ) -> Result<PromoteResult> {
-        if crate::catalog::load_entry(self.backend(), &fe.name)
-            .await?
-            .is_some()
-        {
+        // A nested fork promotes into its *parent*, not into the database:
+        // "up one level" is what promote means at every level, and landing a
+        // child's scratch table on main would skip the parent's review
+        // entirely (ROADMAP X-C1).
+        let target_fork = fork.parent.clone();
+        let taken = match &target_fork {
+            None => crate::catalog::load_entry(self.backend(), &fe.name)
+                .await?
+                .is_some(),
+            Some(parent) => load_entry(self.backend(), parent, &fe.name)
+                .await?
+                .is_some(),
+        };
+        if taken {
             return Err(Error::TableExists {
                 name: fe.name.clone(),
             });
         }
-        let entry = crate::catalog::CatalogEntry {
-            name: fe.name.clone(),
-            table_id: fe.table_id,
-            created_at_ns: fe.created_at_ns,
-            spec_revision: fe.spec_revision,
-            checksum: String::new(),
-        }
-        .seal()?;
-        // Global catalog first, then release it from the fork: a crash in
+        // Target catalog first, then release it from the fork: a crash in
         // between leaves the table reachable from both, never from neither.
-        crate::catalog::create_entry(self.backend(), &entry).await?;
+        match &target_fork {
+            None => {
+                let entry = crate::catalog::CatalogEntry {
+                    name: fe.name.clone(),
+                    table_id: fe.table_id,
+                    created_at_ns: fe.created_at_ns,
+                    spec_revision: fe.spec_revision,
+                    checksum: String::new(),
+                }
+                .seal()?;
+                crate::catalog::create_entry(self.backend(), &entry).await?;
+            }
+            Some(parent) => {
+                let entry = ForkTableEntry {
+                    name: fe.name.clone(),
+                    table_id: fe.table_id,
+                    created_at_ns: fe.created_at_ns,
+                    spec_revision: fe.spec_revision,
+                    // It was created inside a fork and still is, one level up.
+                    origin: None,
+                    checksum: String::new(),
+                }
+                .seal()?;
+                create_entry(self.backend(), parent, &entry).await?;
+            }
+        }
         remove_entry(self.backend(), &fork.name, &fe.name).await?;
         Ok(PromoteResult {
             fork: fork.name.clone(),
@@ -1029,6 +1408,7 @@ impl crate::database::Database {
             rows: manifest.rows,
             segments_linked: 0,
             bytes_copied: 0,
+            rebased_from: None,
         })
     }
 
@@ -1081,6 +1461,8 @@ mod tests {
                 table_name: "trades".into(),
                 sequence: 7,
                 manifest_checksum: "abc".into(),
+                spec_revision: Some(1),
+                created_at_ns: Some(5),
             },
         );
         Fork {
@@ -1088,6 +1470,8 @@ mod tests {
             created_at_ns: 42,
             note: None,
             as_of_ns: None,
+            parent: None,
+            depth: None,
             pins,
             user_meta: serde_json::Map::new(),
             checksum: String::new(),
@@ -1135,6 +1519,57 @@ mod tests {
         assert!(!json.contains("note"), "{json}");
         assert!(!json.contains("as_of_ns"), "{json}");
         assert!(!json.contains("user_meta"), "{json}");
+        // A top-level fork records no parent and no depth, so nesting cost
+        // existing databases nothing on disk.
+        assert!(!json.contains("parent"), "{json}");
+        assert!(!json.contains("depth"), "{json}");
+    }
+
+    /// The compatibility claim behind X-C1's added fields: a fork object
+    /// written before nesting existed still verifies.
+    ///
+    /// Its checksum was computed over JSON that had no `parent`, `depth`,
+    /// `spec_revision` or `created_at_ns`, so the new fields must vanish from
+    /// the serialised form when absent — `#[serde(default,
+    /// skip_serializing_if)]` rather than a plain default. Anything else turns
+    /// every fork in every existing database into a corruption error.
+    #[test]
+    fn a_fork_written_before_nesting_still_verifies() {
+        // Exactly the bytes the pre-X-C1 writer produced.
+        let legacy = r#"{
+              "name": "agent-01",
+              "created_at_ns": 42,
+              "pins": {
+                "00000000-0000-0000-0000-000000000000": {
+                  "table_name": "trades",
+                  "sequence": 7,
+                  "manifest_checksum": "abc"
+                }
+              },
+              "checksum": ""
+            }"#;
+        let mut old: Fork = serde_json::from_str(legacy).unwrap();
+        assert_eq!(old.parent, None);
+        assert_eq!(old.depth(), 0);
+        assert_eq!(old.pins[&Uuid::nil()].spec_revision, None);
+
+        // Sealing it reproduces whatever checksum the old writer would have
+        // computed, because the serialised form is unchanged.
+        old.checksum = String::new();
+        let sealed = old.seal().unwrap();
+        assert!(sealed.verify("forks/x.json").is_ok());
+        let round_tripped = serde_json::to_string(&sealed).unwrap();
+        assert!(!round_tripped.contains("spec_revision"), "{round_tripped}");
+        assert!(!round_tripped.contains("parent"), "{round_tripped}");
+    }
+
+    #[test]
+    fn pins_are_addressable_by_name_for_nested_resolution() {
+        let f = fork("agent-01").seal().unwrap();
+        let (id, pin) = f.pin_by_name("trades").expect("pinned by name");
+        assert_eq!(id, Uuid::nil());
+        assert_eq!(pin.sequence, 7);
+        assert!(f.pin_by_name("quotes").is_none());
     }
 
     #[test]

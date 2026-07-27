@@ -433,12 +433,12 @@ against one dataset at once. See [Forks](concepts.html#forks) for the model.
 
 | Subcommand | Meaning |
 |---|---|
-| `fork create <db> <name>` | Pin every table and open a workspace; `--note`, `--as-of`, `--meta` supported |
+| `fork create <db> <name>` | Pin every table and open a workspace; `--note`, `--as-of`, `--meta`, `--count` supported |
 | `fork list <db>` | Every fork, with what it owns (`bytes_own`) and what it holds back (`bytes_pinned`) |
 | `fork show <db> <name>` | One fork's pins and metadata |
 | `fork diff <db> <name>` | What the fork changed, from manifests alone; `--table` to narrow |
 | `fork promote <db> <name> --table <t>` | Land one of its tables on the base |
-| `fork drop <db> <name>` | Delete the fork and everything it owns |
+| `fork drop <db> <name>…` | Delete the named forks and everything they own |
 
 ```console
 $ h5i-db fork create market.db agent-01 --note "hypothesis 1"
@@ -453,19 +453,35 @@ $ h5i-db fork drop market.db agent-01
 present, and `--meta` (inline JSON, `@file`, or `-`) to record whatever ties
 the fork back to the run that made it.
 
+**Wide fanouts.** `fork create <db> <name> --count N` creates
+`<name>-0000 … <name>-000(N-1)` over a *single* resolution of the base, and
+`fork drop` takes several names at once. Every fork of one base at one instant
+pins the same versions, so the batch does one pass over the catalog however
+many branches it makes, which is what makes a few hundred short-lived
+branches a reasonable thing to create and then throw away. With `--count` the
+command returns a JSON list; without it, a single object as before.
+
 **The `--fork` flag.** Every data command takes `--fork <name>` and then reads
 and writes inside that workspace, so an existing script runs unchanged against
 a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`,
-`fork create`) refuse it and say so: they move state a fork's siblings depend
-on.
+`set-retention`) refuse it and say so: they move state a fork's siblings
+depend on. `fork create` is the exception: with `--fork` it creates the new
+fork *inside* that one (see [Forks](concepts.html#forks-nest)).
 
 **Promotion conflicts.** `fork promote` compare-and-swaps against the version
 the fork started from. If the base moved, it exits 3 with
 `code: "promote_conflict"` and `retryable: false` — retrying cannot help,
 because the work was computed against a base that no longer exists. Re-fork
-and re-run, or drop the fork. When every intervening base commit was a
-compaction, the message says so, since the base's *contents* did not actually
-change.
+and re-run, or drop the fork.
+
+Compaction is the one exception, and it is handled for you. If every
+intervening base commit was a compaction then the base's *rows* did not
+change, only where they live, so the promote is **rebased** onto the new
+layout instead of rejected, and the result reports `rebased_from`. That works
+while the fork still holds every row it inherited; a fork that deleted
+inherited rows cannot be replayed from metadata (a compacted segment may merge
+rows it dropped with rows it kept), so that case still conflicts and the
+message says why.
 
 ---
 

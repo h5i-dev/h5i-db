@@ -143,6 +143,50 @@ That gives a workspace where the base is frozen at a past instant but you can
 still materialise features, intermediate results, and scratch tables — the
 writable counterpart of a read-only historical pin.
 
+### Forks nest
+
+A fork is itself something to fork. Add `--fork` to `fork create` and the new
+fork is created *inside* that one, pinning its tables the way a top-level fork
+pins the database's:
+
+```console
+$ h5i-db fork create market.db trunk
+$ h5i-db fork create market.db branch-a --fork trunk
+```
+
+`branch-a` sees the database, plus whatever `trunk` had done when it was
+taken, plus its own work, and stays frozen against anything `trunk` does
+afterwards. `promote` moves work up exactly one level, so `branch-a` promotes
+onto `trunk`, never onto the database. That is what makes a search tree
+expressible: refine, evaluate, keep the good subtree, discard the rest.
+
+Depth costs nothing to read. A fork's manifest names its segments by path, so
+resolving a table twenty levels down takes the same number of reads as one
+level down. There is no chain to replay. Nesting is capped at 32 levels as a
+runaway guard.
+
+Dropping is the one place the tree matters: a fork that others are nested
+inside cannot be dropped out from under them, and the error names them.
+
+### Querying across forks
+
+`forks()` reads a table from every fork at once, labelling each row with the
+fork it came from:
+
+```console
+$ h5i-db query market.db "SELECT __fork, avg(price) FROM forks('trades') GROUP BY __fork"
+```
+
+This is how you compare outcomes without exporting anything. It is cheap for
+the same reason forking is: the forks share their segments, so a segment
+several forks can see is read **once** however many reference it, and only
+what each fork actually changed is read separately. Pass a comma-separated
+list to narrow it (`forks('trades', 'branch-a,branch-b')`), and use
+`db.fork_scan("trades")` for the same thing from Python.
+
+Forks whose schema for the table has diverged are refused rather than blended;
+`fork diff` is the tool for looking at that.
+
 ## Previewable mutations: plan / apply
 
 Destructive operations (`delete-range`, `replace-range`) can run in two modes:

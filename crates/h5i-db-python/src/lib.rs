@@ -225,6 +225,26 @@ fn encode_err(e: arrow::error::ArrowError) -> PyErr {
     )
 }
 
+/// Decode the caller-supplied fork metadata blob, which must be a JSON object.
+///
+/// Shared by the single- and batch-create bindings so the two cannot drift
+/// into accepting different things.
+fn parse_fork_meta(
+    meta_json: Option<String>,
+) -> PyResult<serde_json::Map<String, serde_json::Value>> {
+    match meta_json {
+        None => Ok(serde_json::Map::new()),
+        Some(text) => match serde_json::from_str::<serde_json::Value>(&text)
+            .map_err(|e| to_py_err(Error::invalid(format!("fork metadata JSON: {e}"))))?
+        {
+            serde_json::Value::Object(m) => Ok(m),
+            _ => Err(to_py_err(Error::invalid(
+                "fork metadata must be a JSON object",
+            ))),
+        },
+    }
+}
+
 fn to_json<T: serde::Serialize>(v: &T) -> PyResult<String> {
     serde_json::to_string(v).map_err(|e| {
         tagged_plain(
@@ -703,23 +723,42 @@ impl NativeDatabase {
         meta_json: Option<String>,
     ) -> PyResult<String> {
         let name = name.to_string();
-        let user_meta = match meta_json {
-            None => serde_json::Map::new(),
-            Some(text) => match serde_json::from_str::<serde_json::Value>(&text)
-                .map_err(|e| to_py_err(Error::invalid(format!("fork metadata JSON: {e}"))))?
-            {
-                serde_json::Value::Object(m) => m,
-                _ => {
-                    return Err(to_py_err(Error::invalid(
-                        "fork metadata must be a JSON object",
-                    )));
-                }
-            },
-        };
+        let user_meta = parse_fork_meta(meta_json)?;
         let fork = self.block(py, None, move |db| async move {
             db.create_fork(&name, note, as_of_ns, user_meta).await
         })?;
         to_json(&fork)
+    }
+
+    /// Create many forks over one resolution of the base (ROADMAP X-B1).
+    #[pyo3(signature = (names, note = None, as_of_ns = None, meta_json = None))]
+    fn create_forks(
+        &self,
+        py: Python<'_>,
+        names: Vec<String>,
+        note: Option<String>,
+        as_of_ns: Option<i64>,
+        meta_json: Option<String>,
+    ) -> PyResult<String> {
+        let user_meta = parse_fork_meta(meta_json)?;
+        let forks = self.block(py, None, move |db| async move {
+            db.create_forks(&names, note, as_of_ns, user_meta).await
+        })?;
+        to_json(&forks)
+    }
+
+    fn drop_forks(&self, py: Python<'_>, names: Vec<String>) -> PyResult<usize> {
+        self.block(
+            py,
+            None,
+            move |db| async move { db.drop_forks(&names).await },
+        )
+    }
+
+    /// Every fork's name, from the visibility index.
+    fn fork_names(&self, py: Python<'_>) -> PyResult<String> {
+        let names = self.block(py, None, move |db| async move { db.fork_names().await })?;
+        to_json(&names)
     }
 
     /// A handle scoped to a fork. Shares this handle's runtime; closing one
