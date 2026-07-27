@@ -12,6 +12,13 @@ publish = false
 name = "h5i-db-bench"
 path = "src/main.rs"
 
+# Fork lifecycle microbenchmarks (ROADMAP X-D1). A separate binary because it
+# measures branch primitives rather than query workloads, and wants to run at a
+# different scale.
+[[bin]]
+name = "h5i-db-fork-bench"
+path = "src/fork_bench.rs"
+
 [dependencies]
 h5i-db-core = { workspace = true }
 h5i-db-query = { workspace = true }
