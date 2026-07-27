@@ -1649,3 +1649,222 @@ SQL-text generation has not yet been measured as limiting). Join output
 columns are not deduplicated, so a `SELECT *` over two tables sharing a name
 yields both; documented rather than solved, since fixing it needs schema
 knowledge the builder deliberately does not fetch at build time.
+
+---
+
+# Part X — Fork at agentic scale (2026-07-26)
+
+**Decision.** Evolve Part IX's fork from "a handful of long-lived agent
+workspaces" to "thousands of ephemeral hypotheses". One new structure,
+the **fork visibility index** (X-A1), funds the three capabilities that
+matter: cross-fork aggregation (X-A2/A3), constant-time GC guards at
+high fork counts (X-A1), and, later, fork-of-fork (X-C1). Everything
+else in this Part is lifecycle plumbing (batch create/drop, an
+ephemeral tier) and the benchmark that proves the claims.
+
+**Positioning.** *BranchBench* [1] (the paper that lifted Part IX's
+existence ⚠, now read in full) benchmarked Neon, DoltgreSQL, TigerData,
+Xata and Postgres baselines against five agentic workloads (software
+engineering, failure reproduction, data cleaning, MCTS, Monte Carlo
+simulation) and found (i) a fundamental tension: content-addressed
+designs fork instantly but reads degrade 5-4000x as branches and
+mutations accumulate, while page-server designs keep reads fast but pay
+25-1500x on branch creation and cap at ~20 live branches; and (ii) **no
+system supports cross-branch aggregation**, which every
+compare-outcomes workflow ends with. h5i-db dodges (i) by construction:
+shadow manifests reference segment paths directly, so there is no chain
+replay and no tree traversal, and read cost is independent of how the
+fork came to be. What we lack, measured against their workloads: the
+simulation topology (1000 flat forks) hits our O(#forks) guard scans;
+MCTS (deep narrow trees, depth ~25) hits "no fork-of-fork"; data
+cleaning and simulation both end in a cross-fork aggregation we cannot
+push below the application. Closing those three gaps occupies the
+design point BranchBench measured as empty: instant forks, flat reads,
+cross-branch aggregation, GC that survives branch churn.
+
+## Design rules (the load-bearing wall)
+
+1. **The index is a cache, never a source of truth.** Pin JSONs remain
+   the authoritative, self-checksummed GC roots (IX design rule 2). The
+   visibility index is generation-stamped and rebuilt from the fork
+   objects on any mismatch; a corrupt or missing index costs a rebuild,
+   never data. No new crash-consistency obligations.
+2. **Sharing granularity is the segment; visibility is metadata.**
+   "Which forks see this tuple" is constant within a segment, so branch
+   visibility is a per-segment fork bitmap, not a per-tuple annotation.
+   This deliberately takes the metadata-level shortcut past
+   tuple-versioned designs (Decibel's membership bitmaps [2], provenance
+   semirings [9]): at our granularity the bitmap join captures the
+   runtime win with none of the machinery.
+3. **Aggregates decompose over immutable segments.** `agg(segment)`
+   cached by (path, checksum) is correct forever; a fork's answer is
+   the combine of shared-segment partials plus its own deltas.
+   Count/min/max come free from Parquet footers; sums are cheap;
+   holistic aggregates (quantiles) use mergeable sketches (t-digest
+   [6], KLL [7]) and are approximate, labeled as such.
+4. **Ephemeral means ephemeral.** The ephemeral fork tier is
+   process-local state: no file, no GC root, no durability, lost on
+   crash by design ("branches die young", the weak generational
+   hypothesis [8] applied to forks). Promotion to a durable fork is one
+   JSON write, the same object IX-A1 already defines.
+5. **Fork-of-fork must not create read chains.** The refinement
+   invariant generalizes to "own segments, or segments pinned by any
+   ancestor"; manifests keep direct paths, so depth-25 reads cost the
+   same as depth-1. If an implementation choice would make read cost a
+   function of fork depth, it is the wrong choice (that is the failure
+   mode BranchBench measured in Dolt).
+
+## Tier X-A — Visibility index + cross-fork reads
+
+| # | Item | Acceptance criteria |
+|---|------|---------------------|
+| X-A1 | **Fork visibility index.** One maintained structure answering "which forks pin this table/segment, at what sequence" in O(1) reads: per-table pin map plus per-segment fork bitmaps (EWAH-style). Consumers: retention floor check (`retention.rs`), `drop_table` guard, vacuum's orphan sweep and root walk (`database.rs`), X-A2's scan planning. | The three guard paths do constant index reads instead of listing every fork (asserted on object-read counts). Differential test: index answers equal the slow full-scan answers on randomized fork populations. Delete or corrupt the index: next consumer rebuilds it and results are byte-identical. 1000-fork fixture: vacuum and `set_retention` wall time flat vs fork count. Index write is not on the fork-read path (readers never require it). |
+| X-A2 | **Cross-fork union scan.** `scan_forks(table, forks=…)` in the query layer: the table unioned across N forks with a `__fork` column, planned so shared base segments are scanned once and per-fork delta segments appended. Python surface returns a lazy DataFrame (Part VIII builder verb). | Results equal N independent per-fork scans stacked (differential test). Shared segments opened exactly once regardless of N (asserted from `EXPLAIN ANALYZE` / stats, the VIII-A5 technique). Works on base + forks that shadowed, forks that did not, and fork-created tables absent from some forks (absent forks contribute zero rows, not errors). |
+| X-A3 | **Per-segment aggregate cache + data-level diff.** Partial aggregates cached by (segment path, checksum); `sum`/`count`/`min`/`max` exact, quantiles via mergeable sketches; `fork diff --data` reports row/byte deltas from segment set difference without scanning shared segments. | 1000-fork aggregation over a mostly-shared table scans shared segments once and reads cached partials thereafter (asserted on bytes read, second run). Cache entries invalidate by checksum only (mutation test: edited segment fixture is detected). Sketch-based quantiles within documented error on the panel fixture. `fork diff --data` does no segment I/O for unchanged segments (asserted). |
+
+## Tier X-B — Lifecycle at agentic scale
+
+| # | Item | Acceptance criteria |
+|---|------|---------------------|
+| X-B1 | **Batch fork verbs.** `fork_many(n, prefix)` resolves the pin set once and writes N fork objects; batch drop for mass pruning. | Star-1000 fixture: `fork_many(1000)` does one HEAD read pass + 1000 object writes (asserted on read counts), and is >10x faster than a create loop. Batch drop of k forks leaves the index and GC roots consistent (verify passes); kill mid-batch: re-run completes, no fork half-dropped (per-fork ordering from IX-A2 preserved). |
+| X-B2 | **Ephemeral fork tier.** In-process fork: pin set in memory, fork-created/shadow tables under a scratch prefix, no fork object written. `persist()` promotes to a durable fork (writes the IX fork object); process exit or crash abandons it. | Ephemeral create/drop round-trip writes zero objects under `forks/` (asserted). `persist()` then crash: the durable fork is complete and pinned. Crash before `persist()`: next vacuum reclaims the scratch tables (they are orphans by design, and the sweep must see them as such). Read/write semantics identical to durable forks (shared test suite runs in both modes). |
+| X-B3 | **Rebase-over-compaction on promote.** Finish the case IX-A5 already detects: when every intervening base commit is `OpKind::Compact`, promote rebases automatically instead of telling the caller to re-fork (logical content unchanged, only layout moved). | A promote blocked only by compaction succeeds and the result equals re-fork-and-replay (differential fixture). Any non-Compact intervening commit still yields the clean CAS conflict. `verify` passes after rebase; no cross-dir refs in main. |
+
+## Tier X-C — Fork-of-fork
+
+| # | Item | Acceptance criteria |
+|---|------|---------------------|
+| X-C1 | **Nested forks** (supersedes IX "not in v1" on BranchBench's evidence: the MCTS topology is deep narrow trees, and MCTS is the flagship agentic pattern). Pins form a DAG; generalized refinement invariant (design rule 5); promote targets the parent (fork or base) with the same CAS semantics; subtree drop; configurable depth cap. | Read latency flat vs fork depth (measured to depth 32, the claim that differentiates us). Dropping a parent with live children is refused (or subtree-drop is explicit); vacuum with a 3-level tree deletes nothing any live descendant reads (mutation-check the root walk, the IX lesson). Kill mid-subtree-drop: resumable, never an unpinned fork with live tables. Promote fork→parent-fork and fork→base both CAS-conflict cleanly against concurrent parent commits. |
+
+## Tier X-D — Benchmarks + docs
+
+| # | Item | Acceptance criteria |
+|---|------|---------------------|
+| X-D1 | **`fork-bench`**: BranchBench-shaped microbenchmarks [1] ported to the embedded setting: n-th fork creation latency, read/write throughput vs live fork count, storage amplification, reclamation speed after mass drop, branching overhead ratio; topologies star-1000 and wide-shallow now, deep-narrow after X-C1. | Runs in CI at reduced scale (serial, memory-bounded); full scale documented and reproducible. Numbers land in docs, not just CI logs: the README-level claim ("instant forks, flat reads, cross-fork aggregation") cites this benchmark. |
+| X-D2 | **Docs debt.** `docs/OPERATIONS.md` gains a fork section (vacuum interaction, pinned-bytes math, backup implications: the runbook currently predates forks entirely); `DESIGN.md` gains the fork design (the note at §"restore to fork forward" is stale); remove dead `fork::pins_by_table`, re-export `ForkSummary`. | The OPERATIONS vacuum and disk-usage sections answer "why is disk not shrinking" for a fork-pinned base without leaving the page. Docs-are-executable coverage extends to fork CLI examples. Dead code gone (`cargo +nightly udeps`-clean or equivalent grep test). |
+
+## Costs accepted, stated honestly
+
+- **Index maintenance is write amplification**: one extra object write
+  per fork create/drop (amortized to ~zero inside `fork_many`). Bounded
+  by design rule 1: losing the index costs a rebuild scan, which is
+  exactly today's behavior.
+- **The aggregate cache trades storage for scan time.** Entries are
+  immortal-correct (immutability) but not free; the cache is evictable
+  and bounded, and X-A3 must publish its size the way `fork list`
+  publishes `bytes_pinned`.
+- **Ephemeral forks are lost on crash.** That is the contract; the cost
+  is that "my exploration disappeared" is a support question with a
+  one-line answer (`persist()`).
+- **Fork-of-fork multiplies the promote and GC paths** (the reason IX
+  deferred it). The depth cap and subtree-drop keep the DAG tame; the
+  X-C1 crash fixtures are the price of admission, not optional.
+- **Quantiles over cross-fork scans are approximate** when served from
+  sketches. Exact remains available by scanning; the API must say which
+  it did.
+
+## Do NOT build
+
+- **Row-level merge / 3-way merge.** Unchanged from Part IX, and now
+  with workload evidence: BranchBench's MCTS and simulation workloads
+  discard branches, they do not merge them; table-granularity promote
+  CAS covers the software-engineering case.
+- **Per-tuple provenance annotation / K-relation single-pass
+  evaluation** [9]. Design rule 2: at segment granularity the bitmap
+  join subsumes it. The semiring formulation is a paper for
+  tuple-versioned systems, not a feature for this one.
+- **Content-hash transposition detection** ("same state reached twice
+  collapses to one branch"). State identity is not storage identity in
+  a non-canonical store: row order, segment layout and compaction
+  timing all break the hash. Only canonical content-addressed designs
+  (Dolt's prolly trees) can even attempt it.
+- **Speculative pre-fork / warm pools** (Catalyzer [10], REAP [11]
+  territory). Those hide compute-provisioning latency that a
+  page-server architecture pays per branch. Our fork create is one
+  metadata write; there is nothing to hide.
+- **Policy-aware GC** (evict by search value, not LRU). In an embedded
+  model the search framework owns pruning and calls `drop_fork`
+  itself; teaching the DB the agent's value function is coupling
+  without a customer.
+- **Delta-chain recreation/storage optimization** (the
+  Bhattacherjee/OrpheusDB/ForkBase lineage [3][4][5]). A real research
+  line, aimed at systems with version chains; we have none. Our
+  nearest analog is compaction policy for accumulations of small
+  fork-local segments, which the existing compactor already owns.
+
+## Cross-references (Part X ⇄ existing parts)
+
+- X-A1 ⇄ **IX design rule 2**: the index is a derived view over the
+  fork objects that rule made GC roots; it changes their *lookup* cost,
+  never their authority.
+- X-A2/A3 ⇄ **Part VIII builder**: `scan_forks` is a builder entry
+  point like `Database.table`; the `__fork` column and lazy-DataFrame
+  surface reuse VIII-A2's pinning discipline, and the "assert segment
+  opens from EXPLAIN ANALYZE" technique is VIII-A5's scale test.
+- X-B2 ⇄ **IX-A2 drop ordering**: an abandoned ephemeral fork must look
+  like the crash states IX-A2 already recovers from (orphan scratch
+  tables), not a new failure mode.
+- X-B3 ⇄ **IX-A5**: closes the "detected, named, deferred" rebase.
+- X-C1 ⇄ **IX "Do NOT build: fork-of-fork in v1"**: superseded on
+  evidence, with IX's own lesson #1 (every reachability computation has
+  an unstated "which catalog" assumption) as the test-design guide.
+- X-D1 ⇄ **Part II**: the benchmark discipline (measure, then claim)
+  applied to the fork subsystem.
+
+## Build order
+
+1. **X-A1** — the foundation; everything else consumes it. Ships alone
+   as "GC guards no longer scale with fork count".
+2. **X-A2, then X-A3** — the headline capability. After these two,
+   the claim "instant forks with cross-fork aggregation over shared
+   segments" holds, and no benchmarked system can make it [1].
+3. **X-B1 + X-B2** — cheap, parallel to X-A work after A1; B3 rides
+   any promote-adjacent change.
+4. **X-C1** — the big rock, deliberately after the index exists and
+   deliberately last among features: it multiplies paths that must
+   already be boringly solid.
+5. **X-D1/D2** — wrap around everything; D2's OPERATIONS debt should
+   not wait for D1.
+
+If only two steps get funded, fund 1 and 2.
+
+## References
+
+1. E. Ang, I. K. Kim, S. Weldon, K. Durand, K. Kaffes, E. Wu.
+   *BranchBench: Aligning Database Branching with Agentic Demands.*
+   arXiv:2604.17180, 2026. Benchmark code:
+   https://github.com/ElaineAng/db-fork. Companion posts: DAPLab,
+   "Branchable Databases Aren't Ready for Agentic Workloads" (2026);
+   DoltHub, "An Overview of BranchBench" (2026).
+2. M. Maddox, D. Goehring, A. J. Elmore, S. Madden, A. Parameswaran,
+   A. Deshpande. *Decibel: The Relational Dataset Branching System.*
+   PVLDB 9(9), 2016.
+3. S. Bhattacherjee, A. Chavan, S. Huang, A. Deshpande,
+   A. Parameswaran. *Principles of Dataset Versioning: Exploring the
+   Recreation/Storage Tradeoff.* PVLDB 8(12), 2015.
+4. S. Huang, L. Xu, J. Liu, A. J. Elmore, A. Parameswaran.
+   *OrpheusDB: Bolt-on Versioning for Relational Databases.*
+   PVLDB 10(10), 2017.
+5. S. Wang, T. T. A. Dinh, Q. Lin, Z. Xie, M. Zhang, Q. Cai, G. Chen,
+   B. C. Ooi, P. Ruan. *ForkBase: An Efficient Storage Engine for
+   Blockchain and Forkable Applications.* PVLDB 11(10), 2018.
+6. T. Dunning, O. Ertl. *Computing Extremely Accurate Quantiles Using
+   t-Digests.* arXiv:1902.04023, 2019.
+7. Z. Karnin, K. Lang, E. Liberty. *Optimal Quantile Approximation in
+   Streams.* FOCS 2016.
+8. D. Ungar. *Generation Scavenging: A Non-disruptive High Performance
+   Storage Reclamation Algorithm.* ACM SIGSOFT/SIGPLAN Software
+   Engineering Symposium on Practical Software Development
+   Environments, 1984. (The weak generational hypothesis behind X-B2.)
+9. T. J. Green, G. Karvounarakis, V. Tannen. *Provenance Semirings.*
+   PODS 2007.
+10. D. Du et al. *Catalyzer: Sub-millisecond Startup for Serverless
+    Computing with Initialization-less Booting.* ASPLOS 2020.
+11. D. Ustiugov et al. *Benchmarking, Analysis, and Optimization of
+    Serverless Function Snapshots.* ASPLOS 2021. (REAP.)
+
+Non-paper design sources: Git packfile delta-depth limits, reachability
+bitmaps (EWAH) and commit-graph generation numbers; Mercurial revlog
+snapshot-insertion heuristics; SVN cheap copies; ZFS/Btrfs deadlists
+and reference counting. These informed rules 2 and 5 and the X-A1
+bitmap representation; none is a dependency.
