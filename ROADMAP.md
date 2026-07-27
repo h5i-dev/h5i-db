@@ -1868,3 +1868,76 @@ bitmaps (EWAH) and commit-graph generation numbers; Mercurial revlog
 snapshot-insertion heuristics; SVN cheap copies; ZFS/Btrfs deadlists
 and reference counting. These informed rules 2 and 5 and the X-A1
 bitmap representation; none is a dependency.
+
+## Part X implementation status (2026-07-27, branch `survery-fork-system`)
+
+**X-A1 — delivered.** `crates/h5i-db-core/src/fork_index.rs`, consumed by
+`retention.rs` (floor check), `database.rs` (`drop_table` guard, vacuum
+roots). 11 integration tests in `tests/fork_index.rs`. Measured: the
+drop guard reads 2 objects at 6 forks where the full scan read 7, and
+the count no longer grows with fork count.
+
+*Design corrected while building it.* The plan called for "per-table pin
+map plus per-segment fork bitmaps". The per-segment half was dropped:
+segment membership changes on every fork *write*, so maintaining it in a
+persisted index would put an index write on the fork write path — which
+design rule 1 forbids and which buys nothing, because X-A2 computes
+segment visibility at scan time from manifests it must read anyway. What
+shipped indexes pins and owned tables, which change only on fork
+create/drop/materialize.
+
+The bigger correction is to *how* it stays correct. The plan implied a
+maintained index (update on every fork mutation). What shipped is
+maintenance-free: nothing writes the index except the reader that finds
+it stale, and staleness is detected by listing `forks/` and
+`catalog/forks/` and reusing only entries whose object is still present
+at the same size. Two listings replace N reads, a rebuild costs one read
+per *changed* fork, and there is no update site to forget — which
+matters because the forgettable-update failure mode is exactly the one
+that loses data.
+
+**X-A2 — delivered.** `crates/h5i-db-query/src/fork_scan.rs` registers
+`forks('table' [, 'a,b'])`; `Database::fork_names()` and Python
+`db.fork_scan()` alongside. 13 integration tests.
+
+The plan's "shared base segments scanned once" needed a specific plan
+shape: group segments by *which forks reference them*, scan each group
+once, cross-join against that group's fork labels, union the groups.
+Single-fork groups use a literal projection instead of a join — not only
+cheaper, but the only shape that works when a group is empty, since a
+scan over zero files reports `UnknownPartitioning(0)` and fails
+`CrossJoinExec`'s `SinglePartition` requirement. Measured: 10 forks over
+3 shared segments scan 3.
+
+**X-A3 — mostly already built; scope corrected to a regression test.**
+Both halves of the plan dissolved on contact:
+
+1. *"Data-level `fork diff` from segment set difference"* was **already
+   implemented in Part IX**. `fork::diff_one` reports `rows_base` /
+   `rows_fork`, `bytes_base` / `bytes_fork` and
+   `segments_added`/`removed`/`shared`, all from manifests. The Part X
+   claim that "today's diff is metadata-level" was simply wrong. What was
+   genuinely missing was the *test*: Part IX listed "diff reads manifests
+   only (no segment I/O)" as an acceptance criterion and never asserted
+   it. `tests/fork_diff_io.rs` now does, on both the add and delete
+   paths, by recording every object read and failing on any `.parquet`.
+2. *"Per-segment partial aggregate cache"* is **the manifest**, and it
+   already exists. Segments carry per-column min/max/null-count;
+   `provider.rs::manifest_statistics` surfaces them as exact
+   `Statistics`; DataFusion answers `count`/`min`/`max` from them with
+   zero segment reads. Being keyed by an immutable segment, it needs no
+   eviction policy and no invalidation — the cost the plan budgeted for.
+
+   Extending it to `sum` was investigated and rejected: in DataFusion
+   54.1 only `count`, `min` and `max` implement `value_from_stats`
+   (`datafusion-functions-aggregate/src/{count,min_max}.rs`), so a
+   recorded sum — in the manifest or in a sidecar — would not remove one
+   segment read without also writing a custom optimizer rule and
+   physical operator. Float sums would additionally disagree with
+   scan-derived sums in the last ulp, so two queries that should agree
+   would not. Quantile sketches inherit the same blocker.
+
+   The lesson generalises past this item: *"add a cache" is only a
+   design if something downstream can consume it.* The consumer here is
+   an engine rule that does not exist, so the work would have been
+   storage and invalidation machinery serving nothing.
