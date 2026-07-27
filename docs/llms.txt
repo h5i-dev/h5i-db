@@ -69,7 +69,7 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [FX and crypto: 24/7 data without an exchange session](https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7.html): Equity tooling leans on the session. The exchange defines "the day", the open and the close.
 - [Fixed income: versioned curve marks, restatements, carry & rolldown](https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves.html): A rates desk's core dataset is small but unforgiving. One par curve per mark date, and every number on it feeds risk, P&L and client marks.
 - [Performance tuning: pruning, projection, commit granularity, caches](https://db.h5i.dev/cookbook/03_risk_and_production/10_performance_tuning.html): h5i-db stores each table as immutable, time-sorted Parquet segments under a versioned manifest. That layout dictates what makes queries fast, and what quietly makes them slow.
-- [Leakage checks: which of last night's backtests actually held up?](https://db.h5i.dev/cookbook/03_risk_and_production/11_leakage_check.html): A research agent runs forty backtests overnight. So does a parameter sweep, or a junior with a for-loop. In the morning there are forty Sharpes.
+- [arrival-delta: which of last night's backtests actually held up?](https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta.html): A research agent runs forty backtests overnight. So does a parameter sweep, or a junior with a for-loop. In the morning there are forty Sharpes.
 
 ## Optional
 - [Full documentation in one file](https://db.h5i.dev/llms-full.txt): the entire manual and Python API reference as plain markdown.
