@@ -372,7 +372,9 @@ async fn fork_detail(State(st): State<UiState>, AxPath(name): AxPath<String>) ->
 /// and pushes it only when its fingerprint changed, so an idle database is
 /// silent (bar keep-alives) and a busy one streams one frame per tick. The
 /// first frame is sent immediately.
-async fn events(State(st): State<UiState>) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+async fn events(
+    State(st): State<UiState>,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     let stream = futures::stream::unfold(
         (st, None::<u64>, true),
         |(st, mut last, mut first)| async move {
@@ -440,27 +442,25 @@ async fn table_detail(State(st): State<UiState>, AxPath(name): AxPath<String>) -
             })
         })
         .collect();
-    // list_versions only exposes summaries; re-read manifests for the audit
-    // columns the review UI cares about.
-    let mut version_rows = Vec::with_capacity(versions.len());
-    for v in &versions {
-        let m = st
-            .db
-            .resolve(&name, ReadAt::Version(v.sequence))
-            .await?
-            .manifest;
-        version_rows.push(json!({
-            "version": v.sequence,
-            "op": v.op,
-            "committed_at_ns": v.committed_at_ns,
-            "rows": v.rows,
-            "bytes": v.bytes,
-            "segments": v.segments,
-            "note": v.note,
-            "execution_mode": m.execution_mode,
-            "plan_hash": m.plan_hash,
-        }));
-    }
+    // The summary already carries the audit columns, so the history renders
+    // from one pass over the manifests rather than a full re-resolve (entry,
+    // head, retention, manifest, spec) per version.
+    let version_rows: Vec<_> = versions
+        .iter()
+        .map(|v| {
+            json!({
+                "version": v.sequence,
+                "op": v.op,
+                "committed_at_ns": v.committed_at_ns,
+                "rows": v.rows,
+                "bytes": v.bytes,
+                "segments": v.segments,
+                "note": v.note,
+                "execution_mode": v.execution_mode,
+                "plan_hash": v.plan_hash,
+            })
+        })
+        .collect();
     Ok(Json(json!({
         "name": name,
         "schema": fields,

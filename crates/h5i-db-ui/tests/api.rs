@@ -480,7 +480,11 @@ async fn setup_forked() -> (tempfile::TempDir, axum::Router, Arc<Database>) {
     .unwrap();
     let fork_db = db.open_fork("exp-a").await.unwrap();
     fork_db
-        .append("trades", vec![batch(&[900, 901], 102.0)], WriteOptions::default())
+        .append(
+            "trades",
+            vec![batch(&[900, 901], 102.0)],
+            WriteOptions::default(),
+        )
         .await
         .unwrap();
     fork_db
@@ -488,9 +492,13 @@ async fn setup_forked() -> (tempfile::TempDir, axum::Router, Arc<Database>) {
         .await
         .unwrap();
     // Move the base so exp-a's shadow is stale: promote would CAS-fail.
-    db.append("trades", vec![batch(&[950], 103.0)], WriteOptions::default())
-        .await
-        .unwrap();
+    db.append(
+        "trades",
+        vec![batch(&[950], 103.0)],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
     let router = router_for(&db, false);
     (dir, router, db)
 }

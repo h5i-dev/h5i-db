@@ -859,7 +859,11 @@ impl crate::database::Database {
                 if let Some(origin) = &fe.origin {
                     // The base head is read by table id, so this also works for
                     // a nested fork whose "base" is its parent's table.
-                    let base_head = self.head(&fe.name, origin.base_table_id).await?.head.sequence;
+                    let base_head = self
+                        .head(&fe.name, origin.base_table_id)
+                        .await?
+                        .head
+                        .sequence;
                     if base_head > origin.base_sequence {
                         stale_shadows += 1;
                     }
