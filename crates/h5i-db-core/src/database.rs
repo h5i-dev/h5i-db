@@ -686,14 +686,12 @@ impl Database {
             }
         }
         // …or by any fork. Same rule, same reason: a pin is a GC root, and
-        // dropping under one would strand a live workspace's reads.
-        for f in crate::fork::list(&self.backend).await? {
-            if f.pins.contains_key(&entry.table_id) {
-                return Err(Error::invalid(format!(
-                    "table {name:?} is pinned by fork {:?}; drop the fork first",
-                    f.name
-                )));
-            }
+        // dropping under one would strand a live workspace's reads. One index
+        // read, not one read per fork (Part X, X-A1).
+        if let Some((fork_name, _)) = self.fork_index().await?.first_pin(entry.table_id) {
+            return Err(Error::invalid(format!(
+                "table {name:?} is pinned by fork {fork_name:?}; drop the fork first"
+            )));
         }
         catalog::remove_entry(&self.backend, name).await?;
         self.backend.heads.remove(entry.table_id).await?;
@@ -2706,12 +2704,13 @@ impl Database {
             // this they would read as orphaned directories and be deleted:
             // reachability must be computed over every catalog that exists,
             // not just the global one.
-            for f in crate::fork::list(&self.backend).await? {
-                pinned.extend(f.pins.keys().copied());
-                for fe in crate::fork::list_entries(&self.backend, &f.name).await? {
-                    cataloged.insert(fe.table_id);
-                }
-            }
+            //
+            // Both root sets come from the fork index (Part X, X-A1), which
+            // revalidates itself against storage on every read — a stale index
+            // here would be exactly the data loss this sweep already avoids.
+            let fork_index = self.fork_index().await?;
+            pinned.extend(fork_index.pinned_table_ids());
+            cataloged.extend(fork_index.owned_table_ids());
             let mut by_table: BTreeMap<Uuid, Vec<object_store::ObjectMeta>> = BTreeMap::new();
             for meta in self.backend.list(&ObjPath::from("tables")).await? {
                 if let Some(id) = meta

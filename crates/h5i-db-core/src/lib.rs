@@ -15,6 +15,7 @@ pub mod database;
 pub mod error;
 pub mod evolution;
 pub mod fork;
+pub mod fork_index;
 pub mod incremental;
 pub mod layout;
 pub mod manifest;
@@ -37,9 +38,10 @@ pub use database::{
 };
 pub use error::{Error, ExitCategory, NextAction, Result, nearest_name};
 pub use fork::{
-    Fork, ForkDiff, ForkOrigin, ForkPin, ForkTableDiff, ForkTableEntry, ForkTableKind,
+    Fork, ForkDiff, ForkOrigin, ForkPin, ForkSummary, ForkTableDiff, ForkTableEntry, ForkTableKind,
     PromoteResult,
 };
+pub use fork_index::{ForkIndex, IndexedFork, IndexedTable};
 pub use manifest::{ColumnStats, Head, OpKind, SegmentMeta, VersionManifest};
 pub use plan::{MutationPlan, PlanSummary};
 pub use policy::MutationPolicy;

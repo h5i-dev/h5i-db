@@ -241,7 +241,13 @@ pub async fn create(backend: &Backend, fork: &Fork) -> Result<()> {
 
 /// Overwrite an existing fork object (metadata edits). Callers must hold the
 /// database metadata lock.
+///
+/// Drops the fork index first. The index reuses an entry when the object is
+/// still there at the same size, which an in-place edit can defeat — and the
+/// failure mode is a pin the index no longer reports, which is the one that
+/// loses data. Invalidating costs one rebuild and removes the whole question.
 pub async fn store(backend: &Backend, fork: &Fork) -> Result<()> {
+    crate::fork_index::invalidate(backend).await?;
     let path = layout::fork_path(&fork.name);
     let bytes = serde_json::to_vec_pretty(fork)?;
     backend.put(&path, bytes.into()).await?;
@@ -269,20 +275,6 @@ pub async fn list(backend: &Backend) -> Result<Vec<Fork>> {
         .try_collect()
         .await?;
     out.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(out)
-}
-
-/// Every base sequence pinned by any fork, per table. Used by retention and
-/// `drop_table` exactly the way snapshot pins are.
-pub async fn pins_by_table(backend: &Backend) -> Result<BTreeMap<Uuid, Vec<(String, u64)>>> {
-    let mut out: BTreeMap<Uuid, Vec<(String, u64)>> = BTreeMap::new();
-    for fork in list(backend).await? {
-        for (table_id, pin) in &fork.pins {
-            out.entry(*table_id)
-                .or_default()
-                .push((fork.name.clone(), pin.sequence));
-        }
-    }
     Ok(out)
 }
 
@@ -335,7 +327,10 @@ pub async fn create_entry(
 
 /// Overwrite a fork catalog entry (spec-revision bumps). Callers must hold the
 /// database metadata lock.
+///
+/// Invalidates the fork index for the same reason [`store`] does.
 pub async fn store_entry(backend: &Backend, fork_name: &str, entry: &ForkTableEntry) -> Result<()> {
+    crate::fork_index::invalidate(backend).await?;
     let path = layout::fork_catalog_entry_path(fork_name, &entry.name);
     let bytes = serde_json::to_vec_pretty(entry)?;
     backend.put(&path, bytes.into()).await?;
