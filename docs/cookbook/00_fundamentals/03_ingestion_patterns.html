@@ -248,7 +248,7 @@ directory under <code>data/dbs</code> stands in for the vendor drop zone.</p>
  &#x27;segments_total&#x27;: 0,
  &#x27;segments_added&#x27;: 0,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785186531752827409}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785195682826901153}</pre></div></div>
 <h2 id="1-from-a-pyarrow-table">1. From a pyarrow Table<a class="headerlink" href="#1-from-a-pyarrow-table" title="Permanent link">#</a></h2>
 <p>The native path, with zero conversion. Every <code>append</code> returns the <strong>commit
 dict</strong>: the new version number (<code>sequence</code>), plus row and segment totals after
@@ -264,7 +264,7 @@ a version.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785186531786505736}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785195682845708583}</pre></div></div>
 <h2 id="2-from-a-pandas-dataframe">2. From a pandas DataFrame<a class="headerlink" href="#2-from-a-pandas-dataframe" title="Permanent link">#</a></h2>
 <p><code>pa.Table.from_pandas</code> does the heavy lifting. Always pass <code>schema=</code> as well:
 depending on your pandas version, datetimes round-trip as nanoseconds rather

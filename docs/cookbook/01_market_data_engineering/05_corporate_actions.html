@@ -335,7 +335,7 @@ factors) is derived and reproducible from it.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785192734548178592}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785195717265335705}</pre></div></div>
 <h2 id="3-the-classic-screwup-naive-returns-across-a-split">3. The classic screwup: naive returns across a split<a class="headerlink" href="#3-the-classic-screwup-naive-returns-across-a-split" title="Permanent link">#</a></h2>
 <p>Compute daily returns straight off the raw closes with a <code>lag()</code> window, then
 look at the worst days on record.</p>
@@ -663,7 +663,7 @@ wall-clock commit time. That is useful when a downstream job only logged
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;as of </span><span class="si">{</span><span class="n">as_of</span><span class="si">}</span><span class="s2">:&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="n">aapl_pre</span><span class="p">[[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">to_string</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">as of 2026-07-27T22:52:14.548178592+00:00:
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">as of 2026-07-27T23:41:57.265335705+00:00:
                        ts symbol  close
 2020-08-28 20:00:00+00:00   AAPL 499.23</pre></div></div>
 <p>And with the head restated, the split artifacts are gone. The worst days in

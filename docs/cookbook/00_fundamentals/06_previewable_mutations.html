@@ -604,7 +604,7 @@ Plans expire after a 7-day TTL, and their staged segments are protected from
 <span class="n">pending</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
 <span class="n">db</span><span class="o">.</span><span class="n">set_policy</span><span class="p">(</span><span class="n">direct_write</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">direct_delete</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">direct_restore</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">plan cbc00464…  note=&#x27;staged under restrictive policy&#x27;  rows_affected=30  ttl=7d</pre><pre>{&#x27;direct_append&#x27;: True,
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">plan c6d6d67b…  note=&#x27;staged under restrictive policy&#x27;  rows_affected=30  ttl=7d</pre><pre>{&#x27;direct_append&#x27;: True,
  &#x27;direct_write&#x27;: True,
  &#x27;direct_replace&#x27;: True,
  &#x27;direct_delete&#x27;: True,

@@ -303,13 +303,13 @@ outlier itself drags around.</p>
   <tbody>
     <tr>
       <th>0</th>
-      <td>AAPL</td>
-      <td>4</td>
+      <td>NVDA</td>
+      <td>2</td>
     </tr>
     <tr>
       <th>1</th>
-      <td>NVDA</td>
-      <td>2</td>
+      <td>AAPL</td>
+      <td>4</td>
     </tr>
   </tbody>
 </table>
@@ -544,7 +544,7 @@ the blast radius before anything changes.</p>
  &#x27;segments_total&#x27;: 2,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 1,
- &#x27;committed_at_ns&#x27;: 1785192851942503193}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785195725357713161}</pre></div></div>
 <h2 id="4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2: replace the polluted window with repaired data<a class="headerlink" href="#4-fix-2-replace-the-polluted-window-with-repaired-data" title="Permanent link">#</a></h2>
 <p>For the 15:00-15:15 window we do not want a delete. We want the <em>corrected</em>
 prints: fat fingers scaled back by 10, zero prices dropped, duplicates
@@ -846,7 +846,7 @@ never applied. Vacuum will not collect segments a live plan references.</p>
 <span class="n">pending</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;after discard:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">list_plans</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">[(&#x27;67e9311e-66e7-466f-9884-f546a1ecbcee&#x27;, &#x27;for review: is 14:00-14:10 real?&#x27;)]
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">[(&#x27;c62ef5a7-66dc-4b27-acf5-19b39808108c&#x27;, &#x27;for review: is 14:00-14:10 real?&#x27;)]
 after discard: []</pre></div></div>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
