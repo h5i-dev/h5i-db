@@ -1447,3 +1447,159 @@ async fn fork_metadata_survives_a_reopen() {
     let fork_db = db.open_fork("agent-01").await.unwrap();
     assert_eq!(rows(&fork_db, "trades").await, 4);
 }
+
+// ---------------------------------------------------------------------------
+// schema evolution inside a fork
+// ---------------------------------------------------------------------------
+
+/// Adding a column inside a fork must copy no Parquet.
+///
+/// This is the BranchBench software-engineering workload's first move: fork,
+/// `ALTER TABLE ADD COLUMN`, backfill, test. Segments are partitioned by row,
+/// so the obvious worry is that widening the schema rewrites every row. It does
+/// not: an added column is recorded in a new spec revision and old segments are
+/// null-filled on read, so the ADD is metadata and only the *backfill* costs
+/// bytes.
+#[tokio::test]
+async fn adding_a_column_in_a_fork_copies_no_parquet() {
+    let (_dir, db, root) = db_with_trades().await;
+    for i in 0..3i64 {
+        db.append(
+            "trades",
+            vec![trades_batch(&[400 + i], &["C"], &[4.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
+
+    let files_before = parquet_files(&root).len();
+    let bytes_before = parquet_bytes(&root);
+
+    let widened: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("price", DataType::Float64, false),
+        Field::new("size", DataType::Int64, false),
+        Field::new("tier", DataType::Int64, true),
+    ]));
+    let fork_db = db.open_fork("agent-01").await.unwrap();
+    fork_db
+        .evolve_schema("trades", widened, WriteOptions::default())
+        .await
+        .unwrap();
+
+    // Not one byte of data moved: the fork holds a new spec revision and a
+    // manifest that still points at the base's segments.
+    assert_eq!(
+        parquet_files(&root).len(),
+        files_before,
+        "adding a column wrote a new segment"
+    );
+    assert_eq!(
+        parquet_bytes(&root),
+        bytes_before,
+        "adding a column rewrote data"
+    );
+
+    // The fork sees the column, filled with nulls on read.
+    let (batches, _) = fork_db
+        .scan("trades", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, 6);
+    for b in &batches {
+        let tier = b.column_by_name("tier").expect("tier column missing");
+        assert_eq!(tier.null_count(), b.num_rows(), "tier should read as null");
+    }
+
+    // The base never learned about the column.
+    let base = db.resolve("trades", ReadAt::Latest).await.unwrap();
+    assert!(
+        base.schema.field_with_name("tier").is_err(),
+        "the base schema must not change"
+    );
+}
+
+/// The backfill is the part that costs bytes, and it costs them in proportion
+/// to what it rewrites rather than to the table.
+#[tokio::test]
+async fn backfilling_the_new_column_rewrites_only_what_it_touches() {
+    let (_dir, db, root) = db_with_trades().await;
+    for i in 0..3i64 {
+        db.append(
+            "trades",
+            vec![trades_batch(&[400 + i], &["C"], &[4.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
+    let fork_db = db.open_fork("agent-01").await.unwrap();
+
+    let widened: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("price", DataType::Float64, false),
+        Field::new("size", DataType::Int64, false),
+        Field::new("tier", DataType::Int64, true),
+    ]));
+    fork_db
+        .evolve_schema("trades", widened.clone(), WriteOptions::default())
+        .await
+        .unwrap();
+    let bytes_after_add = parquet_bytes(&root);
+
+    // Backfill one row's worth of time range, not the whole table.
+    let filled = RecordBatch::try_new(
+        widened,
+        vec![
+            Arc::new(TimestampNanosecondArray::from(vec![400i64]).with_timezone("UTC".to_string())),
+            Arc::new(StringArray::from(vec!["C"])),
+            Arc::new(Float64Array::from(vec![4.0])),
+            Arc::new(Int64Array::from(vec![1i64])),
+            Arc::new(Int64Array::from(vec![7i64])),
+        ],
+    )
+    .unwrap();
+    fork_db
+        .replace_range("trades", 400, 401, vec![filled], WriteOptions::default())
+        .await
+        .unwrap();
+
+    let added = parquet_bytes(&root) - bytes_after_add;
+    assert!(added > 0, "a backfill must write something");
+    // What it wrote is the rewritten range, not the table. The base's four
+    // untouched segments are still shared by path.
+    assert!(
+        added < bytes_after_add / 2,
+        "backfilling one row rewrote {added} bytes against a table of {bytes_after_add}"
+    );
+    let (batches, _) = fork_db
+        .scan("trades", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    let filled_rows: usize = batches
+        .iter()
+        .map(|b| {
+            let t = b.column_by_name("tier").unwrap();
+            b.num_rows() - t.null_count()
+        })
+        .sum();
+    assert_eq!(filled_rows, 1, "exactly the backfilled row carries a tier");
+}
