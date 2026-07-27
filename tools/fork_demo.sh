@@ -21,11 +21,16 @@
 #   H5I_DB_BIN  h5i-db binary   (default: target/release/h5i-db, then debug)
 #   ROUNDS      actions to run  (default 200)
 #   PACE        seconds between actions (default 1.2)
+#   NEST_P      percent chance a new fork nests inside an existing one
+#               (default: 25 while few forks exist, 50 once there are >3 —
+#               nesting prefers parents that have already written, so the
+#               parent-child edge is real dependency, not just a name)
 set -euo pipefail
 
 DB=${1:?usage: tools/fork_demo.sh <db-path>}
 ROUNDS=${ROUNDS:-200}
 PACE=${PACE:-1.2}
+NEST_P=${NEST_P:-auto}
 
 if [[ -z ${H5I_DB_BIN:-} ]]; then
   for cand in target/release/h5i-db target/debug/h5i-db; do
@@ -75,13 +80,47 @@ fi
 OBJECTIVES=("vol regime scan" "spread backfill" "lr sweep" "outlier hunt" "asof repro" "signal decay probe")
 PREFIXES=(scout tuner backfill prober)
 FORKS=()
+declare -A WROTE=()    # fork → 1 once it has committed something
+declare -A PARENT=()   # fork → recorded parent fork
 N=0
 
 pick_fork() { echo "${FORKS[RANDOM % ${#FORKS[@]}]}"; }
+# Nesting parent: strongly prefer forks that have written, so the child pins
+# tables the parent owns and the lineage edge is real dependency rather than
+# just a recorded name (a dependency-free child lets the parent be dropped
+# out from under it, flattening the tree mid-demo).
+pick_parent() {
+  local writers=() f
+  for f in "${FORKS[@]}"; do [[ -n ${WROTE[$f]:-} ]] && writers+=("$f"); done
+  if ((${#writers[@]} > 0)) && ((RANDOM % 10 < 8)); then
+    echo "${writers[RANDOM % ${#writers[@]}]}"
+  else
+    pick_fork
+  fi
+}
+# Drop candidate: prefer leaves (forks no current fork records as parent) so
+# lineage chains survive long enough to be seen.
+pick_droppable() {
+  local -A is_parent=()
+  local f leaves=()
+  for f in "${FORKS[@]}"; do
+    [[ -n ${PARENT[$f]:-} ]] && is_parent[${PARENT[$f]}]=1
+  done
+  for f in "${FORKS[@]}"; do [[ -z ${is_parent[$f]:-} ]] && leaves+=("$f"); done
+  if ((${#leaves[@]} > 0)); then echo "${leaves[RANDOM % ${#leaves[@]}]}"; else pick_fork; fi
+}
+nest_chance() {
+  if [[ $NEST_P == auto ]]; then
+    ((${#FORKS[@]} > 3)) && echo 50 || echo 25
+  else
+    echo "$NEST_P"
+  fi
+}
 forget_fork() { # forget_fork <name> — also drops recorded children of it
   local gone=$1 keep=()
   for f in "${FORKS[@]}"; do [[ $f == "$gone" ]] || keep+=("$f"); done
   FORKS=("${keep[@]}")
+  unset "WROTE[$gone]" "PARENT[$gone]" 2>/dev/null || true
 }
 
 for ((round = 0; round < ROUNDS; round++)); do
@@ -91,9 +130,10 @@ for ((round = 0; round < ROUNDS; round++)); do
     name="${PREFIXES[RANDOM % ${#PREFIXES[@]}]}-$(printf '%02d' "$N")"; N=$((N + 1))
     obj="${OBJECTIVES[RANDOM % ${#OBJECTIVES[@]}]}"
     scope=()
-    if ((${#FORKS[@]} > 0 && RANDOM % 4 == 0)); then
-      parent=$(pick_fork)
+    if ((${#FORKS[@]} > 0 && RANDOM % 100 < $(nest_chance))); then
+      parent=$(pick_parent)
       scope=(--fork "$parent")
+      PARENT[$name]=$parent
       say "fork $name (inside $parent) — $obj"
     else
       say "fork $name — $obj"
@@ -109,6 +149,7 @@ for ((round = 0; round < ROUNDS; round++)); do
     rows "$n" "SIM" 100 | db --fork "$f" ingest "$DB" ticks - \
       --input-format csv --mode append >/dev/null
     T=$((T + n))
+    WROTE[$f]=1
   elif ((r < 8)); then
     # Base moves on its own — forks that shadowed ticks go stale (conflict).
     say "base commit (strands shadows)"
@@ -123,8 +164,9 @@ for ((round = 0; round < ROUNDS; round++)); do
       say "promote $f → base refused (base moved / nothing to promote)"
     fi
   else
-    # Prune. Refused while children pin it — also a demo beat.
-    f=$(pick_fork)
+    # Prune, preferring leaves so lineage chains stay visible for a while.
+    # A refusal (children pin it) is also a demo beat.
+    f=$(pick_droppable)
     if db fork drop "$DB" "$f" >/dev/null 2>&1; then
       say "drop $f"
       forget_fork "$f"
