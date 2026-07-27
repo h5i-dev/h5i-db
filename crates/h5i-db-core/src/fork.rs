@@ -68,12 +68,29 @@ use crate::layout;
 /// survives in an immutable object even if the fork is later dropped.
 pub const FORKED_FROM_META_KEY: &str = "h5i.forked_from";
 
-/// One pinned base table inside a fork.
+/// One pinned table inside a fork.
+///
+/// "Base" means *the thing this fork forked from*, which is the database for a
+/// top-level fork and the parent fork for a nested one (ROADMAP X-C1). The pin
+/// is keyed by table id and does not care which, because a fork's tables are
+/// ordinary tables.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ForkPin {
     pub table_name: String,
     pub sequence: u64,
     pub manifest_checksum: String,
+    /// Schema revision and creation time of the pinned table, carried so a
+    /// fork can build a catalog entry for a name without reading anything.
+    ///
+    /// Both are `Option` with `skip_serializing_if`, which is what keeps the
+    /// addition compatible with fork objects written before nested forks
+    /// existed: an old object round-trips to identical bytes, so its checksum
+    /// still verifies. Absent means "fall back to the global catalog", which
+    /// is where a top-level fork's tables have always been found.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_revision: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at_ns: Option<i64>,
 }
 
 /// A fork: a named, pinned, writable workspace.
@@ -87,7 +104,17 @@ pub struct Fork {
     /// creation). Recorded for provenance; the pins themselves are the truth.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_of_ns: Option<i64>,
-    /// base table UUID → pinned version.
+    /// The fork this one was created inside, if any (ROADMAP X-C1).
+    ///
+    /// `None` = forked from the base database. Recorded for lineage and for
+    /// the drop guard; the pins are still the truth about what is held.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Distance from the base database: 0 for a top-level fork. Absent on
+    /// forks written before nesting existed, which are all top-level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<u32>,
+    /// pinned table UUID → pinned version.
     pub pins: BTreeMap<Uuid, ForkPin>,
     /// Caller-owned metadata. Deliberately unstructured: it is the loose join
     /// point for a future run ledger, so the two features need not be designed
@@ -117,11 +144,38 @@ impl Fork {
         Ok(())
     }
 
-    /// The pinned version of a base table, if this fork pins it.
+    /// The pinned version of a table, if this fork pins it.
     pub fn pin(&self, table_id: Uuid) -> Option<&ForkPin> {
         self.pins.get(&table_id)
     }
+
+    /// The pinned table backing a *name*.
+    ///
+    /// Name resolution inside a fork has to work for tables the fork's parent
+    /// owns as well as tables the database owns, and only the pin knows which
+    /// table id a name meant at fork time — the global catalog would answer
+    /// with the base table a parent had already shadowed.
+    pub fn pin_by_name(&self, name: &str) -> Option<(Uuid, &ForkPin)> {
+        self.pins
+            .iter()
+            .find(|(_, p)| p.table_name == name)
+            .map(|(id, p)| (*id, p))
+    }
+
+    /// Depth below the base database; 0 for a top-level fork.
+    pub fn depth(&self) -> u32 {
+        self.depth.unwrap_or(0)
+    }
 }
+
+/// How deep forks may nest.
+///
+/// MCTS runs deep and narrow — BranchBench parameterises it at depth 25 — so
+/// the cap is set above the workload it exists for rather than at it. It is a
+/// runaway guard, not a design limit: reads cost the same at depth 32 as at
+/// depth 1 because a shadow manifest names its segments by path and never
+/// walks a chain.
+pub const MAX_FORK_DEPTH: u32 = 32;
 
 /// Where a shadow table came from. Absent on tables created inside the fork.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -577,9 +631,26 @@ impl crate::database::Database {
         user_meta: serde_json::Map<String, serde_json::Value>,
     ) -> Result<Vec<Fork>> {
         self.ensure_writable("fork create")?;
-        // No fork-of-fork in v1: nesting multiplies the promote and GC paths
-        // before the primitive has users (ROADMAP IX "Do NOT build").
-        self.ensure_base("fork create")?;
+        // Nesting is allowed (ROADMAP X-C1, superseding IX's "no fork-of-fork
+        // in v1"): the pin set is keyed by table id, so a child pinning its
+        // parent's tables is the same mechanism pointed one level down. The
+        // depth cap is a runaway guard, not a design limit.
+        let depth = match self.fork() {
+            None => 0,
+            Some(parent) => {
+                let depth = parent.depth() + 1;
+                if depth > MAX_FORK_DEPTH {
+                    return Err(Error::invalid(format!(
+                        "fork {:?} is already {} levels below the database, and \
+                         MAX_FORK_DEPTH is {MAX_FORK_DEPTH}; promote or drop part of this \
+                         chain before forking deeper",
+                        parent.name,
+                        parent.depth()
+                    )));
+                }
+                depth
+            }
+        };
         if names.is_empty() {
             return Err(Error::invalid("fork create needs at least one name"));
         }
@@ -640,6 +711,12 @@ impl crate::database::Database {
                     table_name: entry.name.clone(),
                     sequence,
                     manifest_checksum: checksum,
+                    // Free here: the catalog entry is already in hand, so a
+                    // fork records enough to resolve the name later without
+                    // consulting any catalog — which is what lets a nested
+                    // fork resolve a table its parent owns.
+                    spec_revision: Some(entry.spec_revision),
+                    created_at_ns: Some(entry.created_at_ns),
                 },
             );
         }
@@ -672,6 +749,10 @@ impl crate::database::Database {
                     created_at_ns,
                     note: note.clone(),
                     as_of_ns,
+                    parent: self.fork_name().map(|s| s.to_string()),
+                    // Kept `None` at depth 0 so a top-level fork serialises
+                    // byte-identically to one written before nesting existed.
+                    depth: (depth > 0).then_some(depth),
                     pins: pins.clone(),
                     user_meta: user_meta.clone(),
                     checksum: String::new(),
@@ -819,9 +900,77 @@ impl crate::database::Database {
         Ok(dropped)
     }
 
+    /// Drop a fork and everything nested below it, dependents first.
+    ///
+    /// The subtree is discovered by *dependency* rather than by the recorded
+    /// parent name, which is the criterion that actually matters: a child that
+    /// forked before its parent shadowed anything pins only base tables, so
+    /// nothing of the parent's is holding it up and dropping the parent alone
+    /// is safe. This drops what would otherwise be refused, in the order that
+    /// keeps every intermediate state recoverable.
+    pub async fn drop_fork_tree(&self, name: &str) -> Result<usize> {
+        self.ensure_writable("fork drop")?;
+        self.ensure_base("fork drop")?;
+        let _meta = self.backend().meta_lock().await?;
+
+        // Post-order: collect the subtree, then drop deepest-first, so a fork
+        // is never removed while something still pins its tables.
+        let mut order: Vec<String> = Vec::new();
+        let mut stack = vec![name.to_string()];
+        while let Some(current) = stack.pop() {
+            if order.contains(&current) {
+                continue;
+            }
+            stack.extend(self.forks_depending_on(&current).await?);
+            order.push(current);
+        }
+        order.reverse();
+
+        let mut dropped = 0usize;
+        for fork_name in order {
+            dropped += self.drop_fork_locked(&fork_name).await?;
+        }
+        Ok(dropped)
+    }
+
+    /// Forks holding a pin on a table `name` owns — its children, in the only
+    /// sense that constrains deletion.
+    async fn forks_depending_on(&self, name: &str) -> Result<Vec<String>> {
+        let index = self.fork_index().await?;
+        let Some(me) = index.forks.get(name) else {
+            return Ok(Vec::new());
+        };
+        let owned: BTreeSet<Uuid> = me.owned.values().map(|t| t.table_id).collect();
+        if owned.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(index
+            .forks
+            .iter()
+            .filter(|(other, f)| {
+                other.as_str() != name && f.pins.keys().any(|id| owned.contains(id))
+            })
+            .map(|(n, _)| n.clone())
+            .collect())
+    }
+
     /// [`Self::drop_fork`] with the metadata lock already held.
     async fn drop_fork_locked(&self, name: &str) -> Result<usize> {
         let fork = load(self.backend(), name).await?;
+        // A nested fork's shadows reference their parent's segments by path,
+        // exactly as a top-level fork's reference the base's. Deleting the
+        // parent's tables under a live child is therefore the same data loss
+        // the retention floor and `drop_table` guards exist to prevent, so it
+        // is refused for the same reason (ROADMAP X-C1).
+        let dependents = self.forks_depending_on(name).await?;
+        if !dependents.is_empty() {
+            return Err(Error::invalid(format!(
+                "fork {name:?} has {} fork(s) nested below it ({}); drop those first, or \
+                 use a recursive drop to remove the whole subtree",
+                dependents.len(),
+                dependents.join(", ")
+            )));
+        }
         let entries = list_entries(self.backend(), &fork.name).await?;
         let dropped = entries.len();
         for fe in entries {
@@ -1204,25 +1353,52 @@ impl crate::database::Database {
         fe: &ForkTableEntry,
         manifest: &crate::manifest::VersionManifest,
     ) -> Result<PromoteResult> {
-        if crate::catalog::load_entry(self.backend(), &fe.name)
-            .await?
-            .is_some()
-        {
+        // A nested fork promotes into its *parent*, not into the database:
+        // "up one level" is what promote means at every level, and landing a
+        // child's scratch table on main would skip the parent's review
+        // entirely (ROADMAP X-C1).
+        let target_fork = fork.parent.clone();
+        let taken = match &target_fork {
+            None => crate::catalog::load_entry(self.backend(), &fe.name)
+                .await?
+                .is_some(),
+            Some(parent) => load_entry(self.backend(), parent, &fe.name)
+                .await?
+                .is_some(),
+        };
+        if taken {
             return Err(Error::TableExists {
                 name: fe.name.clone(),
             });
         }
-        let entry = crate::catalog::CatalogEntry {
-            name: fe.name.clone(),
-            table_id: fe.table_id,
-            created_at_ns: fe.created_at_ns,
-            spec_revision: fe.spec_revision,
-            checksum: String::new(),
-        }
-        .seal()?;
-        // Global catalog first, then release it from the fork: a crash in
+        // Target catalog first, then release it from the fork: a crash in
         // between leaves the table reachable from both, never from neither.
-        crate::catalog::create_entry(self.backend(), &entry).await?;
+        match &target_fork {
+            None => {
+                let entry = crate::catalog::CatalogEntry {
+                    name: fe.name.clone(),
+                    table_id: fe.table_id,
+                    created_at_ns: fe.created_at_ns,
+                    spec_revision: fe.spec_revision,
+                    checksum: String::new(),
+                }
+                .seal()?;
+                crate::catalog::create_entry(self.backend(), &entry).await?;
+            }
+            Some(parent) => {
+                let entry = ForkTableEntry {
+                    name: fe.name.clone(),
+                    table_id: fe.table_id,
+                    created_at_ns: fe.created_at_ns,
+                    spec_revision: fe.spec_revision,
+                    // It was created inside a fork and still is, one level up.
+                    origin: None,
+                    checksum: String::new(),
+                }
+                .seal()?;
+                create_entry(self.backend(), parent, &entry).await?;
+            }
+        }
         remove_entry(self.backend(), &fork.name, &fe.name).await?;
         Ok(PromoteResult {
             fork: fork.name.clone(),
@@ -1285,6 +1461,8 @@ mod tests {
                 table_name: "trades".into(),
                 sequence: 7,
                 manifest_checksum: "abc".into(),
+                spec_revision: Some(1),
+                created_at_ns: Some(5),
             },
         );
         Fork {
@@ -1292,6 +1470,8 @@ mod tests {
             created_at_ns: 42,
             note: None,
             as_of_ns: None,
+            parent: None,
+            depth: None,
             pins,
             user_meta: serde_json::Map::new(),
             checksum: String::new(),
@@ -1339,6 +1519,57 @@ mod tests {
         assert!(!json.contains("note"), "{json}");
         assert!(!json.contains("as_of_ns"), "{json}");
         assert!(!json.contains("user_meta"), "{json}");
+        // A top-level fork records no parent and no depth, so nesting cost
+        // existing databases nothing on disk.
+        assert!(!json.contains("parent"), "{json}");
+        assert!(!json.contains("depth"), "{json}");
+    }
+
+    /// The compatibility claim behind X-C1's added fields: a fork object
+    /// written before nesting existed still verifies.
+    ///
+    /// Its checksum was computed over JSON that had no `parent`, `depth`,
+    /// `spec_revision` or `created_at_ns`, so the new fields must vanish from
+    /// the serialised form when absent — `#[serde(default,
+    /// skip_serializing_if)]` rather than a plain default. Anything else turns
+    /// every fork in every existing database into a corruption error.
+    #[test]
+    fn a_fork_written_before_nesting_still_verifies() {
+        // Exactly the bytes the pre-X-C1 writer produced.
+        let legacy = r#"{
+              "name": "agent-01",
+              "created_at_ns": 42,
+              "pins": {
+                "00000000-0000-0000-0000-000000000000": {
+                  "table_name": "trades",
+                  "sequence": 7,
+                  "manifest_checksum": "abc"
+                }
+              },
+              "checksum": ""
+            }"#;
+        let mut old: Fork = serde_json::from_str(legacy).unwrap();
+        assert_eq!(old.parent, None);
+        assert_eq!(old.depth(), 0);
+        assert_eq!(old.pins[&Uuid::nil()].spec_revision, None);
+
+        // Sealing it reproduces whatever checksum the old writer would have
+        // computed, because the serialised form is unchanged.
+        old.checksum = String::new();
+        let sealed = old.seal().unwrap();
+        assert!(sealed.verify("forks/x.json").is_ok());
+        let round_tripped = serde_json::to_string(&sealed).unwrap();
+        assert!(!round_tripped.contains("spec_revision"), "{round_tripped}");
+        assert!(!round_tripped.contains("parent"), "{round_tripped}");
+    }
+
+    #[test]
+    fn pins_are_addressable_by_name_for_nested_resolution() {
+        let f = fork("agent-01").seal().unwrap();
+        let (id, pin) = f.pin_by_name("trades").expect("pinned by name");
+        assert_eq!(id, Uuid::nil());
+        assert_eq!(pin.sequence, 7);
+        assert!(f.pin_by_name("quotes").is_none());
     }
 
     #[test]

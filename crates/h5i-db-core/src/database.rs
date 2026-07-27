@@ -728,12 +728,37 @@ impl Database {
             return catalog::list_entries(&self.backend).await;
         };
         let mut by_name: BTreeMap<String, CatalogEntry> = BTreeMap::new();
-        for base in catalog::list_entries(&self.backend).await? {
-            // Only pinned tables. A table created on main *after* the fork is
-            // deliberately invisible: a fork is a frozen base, and a name
-            // appearing mid-run would make its reads unreproducible.
-            if fork.pin(base.table_id).is_some() {
-                by_name.insert(base.name.clone(), base);
+        // Built from the pins rather than by filtering the global catalog, so
+        // a nested fork lists the tables its *parent* owned (ROADMAP X-C1) and
+        // so the listing costs no catalog read at all. A table created on main
+        // after the fork is still invisible, for the same reason as before: a
+        // fork is a frozen base, and a name appearing mid-run would make its
+        // reads unreproducible.
+        let mut needs_catalog = false;
+        for (table_id, pin) in &fork.pins {
+            match (pin.spec_revision, pin.created_at_ns) {
+                (Some(spec_revision), Some(created_at_ns)) => {
+                    by_name.insert(
+                        pin.table_name.clone(),
+                        CatalogEntry {
+                            name: pin.table_name.clone(),
+                            table_id: *table_id,
+                            created_at_ns,
+                            spec_revision,
+                            checksum: String::new(),
+                        }
+                        .seal()?,
+                    );
+                }
+                // Pre-X-C1 fork: fall back to the catalog for the whole set.
+                _ => needs_catalog = true,
+            }
+        }
+        if needs_catalog {
+            for base in catalog::list_entries(&self.backend).await? {
+                if fork.pin(base.table_id).is_some() {
+                    by_name.insert(base.name.clone(), base);
+                }
             }
         }
         // Fork-owned entries win: a shadow replaces the base table it shadows.
@@ -768,12 +793,31 @@ impl Database {
         if let Some(fe) = crate::fork::load_entry(&self.backend, &fork.name, name).await? {
             return Ok(Some(fe.to_catalog_entry()?));
         }
-        if let Some(base) = catalog::load_entry(&self.backend, name).await?
-            && fork.pin(base.table_id).is_some()
-        {
-            return Ok(Some(base));
+        // The *pin* answers what a name meant when this fork was made, and it
+        // is the only thing that can: a nested fork's parent may already have
+        // shadowed the name, so the global catalog would hand back the base
+        // table the parent stopped using (ROADMAP X-C1).
+        let Some((table_id, pin)) = fork.pin_by_name(name) else {
+            return Ok(None);
+        };
+        match (pin.spec_revision, pin.created_at_ns) {
+            (Some(spec_revision), Some(created_at_ns)) => Ok(Some(
+                CatalogEntry {
+                    name: name.to_string(),
+                    table_id,
+                    created_at_ns,
+                    spec_revision,
+                    checksum: String::new(),
+                }
+                .seal()?,
+            )),
+            // A fork written before pins carried these. Such a fork is
+            // top-level by construction, so its tables are in the global
+            // catalog and the pre-X-C1 lookup is still correct for it.
+            _ => Ok(catalog::load_entry(&self.backend, name)
+                .await?
+                .filter(|base| base.table_id == table_id)),
         }
-        Ok(None)
     }
 
     async fn entry(&self, name: &str) -> Result<CatalogEntry> {

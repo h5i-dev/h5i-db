@@ -1311,12 +1311,10 @@ async fn database_wide_operations_are_refused_inside_a_fork() {
         .unwrap();
     let fork_db = db.open_fork("agent-01").await.unwrap();
 
-    // No fork of a fork, and no reaching for the global roots from inside one.
+    // No reaching for the global roots from inside a fork. (Forking *is* now
+    // allowed from here — see the nested-fork tests — because a child pins its
+    // parent's tables rather than touching anything database-wide.)
     for err in [
-        fork_db
-            .create_fork("nested", None, None, Default::default())
-            .await
-            .unwrap_err(),
         fork_db
             .create_snapshot("snap", &[], None)
             .await

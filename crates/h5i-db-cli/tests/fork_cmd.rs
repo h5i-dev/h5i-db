@@ -305,7 +305,6 @@ fn database_wide_commands_refuse_the_fork_flag() {
     for args in [
         vec!["vacuum", "m.db", "--apply"],
         vec!["snapshot", "create", "m.db", "snap"],
-        vec!["fork", "create", "m.db", "nested"],
     ] {
         let mut a = args.clone();
         a.extend_from_slice(&["--fork", "agent-01", "--format", "json"]);
@@ -316,6 +315,18 @@ fn database_wide_commands_refuse_the_fork_flag() {
             "{args:?} should refuse inside a fork, got: {msg}"
         );
     }
+
+    // `fork create` is *not* one of them any more: forking inside a fork nests
+    // (ROADMAP X-C1) rather than reaching for a database-wide root.
+    let nested = ok_json(&run(
+        &[
+            "fork", "create", "m.db", "nested", "--fork", "agent-01", "--format", "json",
+        ],
+        cwd,
+    ));
+    assert_eq!(nested["name"], "nested");
+    assert_eq!(nested["parent"], "agent-01");
+    assert_eq!(nested["depth"], 1);
 }
 
 #[test]

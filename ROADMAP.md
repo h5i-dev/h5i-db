@@ -1423,7 +1423,9 @@ promote, and explicitly.
   databases that never fork. Revisit for cross-table dedup on its own
   evidence, not for this.
 - **No fork-of-fork in v1.** Base = main only; nesting multiplies the
-  promote/GC paths before the primitive has users.
+  promote/GC paths before the primitive has users. *(Superseded by Part X
+  X-C1 on BranchBench's evidence: MCTS explores a deep narrow tree and
+  cannot be expressed as a flat star. Delivered 2026-07-27.)*
 - **No run-ledger coupling.** Neither feature exists yet; the
   `user_meta` blob is the loose join point, and correlation can live in
   the ledger later.
@@ -1941,3 +1943,71 @@ Both halves of the plan dissolved on contact:
    design if something downstream can consume it.* The consumer here is
    an engine rule that does not exist, so the work would have been
    storage and invalidation machinery serving nothing.
+
+**X-B1 — delivered.** `create_forks` / `fork_many` / `drop_forks` in
+`fork.rs`, CLI `fork create --count N` and `fork drop <names…>`, Python
+`create_forks` / `fork_many` / `drop_forks` / `fork_names`. 11 core
+integration tests + 2 CLI e2e.
+
+Two things fell out of building it. The single-fork verbs are now the
+batch verbs with one name, which removes the risk of the two drifting;
+and the durability barrier turned out to matter more than the puts —
+`create_many` takes one fsync pass for the whole batch rather than one
+per fork, which is what dominates at a few hundred branches. The CLI
+output shapes for one fork are deliberately unchanged (one object, and
+`dropped` still a scalar), because agents parse them.
+
+**X-B3 — delivered.** A promote blocked *only* by compaction is now
+replayed onto the new layout instead of refused; `PromoteResult` gains
+`rebased_from`, and the manifest note and `h5i.forked_from` record it.
+
+The rebase is deliberately partial and refuses rather than guessing. It
+is sound only while the fork still holds every row it inherited: a fork
+that *deleted* inherited rows cannot be replayed from metadata, because
+a compacted segment may merge rows it dropped with rows it kept and
+nothing short of reading the data says which. That case still conflicts,
+with a message saying why. The Part IX test asserting this case fails
+was updated to assert it rebases — the behaviour change is the point.
+
+**X-C1 — delivered.** Nested forks, superseding Part IX's "no
+fork-of-fork in v1". `Fork` gains `parent` and `depth`, `ForkPin` gains
+`spec_revision` and `created_at_ns`, `MAX_FORK_DEPTH = 32`,
+`drop_fork_tree`, and a drop guard. 15 integration tests in
+`tests/fork_nested.rs`.
+
+The design turned out to be smaller than the plan feared, for one
+reason: **a pin is keyed by table id and does not care whose table it
+is.** A child pinning its parent's tables is the same mechanism pointed
+one level down, so the write path, the commit protocol, compaction and
+the refinement invariant all generalised untouched — a child's shadow
+references paths listed in the manifest it shadows, which is exactly
+what the invariant already said.
+
+What did have to change was **name resolution**, and it is the one part
+that could have been silently wrong. `entry_opt` and `list_tables`
+resolved a name through the *global catalog*, filtered by the pin set.
+Inside a nested fork that answers with the base table a parent had
+already shadowed. They now resolve through the pin set by name, which is
+the only structure that knows what a name meant at fork time — and which
+is also read-free, so the fix made flat forks cheaper too. Carrying
+`spec_revision`/`created_at_ns` on the pin is what made that possible at
+zero cost: the catalog entry is already in hand when the pin is written.
+
+Both added-field sets use `Option` + `skip_serializing_if` rather than
+`#[serde(default)]` alone. That is load-bearing, not style: a fork
+object is self-checksummed, so a field that serialises when absent
+changes the bytes and turns every fork in every existing database into a
+corruption error. Pinned by `a_fork_written_before_nesting_still_verifies`.
+
+The GC guard is stated in terms of **dependency, not lineage**: a drop
+is refused when another fork pins a table this one owns. A child that
+forked before its parent wrote anything holds nothing of the parent's,
+so dropping the parent is allowed — which is correct, and is what a
+parent-name check would have got wrong. `drop_fork_tree` discovers the
+subtree by the same relation and drops it deepest-first.
+
+Measured: resolving a table at depth 24 costs **exactly** as many object
+reads as at depth 2 (asserted with `assert_eq!`, not a bound). That is
+the property BranchBench found every system missing — Dolt's reads
+degrade 5-4000x with depth — and it holds here because a shadow manifest
+names its segments by path, so there is no chain to walk.

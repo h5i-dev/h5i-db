@@ -1525,8 +1525,9 @@ async fn run(cli: Cli) -> Result<()> {
                         }
                     }
                 };
-                // Deliberately the base handle: forks are not nested in v1, and
-                // `--fork x fork create y` should say so rather than guess.
+                // `--fork x fork create y` nests y inside x (ROADMAP X-C1):
+                // the handle carries the scope, and the child pins whatever
+                // that scope could see.
                 let db = open_db(&db, fork).await?;
                 match count {
                     // One fork stays one JSON object rather than a list of
