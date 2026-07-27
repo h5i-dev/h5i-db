@@ -12,6 +12,7 @@ h5i-db-core = { workspace = true }
 h5i-db-query = { workspace = true }
 arrow = { workspace = true }
 axum = "0.8"
+futures = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -2,8 +2,9 @@
 //!
 //! A thin review surface, not a database GUI (DESIGN_CLAUDE.md §8-UI): its
 //! job is letting a human inspect and approve what agents did or plan to do —
-//! pending mutation plans first (they block someone), then version history,
-//! snapshots, tables, and an SQL scratchpad.
+//! pending mutation plans first (they block someone), then the live fork
+//! monitor (what every agent branch is doing right now, pushed over SSE),
+//! version history, snapshots, tables, and an SQL scratchpad.
 //!
 //! Server design follows `h5i serve`: axum on loopback only, single embedded
 //! HTML asset, flat `/api/*` JSON endpoints, read-only unless the process was
@@ -17,9 +18,11 @@ use std::time::Duration;
 use axum::extract::{Path as AxPath, Query, Request, State};
 use axum::http::{Method, StatusCode, header};
 use axum::middleware::{self, Next};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures::stream::Stream;
 use serde::Deserialize;
 use serde_json::json;
 use tower::limit::ConcurrencyLimitLayer;
@@ -41,6 +44,10 @@ const UI_QUERY_CONCURRENCY: usize = 2;
 /// Header required on every mutating request. Cross-origin pages cannot set
 /// custom headers without a CORS preflight, and we never answer preflights.
 const CSRF_HEADER: &str = "x-h5i-csrf";
+/// How often the `/api/events` stream re-derives the live frame. Frames are
+/// only *sent* when the frame actually changed, so an idle database costs a
+/// metadata poll per tick and no traffic.
+const EVENTS_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub struct UiState {
@@ -116,6 +123,9 @@ pub fn build_router(state: UiState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/api/overview", get(overview))
+        .route("/api/forks", get(forks))
+        .route("/api/fork/{name}", get(fork_detail))
+        .route("/api/events", get(events))
         .route("/api/table/{name}", get(table_detail))
         .route("/api/table/{name}/sample", get(table_sample))
         .route("/api/table/{name}/diff", get(version_diff))
@@ -278,13 +288,15 @@ type ApiResult = Result<Json<serde_json::Value>, ApiError>;
 // handlers
 // ---------------------------------------------------------------------------
 
-/// The triage projection: everything the front page needs in one call —
-/// pending plans (needs-a-human), tables, snapshots, policy, mode.
-async fn overview(State(st): State<UiState>) -> ApiResult {
+/// The live projection shared by `/api/overview` and the `/api/events`
+/// stream: everything that changes while agents work — tables, pending
+/// plans, forks — but none of the slow-moving extras (policy, snapshots).
+async fn live_frame(st: &UiState) -> Result<serde_json::Value, Error> {
     let mut tables = Vec::new();
     let mut plans = Vec::new();
     for entry in st.db.list_tables().await? {
         let resolved = st.db.resolve(&entry.name, ReadAt::Latest).await?;
+        let head = resolved.head_sequence;
         tables.push(json!({
             "name": entry.name,
             "version": resolved.manifest.sequence,
@@ -298,15 +310,24 @@ async fn overview(State(st): State<UiState>) -> ApiResult {
             "execution_mode": resolved.manifest.execution_mode,
         }));
         for plan in st.db.list_plans(&entry.name).await? {
-            plans.push(plan_summary_json(
-                &plan,
-                st.db
-                    .resolve(&entry.name, ReadAt::Latest)
-                    .await?
-                    .head_sequence,
-            ));
+            plans.push(plan_summary_json(&plan, head));
         }
     }
+    let forks = st.db.list_forks().await?;
+    Ok(json!({
+        "db": st.db_label,
+        "fork": st.db.fork_name(),
+        "allow_mutations": st.allow_mutations,
+        "plans": plans,
+        "tables": tables,
+        "forks": forks,
+    }))
+}
+
+/// The triage projection: everything the front page needs in one call —
+/// pending plans (needs-a-human), tables, forks, snapshots, policy, mode.
+async fn overview(State(st): State<UiState>) -> ApiResult {
+    let mut out = live_frame(&st).await?;
     let snapshots: Vec<_> = st
         .db
         .list_snapshots()
@@ -323,15 +344,68 @@ async fn overview(State(st): State<UiState>) -> ApiResult {
             })
         })
         .collect();
+    out["read_only_db"] = json!(st.db.is_read_only());
+    out["policy"] = serde_json::to_value(st.db.policy().await?).map_err(Error::from)?;
+    out["snapshots"] = json!(snapshots);
+    Ok(Json(out))
+}
+
+/// Fork monitor projection: every fork with lineage and liveness numbers.
+async fn forks(State(st): State<UiState>) -> ApiResult {
     Ok(Json(json!({
-        "db": st.db_label,
-        "allow_mutations": st.allow_mutations,
-        "read_only_db": st.db.is_read_only(),
-        "policy": st.db.policy().await?,
-        "plans": plans,
-        "tables": tables,
-        "snapshots": snapshots,
+        "fork": st.db.fork_name(),
+        "forks": st.db.list_forks().await?,
     })))
+}
+
+/// One fork in depth: its pin set and metadata plus the per-table divergence
+/// from its base. Runs against the base scope so it also answers when the
+/// server itself was started `--fork`-scoped.
+async fn fork_detail(State(st): State<UiState>, AxPath(name): AxPath<String>) -> ApiResult {
+    let base = st.db.base();
+    let info = base.fork_info(&name).await?;
+    let diff = base.fork_diff(&name, None).await?;
+    Ok(Json(json!({"info": info, "diff": diff})))
+}
+
+/// Server-sent events for the monitor: a ticker re-derives the live frame
+/// and pushes it only when its fingerprint changed, so an idle database is
+/// silent (bar keep-alives) and a busy one streams one frame per tick. The
+/// first frame is sent immediately.
+async fn events(State(st): State<UiState>) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let stream = futures::stream::unfold(
+        (st, None::<u64>, true),
+        |(st, mut last, mut first)| async move {
+            loop {
+                if !first {
+                    tokio::time::sleep(EVENTS_INTERVAL).await;
+                }
+                first = false;
+                let frame = match live_frame(&st).await {
+                    Ok(f) => f,
+                    // A storage hiccup mid-poll is not worth tearing the
+                    // stream down for; the next tick retries.
+                    Err(_) => continue,
+                };
+                let body = frame.to_string();
+                let fp = fingerprint(&body);
+                if last == Some(fp) {
+                    continue;
+                }
+                last = Some(fp);
+                let ev = Event::default().event("update").data(body);
+                return Some((Ok(ev), (st, last, false)));
+            }
+        },
+    );
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+}
+
+fn fingerprint(s: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 fn plan_summary_json(plan: &MutationPlan, head: u64) -> serde_json::Value {

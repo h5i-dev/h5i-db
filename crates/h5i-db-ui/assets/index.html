@@ -116,6 +116,46 @@ a.vlink:hover { text-decoration: underline; }
   font-family: var(--font-mono); font-size: 12px; }
 select { background: var(--elev); color: var(--text); border: 1px solid var(--border);
   border-radius: 4px; font: inherit; font-size: 12px; padding: 4px 8px; }
+
+/* fork monitor — herdr's glance vocabulary: one status dot per fork
+   (conflict > working > ahead > idle), tree structure recedes a shade
+   below the labels, selection is elevation rather than borders, and only
+   `working` animates. */
+.livedot { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--dim); white-space: nowrap; }
+.livedot.on { color: var(--accent); }
+nav button .badge.alert { background: var(--red); color: #2b0808; }
+.forkchip { font-family: var(--font-mono); font-size: 10.5px; color: var(--violet);
+  background: rgba(180,139,217,.12); padding: 3px 9px; border-radius: 3px; }
+.fstats { display: flex; gap: 16px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--dim); margin: 2px 0 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.fstats b { color: var(--text); font-weight: 400; }
+.ftree { font-family: var(--font-mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.frow { display: flex; align-items: center; gap: 7px; padding: 4px 8px;
+  border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.frow:hover { background: var(--surface-2); }
+.frow.sel { background: var(--elev); }
+.frow.base { cursor: default; }
+.frow .pre { color: var(--dim); white-space: pre; }
+.frow .st { width: 13px; text-align: center; flex: none; }
+.st.conflict { color: var(--red); } .st.working { color: var(--orange); }
+.st.ahead { color: var(--accent); } .st.idle { color: var(--dim); }
+.frow .nm { overflow: hidden; text-overflow: ellipsis; }
+.frow.base .nm { color: var(--muted); }
+.frow .meta { margin-left: auto; color: var(--dim); font-size: 11px; padding-left: 14px; }
+.frow .meta .hot { color: var(--red); }
+.cols.forks { grid-template-columns: 1.15fr 1fr; align-items: start; }
+@media (max-width: 1100px) { .cols.forks { grid-template-columns: 1fr; } }
+.tag.f-conflict { color: var(--red); background: rgba(255,107,107,.12); }
+.tag.f-working { color: var(--orange); background: rgba(240,160,80,.12); }
+.tag.f-ahead { color: var(--accent); background: var(--accent-bg); }
+.tag.f-idle { color: var(--dim); }
+.tag.created { color: var(--green); }
+.tag.shadowed { color: var(--violet); }
+.cmdline { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted);
+  background: var(--bg); border-radius: 5px; padding: 8px 10px; margin-top: 6px;
+  overflow-x: auto; white-space: nowrap; cursor: copy; }
+.cmdline:hover { color: var(--text); }
 </style>
 </head>
 <body>
@@ -124,7 +164,9 @@ select { background: var(--elev); color: var(--text); border: 1px solid var(--bo
     <div class="logo">h5i-<b>db</b> <span style="color:var(--dim);font-weight:400">review</span></div>
     <nav id="nav"></nav>
     <span class="dbpath" id="dbpath"></span>
+    <span class="forkchip" id="forkchip" style="display:none"></span>
     <span class="mode ro" id="mode">…</span>
+    <span class="livedot" id="livedot">○ connecting</span>
   </header>
   <main id="main"><div class="quiet">loading…</div></main>
 </div>
@@ -182,14 +224,26 @@ async function api(path, opts) {
 }
 const post = (path) => api(path, { method: "POST", headers: {"content-type": "application/json"} });
 
+const fmtAgo = (ns) => {
+  if (ns == null) return null;
+  const s = (Date.now() * 1e6 - ns) / 1e9;
+  if (s < 1) return "now";
+  if (s < 60) return Math.floor(s) + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  if (s < 86400) return Math.floor(s / 3600) + "h ago";
+  return Math.floor(s / 86400) + "d ago";
+};
+
 // ---------------------------------------------------------------- state
 let OV = null;               // /api/overview payload
 let view = "review";         // current view
 let tableSel = null;         // selected table for the tables/history views
+let forkSel = null;          // selected fork for the forks view
 
 // ---------------------------------------------------------------- shell
 const VIEWS = [
   ["review",   "Review"],
+  ["forks",    "Forks"],
   ["tables",   "Tables"],
   ["history",  "History"],
   ["sql",      "SQL"],
@@ -198,14 +252,28 @@ const VIEWS = [
 function renderNav() {
   const nav = $("#nav");
   nav.replaceChildren(...VIEWS.map(([id, label]) => {
-    const pending = id === "review" ? OV.plans.filter(p => !p.expired).length : 0;
+    // Roll status up by attention priority, not by count: the badge shows
+    // the most urgent thing behind the tab (conflicts outrank activity).
+    let badge = null;
+    if (id === "review") {
+      const pending = OV.plans.filter(p => !p.expired).length;
+      if (pending) badge = h("span", { class: "badge" }, String(pending));
+    } else if (id === "forks") {
+      const conflicts = (OV.forks || []).filter(f => f.stale_shadows > 0).length;
+      const working = (OV.forks || []).filter(f => forkState(f) === "working").length;
+      if (conflicts) badge = h("span", { class: "badge alert" }, String(conflicts));
+      else if (working) badge = h("span", { class: "badge" }, String(working));
+    }
     return h("button", { class: view === id ? "active" : "", onclick: () => { view = id; render(); } },
-      label, pending ? h("span", { class: "badge" }, String(pending)) : null);
+      label, badge);
   }));
 }
 async function refresh() {
   OV = await api("/api/overview");
   $("#dbpath").textContent = OV.db;
+  const chip = $("#forkchip");
+  if (OV.fork) { chip.style.display = ""; chip.textContent = "fork: " + OV.fork; }
+  else chip.style.display = "none";
   const mode = $("#mode");
   mode.textContent = OV.allow_mutations ? "mutations allowed" : "read-only";
   mode.className = "mode " + (OV.allow_mutations ? "rw" : "ro");
@@ -216,8 +284,54 @@ function render() {
   renderNav();
   const main = $("#main");
   main.replaceChildren();
-  ({ review: renderReview, tables: renderTables, history: renderHistory,
-     sql: renderSql, snapshots: renderSnapshots })[view](main);
+  ({ review: renderReview, forks: renderForks, tables: renderTables,
+     history: renderHistory, sql: renderSql, snapshots: renderSnapshots })[view](main);
+}
+
+// ------------------------------------------------------- live event stream
+// One SSE subscription (over fetch, so it can carry the bearer token) keeps
+// tables / plans / forks current; the server only pushes frames when the
+// state actually changed. The dot in the header reports transport state
+// honestly — "live" means the stream is open, not that we hope it is.
+function setLive(state) {
+  const el = $("#livedot");
+  if (state === "live") { el.textContent = "● live"; el.className = "livedot on"; }
+  else if (state === "connecting") { el.textContent = "○ connecting"; el.className = "livedot"; }
+  else { el.textContent = "○ offline — retrying"; el.className = "livedot"; }
+}
+function applyFrame(f) {
+  if (!OV) return;
+  OV.plans = f.plans; OV.tables = f.tables; OV.forks = f.forks;
+  renderNav();
+  if (view === "forks") { drawForkTree(); renderForkDetail(true); }
+}
+async function startLive() {
+  for (;;) {
+    try {
+      setLive("connecting");
+      const res = await fetch("/api/events", { headers: { "authorization": "Bearer " + TOKEN } });
+      if (!res.ok || !res.body) throw new Error("events " + res.status);
+      setLive("live");
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf("\n\n")) >= 0) {
+          const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+          const data = chunk.split("\n").filter(l => l.startsWith("data:"))
+            .map(l => l.slice(5).trim()).join("\n");
+          if (!data) continue;                       // keep-alive comment
+          try { applyFrame(JSON.parse(data)); } catch (_) { /* partial frame */ }
+        }
+      }
+    } catch (_) { /* fall through to retry */ }
+    setLive("retry");
+    await new Promise(r => setTimeout(r, 3000));
+  }
 }
 
 // ---------------------------------------------------------------- data grid
@@ -322,6 +436,219 @@ function showErr(status, e) {
     h("span", { class: "err" }, `${env.code || "error"}: ${e.message}`),
     env.hint ? h("span", { class: "hint" }, ` — ${env.hint}`) : null);
 }
+const errline = (e) => h("div", { class: "statusline" }, h("span", { class: "err" }, e.message));
+
+// ---------------------------------------------------------------- forks
+// One glanceable status per fork, rolled up from what the metadata proves:
+//   conflict — the base moved under a shadowed table; promote will CAS-fail
+//   working  — the fork committed within the last 15 s
+//   ahead    — it holds unpromoted commits, quiet right now
+//   idle     — forked, never wrote
+const ACTIVE_NS = 15e9;
+function forkState(f) {
+  if (f.stale_shadows > 0) return "conflict";
+  if (f.last_write_ns != null && Date.now() * 1e6 - f.last_write_ns < ACTIVE_NS) return "working";
+  if (f.commits_own > 0 || f.tables_created + f.tables_shadowed > 0) return "ahead";
+  return "idle";
+}
+const ST_ICON = { conflict: "◉", working: "●", ahead: "●", idle: "○" };
+// Only `working` animates — the braille spinner is the single motion
+// primitive, and it stands still under prefers-reduced-motion.
+const SPIN = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let spinTick = 0;
+if (!REDUCED) setInterval(() => {
+  const els = document.querySelectorAll(".spin");
+  if (!els.length) return;
+  const g = SPIN[++spinTick % SPIN.length];
+  for (const el of els) el.textContent = g;
+}, 100);
+// "…s ago" labels and activity states decay even when no frame arrives.
+setInterval(() => { if (view === "forks" && OV) { drawForkTree(); renderNav(); } }, 8000);
+
+function statusIcon(state) {
+  const spin = state === "working" && !REDUCED;
+  return h("span", { class: "st " + state + (spin ? " spin" : "") },
+    spin ? SPIN[spinTick % SPIN.length] : ST_ICON[state]);
+}
+// Row meta follows herdr's token rule: missing values and their separators
+// vanish rather than rendering as zeros.
+function forkMeta(f) {
+  const t = [];
+  if (f.tables_shadowed) t.push(f.tables_shadowed + " shadowed");
+  if (f.tables_created) t.push(f.tables_created + " created");
+  if (f.commits_own) t.push("+" + f.commits_own);
+  if (f.bytes_own) t.push(fmtBytes(f.bytes_own) + " own");
+  const ago = fmtAgo(f.last_write_ns);
+  if (ago) t.push(ago);
+  const parts = [t.join(" · ")];
+  if (f.stale_shadows) parts.push(h("span", { class: "hot" },
+    (t.length ? " · " : "") + f.stale_shadows + " conflict" + (f.stale_shadows > 1 ? "s" : "")));
+  return parts;
+}
+// Depth-first rows with connected branch glyphs; the base database is the
+// root. Lineage uses the recorded parent, falling back to top-level when a
+// parent is gone.
+function forkTreeRows(forks) {
+  const names = new Set(forks.map(f => f.name));
+  const kids = new Map();
+  const roots = [];
+  for (const f of forks) {
+    if (f.parent && names.has(f.parent)) {
+      if (!kids.has(f.parent)) kids.set(f.parent, []);
+      kids.get(f.parent).push(f);
+    } else roots.push(f);
+  }
+  const rows = [];
+  const walk = (f, prefix, childPrefix) => {
+    rows.push({ f, prefix });
+    const c = kids.get(f.name) || [];
+    c.forEach((k, i) => {
+      const last = i === c.length - 1;
+      walk(k, childPrefix + (last ? "└─ " : "├─ "), childPrefix + (last ? "   " : "│  "));
+    });
+  };
+  roots.forEach((f, i) => {
+    const last = i === roots.length - 1;
+    walk(f, last ? "└─ " : "├─ ", last ? "   " : "│  ");
+  });
+  return rows;
+}
+
+let forkTreeBox = null;
+let forkDetailBox = null;
+function renderForks(main) {
+  forkTreeBox = h("div", { class: "card" });
+  forkDetailBox = h("div", { class: "card" });
+  main.append(h("p", { class: "micro" }, "forks — live branch monitor"));
+  main.append(h("div", { class: "cols forks" }, forkTreeBox, forkDetailBox));
+  drawForkTree();
+  if (forkSel) renderForkDetail();
+  else forkDetailBox.replaceChildren(h("div", { class: "quiet" },
+    "select a fork to see its pins, divergence from base, and promote/drop commands"));
+}
+function drawForkTree() {
+  if (!forkTreeBox || !forkTreeBox.isConnected) return;
+  const forks = OV.forks || [];
+  const counts = { conflict: 0, working: 0, ahead: 0, idle: 0 };
+  let own = 0, pinned = 0;
+  for (const f of forks) { counts[forkState(f)]++; own += f.bytes_own; pinned += f.bytes_pinned; }
+  const stats = h("div", { class: "fstats" },
+    h("span", {}, h("b", {}, String(forks.length)), " fork" + (forks.length === 1 ? "" : "s")),
+    counts.conflict ? h("span", { style: "color:var(--red)" }, String(counts.conflict) + " conflict") : null,
+    counts.working ? h("span", { style: "color:var(--orange)" }, String(counts.working) + " working") : null,
+    counts.ahead ? h("span", { style: "color:var(--accent)" }, String(counts.ahead) + " ahead") : null,
+    counts.idle ? h("span", {}, String(counts.idle) + " idle") : null,
+    own ? h("span", {}, h("b", {}, fmtBytes(own)), " fork-owned") : null,
+    pinned ? h("span", {}, h("b", {}, fmtBytes(pinned)), " pinned in base") : null,
+  );
+  const tree = h("div", { class: "ftree" });
+  tree.append(h("div", { class: "frow base" },
+    h("span", { class: "st", style: "color:var(--accent)" }, "◆"),
+    h("span", { class: "nm" }, OV.db + (OV.fork ? "  (scope: fork " + OV.fork + ")" : "")),
+    h("span", { class: "meta" }, (OV.tables || []).length + " tables")));
+  for (const { f, prefix } of forkTreeRows(forks)) {
+    const state = forkState(f);
+    tree.append(h("div", {
+      class: "frow" + (f.name === forkSel ? " sel" : ""),
+      onclick: () => { forkSel = f.name; drawForkTree(); renderForkDetail(); },
+    },
+      h("span", { class: "pre" }, prefix),
+      statusIcon(state),
+      h("span", { class: "nm" }, f.name),
+      h("span", { class: "meta" }, forkMeta(f))));
+  }
+  forkTreeBox.replaceChildren(stats, tree);
+  if (!forks.length) forkTreeBox.append(h("div", { class: "quiet" },
+    "No forks. `h5i-db fork create " + OV.db + " <name>` gives an agent a fully " +
+    "writable copy of the database in O(1) — one JSON object, nothing copied."));
+}
+async function renderForkDetail(silent) {
+  const card = forkDetailBox;
+  if (!card || !card.isConnected || !forkSel) return;
+  const name = forkSel;
+  if (!silent) card.replaceChildren(h("div", { class: "quiet" }, "loading " + name + "…"));
+  let d;
+  try { d = await api("/api/fork/" + encodeURIComponent(name)); }
+  catch (e) { if (!silent) card.replaceChildren(errline(e)); return; }
+  if (forkSel !== name || !card.isConnected) return;   // selection moved on
+  const f = (OV.forks || []).find(x => x.name === name);
+  const state = f ? forkState(f) : "idle";
+  const info = d.info, diff = d.diff;
+  const bits = [];
+  bits.push(h("div", { class: "plan-head" },
+    h("span", { class: "title" }, name),
+    h("span", { class: "tag f-" + state }, state),
+    h("span", { style: "margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--dim)" },
+      "forked " + fmtTs(info.created_at_ns))));
+  if (info.note) bits.push(h("div", { class: "hintline" }, info.note));
+  bits.push(h("div", { class: "kv" },
+    info.parent ? h("span", { class: "k" }, "parent") : null,
+    info.parent ? h("span", {}, h("a", { class: "vlink", onclick: () => {
+      forkSel = info.parent; drawForkTree(); renderForkDetail();
+    } }, info.parent)) : null,
+    h("span", { class: "k" }, "depth"), h("span", {}, String(info.depth || 0)),
+    info.as_of_ns ? h("span", { class: "k" }, "as of") : null,
+    info.as_of_ns ? h("span", {}, fmtTs(info.as_of_ns)) : null,
+    h("span", { class: "k" }, "pinned tables"), h("span", {}, String(Object.keys(info.pins || {}).length)),
+    f ? h("span", { class: "k" }, "fork-owned bytes") : null,
+    f ? h("span", {}, fmtBytes(f.bytes_own)) : null,
+    f ? h("span", { class: "k" }, "holds back in base") : null,
+    f ? h("span", {}, fmtBytes(f.bytes_pinned)) : null,
+  ));
+  const meta = info.user_meta || {};
+  if (Object.keys(meta).length) {
+    bits.push(h("p", { class: "micro" }, "agent metadata"));
+    bits.push(h("div", { class: "kv" }, Object.entries(meta).map(([k, v]) => [
+      h("span", { class: "k" }, k),
+      h("span", {}, typeof v === "string" ? v : JSON.stringify(v)),
+    ]).flat()));
+  }
+  const tables = (diff && diff.tables) || [];
+  if (tables.length) {
+    bits.push(h("p", { class: "micro" }, "tables the fork touched"));
+    const t = h("table", { class: "grid" });
+    t.append(h("tr", {}, ["table", "kind", "commits", "rows", "own size", "base"].map(x => h("th", {}, x))));
+    for (const td of tables) {
+      const shadowed = td.kind === "shadowed";
+      t.append(h("tr", {},
+        h("td", {}, td.table),
+        h("td", {}, h("span", { class: "tag " + td.kind }, td.kind)),
+        h("td", { class: "num" }, "+" + td.fork_versions),
+        h("td", { class: "num" }, shadowed
+          ? fmtNum(td.rows_base) + " → " + fmtNum(td.rows_fork) : fmtNum(td.rows_fork)),
+        h("td", { class: "num" }, fmtBytes(td.bytes_fork)),
+        h("td", {}, !shadowed ? "—" : td.base_moved
+          ? h("span", { style: "color:" + (td.base_moved_by_compaction_only ? "var(--orange)" : "var(--red)") },
+              td.base_moved_by_compaction_only
+                ? `moved v${td.base_sequence} → v${td.base_head_sequence} (compaction only)`
+                : `moved v${td.base_sequence} → v${td.base_head_sequence} — promote will conflict`)
+          : h("span", { style: "color:var(--dim)" }, "v" + td.base_sequence + " ✓"))));
+    }
+    bits.push(h("div", { class: "scroll-x" }, t));
+  } else {
+    bits.push(h("div", { class: "quiet" }, "the fork has not written anything yet — it reads base data through its pins"));
+  }
+  const pins = Object.values(info.pins || {});
+  if (pins.length) {
+    bits.push(h("p", { class: "micro" }, "pins (base versions this fork holds)"));
+    const shown = pins.slice(0, 12);
+    bits.push(h("div", { class: "kv" },
+      shown.map(p => [h("span", { class: "k" }, p.table_name), h("span", {}, "v" + p.sequence)]).flat(),
+      pins.length > shown.length ? h("span", { class: "k" }, "…") : null,
+      pins.length > shown.length ? h("span", {}, (pins.length - shown.length) + " more") : null));
+  }
+  // The UI stays read-only; the CLI is the mutation surface. Click to copy.
+  bits.push(h("p", { class: "micro" }, "act from the cli — click to copy"));
+  const cmd = (text) => h("div", { class: "cmdline", title: "copy",
+    onclick: (e) => { navigator.clipboard.writeText(text); e.target.style.color = "var(--accent)";
+      setTimeout(() => { e.target.style.color = ""; }, 400); } }, text);
+  const firstTable = tables.length ? tables[0].table : "<table>";
+  bits.push(cmd(`h5i-db fork promote ${OV.db} ${name} --table ${firstTable}`));
+  bits.push(cmd(`h5i-db fork drop ${OV.db} ${name}`));
+  bits.push(cmd(`h5i-db query ${OV.db} "SELECT __fork, count(*) FROM forks('${firstTable === "<table>" ? (OV.tables[0] || {}).name || "<table>" : firstTable}') GROUP BY __fork"`));
+  card.replaceChildren(...bits);
+}
 
 // ---------------------------------------------------------------- tables
 function renderTables(main) {
@@ -354,10 +681,10 @@ function renderTables(main) {
         h("td", {}, f.name === d.time_column ? h("span", { class: "tag planned" }, "time index") : "")));
     }
     schemaCard.append(h("div", { class: "scroll-x" }, st));
-  });
+  }).catch(e => schemaCard.append(errline(e)));
   api(`/api/table/${encodeURIComponent(tableSel)}/sample?rows=20`).then(d => {
     sampleCard.append(dataGrid(d));
-  });
+  }).catch(e => sampleCard.append(errline(e)));
 }
 
 // ---------------------------------------------------------------- history
@@ -399,7 +726,7 @@ function renderHistory(main) {
     }
     timeline.replaceChildren(h("p", { class: "micro" },
       `versions of ${tableSel} (newest first)`), t);
-  });
+  }).catch(e => timeline.replaceChildren(errline(e)));
   async function loadDiff() {
     const d = await api(`/api/table/${encodeURIComponent(tableSel)}/diff?from=${Math.min(from,to)}&to=${Math.max(from,to)}`);
     diffCard.replaceChildren(
@@ -506,7 +833,7 @@ function renderSnapshots(main) {
 }
 
 // ---------------------------------------------------------------- boot
-refresh().catch(e => {
+refresh().then(() => { startLive(); }).catch(e => {
   $("#main").replaceChildren(h("div", { class: "statusline" }, h("span", { class: "err" }, e.message)));
 });
 </script>
