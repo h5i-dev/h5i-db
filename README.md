@@ -145,6 +145,12 @@ any plan already staged.
 - **Errors that can be acted on:** the stderr envelope carries `next_actions`
 (runnable commands), `did_you_mean` for typos, and a `retryable` flag.
 
+- **Branch without copying.** `fork` opens a writable workspace over a pinned
+view of every table and duplicates no data, so an edit or an experiment costs
+one small file and is as cheap to discard as to keep. `forks('trades')` then
+reads that table across every branch at once with a `__fork` column, so
+comparing what each one produced needs no export step.
+
 - **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
 require that gate; `--idempotency-key` makes a retried ingest replay instead of
 double-appending; an opt-in `data-policy` rejects malformed rows fail-closed;
