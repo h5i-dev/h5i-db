@@ -61,7 +61,7 @@
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html" class="active">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_leakage_check.html">leakage-check: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html" class="active">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_leakage_check.html">Leakage checks: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -77,24 +77,25 @@
 <p>The worst place to discover a broken vendor file is in the P&amp;L meeting.
 The pattern that prevents it is old ETL wisdom with a versioned twist:
 <strong>land every delivery in a staging table, run gates, and only promote to
-production on pass</strong>. h5i-db makes each step defensible: the raw broken
+production on pass</strong>. h5i-db makes each step defensible - the raw broken
 delivery stays on record as a staging version (evidence, not embarrassment),
 the fix goes through a previewable plan/apply mutation with before/after
 samples, and a database-level policy makes direct destructive writes
 <em>impossible to do casually</em>, for humans and pipeline agents alike.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
-<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
-<span class="kn">import</span> <span class="nn">h5i_db</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">when</span>
 
-<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_dq&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 <h2 id="1-production-history-and-a-staging-table">1. Production history and a staging table<a class="headerlink" href="#1-production-history-and-a-staging-table" title="Permanent link">#</a></h2>
 <p>A 20-name universe with ~1 year of daily closes in <code>prices_prod</code>. The
-vendor's next file will land in <code>vendor_staging</code>: same schema, separate
+vendor's next file will land in <code>vendor_staging</code> - same schema, separate
 table, so nothing unvetted ever touches production.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">UNIVERSE</span> <span class="o">=</span> <span class="p">[</span><span class="sa">f</span><span class="s2">&quot;STK</span><span class="si">{</span><span class="n">i</span><span class="si">:</span><span class="s2">03d</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">20</span><span class="p">)]</span>
 <span class="n">panel</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_daily_prices</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="n">UNIVERSE</span><span class="p">,</span> <span class="n">days</span><span class="o">=</span><span class="mi">250</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
@@ -122,7 +123,7 @@ table, so nothing unvetted ever touches production.</p>
                          <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
     <span class="n">note</span><span class="o">=</span><span class="s2">&quot;production history backfill&quot;</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT count(*) AS rows, count(DISTINCT ts) AS sessions FROM prices_prod&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices_prod&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">rows</span><span class="o">=</span><span class="n">count_star</span><span class="p">(),</span> <span class="n">sessions</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">())</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
 
@@ -146,7 +147,7 @@ table, so nothing unvetted ever touches production.</p>
 <h2 id="2-lock-the-database-down-first">2. Lock the database down first<a class="headerlink" href="#2-lock-the-database-down-first" title="Permanent link">#</a></h2>
 <p><code>set_policy</code> flips database-wide flags gating the <em>direct</em> mutation paths.
 With <code>direct_write</code> / <code>direct_delete</code> off, restatements and deletions must
-go through the plan/apply flow (previewed, noted, and conflict-checked)
+go through the plan/apply flow - previewed, noted, and conflict-checked -
 while plain <code>append</code> (the only thing an ingest job should ever do) stays
 open. This is the guardrail you want when pipelines are driven by cron jobs
 or LLM agents: the destructive path simply isn't callable. (In the Python
@@ -162,7 +163,7 @@ direct paths.)</p>
  &#x27;direct_compact&#x27;: True}</pre></div></div>
 <h2 id="3-todays-delivery-is-broken-four-ways">3. Today's delivery is broken four ways<a class="headerlink" href="#3-todays-delivery-is-broken-four-ways" title="Permanent link">#</a></h2>
 <p>The vendor file: half the universe missing, one negative price, one null,
-and two duplicated rows. We land it in staging as-is; the raw file becomes
+and two duplicated rows. We land it in staging as-is - the raw file becomes
 an immutable staging version, which is exactly what you want to show the
 vendor when you open the ticket.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">corrupt</span> <span class="o">=</span> <span class="n">delivery_true</span><span class="p">[</span><span class="n">delivery_true</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isin</span><span class="p">(</span><span class="n">UNIVERSE</span><span class="p">[:</span><span class="mi">10</span><span class="p">])]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
@@ -254,26 +255,31 @@ vendor when you open the ticket.</p>
 <p>Completeness against the expected universe, null and price sanity,
 duplicate detection, and a row-count check against the trailing 20-session
 average in production (a cheap but effective "did the vendor send half a
-file" alarm). Every check reads the <em>staging table's current version</em>, so
-the gate result is reproducible against that version forever.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">run_gate</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-    <span class="n">stat</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">        SELECT count(*)                                 AS rows,</span>
-<span class="s2">               count(DISTINCT symbol)                   AS symbols,</span>
-<span class="s2">               sum(CASE WHEN close IS NULL THEN 1 ELSE 0 END) AS null_closes,</span>
-<span class="s2">               min(close)                               AS px_min</span>
-<span class="s2">        FROM vendor_staging</span>
-<span class="s2">        WHERE ts &gt;= &#39;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T00:00:00Z&#39; AND ts &lt; &#39;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T23:59:59Z&#39;</span>
-<span class="s2">        &quot;&quot;&quot;</span>
-    <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
-    <span class="n">trailing</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        SELECT avg(n) AS avg_rows FROM (</span>
-<span class="sd">            SELECT ts, count(*) AS n FROM prices_prod GROUP BY ts ORDER BY ts DESC LIMIT 20</span>
-<span class="sd">        )</span>
-<span class="sd">        &quot;&quot;&quot;</span>
-    <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;avg_rows&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+file" alarm). Every check reads the <em>staging table's current version</em> - the
+gate result is reproducible against that version forever.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">run_gate</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+    <span class="n">stat</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;vendor_staging&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T00:00:00Z&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T23:59:59Z&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">select</span><span class="p">(</span>
+            <span class="n">rows</span><span class="o">=</span><span class="n">count_star</span><span class="p">(),</span>
+            <span class="n">symbols</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">(),</span>
+            <span class="n">null_closes</span><span class="o">=</span><span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_null</span><span class="p">())</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span>
+            <span class="n">px_min</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span>
+        <span class="p">)</span>
+        <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+        <span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="p">)</span>
+    <span class="n">trailing</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices_prod&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">count</span><span class="p">(</span><span class="s2">&quot;n&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">20</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">avg_rows</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;n&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
+        <span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;avg_rows&quot;</span><span class="p">]</span>
+        <span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="p">)</span>
 
     <span class="n">rows</span><span class="p">,</span> <span class="n">symbols</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">stat</span><span class="p">[</span><span class="s2">&quot;rows&quot;</span><span class="p">]),</span> <span class="nb">int</span><span class="p">(</span><span class="n">stat</span><span class="p">[</span><span class="s2">&quot;symbols&quot;</span><span class="p">])</span>
     <span class="n">checks</span> <span class="o">=</span> <span class="p">[</span>
@@ -338,7 +344,7 @@ the gate result is reproducible against that version forever.</p>
 </div></div></div></div>
 <h2 id="5-the-shortcut-that-policy-makes-impossible">5. The shortcut that policy makes impossible<a class="headerlink" href="#5-the-shortcut-that-policy-makes-impossible" title="Permanent link">#</a></h2>
 <p>The tempting fix: "just overwrite staging with the corrected file". With
-<code>direct_write</code> off, that path raises <code>PolicyError</code>, and the error's hint
+<code>direct_write</code> off, that path raises <code>PolicyError</code> - the error's hint
 points at the sanctioned flow. Nobody fixes production data at 2am with an
 unreviewed <code>write()</code> again.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">fixed</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span><span class="n">delivery_true</span><span class="p">[</span><span class="n">cols</span><span class="p">]</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">]),</span>
@@ -355,7 +361,7 @@ hint: run the write with --plan to preview it, review, then `h5i-db plan apply`;
 <p><code>plan_replace_range</code> stages the corrected delivery over the broken day's
 window (range bounds are raw <strong>microseconds</strong> in the time column's unit).
 The plan is not a commit: it carries a summary and before/after samples you
-can eyeball, or attach to the change ticket, before <code>apply()</code> publishes
+can eyeball - or attach to the change ticket - before <code>apply()</code> publishes
 it atomically. Applying is conflict-checked: if anyone commits to staging
 in between, apply fails instead of clobbering.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">day_start_us</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">delivery_ts</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">)</span>
@@ -399,7 +405,7 @@ AFTER (corrected delivery):
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;sequence&#x27;: 2, &#x27;op&#x27;: &#x27;replace_range&#x27;, &#x27;rows_total&#x27;: 20}</pre></div></div>
 <h2 id="7-re-run-the-gate-then-promote">7. Re-run the gate, then promote<a class="headerlink" href="#7-re-run-the-gate-then-promote" title="Permanent link">#</a></h2>
-<p>The gate now passes, so the delivery-day rows are appended to production,
+<p>The gate now passes, so the delivery-day rows are appended to production -
 with a note tying the promotion to the gated delivery. Both tables' version
 histories together tell the whole story: raw broken file, previewed fix,
 gated promotion.</p>
@@ -407,10 +413,13 @@ gated promotion.</p>
 <span class="k">assert</span> <span class="n">gate_fixed</span><span class="p">[</span><span class="s2">&quot;passed&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">all</span><span class="p">(),</span> <span class="s2">&quot;gate must pass after remediation&quot;</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;gate verdict: PROMOTE&quot;</span><span class="p">)</span>
 
-<span class="n">staged</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">&quot;SELECT ts, symbol, close, volume FROM vendor_staging &quot;</span>
-    <span class="sa">f</span><span class="s2">&quot;WHERE ts &gt;= &#39;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T00:00:00Z&#39; ORDER BY ts, symbol&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>
+<span class="n">staged</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;vendor_staging&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T00:00:00Z&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="s2">&quot;volume&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>
+<span class="p">)</span>
 <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;prices_prod&quot;</span><span class="p">,</span> <span class="n">staged</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">schema</span><span class="p">),</span> <span class="n">note</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;promoted gated delivery </span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 
 <span class="p">[</span>
@@ -436,7 +445,7 @@ gated promotion.</p>
   &#x27;rows&#x27;: 5000,
   &#x27;note&#x27;: &#x27;promoted gated delivery 2023-12-15&#x27;}]</pre></div></div>
 <h2 id="8-the-gate-report-dashboard-style">8. The gate report, dashboard-style<a class="headerlink" href="#8-the-gate-report-dashboard-style" title="Permanent link">#</a></h2>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mf">2.8</span><span class="p">))</span>
 <span class="n">ax</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">&quot;off&quot;</span><span class="p">)</span>
@@ -465,7 +474,7 @@ gated promotion.</p>
 <ul>
 <li>Staging + gate + promote is the pattern; h5i-db adds the receipts. The
   broken raw file, the previewed fix, and the promotion are all <em>versions
-  with notes</em>, so the incident report writes itself from <code>versions()</code>.</li>
+  with notes</em> - the incident report writes itself from <code>versions()</code>.</li>
 <li><code>set_policy(direct_write=False, direct_delete=False)</code> turns "please don't
   hot-fix production" from a convention into a <code>PolicyError</code>. Appends stay
   open, so ingest keeps flowing.</li>
@@ -473,7 +482,7 @@ gated promotion.</p>
   before/after samples, then an atomic, conflict-checked <code>apply()</code>.
   Remember: plan range bounds are raw microseconds.</li>
 <li>The row-count-vs-trailing-history check is the cheapest gate with the
-  highest catch rate: half-files and double-sends are far more common than
+  highest catch rate - half-files and double-sends are far more common than
   subtle corruption.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>

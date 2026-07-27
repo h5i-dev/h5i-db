@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NBBO consolidation: best bid/offer across fragmented venues · h5i-db docs</title>
-  <meta name="description" content="US equities trade on a dozen-plus venues, each publishing its own top of book. The consolidated best bid and offer (NBBO), the number your execution quality is measured against, has to be derived: at any instant, take …">
+  <meta name="description" content="US equities trade on a dozen or more venues, each publishing its own top of book. The consolidated best bid and offer, the number your execution quality is measured against, has to be derived: at any instant, take each …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -16,12 +16,12 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="NBBO consolidation: best bid/offer across fragmented venues · h5i-db docs">
-  <meta property="og:description" content="US equities trade on a dozen-plus venues, each publishing its own top of book. The consolidated best bid and offer (NBBO), the number your execution quality is measured against, has to be derived: at any instant, take …">
+  <meta property="og:description" content="US equities trade on a dozen or more venues, each publishing its own top of book. The consolidated best bid and offer, the number your execution quality is measured against, has to be derived: at any instant, take each …">
   <meta property="og:url" content="https://db.h5i.dev/cookbook/01_market_data_engineering/08_nbbo_consolidation.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="NBBO consolidation: best bid/offer across fragmented venues · h5i-db docs">
-  <meta name="twitter:description" content="US equities trade on a dozen-plus venues, each publishing its own top of book. The consolidated best bid and offer (NBBO), the number your execution quality is measured against, has to be derived: at any instant, take …">
+  <meta name="twitter:description" content="US equities trade on a dozen or more venues, each publishing its own top of book. The consolidated best bid and offer, the number your execution quality is measured against, has to be derived: at any instant, take each …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -74,38 +74,148 @@
 <span class="sep">/</span>
 <span>NBBO consolidation: best bid/offer across fragmented venues</span></div>
 <h1>NBBO consolidation: best bid/offer across fragmented venues</h1>
-<p>US equities trade on a dozen-plus venues, each publishing its own top of
-book. The consolidated best bid and offer (NBBO), the number your
-execution quality is measured against, has to be <em>derived</em>: at any instant,
-take each venue's latest quote and cross-sectionally best them. That
-"latest quote per venue at time t" is exactly an ASOF join, and h5i-db lets
-us build a research-grade sampled NBBO in a few SQL statements: a time grid
-ASOF-joined against per-venue quotes, then <code>max(bid)</code> / <code>min(ask)</code> per
-instant. Along the way we measure which venue actually sets the inside, how
-often the market locks or crosses, and how much tighter the consolidated
-spread is than any single venue's.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
-<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<p>US equities trade on a dozen or more venues, each publishing its own top of
+book. The consolidated best bid and offer, the number your execution quality
+is measured against, has to be <em>derived</em>: at any instant, take each venue's
+latest quote and best them cross-sectionally.</p>
+<p>"Latest quote per venue at time t" is exactly an ASOF join. So a
+research-grade sampled NBBO is a few SQL statements: a time grid ASOF-joined
+against per-venue quotes, then <code>max(bid)</code> and <code>min(ask)</code> per instant.</p>
+<p>In this recipe we:</p>
+<ol>
+<li>fan a consolidated quote stream out to three venues with distinct
+   microstructure personalities,</li>
+<li>snapshot each venue's prevailing quote on a 10-second grid,</li>
+<li>consolidate and store the NBBO as its own table,</li>
+<li>measure which venue sets the inside, how often the market locks or
+   crosses, and how much tighter the consolidated spread is than any single
+   book.</li>
+</ol>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
 
-<span class="kn">import</span> <span class="nn">h5i_db</span>
-<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;mde_nbbo&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<h2 id="1-synthesize-a-fragmented-tape">1. Synthesize a fragmented tape<a class="headerlink" href="#1-synthesize-a-fragmented-tape" title="Permanent link">#</a></h2>
-<p>One day of consolidated-style AAPL quotes, fanned out to three venues with
-distinct microstructure personalities: each venue re-quotes on the
-consolidated updates but occasionally <em>drops</em> some (feed gaps, the source
-of genuine staleness), adds its own gateway latency, and skews its price a
-tick away from the reference, or occasionally inside it. That mix is what
-makes one venue more competitive at the inside than another and lets brief
-locked/crossed states appear. Fixed seeds throughout.</p>
+<h2 id="1-the-data">1. The data<a class="headerlink" href="#1-the-data" title="Permanent link">#</a></h2>
+<p>One session of consolidated-style AAPL quotes from <code>cu.make_quotes</code>, one row
+per change in the best bid or offer.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td><code>timestamp[us, tz=UTC]</code></td>
+<td>quote timestamp, ascending</td>
+</tr>
+<tr>
+<td><code>symbol</code></td>
+<td><code>string</code></td>
+<td>ticker, <code>AAPL</code> only here</td>
+</tr>
+<tr>
+<td><code>bid</code>, <code>ask</code></td>
+<td><code>float64</code></td>
+<td>best bid and offer</td>
+</tr>
+<tr>
+<td><code>bid_size</code>, <code>ask_size</code></td>
+<td><code>int64</code></td>
+<td>displayed depth at each side</td>
+</tr>
+</tbody>
+</table></div>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">quotes</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_quotes</span><span class="p">(</span>
     <span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">quotes_per_day</span><span class="o">=</span><span class="mi">2_600</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">11</span><span class="p">,</span> <span class="n">base_prices</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;AAPL&quot;</span><span class="p">:</span> <span class="mf">320.0</span><span class="p">}</span>
 <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">quotes</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">quotes</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">quotes</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">2,598 rows x 6 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>bid</th>
+      <th>ask</th>
+      <th>bid_size</th>
+      <th>ask_size</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:03.208519+00:00</td>
+      <td>AAPL</td>
+      <td>319.97</td>
+      <td>320.03</td>
+      <td>1400</td>
+      <td>900</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:06.219475+00:00</td>
+      <td>AAPL</td>
+      <td>319.99</td>
+      <td>320.04</td>
+      <td>500</td>
+      <td>500</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:07.005816+00:00</td>
+      <td>AAPL</td>
+      <td>319.98</td>
+      <td>320.07</td>
+      <td>300</td>
+      <td>700</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:10.980307+00:00</td>
+      <td>AAPL</td>
+      <td>320.00</td>
+      <td>320.05</td>
+      <td>600</td>
+      <td>200</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:30:17.932779+00:00</td>
+      <td>AAPL</td>
+      <td>319.98</td>
+      <td>320.05</td>
+      <td>700</td>
+      <td>300</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>We fan that single stream out to three venues, each with its own personality.
+A venue re-quotes on the consolidated updates but occasionally <em>drops</em> some,
+which is where genuine staleness comes from. It adds its own gateway latency,
+and it skews its price a tick away from, or occasionally inside, the
+reference.</p>
+<p>That mix is what makes one venue more competitive at the inside than another,
+and what lets brief locked and crossed states appear. Seeds are fixed
+throughout.</p>
+<p>The fanned-out table has one row per venue quote: <code>ts</code>, <code>venue</code>, <code>bid</code>, <code>ask</code>,
+<code>bid_size</code>, <code>ask_size</code>.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
 <span class="n">TICK</span> <span class="o">=</span> <span class="mf">0.01</span>
 
 <span class="n">VENUES</span> <span class="o">=</span> <span class="p">{</span>
@@ -190,20 +300,20 @@ locked/crossed states appear. Fixed seeds throughout.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1784778982312998120}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785192854371674419}</pre></div></div>
 <h2 id="2-a-sampling-grid-asof-joined-per-venue">2. A sampling grid, ASOF-joined per venue<a class="headerlink" href="#2-a-sampling-grid-asof-joined-per-venue" title="Permanent link">#</a></h2>
-<p>An event-accurate NBBO re-evaluates on <em>every</em> quote update; for research,
-a sampled NBBO on a regular grid is the standard approximation (error
-bounded by the sampling interval; consolidated updates arrive every ~9
-seconds here, and we sample every 10). The grid is itself a tiny h5i-db
-table: one row per (timestamp, venue), so a single
-<code>asof_join(grid, venue_quotes, ..., 'venue')</code> snapshots each venue's
-prevailing quote at each instant. The 60-second <code>tolerance</code> (raw
-microseconds) declares a venue's quote stale (NULL) rather than letting a
-dead book linger at the inside.</p>
-<p>One habit for any ASOF pipeline: assert the join returned exactly one row
-per grid row (a LEFT ASOF join is 1:1 with its left side), so a sizing or
-key mistake fails loudly instead of skewing the book.</p>
+<p>An event-accurate NBBO re-evaluates on <em>every</em> quote update. For research, a
+sampled NBBO on a regular grid is the standard approximation, with error
+bounded by the sampling interval. Consolidated updates arrive roughly every 9
+seconds here and we sample every 10.</p>
+<p>The grid is itself a tiny h5i-db table, one row per (timestamp, venue). So a
+single <code>asof_join(grid, venue_quotes, ..., 'venue')</code> snapshots each venue's
+prevailing quote at each instant. The 60-second <code>tolerance</code>, in raw
+microseconds, declares a venue's quote stale and returns NULL, rather than
+letting a dead book linger at the inside.</p>
+<p>One habit is worth keeping in any ASOF pipeline: assert the join returned
+exactly one row per grid row. A LEFT ASOF join is 1:1 with its left side, so a
+sizing or key mistake then fails loudly instead of skewing the book.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">open_ts</span> <span class="o">=</span> <span class="n">venue_quotes</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="s2">&quot;10s&quot;</span><span class="p">)</span>
 <span class="n">close_ts</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-06-01 20:00&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span>
 <span class="n">grid_times</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">date_range</span><span class="p">(</span><span class="n">open_ts</span><span class="p">,</span> <span class="n">close_ts</span><span class="p">,</span> <span class="n">freq</span><span class="o">=</span><span class="s2">&quot;10s&quot;</span><span class="p">,</span> <span class="n">inclusive</span><span class="o">=</span><span class="s2">&quot;left&quot;</span><span class="p">)</span>
@@ -223,14 +333,20 @@ key mistake fails loudly instead of skewing the book.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">grid: 2339 instants x 3 venues = 7,017 rows</pre></div></div>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">STALE_US</span> <span class="o">=</span> <span class="mi">60</span> <span class="o">*</span> <span class="mi">1_000_000</span>
-<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    SELECT ts, venue, bid, ask, ts_right AS quoted_at</span>
-<span class="s2">    FROM asof_join(&#39;nbbo_grid&#39;, &#39;venue_quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;venue&#39;, &#39;backward&#39;, </span><span class="si">{</span><span class="n">STALE_US</span><span class="si">}</span><span class="s2">)</span>
-<span class="s2">    ORDER BY ts, venue</span>
-<span class="s2">    LIMIT 6</span>
-<span class="s2">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+<span class="c1"># One frame, reused for every question below: each grid instant x venue gets</span>
+<span class="c1"># the venue&#39;s prevailing quote, or NULL if the last one is older than STALE_US.</span>
+<span class="n">SNAPSHOT</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;nbbo_grid&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">join_asof</span><span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;venue_quotes&quot;</span><span class="p">),</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;venue&quot;</span><span class="p">,</span>
+    <span class="n">direction</span><span class="o">=</span><span class="s2">&quot;backward&quot;</span><span class="p">,</span> <span class="n">tolerance</span><span class="o">=</span><span class="n">STALE_US</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="p">(</span>
+    <span class="n">SNAPSHOT</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;venue&quot;</span><span class="p">,</span> <span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="n">quoted_at</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts_right&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;venue&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
 
@@ -299,13 +415,7 @@ key mistake fails loudly instead of skewing the book.</p>
 </div></div></div></div>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="c1"># Trust, but verify: one output row per grid row, and the SQL ASOF must agree</span>
 <span class="c1"># with an independent pandas merge_asof on a venue&#39;s book.</span>
-<span class="n">state</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    SELECT ts, venue, bid, ask</span>
-<span class="s2">    FROM asof_join(&#39;nbbo_grid&#39;, &#39;venue_quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;venue&#39;, &#39;backward&#39;, </span><span class="si">{</span><span class="n">STALE_US</span><span class="si">}</span><span class="s2">)</span>
-<span class="s2">    ORDER BY ts, venue</span>
-<span class="s2">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">state</span> <span class="o">=</span> <span class="n">SNAPSHOT</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;venue&quot;</span><span class="p">,</span> <span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="s2">&quot;ask&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;venue&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">state</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">grid</span><span class="p">),</span> <span class="sa">f</span><span class="s2">&quot;ASOF join returned </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">state</span><span class="p">)</span><span class="si">}</span><span class="s2"> rows for </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">grid</span><span class="p">)</span><span class="si">}</span><span class="s2"> grid rows&quot;</span>
 
 <span class="n">ref</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">merge_asof</span><span class="p">(</span>
@@ -319,22 +429,17 @@ key mistake fails loudly instead of skewing the book.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">validated: 7,017 snapshot rows, XNAS column matches pandas merge_asof exactly</pre></div></div>
 <h2 id="3-consolidate-and-store-the-nbbo">3. Consolidate and store the NBBO<a class="headerlink" href="#3-consolidate-and-store-the-nbbo" title="Permanent link">#</a></h2>
-<p>Bettering across venues is now a plain GROUP BY per grid instant. We
-materialize the result as its own table; downstream recipes (execution
-benchmarks, effective-spread studies) read <code>nbbo_10s</code> without re-running
-the consolidation.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">nbbo</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    SELECT ts,</span>
-<span class="s2">           max(bid)   AS nbb,</span>
-<span class="s2">           min(ask)   AS nbo,</span>
-<span class="s2">           count(bid) AS venues_quoting</span>
-<span class="s2">    FROM asof_join(&#39;nbbo_grid&#39;, &#39;venue_quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;venue&#39;, &#39;backward&#39;, </span><span class="si">{</span><span class="n">STALE_US</span><span class="si">}</span><span class="s2">)</span>
-<span class="s2">    GROUP BY ts</span>
-<span class="s2">    HAVING max(bid) IS NOT NULL AND min(ask) IS NOT NULL</span>
-<span class="s2">    ORDER BY ts</span>
-<span class="s2">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>
+<p>Bettering across venues is now a plain GROUP BY per grid instant.</p>
+<p>We materialize the result as its own table. Downstream recipes, such as
+execution benchmarks and effective-spread studies, read <code>nbbo_10s</code> without
+re-running the consolidation.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">nbbo</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">SNAPSHOT</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">nbb</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="n">nbo</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span> <span class="n">venues_quoting</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">count</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbb&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">(),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbo&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">())</span>  <span class="c1"># the HAVING</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>
+<span class="p">)</span>
 
 <span class="n">NBBO_SCHEMA</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
     <span class="p">[</span>
@@ -346,7 +451,7 @@ the consolidation.</p>
 <span class="p">)</span>
 <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;nbbo_10s&quot;</span><span class="p">,</span> <span class="n">NBBO_SCHEMA</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
 <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;nbbo_10s&quot;</span><span class="p">,</span> <span class="n">nbbo</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">NBBO_SCHEMA</span><span class="p">),</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;10s-sampled NBBO from 3 venues&quot;</span><span class="p">)</span>
-<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM nbbo_10s LIMIT 5&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;nbbo_10s&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
 
@@ -400,34 +505,31 @@ the consolidation.</p>
 </table>
 </div></div></div></div>
 <h2 id="4-who-sets-the-inside-and-how-often-does-it-lock-or-cross">4. Who sets the inside, and how often does it lock or cross?<a class="headerlink" href="#4-who-sets-the-inside-and-how-often-does-it-lock-or-cross" title="Permanent link">#</a></h2>
-<p>Window functions over the per-venue snapshot answer the venue-share
-question: at each instant, is this venue's bid equal to the consolidated
-best? (Ties count for every venue at the inside.) The same snapshot flags
-<em>locked</em> (NBB = NBO) and <em>crossed</em> (NBB &gt; NBO) states. With independent
-per-venue latencies and price skews, brief locks and crossings are a fact
-of consolidated life, and any NBBO pipeline must decide how to treat them.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    WITH state AS (</span>
-<span class="s2">        SELECT ts, venue, bid, ask</span>
-<span class="s2">        FROM asof_join(&#39;nbbo_grid&#39;, &#39;venue_quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;venue&#39;, &#39;backward&#39;, </span><span class="si">{</span><span class="n">STALE_US</span><span class="si">}</span><span class="s2">)</span>
-<span class="s2">        WHERE bid IS NOT NULL AND ask IS NOT NULL</span>
-<span class="s2">    ),</span>
-<span class="s2">    ranked AS (</span>
-<span class="s2">        SELECT venue, bid, ask,</span>
-<span class="s2">               max(bid) OVER (PARTITION BY ts) AS nbb,</span>
-<span class="s2">               min(ask) OVER (PARTITION BY ts) AS nbo</span>
-<span class="s2">        FROM state</span>
-<span class="s2">    )</span>
-<span class="s2">    SELECT venue,</span>
-<span class="s2">           round(avg(CASE WHEN bid &gt;= nbb THEN 1.0 ELSE 0.0 END) * 100, 1) AS pct_at_best_bid,</span>
-<span class="s2">           round(avg(CASE WHEN ask &lt;= nbo THEN 1.0 ELSE 0.0 END) * 100, 1) AS pct_at_best_ask,</span>
-<span class="s2">           round(avg(ask - bid), 4)                                        AS avg_own_spread</span>
-<span class="s2">    FROM ranked</span>
-<span class="s2">    GROUP BY venue</span>
-<span class="s2">    ORDER BY venue</span>
-<span class="s2">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<p>Window functions over the per-venue snapshot answer the venue-share question:
+at each instant, is this venue's bid equal to the consolidated best? Ties
+count for every venue at the inside.</p>
+<p>The same snapshot flags <em>locked</em> states, where NBB equals NBO, and <em>crossed</em>
+states, where NBB exceeds NBO. With independent per-venue latencies and price
+skews, brief locks and crossings are a fact of consolidated life, and any NBBO
+pipeline has to decide how to treat them.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">QUOTING</span> <span class="o">=</span> <span class="n">SNAPSHOT</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">(),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">())</span>
+
+<span class="n">share</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">flag</span><span class="p">:</span> <span class="p">(</span><span class="n">when</span><span class="p">(</span><span class="n">flag</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mf">1.0</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mf">0.0</span><span class="p">))</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="o">*</span> <span class="mi">100</span><span class="p">)</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+
+<span class="p">(</span>
+    <span class="n">QUOTING</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+        <span class="n">nbb</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span>
+        <span class="n">nbo</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;venue&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">pct_at_best_bid</span><span class="o">=</span><span class="n">share</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbb&quot;</span><span class="p">)),</span>
+        <span class="n">pct_at_best_ask</span><span class="o">=</span><span class="n">share</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbo&quot;</span><span class="p">)),</span>
+        <span class="n">avg_own_spread</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;venue&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
 
@@ -466,15 +568,20 @@ of consolidated life, and any NBBO pipeline must decide how to treat them.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    SELECT count(*)                                        AS instants,</span>
-<span class="sd">           sum(CASE WHEN nbb = nbo THEN 1 ELSE 0 END)      AS locked,</span>
-<span class="sd">           sum(CASE WHEN nbb &gt; nbo THEN 1 ELSE 0 END)      AS crossed,</span>
-<span class="sd">           round(avg(CASE WHEN nbb &gt;= nbo THEN 1.0 ELSE 0.0 END) * 100, 2) AS pct_locked_or_crossed</span>
-<span class="sd">    FROM nbbo_10s</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">count_if</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">flag</span><span class="p">:</span> <span class="n">when</span><span class="p">(</span><span class="n">flag</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+<span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;nbbo_10s&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span>
+        <span class="n">instants</span><span class="o">=</span><span class="n">count_star</span><span class="p">(),</span>
+        <span class="n">locked</span><span class="o">=</span><span class="n">count_if</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbb&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbo&quot;</span><span class="p">)),</span>
+        <span class="n">crossed</span><span class="o">=</span><span class="n">count_if</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbb&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbo&quot;</span><span class="p">)),</span>
+        <span class="n">pct_locked_or_crossed</span><span class="o">=</span><span class="p">(</span>
+            <span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbb&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbo&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mf">1.0</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mf">0.0</span><span class="p">))</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="o">*</span> <span class="mi">100</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
 
@@ -500,17 +607,22 @@ of consolidated life, and any NBBO pipeline must decide how to treat them.</p>
 </table>
 </div></div></div></div>
 <h2 id="5-the-consolidation-dividend-spread-vs-any-single-venue">5. The consolidation dividend: spread vs any single venue<a class="headerlink" href="#5-the-consolidation-dividend-spread-vs-any-single-venue" title="Permanent link">#</a></h2>
-<p>The point of consolidating: the inside spread is tighter than every
-individual book, because the best bid and best ask usually live on
-<em>different</em> venues. One UNION ALL puts the books side by side, and the
-session plot shows the NBBO spread hugging the floor below each venue's
-own spread.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<p>Here is the point of consolidating. The inside spread is tighter than every
+individual book, because the best bid and the best ask usually live on
+<em>different</em> venues.</p>
+<p>One UNION ALL puts the books side by side, and the session plot shows the NBBO
+spread hugging the floor below each venue's own spread.</p>
+<p>There is no <code>UNION</code> verb, so this is the moment to walk through the door.
+<code>.sql()</code> renders the per-venue half we already built, and the string supplies
+the union. No f-string interpolation of the tolerance, and no hand-rewriting
+of a query that already exists.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">venue_spreads</span> <span class="o">=</span> <span class="n">QUOTING</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;venue&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;book&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+    <span class="n">avg_spread_usd</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
     <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    SELECT venue AS book, round(avg(ask - bid), 4) AS avg_spread_usd</span>
-<span class="s2">    FROM asof_join(&#39;nbbo_grid&#39;, &#39;venue_quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;venue&#39;, &#39;backward&#39;, </span><span class="si">{</span><span class="n">STALE_US</span><span class="si">}</span><span class="s2">)</span>
-<span class="s2">    WHERE bid IS NOT NULL AND ask IS NOT NULL</span>
-<span class="s2">    GROUP BY venue</span>
+<span class="s2">    </span><span class="si">{</span><span class="n">venue_spreads</span><span class="o">.</span><span class="n">sql</span><span class="p">()</span><span class="si">}</span>
 <span class="s2">    UNION ALL</span>
 <span class="s2">    SELECT &#39;NBBO&#39;, round(avg(nbo - nbb), 4) FROM nbbo_10s</span>
 <span class="s2">    ORDER BY avg_spread_usd</span>
@@ -551,22 +663,23 @@ own spread.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
 
-<span class="n">venue_min</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    SELECT time_bucket(&#39;1m&#39;, ts) AS m, venue, avg(ask - bid) AS spread</span>
-<span class="s2">    FROM asof_join(&#39;nbbo_grid&#39;, &#39;venue_quotes&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;venue&#39;, &#39;backward&#39;, </span><span class="si">{</span><span class="n">STALE_US</span><span class="si">}</span><span class="s2">)</span>
-<span class="s2">    WHERE bid IS NOT NULL AND ask IS NOT NULL</span>
-<span class="s2">    GROUP BY m, venue ORDER BY m</span>
-<span class="s2">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-<span class="n">nbbo_min</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    SELECT time_bucket(&#39;1m&#39;, ts) AS m, avg(nbo - nbb) AS spread</span>
-<span class="sd">    FROM nbbo_10s GROUP BY m ORDER BY m</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">MINUTE</span> <span class="o">=</span> <span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;1m&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span>
+
+<span class="n">venue_min</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">QUOTING</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">MINUTE</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;m&quot;</span><span class="p">),</span> <span class="s2">&quot;venue&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">spread</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;m&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
+<span class="n">nbbo_min</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;nbbo_10s&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">MINUTE</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;m&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">spread</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbo&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;nbb&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;m&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 <span class="k">for</span> <span class="n">venue</span><span class="p">,</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">venue_min</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;venue&quot;</span><span class="p">):</span>
@@ -582,13 +695,13 @@ own spread.</p>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
 <li>NBBO construction is "latest quote per venue, then best across venues",
-  which maps 1:1 onto <code>asof_join(grid, venue_quotes, ..., 'venue')</code> plus a
-  GROUP BY. No per-venue loops, no manual state machines.</li>
-<li>The ASOF <code>tolerance</code> doubles as a staleness rule: a venue that stops
-  quoting drops out of the consolidation instead of pinning a dead price at
-  the inside.</li>
-<li>A sampled NBBO is an approximation: honest work states its grid (10s
-  here) and remembers that locks/crosses between samples go unseen.</li>
+  which maps one-to-one onto <code>asof_join(grid, venue_quotes, ..., 'venue')</code>
+  plus a GROUP BY. No per-venue loops, no manual state machines.</li>
+<li>The ASOF <code>tolerance</code> doubles as a staleness rule. A venue that stops quoting
+  drops out of the consolidation instead of pinning a dead price at the
+  inside.</li>
+<li>A sampled NBBO is an approximation. Honest work states its grid, 10s here,
+  and remembers that locks and crosses between samples go unseen.</li>
 <li>Materializing <code>nbbo_10s</code> as a table makes the consolidation a build
   artifact: versioned, noted, and instantly queryable by every downstream
   execution study.</li>
@@ -599,7 +712,7 @@ own spread.</p>
     <nav class="page-nav"><a class="prev" href="../../cookbook/01_market_data_engineering/07_tick_data_cleaning.html"><span class="dir">← Previous</span><span class="pn-title">Tick data cleaning: find it, preview the fix, keep the audit trail</span></a><a class="next" href="../../cookbook/02_alpha_research/01_momentum_backtest.html"><span class="dir">Next →</span><span class="pn-title">Cross-sectional momentum: an honest monthly backtest</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-synthesize-a-fragmented-tape">1. Synthesize a fragmented tape</a></li><li><a href="#2-a-sampling-grid-asof-joined-per-venue">2. A sampling grid, ASOF-joined per venue</a></li><li><a href="#3-consolidate-and-store-the-nbbo">3. Consolidate and store the NBBO</a></li><li><a href="#4-who-sets-the-inside-and-how-often-does-it-lock-or-cross">4. Who sets the inside, and how often does it lock or cross?</a></li><li><a href="#5-the-consolidation-dividend-spread-vs-any-single-venue">5. The consolidation dividend: spread vs any single venue</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-a-sampling-grid-asof-joined-per-venue">2. A sampling grid, ASOF-joined per venue</a></li><li><a href="#3-consolidate-and-store-the-nbbo">3. Consolidate and store the NBBO</a></li><li><a href="#4-who-sets-the-inside-and-how-often-does-it-lock-or-cross">4. Who sets the inside, and how often does it lock or cross?</a></li><li><a href="#5-the-consolidation-dividend-spread-vs-any-single-venue">5. The consolidation dividend: spread vs any single venue</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

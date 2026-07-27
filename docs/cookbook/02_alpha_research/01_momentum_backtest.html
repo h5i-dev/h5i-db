@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cross-sectional momentum: an honest monthly backtest · h5i-db docs</title>
-  <meta name="description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and, the part most backtest stacks get wrong, a versioned …">
+  <meta name="description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and - the part most backtest stacks get wrong - a versioned …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -16,12 +16,12 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Cross-sectional momentum: an honest monthly backtest · h5i-db docs">
-  <meta property="og:description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and, the part most backtest stacks get wrong, a versioned …">
+  <meta property="og:description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and - the part most backtest stacks get wrong - a versioned …">
   <meta property="og:url" content="https://db.h5i.dev/cookbook/02_alpha_research/01_momentum_backtest.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Cross-sectional momentum: an honest monthly backtest · h5i-db docs">
-  <meta name="twitter:description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and, the part most backtest stacks get wrong, a versioned …">
+  <meta name="twitter:description" content="The classic 12-1 momentum factor, end to end on real prices: signal computation as a SQL window query, monthly rebalance dates from timebucket(&#x27;1mo&#x27;, ...), and - the part most backtest stacks get wrong - a versioned …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -76,23 +76,24 @@
 <h1>Cross-sectional momentum: an honest monthly backtest</h1>
 <p>The classic 12-1 momentum factor, end to end on real prices: signal
 computation as a SQL window query, monthly rebalance dates from
-<code>time_bucket('1mo', ...)</code>, and, the part most backtest stacks get wrong,
+<code>time_bucket('1mo', ...)</code>, and - the part most backtest stacks get wrong -
 a versioned, snapshotted signal table so that six months from now you can
 reproduce <em>exactly</em> what this run saw. The strategy itself is deliberately
 vanilla; the h5i-db-native workflow around it is the point.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
-<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
 
-<span class="kn">import</span> <span class="nn">h5i_db</span>
-<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;alpha_momentum&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 <h2 id="1-load-real-prices-into-a-versioned-table">1. Load real prices into a versioned table<a class="headerlink" href="#1-load-real-prices-into-a-versioned-table" title="Permanent link">#</a></h2>
 <p>30 large caps, daily, 2018–2026 (cached Yahoo Finance data). We store only
-what the study needs (<code>ts, symbol, adj_close</code>) with <code>sort_key</code>
+what the study needs - <code>ts, symbol, adj_close</code> - with <code>sort_key</code>
 <code>["ts", "symbol"]</code> so per-symbol window scans stream in order. <code>append</code> is
 strict about that sort key: the input must be ordered by <code>ts</code>, then
 <code>symbol</code> within each timestamp.</p>
@@ -121,30 +122,33 @@ strict about that sort key: the input must be ordered by <code>ts</code>, then
 recent month (short-term reversal). On a trading-day series that is
 <code>lag(px, 21) / lag(px, 252) - 1</code> per symbol. The rebalance grid comes from
 <code>time_bucket('1mo', ts)</code>: the last trading day of each calendar month.
-Joining the two gives the month-end signal panel, with no pandas resampling
-and no calendar edge cases.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">panel</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    WITH sig AS (</span>
-<span class="sd">        SELECT ts, symbol, adj_close,</span>
-<span class="sd">               lag(adj_close, 21)  OVER w AS px_1m_ago,</span>
-<span class="sd">               lag(adj_close, 252) OVER w AS px_12m_ago</span>
-<span class="sd">        FROM prices</span>
-<span class="sd">        WINDOW w AS (PARTITION BY symbol ORDER BY ts)</span>
-<span class="sd">    ),</span>
-<span class="sd">    month_end AS (</span>
-<span class="sd">        SELECT time_bucket(&#39;1mo&#39;, ts) AS month, symbol, max(ts) AS ts</span>
-<span class="sd">        FROM prices</span>
-<span class="sd">        GROUP BY month, symbol</span>
-<span class="sd">    )</span>
-<span class="sd">    SELECT s.ts, s.symbol,</span>
-<span class="sd">           s.adj_close             AS close,</span>
-<span class="sd">           s.px_1m_ago / s.px_12m_ago - 1 AS momentum</span>
-<span class="sd">    FROM sig s</span>
-<span class="sd">    JOIN month_end USING (ts, symbol)</span>
-<span class="sd">    ORDER BY s.ts, s.symbol</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+Joining the two gives the month-end signal panel - no pandas resampling, no
+calendar edge cases.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">lag_px</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;lag(adj_close, n) per symbol - there is no .lag() verb, so sql_expr.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">sql_expr</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;lag(adj_close, </span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+
+
+<span class="n">sig</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">px_1m_ago</span><span class="o">=</span><span class="n">lag_px</span><span class="p">(</span><span class="mi">21</span><span class="p">),</span> <span class="n">px_12m_ago</span><span class="o">=</span><span class="n">lag_px</span><span class="p">(</span><span class="mi">252</span><span class="p">))</span>
+
+<span class="n">month_end</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;1mo&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;month&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">month_end</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;month_end&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="n">panel</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">sig</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">month_end</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span>
+        <span class="n">ts</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">),</span>
+        <span class="n">symbol</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">),</span>
+        <span class="n">close</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;adj_close&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">),</span>
+        <span class="n">momentum</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;px_1m_ago&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;px_12m_ago&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 <span class="n">panel</span><span class="o">.</span><span class="n">tail</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
@@ -193,8 +197,8 @@ and no calendar edge cases.</p>
 </div></div></div></div>
 <h2 id="3-portfolio-construction-and-an-honest-pl">3. Portfolio construction and an honest P&amp;L<a class="headerlink" href="#3-portfolio-construction-and-an-honest-pl" title="Permanent link">#</a></h2>
 <p>With only 30 names a "decile" is 3 stocks, so we long the top 10 and short
-the bottom 10, equal weight, which is closer to terciles and less noisy.
-Discipline checklist:</p>
+the bottom 10, equal weight - closer to terciles, and less noisy. Discipline
+checklist:</p>
 <ul>
 <li><strong>No lookahead</strong>: the signal observed at month-end <em>t</em> earns the return
   from <em>t</em> to <em>t+1</em>. The last month has no forward return and is dropped.</li>
@@ -224,7 +228,7 @@ Discipline checklist:</p>
 <span class="n">bench</span> <span class="o">=</span> <span class="n">fwd_ret</span><span class="o">.</span><span class="n">mean</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">iloc</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>  <span class="c1"># equal-weight long-only, no costs</span>
 
 
-<span class="k">def</span> <span class="nf">perf_stats</span><span class="p">(</span><span class="n">r</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">periods</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">perf_stats</span><span class="p">(</span><span class="n">r</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">periods</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">12</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
     <span class="n">eq</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">r</span><span class="p">)</span><span class="o">.</span><span class="n">cumprod</span><span class="p">()</span>
     <span class="n">dd</span> <span class="o">=</span> <span class="n">eq</span> <span class="o">/</span> <span class="n">eq</span><span class="o">.</span><span class="n">cummax</span><span class="p">()</span> <span class="o">-</span> <span class="mi">1</span>
     <span class="k">return</span> <span class="p">{</span>
@@ -275,7 +279,7 @@ Discipline checklist:</p>
 <p>The long/short book is roughly market-neutral, so comparing it to a
 long-only benchmark is about <em>shape</em>, not level: the benchmark rides the
 2018–2026 bull market while the momentum book mostly treads water.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mf">4.5</span><span class="p">))</span>
 <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">((</span><span class="mi">1</span> <span class="o">+</span> <span class="n">net</span><span class="p">)</span><span class="o">.</span><span class="n">cumprod</span><span class="p">(),</span> <span class="n">label</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;12-1 momentum L/S, net </span><span class="si">{</span><span class="n">COST_BPS</span><span class="si">}</span><span class="s2">bps&quot;</span><span class="p">,</span> <span class="n">lw</span><span class="o">=</span><span class="mf">1.4</span><span class="p">)</span>
@@ -291,13 +295,13 @@ long-only benchmark is about <em>shape</em>, not level: the benchmark rides the
 <p>The momentum book lands near a <strong>zero Sharpe</strong> here. That is not a bug: 30
 mega caps are a terrible momentum universe (the premium historically lives
 in broader, smaller cross-sections), and 2020–2023 contained brutal momentum
-crashes. Resist the urge to tweak lookbacks until the curve looks good; that
-is how backtests die. Report it as it is.</p>
-<h2 id="5-version-the-signal-the-reproducibility-layer">5. Version the signal: the reproducibility layer<a class="headerlink" href="#5-version-the-signal-the-reproducibility-layer" title="Permanent link">#</a></h2>
+crashes. Resist the urge to tweak lookbacks until the curve looks good -
+that is how backtests die. Report it as it is.</p>
+<h2 id="5-version-the-signal-the-reproducibility-layer">5. Version the signal - the reproducibility layer<a class="headerlink" href="#5-version-the-signal-the-reproducibility-layer" title="Permanent link">#</a></h2>
 <p>The panel that produced these numbers goes back into h5i-db as a <code>signals</code>
 table, and a <strong>named snapshot</strong> pins both <code>prices</code> and <code>signals</code> at this
-exact state. Anyone can later query <code>h5i('signals', 'mom-run-001')</code>, or
-re-read the prices the run saw, even after both tables move on. That is the
+exact state. Anyone can later query <code>h5i('signals', 'mom-run-001')</code> - or
+re-read the prices the run saw - even after both tables move on. That is the
 audit trail a research platform actually needs.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sig_out</span> <span class="o">=</span> <span class="p">(</span>
     <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span>
@@ -329,15 +333,20 @@ audit trail a research platform actually needs.</p>
 <span class="p">)</span>
 <span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;mom-run-001&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="s2">&quot;signals&quot;</span><span class="p">],</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;momentum backtest run 001&quot;</span><span class="p">)</span>
 
-<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    SELECT ts, count(*) AS names,</span>
-<span class="sd">           sum(CASE WHEN weight &gt; 0 THEN 1 ELSE 0 END) AS longs,</span>
-<span class="sd">           sum(CASE WHEN weight &lt; 0 THEN 1 ELSE 0 END) AS shorts</span>
-<span class="sd">    FROM h5i(&#39;signals&#39;, &#39;mom-run-001&#39;)</span>
-<span class="sd">    GROUP BY ts ORDER BY ts DESC LIMIT 3</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">count_if</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">flag</span><span class="p">:</span> <span class="n">when</span><span class="p">(</span><span class="n">flag</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+<span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;mom-run-001&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">names</span><span class="o">=</span><span class="n">count_star</span><span class="p">(),</span>
+        <span class="n">longs</span><span class="o">=</span><span class="n">count_if</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;weight&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">),</span>
+        <span class="n">shorts</span><span class="o">=</span><span class="n">count_if</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;weight&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
 
@@ -393,9 +402,9 @@ audit trail a research platform actually needs.</p>
   into one SQL statement that streams on sorted storage.</li>
 <li>Backtest hygiene is cheap: lag the signal one period, charge turnover,
   drop the unknowable last month. Do it every time.</li>
-<li>The result is the honest one: near-zero Sharpe for large-cap momentum,
-  ~70% monthly turnover eating 10 bps a side. A universe of 30 mega caps is
-  a demo, not an alpha source.</li>
+<li>The result - near-zero Sharpe for large-cap momentum, ~70% monthly
+  turnover eating 10 bps a side - is the honest one. A universe of 30 mega
+  caps is a demo, not an alpha source.</li>
 <li><code>db.snapshot("mom-run-001", ...)</code> pins prices <em>and</em> signals in one named,
   queryable state: <code>h5i('signals', 'mom-run-001')</code> reproduces this run
   forever, no CSV archaeology required.</li>
@@ -406,7 +415,7 @@ audit trail a research platform actually needs.</p>
     <nav class="page-nav"><a class="prev" href="../../cookbook/01_market_data_engineering/08_nbbo_consolidation.html"><span class="dir">← Previous</span><span class="pn-title">NBBO consolidation: best bid/offer across fragmented venues</span></a><a class="next" href="../../cookbook/02_alpha_research/02_pairs_trading.html"><span class="dir">Next →</span><span class="pn-title">Pairs trading with a version-pinned data spine</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-load-real-prices-into-a-versioned-table">1. Load real prices into a versioned table</a></li><li><a href="#2-the-signal-in-one-sql-statement">2. The signal, in one SQL statement</a></li><li><a href="#3-portfolio-construction-and-an-honest-pl">3. Portfolio construction and an honest P&amp;L</a></li><li><a href="#4-equity-curves">4. Equity curves</a></li><li><a href="#5-version-the-signal-the-reproducibility-layer">5. Version the signal: the reproducibility layer</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-load-real-prices-into-a-versioned-table">1. Load real prices into a versioned table</a></li><li><a href="#2-the-signal-in-one-sql-statement">2. The signal, in one SQL statement</a></li><li><a href="#3-portfolio-construction-and-an-honest-pl">3. Portfolio construction and an honest P&amp;L</a></li><li><a href="#4-equity-curves">4. Equity curves</a></li><li><a href="#5-version-the-signal-the-reproducibility-layer">5. Version the signal - the reproducibility layer</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

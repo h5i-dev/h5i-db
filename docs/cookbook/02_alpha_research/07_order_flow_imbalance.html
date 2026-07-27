@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Order flow imbalance: does signed volume predict returns? · h5i-db docs</title>
-  <meta name="description" content="Order flow imbalance (OFI), the excess of buyer-initiated over seller-initiated volume, is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
+  <meta name="description" content="Order flow imbalance (OFI) - the excess of buyer-initiated over seller-initiated volume - is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -16,12 +16,12 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Order flow imbalance: does signed volume predict returns? · h5i-db docs">
-  <meta property="og:description" content="Order flow imbalance (OFI), the excess of buyer-initiated over seller-initiated volume, is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
+  <meta property="og:description" content="Order flow imbalance (OFI) - the excess of buyer-initiated over seller-initiated volume - is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
   <meta property="og:url" content="https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Order flow imbalance: does signed volume predict returns? · h5i-db docs">
-  <meta name="twitter:description" content="Order flow imbalance (OFI), the excess of buyer-initiated over seller-initiated volume, is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
+  <meta name="twitter:description" content="Order flow imbalance (OFI) - the excess of buyer-initiated over seller-initiated volume - is the workhorse microstructure signal: strongly correlated with contemporaneous price moves, and (in real markets, at short …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -74,26 +74,27 @@
 <span class="sep">/</span>
 <span>Order flow imbalance: does signed volume predict returns?</span></div>
 <h1>Order flow imbalance: does signed volume predict returns?</h1>
-<p>Order flow imbalance (OFI), the excess of buyer-initiated over
-seller-initiated volume, is the workhorse microstructure signal: strongly
+<p>Order flow imbalance (OFI) - the excess of buyer-initiated over
+seller-initiated volume - is the workhorse microstructure signal: strongly
 correlated with contemporaneous price moves, and (in real markets, at short
 horizons) mildly predictive of the next move. This recipe builds both
 flavors on h5i-db:</p>
 <ol>
-<li><strong>trade OFI</strong>: audit signing rules against ground truth (Lee-Ready via
+<li><strong>trade OFI</strong> - audit signing rules against ground truth (Lee-Ready via
    an ASOF join to the prevailing quote, tick test as fallback), sign the
    tape, bucket signed volume per minute,</li>
-<li><strong>quote OFI</strong> (Cont, Kukanov &amp; Stoikov 2014): order-book pressure from
+<li><strong>quote OFI</strong> (Cont, Kukanov &amp; Stoikov 2014) - order-book pressure from
    changes in best bid/ask prices and sizes, via <code>lag()</code> windows,</li>
 <li>an honest look at contemporaneous vs <em>predictive</em> correlation with
    1-minute returns.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
-<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
 
-<span class="kn">import</span> <span class="nn">h5i_db</span>
-<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;alpha_ofi&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -106,7 +107,7 @@ stream and <em>print our own tape off it</em>, the way a matching engine would:
 a random 25% of quote updates trigger a trade 1-50 ms later, buyers lift
 the offer, sellers hit the bid, with the true aggressor side recorded.
 The tape is price-consistent with the quotes by construction, and every
-signing rule below can be scored against ground truth, a luxury real
+signing rule below can be scored against ground truth - a luxury real
 data never affords.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">quotes</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_quotes</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
 <span class="n">q</span> <span class="o">=</span> <span class="n">quotes</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
@@ -161,23 +162,33 @@ and cross-check the attached quotes against <code>pandas.merge_asof</code>.</p>
 <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;quotes_qa&quot;</span><span class="p">,</span> <span class="n">quotes_w</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;midday QA window + run-up&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;QA window: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">trades_w</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> trades, </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">quotes_w</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> quotes&quot;</span><span class="p">)</span>
 
-<span class="n">audit</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    WITH tq AS (</span>
-<span class="sd">        SELECT ts, symbol, price, size, side, bid, ask,</span>
-<span class="sd">               (bid + ask) / 2 AS mid,</span>
-<span class="sd">               lag(price) OVER (PARTITION BY symbol ORDER BY ts) AS prev_px</span>
-<span class="sd">        FROM asof_join(&#39;trades_qa&#39;, &#39;quotes_qa&#39;, &#39;ts&#39;, &#39;ts&#39;, &#39;symbol&#39;, &#39;backward&#39;, 5000000)</span>
-<span class="sd">    )</span>
-<span class="sd">    SELECT ts, symbol, mid,</span>
-<span class="sd">           CASE WHEN price &gt; mid THEN 1 WHEN price &lt; mid THEN -1</span>
-<span class="sd">                WHEN price &gt; prev_px THEN 1 WHEN price &lt; prev_px THEN -1 ELSE 0 END AS lr_sign,</span>
-<span class="sd">           CASE WHEN price &gt; prev_px THEN 1 WHEN price &lt; prev_px THEN -1 ELSE 0 END AS tick_sign,</span>
-<span class="sd">           CASE WHEN side = &#39;B&#39; THEN 1 ELSE -1 END AS true_sign</span>
-<span class="sd">    FROM tq</span>
-<span class="sd">    ORDER BY ts, symbol</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">sign_of</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">prev</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;+1 uptick, -1 downtick, 0 unchanged - the tick test.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="n">when</span><span class="p">(</span><span class="n">x</span> <span class="o">&gt;</span> <span class="n">prev</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">when</span><span class="p">(</span><span class="n">x</span> <span class="o">&lt;</span> <span class="n">prev</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+
+
+<span class="n">PREV_PX</span> <span class="o">=</span> <span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;lag(price)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+<span class="n">TRUE_SIGN</span> <span class="o">=</span> <span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;side&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;B&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>
+
+<span class="n">audit</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades_qa&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">join_asof</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;quotes_qa&quot;</span><span class="p">),</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">tolerance</span><span class="o">=</span><span class="mi">5_000_000</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">,</span>
+            <span class="n">mid</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">))</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">prev_px</span><span class="o">=</span><span class="n">PREV_PX</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span>
+        <span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;mid&quot;</span><span class="p">,</span>
+        <span class="n">lr_sign</span><span class="o">=</span><span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;mid&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+        <span class="o">.</span><span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;mid&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>
+        <span class="o">.</span><span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;prev_px&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+        <span class="o">.</span><span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;prev_px&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span>
+        <span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">)),</span>
+        <span class="n">tick_sign</span><span class="o">=</span><span class="n">sign_of</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;prev_px&quot;</span><span class="p">)),</span>
+        <span class="n">true_sign</span><span class="o">=</span><span class="n">TRUE_SIGN</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 <span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">audit</span><span class="p">)</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">trades_w</span><span class="p">),</span> <span class="s2">&quot;asof_join must return one row per trade&quot;</span>
 
 <span class="c1"># cross-check the ASOF lookup itself against pandas.merge_asof</span>
@@ -203,29 +214,26 @@ asof_join validated against pandas.merge_asof
   tick_sign: 72.4% accuracy vs true aggressor side (377 classified)</pre></div></div>
 <p>On a price-consistent tape, Lee-Ready earns its reputation: the quote rule
 is nearly perfect (errors come from quotes that updated in the 1-50 ms
-between quote and print), while the pure tick test trails well behind,
+between quote and print), while the pure tick test trails well behind -
 the same ordering seen on real TAQ, where Lee-Ready scores ~85%.</p>
 <h2 id="3-sign-the-full-tape">3. Sign the full tape<a class="headerlink" href="#3-sign-the-full-tape" title="Permanent link">#</a></h2>
 <p>The audited quote rule would need the trade-quote ASOF at full scale.
 For this recipe the tick test (a pure <code>lag()</code> window over <code>trades</code>, no
 alignment needed) is accurate enough to carry the OFI study, and we keep
 the generator's true side as an oracle upper bound. The signed tape is
-persisted as its own table: signing is expensive enough that you want it
-done once, committed, and versioned.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">signed</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    WITH t AS (</span>
-<span class="sd">        SELECT ts, symbol, price, size, side,</span>
-<span class="sd">               lag(price) OVER (PARTITION BY symbol ORDER BY ts) AS prev_px</span>
-<span class="sd">        FROM trades</span>
-<span class="sd">    )</span>
-<span class="sd">    SELECT ts, symbol, price, size,</span>
-<span class="sd">           CASE WHEN price &gt; prev_px THEN 1 WHEN price &lt; prev_px THEN -1 ELSE 0 END AS tick_sign,</span>
-<span class="sd">           CASE WHEN side = &#39;B&#39; THEN 1 ELSE -1 END AS true_sign</span>
-<span class="sd">    FROM t</span>
-<span class="sd">    ORDER BY ts, symbol</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>
+persisted as a first-class table: signing is expensive enough that you
+want it done once, committed, and versioned.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">signed</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">prev_px</span><span class="o">=</span><span class="n">PREV_PX</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span>
+        <span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;size&quot;</span><span class="p">,</span>
+        <span class="n">tick_sign</span><span class="o">=</span><span class="n">sign_of</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;prev_px&quot;</span><span class="p">)),</span>
+        <span class="n">true_sign</span><span class="o">=</span><span class="n">TRUE_SIGN</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>
+<span class="p">)</span>
 
 <span class="n">full</span> <span class="o">=</span> <span class="n">signed</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 <span class="n">scored</span> <span class="o">=</span> <span class="n">full</span><span class="p">[</span><span class="n">full</span><span class="p">[</span><span class="s2">&quot;tick_sign&quot;</span><span class="p">]</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">]</span>
@@ -252,24 +260,27 @@ done once, committed, and versioned.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1784779003891765883}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785119887248029879}</pre></div></div>
 <h2 id="4-trade-ofi-per-minute">4. Trade OFI per minute<a class="headerlink" href="#4-trade-ofi-per-minute" title="Permanent link">#</a></h2>
 <p>One <code>time_bucket</code> aggregation: signed buy/sell volume, normalized
 imbalance <code>(buys - sells) / total</code>, and the bucket's closing print via the
 <code>last_value(... ORDER BY ts)</code> idiom.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trade_ofi</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    SELECT time_bucket(&#39;1m&#39;, ts) AS bar, symbol,</span>
-<span class="sd">           sum(CASE WHEN tick_sign &gt; 0 THEN size ELSE 0 END) AS buy_vol,</span>
-<span class="sd">           sum(CASE WHEN tick_sign &lt; 0 THEN size ELSE 0 END) AS sell_vol,</span>
-<span class="sd">           sum(CASE WHEN true_sign &gt; 0 THEN size ELSE -size END) AS oracle_net,</span>
-<span class="sd">           sum(size) AS volume,</span>
-<span class="sd">           last_value(price ORDER BY ts) AS close</span>
-<span class="sd">    FROM signed_trades</span>
-<span class="sd">    GROUP BY bar, symbol</span>
-<span class="sd">    ORDER BY bar, symbol</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">BAR</span> <span class="o">=</span> <span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;1m&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span>
+<span class="n">size_when</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">flag</span><span class="p">:</span> <span class="n">when</span><span class="p">(</span><span class="n">flag</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+
+<span class="n">trade_ofi</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;signed_trades&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">BAR</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">buy_vol</span><span class="o">=</span><span class="n">size_when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;tick_sign&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">),</span>
+        <span class="n">sell_vol</span><span class="o">=</span><span class="n">size_when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;tick_sign&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">),</span>
+        <span class="n">oracle_net</span><span class="o">=</span><span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;true_sign&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="o">-</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span>
+        <span class="n">volume</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span>
+        <span class="n">close</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 <span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;ofi&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;buy_vol&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;sell_vol&quot;</span><span class="p">])</span> <span class="o">/</span> <span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;volume&quot;</span><span class="p">]</span>
 <span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;ofi_oracle&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;oracle_net&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;volume&quot;</span><span class="p">]</span>
 <span class="n">trade_ofi</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
@@ -346,29 +357,33 @@ imbalance <code>(buys - sells) / total</code>, and the bucket's closing print vi
 <h2 id="5-quote-ofi-cont-et-al">5. Quote OFI (Cont et al.)<a class="headerlink" href="#5-quote-ofi-cont-et-al" title="Permanent link">#</a></h2>
 <p>Book-pressure OFI needs <em>changes</em> at the best: a bid price rising (or size
 growing at an unchanged bid) adds buy pressure; the mirror on the ask side
-subtracts. That is four <code>lag()</code> comparisons per quote, pure SQL window
-machinery, summed per minute, with the bucket's closing mid for returns.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">quote_ofi</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    WITH q AS (</span>
-<span class="sd">        SELECT ts, symbol, bid, ask, bid_size, ask_size,</span>
-<span class="sd">               lag(bid)      OVER w AS pb,  lag(ask)      OVER w AS pa,</span>
-<span class="sd">               lag(bid_size) OVER w AS pbs, lag(ask_size) OVER w AS pas</span>
-<span class="sd">        FROM quotes</span>
-<span class="sd">        WINDOW w AS (PARTITION BY symbol ORDER BY ts)</span>
-<span class="sd">    )</span>
-<span class="sd">    SELECT time_bucket(&#39;1m&#39;, ts) AS bar, symbol,</span>
-<span class="sd">           sum(  CASE WHEN bid &gt;= pb THEN bid_size ELSE 0 END</span>
-<span class="sd">               - CASE WHEN bid &lt;= pb THEN pbs      ELSE 0 END</span>
-<span class="sd">               - CASE WHEN ask &lt;= pa THEN ask_size ELSE 0 END</span>
-<span class="sd">               + CASE WHEN ask &gt;= pa THEN pas      ELSE 0 END) AS qofi,</span>
-<span class="sd">           last_value((bid + ask) / 2 ORDER BY ts) AS mid_close</span>
-<span class="sd">    FROM q</span>
-<span class="sd">    WHERE pb IS NOT NULL</span>
-<span class="sd">    GROUP BY bar, symbol</span>
-<span class="sd">    ORDER BY bar, symbol</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+subtracts. That is four <code>lag()</code> comparisons per quote - pure SQL window
+machinery - summed per minute, with the bucket's closing mid for returns.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">prev</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">sql_expr</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;lag(</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+
+
+<span class="c1"># Cont et al.: size added at the bid counts positive, size pulled counts</span>
+<span class="c1"># negative, mirrored on the ask. Four lagged comparisons per quote.</span>
+<span class="n">keep</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">flag</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">when</span><span class="p">(</span><span class="n">flag</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+
+<span class="n">quote_ofi</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">pb</span><span class="o">=</span><span class="n">prev</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">),</span> <span class="n">pa</span><span class="o">=</span><span class="n">prev</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">),</span> <span class="n">pbs</span><span class="o">=</span><span class="n">prev</span><span class="p">(</span><span class="s2">&quot;bid_size&quot;</span><span class="p">),</span> <span class="n">pas</span><span class="o">=</span><span class="n">prev</span><span class="p">(</span><span class="s2">&quot;ask_size&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;pb&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">BAR</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">qofi</span><span class="o">=</span><span class="p">(</span>
+            <span class="n">keep</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;pb&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid_size&quot;</span><span class="p">))</span>
+            <span class="o">-</span> <span class="n">keep</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;pb&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;pbs&quot;</span><span class="p">))</span>
+            <span class="o">-</span> <span class="n">keep</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;pa&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask_size&quot;</span><span class="p">))</span>
+            <span class="o">+</span> <span class="n">keep</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;pa&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;pas&quot;</span><span class="p">))</span>
+        <span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span>
+        <span class="n">mid_close</span><span class="o">=</span><span class="p">((</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">))</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 <span class="n">quote_ofi</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
@@ -420,7 +435,7 @@ machinery, summed per minute, with the bucket's closing mid for returns.</p>
 minute's return (mechanical) or the <em>next</em> minute's (alpha)? We compute
 both correlations per symbol, per estimator. Returns are within-session
 only (<code>shift</code> inside each symbol/day, so no overnight artifacts).</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">bucket_corrs</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">ofi_col</span><span class="p">,</span> <span class="n">px_col</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">bucket_corrs</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">ofi_col</span><span class="p">,</span> <span class="n">px_col</span><span class="p">):</span>
     <span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">frame</span> <span class="o">=</span> <span class="n">frame</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
     <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;bar&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">date</span>
@@ -514,7 +529,7 @@ only (<code>shift</code> inside each symbol/day, so no overnight artifacts).</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
 
 <span class="n">sym</span> <span class="o">=</span> <span class="s2">&quot;AAPL&quot;</span>
 <span class="n">g</span> <span class="o">=</span> <span class="n">trade_ofi</span><span class="p">[</span><span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">sym</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
@@ -538,7 +553,7 @@ only (<code>shift</code> inside each symbol/day, so no overnight artifacts).</p>
 <ul>
 <li><strong>Quote OFI</strong> shows the textbook contemporaneous link (~0.5-0.6): book
   pressure and same-minute mid moves are near-mechanically related.</li>
-<li><strong>Trade OFI with tick-test signs</strong> also reads ~0.5 contemporaneous,
+<li><strong>Trade OFI with tick-test signs</strong> also reads ~0.5 contemporaneous -
   but the <strong>oracle</strong> row exposes most of that as circular. With <em>true</em>
   aggressor signs the correlation drops to ~0.07: in this market the mid
   is an exogenous random walk, flow has no price impact, and true signed
@@ -546,14 +561,14 @@ only (<code>shift</code> inside each symbol/day, so no overnight artifacts).</p>
   closing print. The tick rule manufactures the rest by deriving signs
   from the very price changes we then correlate against. On real data,
   where flow does move price, the oracle-equivalent number would be
-  solidly positive; the comparison is how you learn to ask.</li>
+  solidly positive - the comparison is how you learn to ask.</li>
 <li><strong>Predictive</strong> correlations sit near zero with a negative tilt for
   trade OFI: bid-ask bounce means a buy-heavy minute tends to close at
-  the ask and mean-revert a touch. Even perfect signs would not help:
+  the ask and mean-revert a touch. Even perfect signs would not help -
   there is no flow-to-future-price causality here to find, and the
   pipeline correctly finds none.</li>
 </ul>
-<p>On real tick data quote OFI does carry short-horizon predictive power,
+<p>On real tick data quote OFI does carry short-horizon predictive power -
 but the reality check applies before calling it alpha: the effect lives at
 seconds-to-minutes horizons in size-constrained depth, and capturing a
 ~1 bp move costs you the spread plus fees. OFI signals are best understood
@@ -564,13 +579,13 @@ strategies.</p>
 <li><code>asof_join(..., 'backward', tolerance)</code> is the prevailing-quote lookup,
   and time-ranged <code>db.read(time_start=, time_end=)</code> carves QA windows in
   O(window). Current-build caveat: keep both ASOF inputs within one
-  storage batch (~8k rows) and assert one output row per left row;
+  storage batch (~8k rows) and assert one output row per left row -
   larger inputs truncate silently. Cross-checking against
   <code>pandas.merge_asof</code> costs three lines and buys certainty.</li>
 <li>Signing rules are CASE expressions over that join plus <code>lag()</code> windows;
   persisting the result as a <code>signed_trades</code> table means the pass runs
   once, and every downstream study reads versioned, committed signs.</li>
-<li>Both OFI flavors reduce to one <code>time_bucket</code> GROUP BY each, with
+<li>Both OFI flavors reduce to one <code>time_bucket</code> GROUP BY each - with
   <code>last_value(... ORDER BY ts)</code> giving bucket closes without self-joins.</li>
 <li>Honest nulls matter: solid contemporaneous correlations alongside
   predictive correlations ≈ 0 (even with oracle signs) is the signature

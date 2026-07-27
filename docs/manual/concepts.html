@@ -146,6 +146,75 @@ strings and convert for you.</p>
 create, free to keep. Snapshots make backtests reproducible ("run against
 <code>eod-2026-07-18</code>, forever") and answer audit questions ("what did we know at
 close on date X?"). A table pinned by a snapshot cannot be dropped.</p>
+<h2 id="forks">Forks<a class="headerlink" href="#forks" title="Permanent link">#</a></h2>
+<p>A snapshot pins a version so you can <em>read</em> it later. A <strong>fork</strong> pins one and
+lets you write on top:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>create<span class="w"> </span>market.db<span class="w"> </span>agent-01
+<span class="gp">$ </span>h5i-db<span class="w"> </span>ingest<span class="w"> </span>market.db<span class="w"> </span>features<span class="w"> </span>out.parquet<span class="w"> </span>--fork<span class="w"> </span>agent-01
+</code></pre></div>
+
+<p>Creating a fork writes one small JSON object and copies no data. The first
+write to an existing table's name inside the fork copies that table's
+<em>manifest</em> — a list of segment metadata, kilobytes — into a new table, so the
+fork's rows are its own while the base's segments stay shared. Twenty agents
+forking a 50 GB dataset store 50 GB once plus whatever each of them writes.</p>
+<p>Because a fork's tables are ordinary tables, they contend with nothing: two
+agents writing "the same" table in two forks are writing two different tables.
+Reads resolve through the pin rather than through the head, so a fork neither
+sees nor is disturbed by commits landing on the base meanwhile.</p>
+<p>Work comes back with <code>promote</code>, which replaces one base table with the fork's
+version if the base has not moved since the fork was made:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>diff<span class="w"> </span>market.db<span class="w"> </span>agent-01
+<span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>promote<span class="w"> </span>market.db<span class="w"> </span>agent-01<span class="w"> </span>--table<span class="w"> </span>features
+<span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>drop<span class="w"> </span>market.db<span class="w"> </span>agent-02
+</code></pre></div>
+
+<p>The first promote wins and later ones are rejected rather than merged: the
+conflict unit is the whole table. There is no row-level merge, on purpose —
+speculative work is mostly discarded, and <code>drop</code> is the common ending.</p>
+<p>A fork pins the base versions it reads, so those versions cannot be expired
+while it lives; <code>fork list</code> shows how much each is holding back. Dropping the
+fork releases it.</p>
+<p><code>--as-of</code> forks the past instead of the present:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>create<span class="w"> </span>market.db<span class="w"> </span>backtest<span class="w"> </span>--as-of<span class="w"> </span><span class="m">2026</span>-03-01T00:00:00Z
+</code></pre></div>
+
+<p>That gives a workspace where the base is frozen at a past instant but you can
+still materialise features, intermediate results, and scratch tables — the
+writable counterpart of a read-only historical pin.</p>
+<h3 id="forks-nest">Forks nest<a class="headerlink" href="#forks-nest" title="Permanent link">#</a></h3>
+<p>A fork is itself something to fork. Add <code>--fork</code> to <code>fork create</code> and the new
+fork is created <em>inside</em> that one, pinning its tables the way a top-level fork
+pins the database's:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>create<span class="w"> </span>market.db<span class="w"> </span>trunk
+<span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>create<span class="w"> </span>market.db<span class="w"> </span>branch-a<span class="w"> </span>--fork<span class="w"> </span>trunk
+</code></pre></div>
+
+<p><code>branch-a</code> sees the database, plus whatever <code>trunk</code> had done when it was
+taken, plus its own work, and stays frozen against anything <code>trunk</code> does
+afterwards. <code>promote</code> moves work up exactly one level, so <code>branch-a</code> promotes
+onto <code>trunk</code>, never onto the database. That is what makes a search tree
+expressible: refine, evaluate, keep the good subtree, discard the rest.</p>
+<p>Depth costs nothing to read. A fork's manifest names its segments by path, so
+resolving a table twenty levels down takes the same number of reads as one
+level down. There is no chain to replay. Nesting is capped at 32 levels as a
+runaway guard.</p>
+<p>Dropping is the one place the tree matters: a fork that others are nested
+inside cannot be dropped out from under them, and the error names them.</p>
+<h3 id="querying-across-forks">Querying across forks<a class="headerlink" href="#querying-across-forks" title="Permanent link">#</a></h3>
+<p><code>forks()</code> reads a table from every fork at once, labelling each row with the
+fork it came from:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT __fork, avg(price) FROM forks(&#39;trades&#39;) GROUP BY __fork&quot;</span>
+</code></pre></div>
+
+<p>This is how you compare outcomes without exporting anything. It is cheap for
+the same reason forking is: the forks share their segments, so a segment
+several forks can see is read <strong>once</strong> however many reference it, and only
+what each fork actually changed is read separately. Pass a comma-separated
+list to narrow it (<code>forks('trades', 'branch-a,branch-b')</code>), and use
+<code>db.fork_scan("trades")</code> for the same thing from Python.</p>
+<p>Forks whose schema for the table has diverged are refused rather than blended;
+<code>fork diff</code> is the tool for looking at that.</p>
 <h2 id="previewable-mutations-plan-apply">Previewable mutations: plan / apply<a class="headerlink" href="#previewable-mutations-plan-apply" title="Permanent link">#</a></h2>
 <p>Destructive operations (<code>delete-range</code>, <code>replace-range</code>) can run in two modes:</p>
 <ul>
@@ -208,7 +277,7 @@ Cadence and disk-usage math: <a href="operations.html">Operations guide</a>.</p>
     <nav class="page-nav"><a class="prev" href="../manual/migrating-from-duckdb.html"><span class="dir">← Previous</span><span class="pn-title">Migrating from DuckDB</span></a><a class="next" href="../manual/cli.html"><span class="dir">Next →</span><span class="pn-title">CLI reference</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-database-is-a-directory">The database is a directory</a></li><li><a href="#versions-every-write-is-a-commit">Versions: every write is a commit</a></li><li><a href="#the-time-axis">The time axis</a></li><li><a href="#snapshots">Snapshots</a></li><li><a href="#previewable-mutations-plan-apply">Previewable mutations: plan / apply</a></li><li><a href="#the-mutation-policy">The mutation policy</a></li><li><a href="#queries-and-sessions">Queries and sessions</a></li><li><a href="#maintenance-in-one-paragraph">Maintenance in one paragraph</a></li><li><a href="#read-more">Read more</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-database-is-a-directory">The database is a directory</a></li><li><a href="#versions-every-write-is-a-commit">Versions: every write is a commit</a></li><li><a href="#the-time-axis">The time axis</a></li><li><a href="#snapshots">Snapshots</a></li><li><a href="#forks">Forks</a><ul><li><a href="#forks-nest">Forks nest</a></li><li><a href="#querying-across-forks">Querying across forks</a></li></ul></li><li><a href="#previewable-mutations-plan-apply">Previewable mutations: plan / apply</a></li><li><a href="#the-mutation-policy">The mutation policy</a></li><li><a href="#queries-and-sessions">Queries and sessions</a></li><li><a href="#maintenance-in-one-paragraph">Maintenance in one paragraph</a></li><li><a href="#read-more">Read more</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

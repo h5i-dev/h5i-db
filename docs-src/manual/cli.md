@@ -434,7 +434,7 @@ against one dataset at once. See [Forks](concepts.html#forks) for the model.
 | Subcommand | Meaning |
 |---|---|
 | `fork create <db> <name>` | Pin every table and open a workspace; `--note`, `--as-of`, `--meta`, `--count` supported |
-| `fork list <db>` | Every fork, with what it owns (`bytes_own`) and what it holds back (`bytes_pinned`) |
+| `fork list <db>` | Every fork with lineage and liveness: `parent`/`depth`, `commits_own`, `last_write_ns`, `stale_shadows` (promotes that would now conflict), what it owns (`bytes_own`) and what it holds back (`bytes_pinned`) |
 | `fork show <db> <name>` | One fork's pins and metadata |
 | `fork diff <db> <name>` | What the fork changed, from manifests alone; `--table` to narrow |
 | `fork promote <db> <name> --table <t>` | Land one of its tables on the base |

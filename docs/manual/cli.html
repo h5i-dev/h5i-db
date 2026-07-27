@@ -680,6 +680,80 @@ path; reads are never touched.</p>
 </tr>
 </tbody>
 </table></div>
+</div></section><section class="api-member"><h3 id="h5i-db-fork"><code><span class="api-qual">h5i-db </span><span class="api-name">fork</span></code><a class="headerlink" href="#h5i-db-fork" title="Permanent link">#</a></h3><div class="api-body">
+<p>Writable workspaces over a pinned base, for running several lines of work
+against one dataset at once. See <a href="concepts.html#forks">Forks</a> for the model.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fork create &lt;db&gt; &lt;name&gt;</code></td>
+<td>Pin every table and open a workspace; <code>--note</code>, <code>--as-of</code>, <code>--meta</code>, <code>--count</code> supported</td>
+</tr>
+<tr>
+<td><code>fork list &lt;db&gt;</code></td>
+<td>Every fork with lineage and liveness: <code>parent</code>/<code>depth</code>, <code>commits_own</code>, <code>last_write_ns</code>, <code>stale_shadows</code> (promotes that would now conflict), what it owns (<code>bytes_own</code>) and what it holds back (<code>bytes_pinned</code>)</td>
+</tr>
+<tr>
+<td><code>fork show &lt;db&gt; &lt;name&gt;</code></td>
+<td>One fork's pins and metadata</td>
+</tr>
+<tr>
+<td><code>fork diff &lt;db&gt; &lt;name&gt;</code></td>
+<td>What the fork changed, from manifests alone; <code>--table</code> to narrow</td>
+</tr>
+<tr>
+<td><code>fork promote &lt;db&gt; &lt;name&gt; --table &lt;t&gt;</code></td>
+<td>Land one of its tables on the base</td>
+</tr>
+<tr>
+<td><code>fork drop &lt;db&gt; &lt;name&gt;…</code></td>
+<td>Delete the named forks and everything they own</td>
+</tr>
+</tbody>
+</table></div>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>create<span class="w"> </span>market.db<span class="w"> </span>agent-01<span class="w"> </span>--note<span class="w"> </span><span class="s2">&quot;hypothesis 1&quot;</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>ingest<span class="w"> </span>market.db<span class="w"> </span>features<span class="w"> </span>out.parquet<span class="w"> </span>--fork<span class="w"> </span>agent-01
+<span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT count(*) FROM features&quot;</span><span class="w"> </span>--fork<span class="w"> </span>agent-01
+<span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>diff<span class="w"> </span>market.db<span class="w"> </span>agent-01
+<span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>promote<span class="w"> </span>market.db<span class="w"> </span>agent-01<span class="w"> </span>--table<span class="w"> </span>features
+<span class="gp">$ </span>h5i-db<span class="w"> </span>fork<span class="w"> </span>drop<span class="w"> </span>market.db<span class="w"> </span>agent-01
+</code></pre></div>
+
+<p><code>fork create</code> accepts <code>--as-of &lt;rfc3339&gt;</code> to pin the past instead of the
+present, and <code>--meta</code> (inline JSON, <code>@file</code>, or <code>-</code>) to record whatever ties
+the fork back to the run that made it.</p>
+<p><strong>Wide fanouts.</strong> <code>fork create &lt;db&gt; &lt;name&gt; --count N</code> creates
+<code>&lt;name&gt;-0000 … &lt;name&gt;-000(N-1)</code> over a <em>single</em> resolution of the base, and
+<code>fork drop</code> takes several names at once. Every fork of one base at one instant
+pins the same versions, so the batch does one pass over the catalog however
+many branches it makes, which is what makes a few hundred short-lived
+branches a reasonable thing to create and then throw away. With <code>--count</code> the
+command returns a JSON list; without it, a single object as before.</p>
+<p><strong>The <code>--fork</code> flag.</strong> Every data command takes <code>--fork &lt;name&gt;</code> and then reads
+and writes inside that workspace, so an existing script runs unchanged against
+a fork by adding one flag. Database-wide commands (<code>snapshot</code>, <code>vacuum</code>,
+<code>set-retention</code>) refuse it and say so: they move state a fork's siblings
+depend on. <code>fork create</code> is the exception: with <code>--fork</code> it creates the new
+fork <em>inside</em> that one (see <a href="concepts.html#forks-nest">Forks</a>).</p>
+<p><strong>Promotion conflicts.</strong> <code>fork promote</code> compare-and-swaps against the version
+the fork started from. If the base moved, it exits 3 with
+<code>code: "promote_conflict"</code> and <code>retryable: false</code> — retrying cannot help,
+because the work was computed against a base that no longer exists. Re-fork
+and re-run, or drop the fork.</p>
+<p>Compaction is the one exception, and it is handled for you. If every
+intervening base commit was a compaction then the base's <em>rows</em> did not
+change, only where they live, so the promote is <strong>rebased</strong> onto the new
+layout instead of rejected, and the result reports <code>rebased_from</code>. That works
+while the fork still holds every row it inherited; a fork that deleted
+inherited rows cannot be replayed from metadata (a compacted segment may merge
+rows it dropped with rows it kept), so that case still conflicts and the
+message says why.</p>
 <hr />
 </div></section><h2 id="maintenance-tools">Maintenance &amp; tools<a class="headerlink" href="#maintenance-tools" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="h5i-db-compact"><code><span class="api-qual">h5i-db </span><span class="api-name">compact</span></code><a class="headerlink" href="#h5i-db-compact" title="Permanent link">#</a></h3><div class="api-body">
@@ -764,12 +838,26 @@ cannot read past its decision instant. Takes about a second.</p>
 </tr>
 </tbody>
 </table></div>
-<p>The UI shows pending plans with previews, the version timeline with audit
-badges, version diffs, and an SQL scratchpad that reports pruning per query.</p></div></section>
+<p>The UI shows pending plans with previews, a live fork monitor, the version
+timeline with audit badges, version diffs, and an SQL scratchpad that reports
+pruning per query.</p>
+<p>The <strong>Forks</strong> tab renders the fork lineage as a tree that updates itself over
+a server-sent event stream: each fork carries one glanceable status —
+<code>conflict</code> (the base moved under a shadowed table, so promote will refuse),
+<code>working</code> (committed within the last 15 s), <code>ahead</code> (holds unpromoted
+commits), or <code>idle</code> — plus what it wrote, what its pins hold back, and the
+agent metadata attached at <code>fork create --meta</code>. Selecting a fork shows its
+per-table divergence and copy-ready promote/drop commands; the UI itself
+never mutates forks. <code>tools/fork_demo.sh &lt;db&gt;</code> drives a simulated agent
+swarm against a database if you want to watch the tree move, and
+<code>tools/demo_data.py</code> seeds one first — synthetic multi-symbol ticks
+(<code>synth --symbols AAPL,MSFT,NVDA --db &lt;db&gt;</code>) or a day of real 1s bars from
+Binance's public archive (<code>binance --symbols BTCUSDT,ETHUSDT --db &lt;db&gt;</code>,
+no API key).</p></div></section>
     <nav class="page-nav"><a class="prev" href="../manual/concepts.html"><span class="dir">← Previous</span><span class="pn-title">Core concepts</span></a><a class="next" href="../manual/sql.html"><span class="dir">Next →</span><span class="pn-title">SQL reference</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-context">h5i-db context</a></li><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li><li><a href="#h5i-db-arrival-delta">h5i-db arrival-delta</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-data-policy">h5i-db data-policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-demo">h5i-db demo</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-context">h5i-db context</a></li><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li><li><a href="#h5i-db-arrival-delta">h5i-db arrival-delta</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-data-policy">h5i-db data-policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li><li><a href="#h5i-db-fork">h5i-db fork</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-demo">h5i-db demo</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

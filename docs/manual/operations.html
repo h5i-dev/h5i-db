@@ -113,7 +113,7 @@ the right order and don't run destructive maintenance concurrently</strong>.</p>
    DB=/data/market.db BK=/backup/market.db-$(date +%F)
    mkdir -p "$BK"
    cp "$DB/FORMAT" "$BK/"
-   cp -r "$DB/catalog" "$DB/snapshots" "$BK/" 2&gt;/dev/null || true
+   cp -r "$DB/catalog" "$DB/snapshots" "$DB/forks" "$BK/" 2&gt;/dev/null || true
    for t in "$DB"/tables/*/; do
      b="$BK/tables/$(basename "$t")"; mkdir -p "$b"
      cp "$t/HEAD" "$b/"                        # 1. pin the version to back up
@@ -147,6 +147,11 @@ to rewind a single table inside a live database, prefer
 unreachable objects: segments referenced by no committed manifest and no
 live mutation plan, manifests above <code>HEAD</code> (crashed-writer leftovers), and
 <code>*.lock</code> / <code>HEAD.tmp.*</code> debris. Without <code>--apply</code> it is a dry run.</p>
+<p>Vacuum runs from the base database and treats every fork as a root: it
+consults every fork's pins and every fork's catalog, so a fork's tables and
+the base segments its shadows reference are never candidates. It refuses to
+run through a <code>--fork</code> handle, because reachability is a database-wide
+question.</p>
 <p>Guidance:</p>
 <ul>
 <li><strong>Always review a dry run first</strong> in scripted maintenance
@@ -162,6 +167,32 @@ live mutation plan, manifests above <code>HEAD</code> (crashed-writer leftovers)
 <li><strong>Never run two <code>vacuum --apply</code> concurrently</strong>, and don't run it during
   backups (above).</li>
 </ul>
+<h2 id="forks">Forks<a class="headerlink" href="#forks" title="Permanent link">#</a></h2>
+<p>A fork is a named, writable workspace over a pinned view of the database. It
+costs one small JSON object and copies no data: its tables are ordinary
+tables, and the versions it forked from are shared by reference. Three things
+follow that an operator needs to know.</p>
+<p><strong>A fork is a GC root.</strong> Its pin holds the base's retention floor down, so
+<code>set-retention</code> refuses to expire a version a fork pins, and <code>drop-table</code>
+refuses on a table a fork pins. Both name the fork in the error. The fix is
+always to promote or drop that fork, never to force the floor.</p>
+<p><strong>Forks nest.</strong> <code>fork create &lt;db&gt; &lt;child&gt; --fork &lt;parent&gt;</code> creates a fork
+inside a fork, and a child pins its parent's tables the same way a top-level
+fork pins the database's. Dropping a parent that a child still pins is refused
+and names the children; <code>fork drop</code> one level at a time, or drop the whole
+subtree. Depth is capped at 32.</p>
+<p><strong><code>FORK_INDEX.json</code> is a cache.</strong> It sits at the database root and answers
+"which forks pin what" in one read instead of one per fork. It is rebuilt from
+the fork objects whenever it disagrees with them, so it is safe to delete at
+any time and <strong>does not need to be backed up</strong>: a restore without it simply
+rebuilds it on first use. Every other object is authoritative.</p>
+<p>Routine checks:</p>
+<div class="highlight"><pre><span></span><code>h5i-db<span class="w"> </span>fork<span class="w"> </span>list<span class="w"> </span>&lt;db&gt;<span class="w">       </span><span class="c1"># age, tables owned, bytes_own, bytes_pinned</span>
+h5i-db<span class="w"> </span>fork<span class="w"> </span>diff<span class="w"> </span>&lt;db&gt;<span class="w"> </span>&lt;f&gt;<span class="w">   </span><span class="c1"># what it changed (manifests only, no segments)</span>
+</code></pre></div>
+
+<p>Abandoned forks are the usual cause of a database that will not shrink; see
+Disk-usage math below.</p>
 <h2 id="compaction">Compaction<a class="headerlink" href="#compaction" title="Permanent link">#</a></h2>
 <p>Frequent small appends produce many small segments; queries then pay
 per-segment open/prune cost. <code>h5i-db compact &lt;db&gt; &lt;table&gt;</code> rewrites them
@@ -202,6 +233,29 @@ plan time and protect them from vacuum until applied, discarded, or expired
 <li>Quick audit: <code>du -sh &lt;db&gt;/tables/*/segments</code> vs.
   <code>h5i-db tables &lt;db&gt;</code> row counts shows how much is history vs. head.</li>
 </ul>
+<h3 id="vacuum-ran-and-disk-did-not-shrink">"Vacuum ran and disk did not shrink"<a class="headerlink" href="#vacuum-ran-and-disk-did-not-shrink" title="Permanent link">#</a></h3>
+<p>The usual answer is a fork. Reclamation is <em>deferred</em>, not lost: a live fork
+pins the versions it forked from, the retention floor cannot rise past them,
+and so the segments they reference stay reachable, including the
+pre-compaction copies of segments main has since rewritten. Main pays nothing
+for a fork until main tries to reclaim.</p>
+<div class="highlight"><pre><span></span><code>h5i-db<span class="w"> </span>fork<span class="w"> </span>list<span class="w"> </span>&lt;db&gt;<span class="w">   </span><span class="c1"># bytes_pinned per fork</span>
+</code></pre></div>
+
+<p><code>bytes_pinned</code> is everything in the pinned version, so it is an <strong>upper
+bound</strong> on what dropping that fork could release, not a measure of waste:
+main's current head usually shares most of those bytes. Two forks pinning the
+same version each report it, so the column does not sum.</p>
+<p>Order of operations to actually reclaim:</p>
+<ol>
+<li><code>h5i-db fork drop &lt;db&gt; &lt;name&gt;</code> (or promote it first, if the work is
+   wanted). Nested forks must go from the leaves up.</li>
+<li><code>h5i-db set-retention …</code>, now free to move past the released pin.</li>
+<li><code>h5i-db vacuum &lt;db&gt; --apply</code>.</li>
+</ol>
+<p>A fork's <em>own</em> tables are not vacuumed piecemeal: debris inside them is
+reclaimed wholesale when the fork is dropped, which is why an abandoned fork
+costs more than an active one.</p>
 <h2 id="filesystem-caveats">Filesystem caveats<a class="headerlink" href="#filesystem-caveats" title="Permanent link">#</a></h2>
 <ul>
 <li><strong>Local ext4/xfs/apfs/NTFS</strong>: the supported case. Durability relies on
@@ -280,7 +334,7 @@ the table now stands.</p>
     <nav class="page-nav"><a class="prev" href="../manual/agents.html"><span class="dir">← Previous</span><span class="pn-title">Agents &amp; automation</span></a><a class="next" href="../api/index.html"><span class="dir">Next →</span><span class="pn-title">Overview</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#backup">Backup</a><ul><li><a href="#procedure">Procedure</a></li><li><a href="#restore">Restore</a></li></ul></li><li><a href="#vacuum">Vacuum</a></li><li><a href="#compaction">Compaction</a></li><li><a href="#mutation-plan-hygiene">Mutation-plan hygiene</a></li><li><a href="#disk-usage-math">Disk-usage math</a></li><li><a href="#filesystem-caveats">Filesystem caveats</a></li><li><a href="#runbook-torn-or-corrupt-head">Runbook: torn or corrupt HEAD</a><ul><li><a href="#symptoms">Symptoms</a></li><li><a href="#diagnosis">Diagnosis</a></li><li><a href="#recovery">Recovery</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#backup">Backup</a><ul><li><a href="#procedure">Procedure</a></li><li><a href="#restore">Restore</a></li></ul></li><li><a href="#vacuum">Vacuum</a></li><li><a href="#forks">Forks</a></li><li><a href="#compaction">Compaction</a></li><li><a href="#mutation-plan-hygiene">Mutation-plan hygiene</a></li><li><a href="#disk-usage-math">Disk-usage math</a><ul><li><a href="#vacuum-ran-and-disk-did-not-shrink">"Vacuum ran and disk did not shrink"</a></li></ul></li><li><a href="#filesystem-caveats">Filesystem caveats</a></li><li><a href="#runbook-torn-or-corrupt-head">Runbook: torn or corrupt HEAD</a><ul><li><a href="#symptoms">Symptoms</a></li><li><a href="#diagnosis">Diagnosis</a></li><li><a href="#recovery">Recovery</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

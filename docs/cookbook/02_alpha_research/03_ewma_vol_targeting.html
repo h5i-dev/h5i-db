@@ -78,22 +78,23 @@
 on every risk desk, and h5i-db ships it as a native SQL window function:
 <code>ewma(x, alpha) OVER (...)</code>. This recipe estimates EWMA vol in SQL,
 cross-checks it against <code>pandas.ewm</code> to the last bit, then uses it the way
-practitioners actually do, scaling exposure to hold a constant 10%
-annualized risk target, and compares raw vs vol-targeted equity curves on
+practitioners actually do - scaling exposure to hold a constant 10%
+annualized risk target - and compares raw vs vol-targeted equity curves on
 real data.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
-<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
 
-<span class="kn">import</span> <span class="nn">h5i_db</span>
-<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;alpha_voltarget&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 <h2 id="1-real-prices-and-a-portfolio-return-series-in-sql">1. Real prices, and a portfolio return series in SQL<a class="headerlink" href="#1-real-prices-and-a-portfolio-return-series-in-sql" title="Permanent link">#</a></h2>
 <p>Ten liquid names, daily, 2020–2026 (cached). Our traded asset is the
-equal-weight portfolio of the ten, a reasonable broad-equity proxy with a
+equal-weight portfolio of the ten - a reasonable broad-equity proxy with a
 proper covid drawdown and the 2022 bear market in-sample. Per-symbol simple
 returns come from <code>lag()</code> per partition; the equal-weight portfolio is just
 the cross-sectional average per day. We keep only days where all ten names
@@ -117,21 +118,19 @@ step is a clean single-table window query.</p>
     <span class="n">note</span><span class="o">=</span><span class="s2">&quot;yfinance 10 names 2020-2026&quot;</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="n">port</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    WITH r AS (</span>
-<span class="sd">        SELECT ts, symbol,</span>
-<span class="sd">               adj_close / lag(adj_close) OVER (PARTITION BY symbol ORDER BY ts) - 1 AS ret</span>
-<span class="sd">        FROM prices</span>
-<span class="sd">    )</span>
-<span class="sd">    SELECT ts, avg(ret) AS ret</span>
-<span class="sd">    FROM r</span>
-<span class="sd">    WHERE ret IS NOT NULL</span>
-<span class="sd">    GROUP BY ts</span>
-<span class="sd">    HAVING count(*) = 10</span>
-<span class="sd">    ORDER BY ts</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>
+<span class="n">PREV</span> <span class="o">=</span> <span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;lag(adj_close)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+
+<span class="n">port</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">ret</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;adj_close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">PREV</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">ret</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">(),</span> <span class="n">names</span><span class="o">=</span><span class="n">count_star</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;names&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="mi">10</span><span class="p">)</span>  <span class="c1"># the HAVING: full cross-section only</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;ret&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span>
+<span class="p">)</span>
 
 <span class="n">ret_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
     <span class="p">[</span>
@@ -144,23 +143,21 @@ step is a clean single-table window query.</p>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">port</span><span class="o">.</span><span class="n">num_rows</span><span class="si">}</span><span class="s2"> daily portfolio returns&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">1630 daily portfolio returns</pre></div></div>
-<h2 id="2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary">2. EWMA variance in SQL, and the lambda/alpha dictionary<a class="headerlink" href="#2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary" title="Permanent link">#</a></h2>
+<h2 id="2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary">2. EWMA variance in SQL - and the lambda/alpha dictionary<a class="headerlink" href="#2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary" title="Permanent link">#</a></h2>
 <p>RiskMetrics writes the recursion as
 $\sigma_t^2 = \lambda\,\sigma_{t-1}^2 + (1-\lambda)\,r_t^2$ with
 $\lambda = 0.94$ for daily data. h5i-db's <code>ewma(x, alpha)</code> uses the smoothing
 weight on the <em>new</em> observation, so <strong>alpha = 1 − lambda = 0.06</strong>. Same
-recursion, opposite naming convention, and a perennial source of
-off-by-one-convention bugs. The 0.94/0.06 pair implies a center of mass of
+recursion, opposite naming convention - a perennial source of off-by-one-
+convention bugs. The 0.94/0.06 pair implies a center of mass of
 λ/(1−λ) ≈ 16 trading days; at other bar frequencies you would rescale
 (e.g. λ closer to 0.97 for weekly bars) rather than reuse 0.94 blindly.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">ewma_sql</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    SELECT ts, ret,</span>
-<span class="sd">           ewma(ret * ret, 0.06) OVER (ORDER BY ts) AS ewma_var</span>
-<span class="sd">    FROM port_returns</span>
-<span class="sd">    ORDER BY ts</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">ewma_sql</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;port_returns&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;ret&quot;</span><span class="p">,</span> <span class="n">ewma_var</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">ewma</span><span class="p">(</span><span class="mf">0.06</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 <span class="n">ewma_sql</span><span class="p">[</span><span class="s2">&quot;ewma_vol_ann&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">ewma_sql</span><span class="p">[</span><span class="s2">&quot;ewma_var&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="mi">252</span><span class="p">)</span>
 
 <span class="c1"># Cross-check against pandas (adjust=False = the plain recursion).</span>
@@ -210,7 +207,7 @@ off-by-one-convention bugs. The 0.94/0.06 pair implies a center of mass of
 </div></div></div></div>
 <h2 id="3-vol-targeting">3. Vol targeting<a class="headerlink" href="#3-vol-targeting" title="Permanent link">#</a></h2>
 <p>Target 10% annualized. Each day the position is scaled by
-<code>leverage_t = target_vol / ewma_vol_{t-1}</code>, so <strong>yesterday's</strong> vol estimate
+<code>leverage_t = target_vol / ewma_vol_{t-1}</code> - <strong>yesterday's</strong> vol estimate
 sizes today's exposure; using today's would leak the day's own squared
 return into its sizing. Leverage is capped at 2x (financing and mandate
 reality), and we charge 5 bps on each day's change in gross exposure so the
@@ -223,7 +220,7 @@ strategy pays for its own rebalancing.</p>
 <span class="n">targeted</span> <span class="o">=</span> <span class="p">(</span><span class="n">lev</span> <span class="o">*</span> <span class="n">raw</span> <span class="o">-</span> <span class="n">COST_BPS</span> <span class="o">/</span> <span class="mf">1e4</span> <span class="o">*</span> <span class="n">lev</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span><span class="o">.</span><span class="n">abs</span><span class="p">())</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
 
 
-<span class="k">def</span> <span class="nf">perf_stats</span><span class="p">(</span><span class="n">r</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">perf_stats</span><span class="p">(</span><span class="n">r</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
     <span class="n">eq</span> <span class="o">=</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">r</span><span class="p">)</span><span class="o">.</span><span class="n">cumprod</span><span class="p">()</span>
     <span class="n">dd</span> <span class="o">=</span> <span class="n">eq</span> <span class="o">/</span> <span class="n">eq</span><span class="o">.</span><span class="n">cummax</span><span class="p">()</span> <span class="o">-</span> <span class="mi">1</span>
     <span class="k">return</span> <span class="p">{</span>
@@ -270,7 +267,7 @@ strategy pays for its own rebalancing.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="n">sharex</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;ewma_vol_ann&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="mi">100</span><span class="p">,</span> <span class="n">lw</span><span class="o">=</span><span class="mf">0.9</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;tab:blue&quot;</span><span class="p">)</span>
@@ -297,14 +294,14 @@ strategy pays for its own rebalancing.</p>
 <p>The mechanics show up exactly where theory says they should: realized vol of
 the targeted book lands near 10% (versus ~24% raw), and the max drawdown
 shrinks by roughly two-thirds because the strategy de-levers into vol
-spikes (covid 2020, the 2022 bear). The Sharpe improves modestly: vol
+spikes (covid 2020, the 2022 bear). The Sharpe improves modestly - vol
 targeting is primarily a <em>risk shaping</em> tool that exploits the negative
-vol/return correlation in equities, so treat any Sharpe pickup as a bonus
-rather than the objective.</p>
+vol/return correlation in equities; treat any Sharpe pickup as a bonus, not
+the objective.</p>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
 <li><code>ewma(ret*ret, 0.06) OVER (ORDER BY ts)</code> reproduces the RiskMetrics
-  recursion in one SQL window call, verified bit-exact against
+  recursion in one SQL window call - verified bit-exact against
   <code>pandas.ewm(alpha=0.06, adjust=False)</code>.</li>
 <li>Remember the dictionary: h5i-db's <code>alpha</code> = 1 − RiskMetrics <code>lambda</code>.
   Daily λ=0.94 → <code>ewma(x, 0.06)</code>, ~16-day center of mass; rescale for other
@@ -312,9 +309,9 @@ rather than the objective.</p>
 <li>Size with <em>yesterday's</em> vol estimate. Same-day sizing is lookahead, and it
   flatters exactly the days that matter.</li>
 <li>On this sample, targeting held realized vol at ~10% and cut max drawdown
-  from ~32% to ~11% with a small Sharpe gain, which is the honest selling
-  point of vol targeting.</li>
-<li>Derived series (<code>port_returns</code>) live as ordinary versioned tables, so
+  from ~32% to ~11% with a small Sharpe gain - the honest selling point of
+  vol targeting.</li>
+<li>Derived series (<code>port_returns</code>) live as first-class versioned tables, so
   the whole risk pipeline is SQL-queryable and reproducible.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
@@ -323,7 +320,7 @@ rather than the objective.</p>
     <nav class="page-nav"><a class="prev" href="../../cookbook/02_alpha_research/02_pairs_trading.html"><span class="dir">← Previous</span><span class="pn-title">Pairs trading with a version-pinned data spine</span></a><a class="next" href="../../cookbook/02_alpha_research/04_realized_volatility.html"><span class="dir">Next →</span><span class="pn-title">Realized volatility from ticks: signature plots, jumps, overnight risk</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-real-prices-and-a-portfolio-return-series-in-sql">1. Real prices, and a portfolio return series in SQL</a></li><li><a href="#2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary">2. EWMA variance in SQL, and the lambda/alpha dictionary</a></li><li><a href="#3-vol-targeting">3. Vol targeting</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-real-prices-and-a-portfolio-return-series-in-sql">1. Real prices, and a portfolio return series in SQL</a></li><li><a href="#2-ewma-variance-in-sql-and-the-lambdaalpha-dictionary">2. EWMA variance in SQL - and the lambda/alpha dictionary</a></li><li><a href="#3-vol-targeting">3. Vol targeting</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">
