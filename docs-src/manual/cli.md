@@ -557,4 +557,8 @@ commits), or `idle` — plus what it wrote, what its pins hold back, and the
 agent metadata attached at `fork create --meta`. Selecting a fork shows its
 per-table divergence and copy-ready promote/drop commands; the UI itself
 never mutates forks. `tools/fork_demo.sh <db>` drives a simulated agent
-swarm against a database if you want to watch the tree move.
+swarm against a database if you want to watch the tree move, and
+`tools/demo_data.py` seeds one first — synthetic multi-symbol ticks
+(`synth --symbols AAPL,MSFT,NVDA --db <db>`) or a day of real 1s bars from
+Binance's public archive (`binance --symbols BTCUSDT,ETHUSDT --db <db>`,
+no API key).

@@ -6,6 +6,13 @@
 #   terminal 1:  tools/fork_demo.sh /tmp/h5i-demo
 #   terminal 2:  h5i-db ui /tmp/h5i-demo        # open the URL → Forks tab
 #
+# For a richer base than the built-in 400-row seed, seed first with
+# tools/demo_data.py (synthetic multi-symbol ticks, or real Binance data)
+# and point this script at the same path — it resumes on existing databases:
+#
+#   tools/demo_data.py synth --symbols AAPL,MSFT,NVDA --db /tmp/h5i-demo
+#   tools/fork_demo.sh /tmp/h5i-demo
+#
 # The loop is weighted toward the shapes the monitor distinguishes: bursts of
 # writes inside forks (working), quiet forks holding results (ahead), base
 # commits that strand shadows (conflict), and the occasional promote or prune.
