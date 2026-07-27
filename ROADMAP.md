@@ -1640,7 +1640,7 @@ on every wrapped query while every correctness test still passed.
 `docs_are_executable` test leaves: that test only runs lines starting
 `h5i-db`, so Python fences were never checked. The new one executes every
 runnable Python fence on the builder page **and** asserts each following
-```sql fence is what the example actually compiles to — a claimed lowering
+sql fence is what the example actually compiles to — a claimed lowering
 is now a tested one (mutation-checked: corrupting a documented frame
 fails it).
 
