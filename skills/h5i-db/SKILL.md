@@ -76,7 +76,11 @@ h5i-db fork drop market.db agent-01                            # or promote it
 Every data command takes `--fork <name>`. Keep it if it worked
 (`fork diff`, then `fork promote --table <t>`, which is first-commit-wins and
 must not be retried on conflict); drop it if it did not.
-→ [references/forks.md](references/forks.md)
+
+Forks nest (`fork create … --fork <parent>`), so a search tree of hypotheses
+is expressible directly; `forks('t')` queries a table across every fork at
+once with a `__fork` column; and `fork create --count N` makes a fanout in one
+command. → [references/forks.md](references/forks.md)
 
 ## Backtesting: let the database withhold the future
 

@@ -633,11 +633,27 @@ listed extensions, ArcticDB API compatibility, custom columnar file format
 2. Multi-table atomic snapshots are in (cheap: one snapshot file pinning many
    table versions); multi-table atomic *commits* are not — is that ever needed
    for the finance use case? Revisit after Phase 1 usage.
-3. Version history is **linear** by design (branch = copy the database dir or
-   `restore` to fork forward). If real demand for branching appears, the
-   manifest's parent pointer already supports a DAG — but branching a DB like
-   git is exactly the "worktree in a DB" idea we decided smells wrong, so the
-   bar is high.
+3. ~~Version history is **linear** by design (branch = copy the database dir
+   or `restore` to fork forward)~~ — **resolved** by ROADMAP Parts IX and X.
+   Demand appeared, from a direction this note did not anticipate: agents
+   exploring a tree of hypotheses over one dataset. Per-table history is still
+   linear, and the manifest's parent pointer is still a chain — branching was
+   *not* built into version history at all. A **fork** is catalog aliasing
+   plus a GC pin: a fork-scoped catalog, a pin on the base versions it was
+   made from, and a copy-on-write shadow table (a fresh `table_id` whose first
+   manifest is a copy of the pinned one) on first write. The branch pointer is
+   the catalog; the branch itself is an ordinary table, so commit, locking,
+   retention, vacuum, compaction and time travel apply to it unchanged.
+
+   That is what keeps this clear of the "worktree in a DB" smell the note was
+   guarding against: no second mutable object per table, no DAG in the version
+   chain, no merge. The conflict unit is the whole table and the policy is
+   compare-and-swap (`fork promote`), first-commit-wins. Forks nest, and a
+   nested fork is the same mechanism pointed one level down — a child pins its
+   parent's tables exactly as a top-level fork pins the database's.
+
+   See `crates/h5i-db-core/src/fork.rs` for the model and the refinement
+   invariant that makes cross-table segment references GC-safe.
 4. Name of the CLI binary: `h5i-db` (current) vs something shorter.
 
 ---

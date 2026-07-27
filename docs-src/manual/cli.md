@@ -464,8 +464,9 @@ command returns a JSON list; without it, a single object as before.
 **The `--fork` flag.** Every data command takes `--fork <name>` and then reads
 and writes inside that workspace, so an existing script runs unchanged against
 a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`,
-`fork create`) refuse it and say so: they move state a fork's siblings depend
-on.
+`set-retention`) refuse it and say so: they move state a fork's siblings
+depend on. `fork create` is the exception — with `--fork` it creates the new
+fork *inside* that one (see [Forks](concepts.html#forks-nest)).
 
 **Promotion conflicts.** `fork promote` compare-and-swaps against the version
 the fork started from. If the base moved, it exits 3 with
