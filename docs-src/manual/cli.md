@@ -457,7 +457,7 @@ the fork back to the run that made it.
 `<name>-0000 … <name>-000(N-1)` over a *single* resolution of the base, and
 `fork drop` takes several names at once. Every fork of one base at one instant
 pins the same versions, so the batch does one pass over the catalog however
-many branches it makes — which is what makes a few hundred short-lived
+many branches it makes, which is what makes a few hundred short-lived
 branches a reasonable thing to create and then throw away. With `--count` the
 command returns a JSON list; without it, a single object as before.
 
@@ -465,7 +465,7 @@ command returns a JSON list; without it, a single object as before.
 and writes inside that workspace, so an existing script runs unchanged against
 a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`,
 `set-retention`) refuse it and say so: they move state a fork's siblings
-depend on. `fork create` is the exception — with `--fork` it creates the new
+depend on. `fork create` is the exception: with `--fork` it creates the new
 fork *inside* that one (see [Forks](concepts.html#forks-nest)).
 
 **Promotion conflicts.** `fork promote` compare-and-swaps against the version
@@ -476,7 +476,7 @@ and re-run, or drop the fork.
 
 Compaction is the one exception, and it is handled for you. If every
 intervening base commit was a compaction then the base's *rows* did not
-change — only where they live — so the promote is **rebased** onto the new
+change, only where they live, so the promote is **rebased** onto the new
 layout instead of rejected, and the result reports `rebased_from`. That works
 while the fork still holds every row it inherited; a fork that deleted
 inherited rows cannot be replayed from metadata (a compacted segment may merge

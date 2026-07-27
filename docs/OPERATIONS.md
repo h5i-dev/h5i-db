@@ -136,14 +136,14 @@ subtree. Depth is capped at 32.
 **`FORK_INDEX.json` is a cache.** It sits at the database root and answers
 "which forks pin what" in one read instead of one per fork. It is rebuilt from
 the fork objects whenever it disagrees with them, so it is safe to delete at
-any time and **does not need to be backed up** — a restore without it simply
+any time and **does not need to be backed up**: a restore without it simply
 rebuilds it on first use. Every other object is authoritative.
 
 Routine checks:
 
 ```bash
 h5i-db fork list <db>       # age, tables owned, bytes_own, bytes_pinned
-h5i-db fork diff <db> <f>   # what it changed — manifests only, no segment reads
+h5i-db fork diff <db> <f>   # what it changed (manifests only, no segments)
 ```
 
 Abandoned forks are the usual cause of a database that will not shrink; see
@@ -196,7 +196,7 @@ Nothing is ever deleted except by vacuum, and vacuum only deletes
 
 The usual answer is a fork. Reclamation is *deferred*, not lost: a live fork
 pins the versions it forked from, the retention floor cannot rise past them,
-and so the segments they reference stay reachable — including the
+and so the segments they reference stay reachable, including the
 pre-compaction copies of segments main has since rewritten. Main pays nothing
 for a fork until main tries to reclaim.
 
@@ -213,10 +213,10 @@ Order of operations to actually reclaim:
 
 1. `h5i-db fork drop <db> <name>` (or promote it first, if the work is
    wanted). Nested forks must go from the leaves up.
-2. `h5i-db set-retention …` — now free to move past the released pin.
+2. `h5i-db set-retention …`, now free to move past the released pin.
 3. `h5i-db vacuum <db> --apply`.
 
-A fork's *own* tables are not vacuumed piecemeal — debris inside them is
+A fork's *own* tables are not vacuumed piecemeal: debris inside them is
 reclaimed wholesale when the fork is dropped, which is why an abandoned fork
 costs more than an active one.
 

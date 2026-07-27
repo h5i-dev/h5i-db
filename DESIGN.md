@@ -634,10 +634,10 @@ listed extensions, ArcticDB API compatibility, custom columnar file format
    table versions); multi-table atomic *commits* are not — is that ever needed
    for the finance use case? Revisit after Phase 1 usage.
 3. ~~Version history is **linear** by design (branch = copy the database dir
-   or `restore` to fork forward)~~ — **resolved** by ROADMAP Parts IX and X.
+   or `restore` to fork forward)~~ is **resolved** by ROADMAP Parts IX and X.
    Demand appeared, from a direction this note did not anticipate: agents
    exploring a tree of hypotheses over one dataset. Per-table history is still
-   linear, and the manifest's parent pointer is still a chain — branching was
+   linear, and the manifest's parent pointer is still a chain. Branching was
    *not* built into version history at all. A **fork** is catalog aliasing
    plus a GC pin: a fork-scoped catalog, a pin on the base versions it was
    made from, and a copy-on-write shadow table (a fresh `table_id` whose first
@@ -649,7 +649,7 @@ listed extensions, ArcticDB API compatibility, custom columnar file format
    guarding against: no second mutable object per table, no DAG in the version
    chain, no merge. The conflict unit is the whole table and the policy is
    compare-and-swap (`fork promote`), first-commit-wins. Forks nest, and a
-   nested fork is the same mechanism pointed one level down — a child pins its
+   nested fork is the same mechanism pointed one level down: a child pins its
    parent's tables exactly as a top-level fork pins the database's.
 
    See `crates/h5i-db-core/src/fork.rs` for the model and the refinement

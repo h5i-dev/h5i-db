@@ -29,7 +29,7 @@ Every data command takes `--fork <name>`. Inside a fork:
 
 Database-wide commands (`snapshot`, `vacuum`, `set-retention`) refuse `--fork`
 and say so: they move state a fork's siblings depend on. `fork create` is not
-one of them — with `--fork` it nests (see [Nesting forks](#nesting-forks)).
+one of them: with `--fork` it nests (see [Nesting forks](#nesting-forks)).
 
 ## Finishing: promote or drop
 
@@ -136,8 +136,8 @@ Rules worth knowing before you plan around it:
   way to main, promote at each level.
 - **A parent with live children cannot be dropped.** The error names them.
   Drop from the leaves up, or drop the whole subtree at once.
-- **Depth is capped at 32.** Reads do not slow down with depth — a fork names
-  its segments by path, so there is no chain to walk — the cap is only a
+- **Depth is capped at 32.** Reads do not slow down with depth. A fork names
+  its segments by path, so there is no chain to walk; the cap is only a
   runaway guard.
 - `fork show` reports `parent` and `depth`.
 
@@ -156,8 +156,8 @@ can see is read once however many reference it, and only what each fork
 actually changed is read separately. Comparing fifty branches costs about what
 reading one does, plus their deltas.
 
-Narrow it with a comma-separated list — `forks('trades', 'branch-a,branch-b')`
-— and note that named forks must exist (a typo is an error, not an omission).
+Narrow it with a comma-separated list, `forks('trades', 'branch-a,branch-b')`.
+Named forks must exist: a typo is an error, not an omission.
 Forks whose schema for the table has diverged are refused; use `fork diff` to
 see how they differ.
 
@@ -177,7 +177,7 @@ h5i-db fork drop market.db trial-0000 trial-0001  # several names at once
 the cost is one pass over the catalog however many branches you make. Names
 must all be free before anything is written, so a collision leaves no partial
 fanout. A batch drop stops at a name that does not exist rather than skipping
-it — forks dropped before that point stay dropped, so re-run with what
+it. Forks dropped before that point stay dropped, so re-run with what
 `fork list` still shows.
 
 Python: `db.fork_many("trial", 200)`, `db.create_forks([...])`,

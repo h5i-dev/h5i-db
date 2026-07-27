@@ -155,14 +155,14 @@ $ h5i-db fork create market.db branch-a --fork trunk
 ```
 
 `branch-a` sees the database, plus whatever `trunk` had done when it was
-taken, plus its own work — and stays frozen against anything `trunk` does
+taken, plus its own work, and stays frozen against anything `trunk` does
 afterwards. `promote` moves work up exactly one level, so `branch-a` promotes
 onto `trunk`, never onto the database. That is what makes a search tree
 expressible: refine, evaluate, keep the good subtree, discard the rest.
 
 Depth costs nothing to read. A fork's manifest names its segments by path, so
 resolving a table twenty levels down takes the same number of reads as one
-level down — there is no chain to replay. Nesting is capped at 32 levels as a
+level down. There is no chain to replay. Nesting is capped at 32 levels as a
 runaway guard.
 
 Dropping is the one place the tree matters: a fork that others are nested
@@ -181,7 +181,7 @@ This is how you compare outcomes without exporting anything. It is cheap for
 the same reason forking is: the forks share their segments, so a segment
 several forks can see is read **once** however many reference it, and only
 what each fork actually changed is read separately. Pass a comma-separated
-list to narrow it — `forks('trades', 'branch-a,branch-b')` — and use
+list to narrow it (`forks('trades', 'branch-a,branch-b')`), and use
 `db.fork_scan("trades")` for the same thing from Python.
 
 Forks whose schema for the table has diverged are refused rather than blended;

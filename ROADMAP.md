@@ -1702,7 +1702,7 @@ cross-branch aggregation, GC that survives branch churn.
    cached by (path, checksum) is correct forever; a fork's answer is
    the combine of shared-segment partials plus its own deltas.
    Count/min/max come free from Parquet footers; sums are cheap;
-   holistic aggregates (quantiles) use mergeable sketches (t-digest
+   quantiles use mergeable sketches (t-digest
    [6], KLL [7]) and are approximate, labeled as such.
 4. **Ephemeral means ephemeral.** The ephemeral fork tier is
    process-local state: no file, no GC root, no durability, lost on
@@ -1873,7 +1873,7 @@ bitmap representation; none is a dependency.
 
 ## Part X implementation status (2026-07-27, branch `survery-fork-system`)
 
-**X-A1 — delivered.** `crates/h5i-db-core/src/fork_index.rs`, consumed by
+**X-A1: delivered.** `crates/h5i-db-core/src/fork_index.rs`, consumed by
 `retention.rs` (floor check), `database.rs` (`drop_table` guard, vacuum
 roots). 11 integration tests in `tests/fork_index.rs`. Measured: the
 drop guard reads 2 objects at 6 forks where the full scan read 7, and
@@ -1882,7 +1882,7 @@ the count no longer grows with fork count.
 *Design corrected while building it.* The plan called for "per-table pin
 map plus per-segment fork bitmaps". The per-segment half was dropped:
 segment membership changes on every fork *write*, so maintaining it in a
-persisted index would put an index write on the fork write path — which
+persisted index would put an index write on the fork write path, which
 design rule 1 forbids and which buys nothing, because X-A2 computes
 segment visibility at scan time from manifests it must read anyway. What
 shipped indexes pins and owned tables, which change only on fork
@@ -1894,24 +1894,24 @@ maintenance-free: nothing writes the index except the reader that finds
 it stale, and staleness is detected by listing `forks/` and
 `catalog/forks/` and reusing only entries whose object is still present
 at the same size. Two listings replace N reads, a rebuild costs one read
-per *changed* fork, and there is no update site to forget — which
+per *changed* fork, and there is no update site to forget. That
 matters because the forgettable-update failure mode is exactly the one
 that loses data.
 
-**X-A2 — delivered.** `crates/h5i-db-query/src/fork_scan.rs` registers
+**X-A2: delivered.** `crates/h5i-db-query/src/fork_scan.rs` registers
 `forks('table' [, 'a,b'])`; `Database::fork_names()` and Python
 `db.fork_scan()` alongside. 13 integration tests.
 
 The plan's "shared base segments scanned once" needed a specific plan
 shape: group segments by *which forks reference them*, scan each group
 once, cross-join against that group's fork labels, union the groups.
-Single-fork groups use a literal projection instead of a join — not only
+Single-fork groups use a literal projection instead of a join. That is not only
 cheaper, but the only shape that works when a group is empty, since a
 scan over zero files reports `UnknownPartitioning(0)` and fails
 `CrossJoinExec`'s `SinglePartition` requirement. Measured: 10 forks over
 3 shared segments scan 3.
 
-**X-A3 — mostly already built; scope corrected to a regression test.**
+**X-A3: mostly already built; scope corrected to a regression test.**
 Both halves of the plan dissolved on contact:
 
 1. *"Data-level `fork diff` from segment set difference"* was **already
@@ -1919,7 +1919,7 @@ Both halves of the plan dissolved on contact:
    `rows_fork`, `bytes_base` / `bytes_fork` and
    `segments_added`/`removed`/`shared`, all from manifests. The Part X
    claim that "today's diff is metadata-level" was simply wrong. What was
-   genuinely missing was the *test*: Part IX listed "diff reads manifests
+   missing was the *test*: Part IX listed "diff reads manifests
    only (no segment I/O)" as an acceptance criterion and never asserted
    it. `tests/fork_diff_io.rs` now does, on both the add and delete
    paths, by recording every object read and failing on any `.parquet`.
@@ -1928,12 +1928,12 @@ Both halves of the plan dissolved on contact:
    `provider.rs::manifest_statistics` surfaces them as exact
    `Statistics`; DataFusion answers `count`/`min`/`max` from them with
    zero segment reads. Being keyed by an immutable segment, it needs no
-   eviction policy and no invalidation — the cost the plan budgeted for.
+   eviction policy and no invalidation, which is the cost the plan budgeted for.
 
    Extending it to `sum` was investigated and rejected: in DataFusion
    54.1 only `count`, `min` and `max` implement `value_from_stats`
    (`datafusion-functions-aggregate/src/{count,min_max}.rs`), so a
-   recorded sum — in the manifest or in a sidecar — would not remove one
+   recorded sum (in the manifest or in a sidecar) would not remove one
    segment read without also writing a custom optimizer rule and
    physical operator. Float sums would additionally disagree with
    scan-derived sums in the last ulp, so two queries that should agree
@@ -1944,20 +1944,20 @@ Both halves of the plan dissolved on contact:
    an engine rule that does not exist, so the work would have been
    storage and invalidation machinery serving nothing.
 
-**X-B1 — delivered.** `create_forks` / `fork_many` / `drop_forks` in
+**X-B1: delivered.** `create_forks` / `fork_many` / `drop_forks` in
 `fork.rs`, CLI `fork create --count N` and `fork drop <names…>`, Python
 `create_forks` / `fork_many` / `drop_forks` / `fork_names`. 11 core
 integration tests + 2 CLI e2e.
 
 Two things fell out of building it. The single-fork verbs are now the
 batch verbs with one name, which removes the risk of the two drifting;
-and the durability barrier turned out to matter more than the puts —
+and the durability barrier turned out to matter more than the puts:
 `create_many` takes one fsync pass for the whole batch rather than one
 per fork, which is what dominates at a few hundred branches. The CLI
 output shapes for one fork are deliberately unchanged (one object, and
 `dropped` still a scalar), because agents parse them.
 
-**X-B3 — delivered.** A promote blocked *only* by compaction is now
+**X-B3: delivered.** A promote blocked *only* by compaction is now
 replayed onto the new layout instead of refused; `PromoteResult` gains
 `rebased_from`, and the manifest note and `h5i.forked_from` record it.
 
@@ -1967,9 +1967,9 @@ that *deleted* inherited rows cannot be replayed from metadata, because
 a compacted segment may merge rows it dropped with rows it kept and
 nothing short of reading the data says which. That case still conflicts,
 with a message saying why. The Part IX test asserting this case fails
-was updated to assert it rebases — the behaviour change is the point.
+was updated to assert it rebases, because the behaviour change is the point.
 
-**X-C1 — delivered.** Nested forks, superseding Part IX's "no
+**X-C1: delivered.** Nested forks, superseding Part IX's "no
 fork-of-fork in v1". `Fork` gains `parent` and `depth`, `ForkPin` gains
 `spec_revision` and `created_at_ns`, `MAX_FORK_DEPTH = 32`,
 `drop_fork_tree`, and a drop guard. 15 integration tests in
@@ -1979,7 +1979,7 @@ The design turned out to be smaller than the plan feared, for one
 reason: **a pin is keyed by table id and does not care whose table it
 is.** A child pinning its parent's tables is the same mechanism pointed
 one level down, so the write path, the commit protocol, compaction and
-the refinement invariant all generalised untouched — a child's shadow
+the refinement invariant all generalised untouched: a child's shadow
 references paths listed in the manifest it shadows, which is exactly
 what the invariant already said.
 
@@ -1988,13 +1988,14 @@ that could have been silently wrong. `entry_opt` and `list_tables`
 resolved a name through the *global catalog*, filtered by the pin set.
 Inside a nested fork that answers with the base table a parent had
 already shadowed. They now resolve through the pin set by name, which is
-the only structure that knows what a name meant at fork time — and which
+the only structure that knows what a name meant at fork time, and it
 is also read-free, so the fix made flat forks cheaper too. Carrying
 `spec_revision`/`created_at_ns` on the pin is what made that possible at
 zero cost: the catalog entry is already in hand when the pin is written.
 
 Both added-field sets use `Option` + `skip_serializing_if` rather than
-`#[serde(default)]` alone. That is load-bearing, not style: a fork
+`#[serde(default)]` alone. That distinction is what keeps old forks
+readable, and it is not a style preference: a fork
 object is self-checksummed, so a field that serialises when absent
 changes the bytes and turns every fork in every existing database into a
 corruption error. Pinned by `a_fork_written_before_nesting_still_verifies`.
@@ -2002,12 +2003,12 @@ corruption error. Pinned by `a_fork_written_before_nesting_still_verifies`.
 The GC guard is stated in terms of **dependency, not lineage**: a drop
 is refused when another fork pins a table this one owns. A child that
 forked before its parent wrote anything holds nothing of the parent's,
-so dropping the parent is allowed — which is correct, and is what a
+so dropping the parent is allowed. That is correct, and is what a
 parent-name check would have got wrong. `drop_fork_tree` discovers the
 subtree by the same relation and drops it deepest-first.
 
 Measured: resolving a table at depth 24 costs **exactly** as many object
 reads as at depth 2 (asserted with `assert_eq!`, not a bound). That is
-the property BranchBench found every system missing — Dolt's reads
-degrade 5-4000x with depth — and it holds here because a shadow manifest
+the property BranchBench found every system missing (Dolt's reads
+degrade 5-4000x with depth), and it holds here because a shadow manifest
 names its segments by path, so there is no chain to walk.
