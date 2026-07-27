@@ -30,9 +30,12 @@ header { display: flex; align-items: center; gap: 20px; padding: 0 18px;
   background: var(--surface); }
 header .logo { font-weight: 700; letter-spacing: .02em; }
 header .logo b { color: var(--accent); }
-header .dbpath { font-family: var(--font-mono); font-size: 11px; color: var(--dim); }
+header .dbpath { font-family: var(--font-mono); font-size: 11px; color: var(--dim);
+  max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  direction: rtl; }
 header .mode { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px;
-  text-transform: uppercase; letter-spacing: .1em; padding: 3px 9px; border-radius: 3px; }
+  text-transform: uppercase; letter-spacing: .1em; padding: 3px 9px; border-radius: 3px;
+  white-space: nowrap; }
 .mode.ro { color: var(--muted); background: var(--surface-2); }
 .mode.rw { color: var(--accent); background: var(--accent-bg); }
 
