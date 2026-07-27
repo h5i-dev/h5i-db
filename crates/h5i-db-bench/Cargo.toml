@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
+# This crate ships two binaries, so `cargo run -p h5i-db-bench` would otherwise
+# be ambiguous and fail. The query harness is the one CI, the README and
+# benchmarks/RESULTS.md all invoke that way; the fork harness is opt-in via
+# `--bin h5i-db-fork-bench`.
+default-run = "h5i-db-bench"
 
 [[bin]]
 name = "h5i-db-bench"

@@ -172,6 +172,7 @@ writer at every step.
 ```bash
 cargo test --workspace          # ~290 tests incl. crash-safety fault injection
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
+cargo run -p h5i-db-bench --profile bench-fast --bin h5i-db-fork-bench
 ```
 
 Workspace crates under `crates/`: `core` (versioned storage kernel), `query`
