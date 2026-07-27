@@ -208,12 +208,17 @@ def test_database_wide_operations_refuse_a_fork_handle():
         db.create_fork("agent-01")
         fork = db.fork("agent-01")
         for call in (
-            lambda: fork.create_fork("nested"),
             lambda: fork.snapshot("snap"),
             lambda: fork.vacuum(apply=True),
         ):
             with pytest.raises(h5i_db.InvalidInputError):
                 call()
+
+        # create_fork is deliberately not in that list: forking from a fork
+        # nests (ROADMAP X-C1) rather than reaching for a database-wide root.
+        fork.create_fork("nested")
+        assert db.fork_info("nested")["parent"] == "agent-01"
+        assert db.fork_info("nested")["depth"] == 1
 
 
 def test_closing_a_fork_handle_leaves_the_base_open():
@@ -225,6 +230,89 @@ def test_closing_a_fork_handle_leaves_the_base_open():
         assert fork.closed
         assert not db.closed
         assert _rows(db) == 5
+
+
+# ---------------------------------------------------------------------------
+# batch verbs and cross-fork reads (ROADMAP Part X)
+# ---------------------------------------------------------------------------
+
+
+def test_fork_many_creates_a_numbered_fanout_with_identical_pins():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _open_db(tmp)
+        forks = db.fork_many("sim", 4, note="trial")
+
+        assert [f["name"] for f in forks] == [
+            "sim-0000",
+            "sim-0001",
+            "sim-0002",
+            "sim-0003",
+        ]
+        assert all(f["note"] == "trial" for f in forks)
+        # One resolution of the base means one pin set, stamped on each.
+        assert all(f["pins"] == forks[0]["pins"] for f in forks)
+        assert db.fork_names() == [f["name"] for f in forks]
+
+
+def test_create_forks_rejects_duplicates_before_writing_anything():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _open_db(tmp)
+        with pytest.raises(h5i_db.InvalidInputError):
+            db.create_forks(["a", "b", "a"])
+        assert db.fork_names() == []
+
+        db.create_fork("taken")
+        with pytest.raises(h5i_db.ConflictError):
+            db.create_forks(["x", "taken"])
+        # The batch aborted on validation, so "x" was never created.
+        assert db.fork_names() == ["taken"]
+
+
+def test_drop_forks_removes_several_and_reports_tables_deleted():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _open_db(tmp)
+        db.fork_many("sim", 3)
+        db.fork("sim-0000").append("trades", _sample(100, 1))
+
+        # One shadow among the three, so the return value is a table count.
+        assert db.drop_forks(["sim-0000", "sim-0001"]) == 1
+        assert db.fork_names() == ["sim-0002"]
+
+
+def test_fork_scan_reads_every_fork_with_a_label_column():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _open_db(tmp)
+        db.fork_many("sim", 3)
+        db.fork("sim-0000").append("trades", _sample(100, 1))
+
+        table = db.fork_scan("trades").collect().to_arrow()
+        assert "__fork" in table.column_names
+        # Three forks over five base rows, plus the one row sim-0000 added.
+        assert table.num_rows == 16
+        assert set(table.column("__fork").to_pylist()) == {
+            "sim-0000",
+            "sim-0001",
+            "sim-0002",
+        }
+
+        narrowed = db.fork_scan("trades", ["sim-0000"]).collect().to_arrow()
+        assert narrowed.num_rows == 6
+        assert set(narrowed.column("__fork").to_pylist()) == {"sim-0000"}
+
+
+def test_fork_scan_builds_sql_lazily_and_validates_its_arguments():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _open_db(tmp)
+        db.create_fork("a")
+
+        assert "forks('trades')" in db.fork_scan("trades").sql()
+        assert "forks('trades', 'a')" in db.fork_scan("trades", ["a"]).sql()
+
+        # A bare string is the easy mistake: it would iterate as characters.
+        with pytest.raises(h5i_db.InvalidInputError):
+            db.fork_scan("trades", "a")
+        with pytest.raises(h5i_db.InvalidInputError):
+            db.fork_scan("trades", [])
 
 
 if __name__ == "__main__":
