@@ -502,6 +502,11 @@ enum ForkCmd {
         /// verbatim on the fork; h5i-db never interprets it.
         #[arg(long)]
         meta: Option<String>,
+        /// Create this many forks named `<name>-0000`, `<name>-0001`, … over a
+        /// single resolution of the base. The wide-fanout shape: one pass over
+        /// the catalog however many branches are made.
+        #[arg(long)]
+        count: Option<usize>,
     },
     /// List forks with what each owns and what it holds back from reclamation.
     List { db: PathBuf },
@@ -525,8 +530,16 @@ enum ForkCmd {
         #[arg(long)]
         table: String,
     },
-    /// Delete a fork and everything it owns, releasing its pin.
-    Drop { db: PathBuf, name: String },
+    /// Delete forks and everything they own, releasing their pins.
+    ///
+    /// Several names are dropped under one metadata lock, which is the shape
+    /// mass pruning wants. A name that does not exist stops the batch rather
+    /// than being skipped.
+    Drop {
+        db: PathBuf,
+        #[arg(required = true, num_args = 1..)]
+        names: Vec<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1492,6 +1505,7 @@ async fn run(cli: Cli) -> Result<()> {
                 note,
                 as_of,
                 meta,
+                count,
             } => {
                 let as_of_ns = match as_of.as_deref() {
                     Some(s) => Some(parse_rfc3339_ns(s, "--as-of")?),
@@ -1514,8 +1528,19 @@ async fn run(cli: Cli) -> Result<()> {
                 // Deliberately the base handle: forks are not nested in v1, and
                 // `--fork x fork create y` should say so rather than guess.
                 let db = open_db(&db, fork).await?;
-                let created = db.create_fork(&name, note, as_of_ns, user_meta).await?;
-                write_value(&created, format)
+                match count {
+                    // One fork stays one JSON object rather than a list of
+                    // one: the common case's output shape does not change
+                    // because a batch flag was added next to it.
+                    None => {
+                        let created = db.create_fork(&name, note, as_of_ns, user_meta).await?;
+                        write_value(&created, format)
+                    }
+                    Some(n) => {
+                        let created = db.fork_many(&name, n, note, as_of_ns, user_meta).await?;
+                        write_value(&created, format)
+                    }
+                }
             }
             ForkCmd::List { db } => {
                 let db = open_db_ro(&db, fork).await?;
@@ -1533,11 +1558,19 @@ async fn run(cli: Cli) -> Result<()> {
                 let db = open_db(&db, fork).await?;
                 write_value(&db.promote(&name, &table).await?, format)
             }
-            ForkCmd::Drop { db, name } => {
+            ForkCmd::Drop { db, names } => {
                 let db = open_db(&db, fork).await?;
-                let dropped = db.drop_fork(&name).await?;
+                let dropped = db.drop_forks(&names).await?;
+                // One name keeps the scalar shape it has always had. Agents
+                // parse this output, and turning `dropped` into a list for
+                // everyone would break them to accommodate a flag they did
+                // not use.
+                let reported = match names.as_slice() {
+                    [one] => serde_json::json!(one),
+                    many => serde_json::json!(many),
+                };
                 write_value(
-                    &serde_json::json!({"dropped": name, "tables_deleted": dropped}),
+                    &serde_json::json!({"dropped": reported, "tables_deleted": dropped}),
                     format,
                 )
             }

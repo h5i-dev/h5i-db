@@ -239,6 +239,30 @@ pub async fn create(backend: &Backend, fork: &Fork) -> Result<()> {
     backend.sync_objects(&[path]).await
 }
 
+/// Store many new forks, then fsync them in one pass.
+///
+/// Two things make this cheaper than a `create` loop, and both are about
+/// round trips rather than bytes: the puts are issued concurrently, and the
+/// durability barrier is taken once for the whole batch instead of once per
+/// fork. At a thousand branches the second dominates.
+pub async fn create_many(backend: &Backend, forks: &[Fork]) -> Result<()> {
+    let paths: Vec<object_store::path::Path> = futures::stream::iter(forks)
+        .map(|fork| async move {
+            let path = layout::fork_path(&fork.name);
+            let bytes = serde_json::to_vec_pretty(fork)?;
+            if !backend.put_if_absent(&path, bytes.into()).await? {
+                return Err(Error::ForkExists {
+                    name: fork.name.clone(),
+                });
+            }
+            Ok::<_, Error>(path)
+        })
+        .buffer_unordered(crate::backend::METADATA_FETCH_CONCURRENCY)
+        .try_collect()
+        .await?;
+    backend.sync_objects(&paths).await
+}
+
 /// Overwrite an existing fork object (metadata edits). Callers must hold the
 /// database metadata lock.
 ///
@@ -516,14 +540,62 @@ impl crate::database::Database {
         as_of_ns: Option<i64>,
         user_meta: serde_json::Map<String, serde_json::Value>,
     ) -> Result<Fork> {
+        let mut created = self
+            .create_forks(
+                std::slice::from_ref(&name.to_string()),
+                note,
+                as_of_ns,
+                user_meta,
+            )
+            .await?;
+        Ok(created.pop().expect("one name in, one fork out"))
+    }
+
+    /// Create many forks over **one** resolution of the base (ROADMAP X-B1).
+    ///
+    /// Every fork of the same base at the same instant pins the same versions,
+    /// so resolving that pin set once and stamping it onto N objects is the
+    /// whole optimisation: a thousand forks cost one pass over the catalog
+    /// instead of a thousand. This is the shape agentic simulation produces —
+    /// a wide star of short-lived branches off one root.
+    ///
+    /// All-or-nothing on *validation*: every name is checked for availability
+    /// under the metadata lock before anything is written, so the ordinary
+    /// "one of these already exists" case writes nothing. Writing itself is
+    /// not transactional — a crash part-way leaves some forks created, each
+    /// individually complete and droppable.
+    pub async fn create_forks(
+        &self,
+        names: &[String],
+        note: Option<String>,
+        as_of_ns: Option<i64>,
+        user_meta: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Vec<Fork>> {
         self.ensure_writable("fork create")?;
         // No fork-of-fork in v1: nesting multiplies the promote and GC paths
         // before the primitive has users (ROADMAP IX "Do NOT build").
         self.ensure_base("fork create")?;
-        crate::database::validate_table_name(name)?;
+        if names.is_empty() {
+            return Err(Error::invalid("fork create needs at least one name"));
+        }
+        for name in names {
+            crate::database::validate_table_name(name)?;
+        }
+        // A repeated name would race itself: the first write wins and the
+        // second reports ForkExists for a fork this very call created, which
+        // reads as a spurious conflict.
+        let unique: BTreeSet<&String> = names.iter().collect();
+        if unique.len() != names.len() {
+            return Err(Error::invalid(
+                "fork create was given the same name twice; fork names must be distinct",
+            ));
+        }
+
         let _meta = self.backend().meta_lock().await?;
-        if load_opt(self.backend(), name).await?.is_some() {
-            return Err(Error::ForkExists { name: name.into() });
+        for name in names {
+            if load_opt(self.backend(), name).await?.is_some() {
+                return Err(Error::ForkExists { name: name.clone() });
+            }
         }
 
         let mut pins = BTreeMap::new();
@@ -586,18 +658,44 @@ impl crate::database::Database {
         self.raise_min_reader_version(layout::FORK_MIN_READER_VERSION)
             .await?;
 
-        let fork = Fork {
-            name: name.to_string(),
-            created_at_ns: crate::util::monotonic_commit_ts(None),
-            note,
-            as_of_ns,
-            pins,
-            user_meta,
-            checksum: String::new(),
+        let created_at_ns = crate::util::monotonic_commit_ts(None);
+        let forks = names
+            .iter()
+            .map(|name| {
+                Fork {
+                    name: name.clone(),
+                    created_at_ns,
+                    note: note.clone(),
+                    as_of_ns,
+                    pins: pins.clone(),
+                    user_meta: user_meta.clone(),
+                    checksum: String::new(),
+                }
+                .seal()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        create_many(self.backend(), &forks).await?;
+        Ok(forks)
+    }
+
+    /// `count` forks named `prefix-0000`, `prefix-0001`, … over one resolution
+    /// of the base.
+    ///
+    /// The zero-padded suffix keeps name order equal to creation order, which
+    /// matters because every listing in the system sorts by name.
+    pub async fn fork_many(
+        &self,
+        prefix: &str,
+        count: usize,
+        note: Option<String>,
+        as_of_ns: Option<i64>,
+        user_meta: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<Vec<Fork>> {
+        if count == 0 {
+            return Err(Error::invalid("fork_many needs a count of at least 1"));
         }
-        .seal()?;
-        create(self.backend(), &fork).await?;
-        Ok(fork)
+        let names: Vec<String> = (0..count).map(|i| format!("{prefix}-{i:04}")).collect();
+        self.create_forks(&names, note, as_of_ns, user_meta).await
     }
 
     /// Checksum of a table's manifest at an exact sequence.
@@ -691,6 +789,33 @@ impl crate::database::Database {
         self.ensure_writable("fork drop")?;
         self.ensure_base("fork drop")?;
         let _meta = self.backend().meta_lock().await?;
+        self.drop_fork_locked(name).await
+    }
+
+    /// Drop many forks under one metadata lock (ROADMAP X-B1).
+    ///
+    /// Pruning is the other half of the branch-mutate-evaluate loop: an agent
+    /// that forked a thousand hypotheses discards most of them, and taking the
+    /// database metadata lock a thousand times to do it is the wrong shape.
+    ///
+    /// Each fork is dropped in the same order a single drop uses, so the crash
+    /// story is unchanged: re-running completes, and a partially dropped fork
+    /// is always still pinned rather than unpinned with live tables. A name
+    /// that does not exist stops the batch — silently skipping it would hide a
+    /// typo in a list the caller believes it deleted.
+    pub async fn drop_forks(&self, names: &[String]) -> Result<usize> {
+        self.ensure_writable("fork drop")?;
+        self.ensure_base("fork drop")?;
+        let _meta = self.backend().meta_lock().await?;
+        let mut dropped = 0usize;
+        for name in names {
+            dropped += self.drop_fork_locked(name).await?;
+        }
+        Ok(dropped)
+    }
+
+    /// [`Self::drop_fork`] with the metadata lock already held.
+    async fn drop_fork_locked(&self, name: &str) -> Result<usize> {
         let fork = load(self.backend(), name).await?;
         let entries = list_entries(self.backend(), &fork.name).await?;
         let dropped = entries.len();

@@ -433,12 +433,12 @@ against one dataset at once. See [Forks](concepts.html#forks) for the model.
 
 | Subcommand | Meaning |
 |---|---|
-| `fork create <db> <name>` | Pin every table and open a workspace; `--note`, `--as-of`, `--meta` supported |
+| `fork create <db> <name>` | Pin every table and open a workspace; `--note`, `--as-of`, `--meta`, `--count` supported |
 | `fork list <db>` | Every fork, with what it owns (`bytes_own`) and what it holds back (`bytes_pinned`) |
 | `fork show <db> <name>` | One fork's pins and metadata |
 | `fork diff <db> <name>` | What the fork changed, from manifests alone; `--table` to narrow |
 | `fork promote <db> <name> --table <t>` | Land one of its tables on the base |
-| `fork drop <db> <name>` | Delete the fork and everything it owns |
+| `fork drop <db> <name>…` | Delete the named forks and everything they own |
 
 ```console
 $ h5i-db fork create market.db agent-01 --note "hypothesis 1"
@@ -452,6 +452,14 @@ $ h5i-db fork drop market.db agent-01
 `fork create` accepts `--as-of <rfc3339>` to pin the past instead of the
 present, and `--meta` (inline JSON, `@file`, or `-`) to record whatever ties
 the fork back to the run that made it.
+
+**Wide fanouts.** `fork create <db> <name> --count N` creates
+`<name>-0000 … <name>-000(N-1)` over a *single* resolution of the base, and
+`fork drop` takes several names at once. Every fork of one base at one instant
+pins the same versions, so the batch does one pass over the catalog however
+many branches it makes — which is what makes a few hundred short-lived
+branches a reasonable thing to create and then throw away. With `--count` the
+command returns a JSON list; without it, a single object as before.
 
 **The `--fork` flag.** Every data command takes `--fork <name>` and then reads
 and writes inside that workspace, so an existing script runs unchanged against

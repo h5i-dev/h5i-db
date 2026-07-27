@@ -471,6 +471,60 @@ class Database:
             )
         )
 
+    def create_forks(
+        self,
+        names: Sequence[str],
+        note: Optional[str] = None,
+        as_of: Optional[Union[str, int, "datetime.datetime"]] = None,
+        meta: Optional[dict] = None,
+    ) -> list[dict]:
+        """Create many forks over a single resolution of the base.
+
+        Every fork of one base at one instant pins the same versions, so this
+        resolves that pin set once and stamps it onto each fork: a wide fanout
+        costs one pass over the catalog rather than one per branch.
+
+            db.create_forks([f"trial-{i}" for i in range(500)])
+
+        Names must be distinct and none may already exist - both are checked
+        before anything is written, so the usual mistakes leave no partial
+        fanout behind. ``note``, ``as_of`` and ``meta`` apply to every fork.
+        """
+        return json.loads(
+            self._native.create_forks(
+                list(names),
+                note,
+                _as_of_ns(as_of),
+                json.dumps(meta) if meta is not None else None,
+            )
+        )
+
+    def fork_many(
+        self,
+        prefix: str,
+        count: int,
+        note: Optional[str] = None,
+        as_of: Optional[Union[str, int, "datetime.datetime"]] = None,
+        meta: Optional[dict] = None,
+    ) -> list[dict]:
+        """``count`` forks named ``prefix-0000``, ``prefix-0001``, ...
+
+        The zero-padded suffix keeps name order equal to creation order, which
+        every listing in h5i-db sorts by.
+        """
+        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+            raise ValueError(f"count must be a positive integer, got {count!r}")
+        names = [f"{prefix}-{i:04}" for i in range(count)]
+        return self.create_forks(names, note, as_of, meta)
+
+    def fork_names(self) -> list[str]:
+        """Every fork's name, in name order.
+
+        One read of the fork index, where :meth:`forks` reads a manifest per
+        table per fork to report sizes.
+        """
+        return json.loads(self._native.fork_names())
+
     def fork(self, name: str) -> "Database":
         """A handle scoped to ``name``.
 
@@ -513,6 +567,17 @@ class Database:
     def drop_fork(self, name: str) -> int:
         """Delete a fork and everything it owns; returns the table count."""
         return self._native.drop_fork(name)
+
+    def drop_forks(self, names: Sequence[str]) -> int:
+        """Delete many forks under one metadata lock; returns the table count.
+
+        Pruning is the other half of a branch-and-discard loop. A name that
+        does not exist stops the batch rather than being skipped, so a typo in
+        a list you believe you deleted is reported instead of swallowed; forks
+        dropped before the failure stay dropped, and re-running with what
+        :meth:`fork_names` still reports completes the job.
+        """
+        return self._native.drop_forks(list(names))
 
     # -- maintenance ----------------------------------------------------------
 
