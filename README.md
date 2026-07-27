@@ -145,14 +145,11 @@ any plan already staged.
 - **Errors that can be acted on:** the stderr envelope carries `next_actions`
 (runnable commands), `did_you_mean` for typos, and a `retryable` flag.
 
-- **Branch the data, not just the code.** `fork` opens a writable workspace over a
-pinned view of every table and copies nothing: the first write to a table
-duplicates that table's manifest, a list of segment paths, so twenty agents over
-one 50 GB dataset still store 50 GB once. Forks nest, and because a fork names
-its segments by path instead of replaying a log or walking a tree, resolving a
-table twenty levels down costs what resolving it one level down does.
-`forks('trades')` reads a table across every fork at once with a `__fork`
-column, so comparing what each branch produced needs no export step.
+- **Branch without copying.** `fork` opens a writable workspace over a pinned
+view of every table and duplicates no data, so an edit or an experiment costs
+one small file and is as cheap to discard as to keep. `forks('trades')` then
+reads that table across every branch at once with a `__fork` column, so
+comparing what each one produced needs no export step.
 
 - **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
 require that gate; `--idempotency-key` makes a retried ingest replay instead of
