@@ -53,9 +53,14 @@ the base. `base_moved` tells you whether a promote would currently conflict.
 the fork started from. If the base moved, you get exit code 3 with
 `code: "promote_conflict"` and `retryable: false` — do not retry it. The work
 was computed against a base that no longer exists, so either re-fork from the
-current head and re-run, or drop the fork. When every intervening base commit
-was a compaction, the message says so: the base's layout changed but its
-contents did not.
+current head and re-run, or drop the fork.
+
+**Compaction does not cost you the promote.** If every intervening base commit
+was a compaction, the base's layout changed but its rows did not, so the
+promote is replayed onto the new layout automatically and the result carries
+`rebased_from`. The exception is a fork that *deleted* rows it inherited:
+those edits cannot be replayed from metadata alone, so that case still
+conflicts and the message says so.
 
 The conflict unit is the whole table. There is no row-level merge, so do not
 plan a workflow around two forks landing complementary changes to one table.

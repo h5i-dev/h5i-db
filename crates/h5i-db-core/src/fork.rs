@@ -499,6 +499,11 @@ pub struct PromoteResult {
     pub segments_linked: usize,
     /// Bytes that had to be *copied* because the backend could not link them.
     pub bytes_copied: u64,
+    /// Set when the base had moved but only by compaction, and the fork's work
+    /// was replayed onto the new layout rather than rejected (ROADMAP X-B3).
+    /// The value is the base version the fork originally forked from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebased_from: Option<u64>,
 }
 
 /// A fork as reported by `fork list`, with the numbers that decide whether it
@@ -1015,6 +1020,17 @@ impl crate::database::Database {
         let base_name = fork.pins[&origin.base_table_id].table_name.clone();
         let base_head_state = self.head(&base_name, origin.base_table_id).await?;
         let base_head = base_head_state.head.sequence;
+        let own_prefix = format!("{}/", layout::table_prefix(fe.table_id));
+        let pinned_manifest = self
+            .manifest_at(origin.base_table_id, origin.base_sequence)
+            .await?;
+
+        // A base that moved is normally a lost race. There is exactly one
+        // exception, and X-B3 is about taking it: if every intervening commit
+        // was a compaction then the base's *rows* are unchanged and only their
+        // physical layout moved, so the fork's work can be replayed onto the
+        // new layout instead of being thrown away.
+        let mut rebased_from = None;
         if base_head != origin.base_sequence {
             let compaction_only = self
                 .intervening_commits_are_compaction(
@@ -1023,47 +1039,91 @@ impl crate::database::Database {
                     base_head,
                 )
                 .await?;
-            return Err(Error::PromoteConflict {
-                fork: fork.name,
-                table: table.to_string(),
-                base: origin.base_sequence,
-                actual: base_head,
-                compaction_note: if compaction_only {
-                    " (every intervening commit was a compaction, so the base's contents \
-                     did not change; re-fork and re-run to promote onto the new layout)"
-                        .to_string()
-                } else {
-                    String::new()
-                },
-            });
+            // Replay is a metadata operation only while the fork still holds
+            // every row it inherited: then the promoted table is "the base as
+            // it is now, plus what the fork added". A fork that *removed*
+            // inherited rows cannot be rebased from metadata, because a
+            // compacted segment may merge rows it deleted with rows it kept,
+            // and nothing short of reading the data says which.
+            let fork_paths: BTreeSet<&str> = fork_manifest
+                .segments
+                .iter()
+                .map(|s| s.path.as_str())
+                .collect();
+            let keeps_every_inherited_row = pinned_manifest
+                .segments
+                .iter()
+                .all(|s| fork_paths.contains(s.path.as_str()));
+
+            if compaction_only && keeps_every_inherited_row {
+                rebased_from = Some(origin.base_sequence);
+            } else {
+                return Err(Error::PromoteConflict {
+                    fork: fork.name,
+                    table: table.to_string(),
+                    base: origin.base_sequence,
+                    actual: base_head,
+                    compaction_note: if compaction_only {
+                        " (every intervening commit was a compaction, so the base's contents \
+                         did not change — but this fork dropped rows it inherited, so its \
+                         edits cannot be replayed onto the new layout automatically; re-fork \
+                         and re-run)"
+                            .to_string()
+                    } else {
+                        String::new()
+                    },
+                });
+            }
         }
 
-        // --- move the fork's own segments into the base table ----------
-        let own_prefix = format!("{}/", layout::table_prefix(fe.table_id));
-        let base_paths: BTreeSet<String> = self
-            .manifest_at(origin.base_table_id, origin.base_sequence)
-            .await?
+        // Re-check the invariant before writing into the base: this is the
+        // other place a cross-table path could enter a manifest, and the base
+        // is the one table where a dangling reference is unrecoverable.
+        //
+        // Checked on the fork's manifest as it stands, against the version it
+        // forked from — the paths as they are *now*, before anything moves.
+        // (The rebased set needs no such check: it is the base's own current
+        // segments plus segments moved into the base's directory, so every
+        // path in it is already the base's.)
+        let pinned_paths: BTreeSet<String> = pinned_manifest
             .segments
             .iter()
             .map(|s| s.path.clone())
             .collect();
-        // Re-check the invariant before writing into the base: this is the
-        // other place a cross-table path could enter a manifest, and the base
-        // is the one table where a dangling reference is unrecoverable.
         check_refinement(
             &own_prefix,
-            &base_paths,
+            &pinned_paths,
             fork_manifest.segments.iter().map(|s| s.path.as_str()),
         )?;
+
+        // --- move the fork's own segments into the base table ----------
+        //
+        // What the fork inherits comes from the base version being committed
+        // onto: the pinned one normally, the current one when rebasing.
+        let inherit_from = if rebased_from.is_some() {
+            self.manifest_at(origin.base_table_id, base_head).await?
+        } else {
+            pinned_manifest
+        };
 
         let new_sequence = base_head + 1;
         let mut segments = Vec::with_capacity(fork_manifest.segments.len());
         let mut linked = 0usize;
         let mut bytes_copied = 0u64;
+
+        if rebased_from.is_some() {
+            // The rebased result is the compacted base verbatim, plus the
+            // fork's own segments appended. The fork's stale copies of the
+            // pre-compaction segments are dropped: they hold the same rows the
+            // new layout does.
+            segments.extend(inherit_from.segments.iter().cloned());
+        }
         for seg in &fork_manifest.segments {
             if !is_own_segment(&own_prefix, &seg.path) {
-                // Inherited: already a base segment at a base path.
-                segments.push(seg.clone());
+                if rebased_from.is_none() {
+                    // Inherited: already a base segment at a base path.
+                    segments.push(seg.clone());
+                }
                 continue;
             }
             let from = object_store::path::Path::from(seg.path.as_str());
@@ -1086,10 +1146,17 @@ impl crate::database::Database {
         manifest.execution_mode = Some("direct".to_string());
         manifest.plan_hash = None;
         manifest.segments = segments;
-        manifest.note = Some(format!(
-            "promoted from fork {:?} (fork version {})",
-            fork.name, fork_head_state.head.sequence
-        ));
+        manifest.note = Some(match rebased_from {
+            None => format!(
+                "promoted from fork {:?} (fork version {})",
+                fork.name, fork_head_state.head.sequence
+            ),
+            Some(from) => format!(
+                "promoted from fork {:?} (fork version {}), rebased from base version \
+                 {from} onto {base_head} across compaction",
+                fork.name, fork_head_state.head.sequence
+            ),
+        });
         manifest.user_meta.insert(
             FORKED_FROM_META_KEY.to_string(),
             serde_json::json!({
@@ -1097,6 +1164,10 @@ impl crate::database::Database {
                 "fork_table_id": fe.table_id,
                 "fork_sequence": fork_head_state.head.sequence,
                 "base_sequence": origin.base_sequence,
+                // Present only on a rebase, so the audit trail distinguishes
+                // "committed onto the version it forked from" from "replayed
+                // onto a newer layout of the same rows".
+                "rebased_onto": rebased_from.map(|_| base_head),
             }),
         );
         manifest.recompute_rollups();
@@ -1120,6 +1191,7 @@ impl crate::database::Database {
             rows: manifest.rows,
             segments_linked: linked,
             bytes_copied,
+            rebased_from,
         })
     }
 
@@ -1160,6 +1232,7 @@ impl crate::database::Database {
             rows: manifest.rows,
             segments_linked: 0,
             bytes_copied: 0,
+            rebased_from: None,
         })
     }
 

@@ -444,3 +444,221 @@ async fn mass_pruning_releases_the_retention_floor_it_was_holding() {
         .await
         .expect("the floor should move once nothing pins the table");
 }
+
+// ---------------------------------------------------------------------------
+// rebase over compaction (ROADMAP Part X, X-B3)
+// ---------------------------------------------------------------------------
+
+/// The case Part IX detected, named in the error, and left to the caller.
+///
+/// Compaction rewrites a table's physical layout without changing a row, so a
+/// promote blocked only by compaction is a spurious conflict: the fork's work
+/// still applies, just to different files. It is now replayed automatically,
+/// and the result must equal what re-forking and re-running would have
+/// produced.
+#[tokio::test]
+async fn a_promote_blocked_only_by_compaction_is_rebased_onto_the_new_layout() {
+    let (_dir, db, _counter) = counted_db(0).await;
+    db.create_table("t", schema(), options()).await.unwrap();
+    // Several small segments, so compaction has something to merge.
+    for i in 0..4i64 {
+        db.append(
+            "t",
+            vec![batch(&[i * 10, i * 10 + 1], &["A", "B"], &[1.0, 2.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    let rows_before = table_rows(&db, "t").await;
+
+    db.create_fork("agent", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    let fork = db.open_fork("agent").await.unwrap();
+    fork.append(
+        "t",
+        vec![batch(&[900, 901], &["Z", "Z"], &[9.0, 9.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    // Main compacts. Contents unchanged; every segment path is new.
+    let before_paths = segment_paths(&db, "t").await;
+    db.compact("t", WriteOptions::default()).await.unwrap();
+    let after_paths = segment_paths(&db, "t").await;
+    assert_ne!(before_paths, after_paths, "compaction should relayout");
+    assert_eq!(
+        rows_before,
+        table_rows(&db, "t").await,
+        "compaction must not change rows"
+    );
+
+    let result = db
+        .promote("agent", "t")
+        .await
+        .expect("rebase should succeed");
+    assert_eq!(
+        result.rebased_from,
+        Some(4),
+        "the promote should record the version it was rebased from"
+    );
+
+    // The base now holds its own rows plus the fork's, and nothing else.
+    assert_eq!(table_rows(&db, "t").await, rows_before + 2);
+    // It references only its own storage, and verifies.
+    let report = db.verify("t", true).await.unwrap();
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+    for p in segment_paths(&db, "t").await {
+        assert!(
+            p.starts_with(&format!("tables/{}", base_table_id(&db, "t").await)),
+            "promoted manifest references foreign storage: {p}"
+        );
+    }
+    // The pre-compaction segments the fork had inherited are gone from the
+    // published manifest: the compacted layout holds those same rows.
+    let published = segment_paths(&db, "t").await;
+    for old in &before_paths {
+        assert!(
+            !published.contains(old),
+            "a rebased promote republished a pre-compaction segment: {old}"
+        );
+    }
+}
+
+/// A rebase is only sound while the fork kept every row it inherited. A fork
+/// that deleted inherited rows cannot be replayed from metadata, because a
+/// compacted segment may merge rows it dropped with rows it kept.
+#[tokio::test]
+async fn a_fork_that_dropped_inherited_rows_is_not_rebased() {
+    let (_dir, db, _counter) = counted_db(0).await;
+    db.create_table("t", schema(), options()).await.unwrap();
+    for i in 0..4i64 {
+        db.append(
+            "t",
+            vec![batch(&[i * 10, i * 10 + 1], &["A", "B"], &[1.0, 2.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    db.create_fork("pruner", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    let fork = db.open_fork("pruner").await.unwrap();
+    fork.delete_range("t", 0, 10, WriteOptions::default())
+        .await
+        .unwrap();
+    db.compact("t", WriteOptions::default()).await.unwrap();
+
+    let err = db.promote("pruner", "t").await.unwrap_err();
+    let msg = format!("{err}");
+    assert!(matches!(err, Error::PromoteConflict { .. }), "{msg}");
+    assert!(
+        msg.contains("dropped rows it inherited"),
+        "the error should say why the rebase was declined: {msg}"
+    );
+    assert!(msg.contains("re-fork"), "{msg}");
+}
+
+/// Compaction is the *only* excuse. A base that actually changed still loses
+/// the promote, exactly as before — this is not a general "retry anyway".
+#[tokio::test]
+async fn a_base_that_really_changed_still_defeats_the_promote() {
+    let (_dir, db, _counter) = counted_db(0).await;
+    db.create_table("t", schema(), options()).await.unwrap();
+    db.append(
+        "t",
+        vec![batch(&[1], &["A"], &[1.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    db.create_fork("agent", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    let fork = db.open_fork("agent").await.unwrap();
+    fork.append(
+        "t",
+        vec![batch(&[900], &["Z"], &[9.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    // A real write on main, plus a compaction on either side of it, so the
+    // "all intervening commits are compactions" test cannot pass by accident.
+    db.compact("t", WriteOptions::default()).await.ok();
+    db.append(
+        "t",
+        vec![batch(&[500], &["M"], &[5.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    db.compact("t", WriteOptions::default()).await.ok();
+
+    let err = db.promote("agent", "t").await.unwrap_err();
+    assert!(matches!(err, Error::PromoteConflict { .. }), "{err}");
+    assert!(
+        !format!("{err}").contains("rebased"),
+        "a genuine conflict must not claim a rebase was possible: {err}"
+    );
+}
+
+/// A promote that needs no rebase must be untouched by X-B3.
+#[tokio::test]
+async fn an_unconflicted_promote_reports_no_rebase() {
+    let (_dir, db, _counter) = counted_db(0).await;
+    db.create_table("t", schema(), options()).await.unwrap();
+    db.append(
+        "t",
+        vec![batch(&[1], &["A"], &[1.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    db.create_fork("agent", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    let fork = db.open_fork("agent").await.unwrap();
+    fork.append(
+        "t",
+        vec![batch(&[900], &["Z"], &[9.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let result = db.promote("agent", "t").await.unwrap();
+    assert_eq!(result.rebased_from, None);
+    assert_eq!(table_rows(&db, "t").await, 2);
+}
+
+async fn table_rows(db: &Database, name: &str) -> usize {
+    let (batches, _) = db
+        .scan(name, ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    batches.iter().map(|b| b.num_rows()).sum()
+}
+
+async fn segment_paths(db: &Database, name: &str) -> Vec<String> {
+    db.resolve(name, ReadAt::Latest)
+        .await
+        .unwrap()
+        .manifest
+        .segments
+        .iter()
+        .map(|s| s.path.clone())
+        .collect()
+}
+
+async fn base_table_id(db: &Database, name: &str) -> uuid::Uuid {
+    db.resolve(name, ReadAt::Latest)
+        .await
+        .unwrap()
+        .entry
+        .table_id
+}

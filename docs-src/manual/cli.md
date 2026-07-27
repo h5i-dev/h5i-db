@@ -471,9 +471,16 @@ on.
 the fork started from. If the base moved, it exits 3 with
 `code: "promote_conflict"` and `retryable: false` — retrying cannot help,
 because the work was computed against a base that no longer exists. Re-fork
-and re-run, or drop the fork. When every intervening base commit was a
-compaction, the message says so, since the base's *contents* did not actually
-change.
+and re-run, or drop the fork.
+
+Compaction is the one exception, and it is handled for you. If every
+intervening base commit was a compaction then the base's *rows* did not
+change — only where they live — so the promote is **rebased** onto the new
+layout instead of rejected, and the result reports `rebased_from`. That works
+while the fork still holds every row it inherited; a fork that deleted
+inherited rows cannot be replayed from metadata (a compacted segment may merge
+rows it dropped with rows it kept), so that case still conflicts and the
+message says why.
 
 ---
 
