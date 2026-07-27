@@ -10,6 +10,7 @@ pub mod arrival;
 pub mod asof;
 pub mod cross_section;
 pub mod finance;
+pub mod fork_scan;
 pub mod functions;
 pub mod gapfill;
 pub mod latest;
@@ -32,6 +33,7 @@ pub use arrival::{
     ArrivalDeltaReport, ColumnDelta, DEFAULT_TOLERANCE, TableVersionDelta, arrival_delta,
 };
 pub use asof::{AsOfDirection, AsOfJoinExec, AsOfJoinNode, AsOfOptions, asof_join};
+pub use fork_scan::{FORK_COLUMN, ForkScanFunc};
 pub use metrics::{
     OperatorPerformanceMetrics, QueryPerformanceReport, QueryStatus, ReportedDataFrame,
     ReportedQueryStream, ScanMetrics, ScanMetricsCollector, WorkloadTelemetryEnvelope,

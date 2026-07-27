@@ -261,6 +261,18 @@ impl H5iSession {
             "resample",
             Arc::new(GapFillFunc::pinned(db.clone(), pin.clone())),
         );
+        // Cross-fork scan (Part X, X-A2). Registered unconditionally: on a
+        // fork-free database it is a table function that explains why there is
+        // nothing to compare, which is a better answer than "no such function".
+        ctx.register_udtf(
+            "forks",
+            Arc::new(crate::fork_scan::ForkScanFunc::pinned(
+                db.clone(),
+                url.clone(),
+                metrics.clone(),
+                pin.clone(),
+            )),
+        );
         ctx.register_udtf("tail", Arc::new(TailFunc::pinned(db.clone(), pin.clone())));
         ctx.register_udtf("latest_on", Arc::new(LatestByFunc::pinned(db.clone(), pin)));
         ctx.register_udf(time_bucket_udf());

@@ -619,6 +619,17 @@ impl crate::database::Database {
         load(self.backend(), name).await
     }
 
+    /// Every fork's name, in name order.
+    ///
+    /// Answered from the visibility index (Part X, X-A1), so this costs one
+    /// read rather than one per fork — which is what makes "query across every
+    /// fork" a reasonable thing to ask for at a thousand of them. Use
+    /// [`Self::list_forks`] when the sizes and table counts are wanted too;
+    /// that one reads a manifest per table per fork.
+    pub async fn fork_names(&self) -> Result<Vec<String>> {
+        Ok(self.fork_index().await?.forks.into_keys().collect())
+    }
+
     /// Every fork with the numbers that decide whether to keep it: what it
     /// wrote, and what it is holding back from reclamation.
     pub async fn list_forks(&self) -> Result<Vec<ForkSummary>> {

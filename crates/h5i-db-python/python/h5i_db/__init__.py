@@ -49,6 +49,7 @@ from h5i_db._native import (  # noqa: F401
     __version__,
 )
 from h5i_db.dataframe import (  # noqa: F401
+    FORK_COLUMN,
     Expr,
     GroupBy,
     LazyFrame,
@@ -363,6 +364,27 @@ class Database:
             db.table("trades", version=42).sql()
         """
         return LazyFrame._from_table(self, name, version, as_of, snapshot)
+
+    def fork_scan(
+        self, name: str, forks: Optional[Sequence[str]] = None
+    ) -> LazyFrame:
+        """Start a lazy query reading ``name`` across forks at once.
+
+        Returns a :class:`LazyFrame` over every fork that has the table (or
+        just ``forks`` when given), with a ``__fork`` column naming the fork
+        each row came from. Nothing runs until ``.collect()``.
+
+            db.fork_scan("trades").group_by("__fork").agg(...).collect()
+            db.fork_scan("trades", ["agent-01", "agent-02"]).sql()
+
+        Forks share their base's segments, so a segment several forks can see
+        is read once however many reference it - comparing a thousand branches
+        costs about what reading one does, plus what they actually changed.
+
+        Forks whose schema for the table has diverged are refused rather than
+        coerced; use :meth:`fork_diff` to see how they differ.
+        """
+        return LazyFrame._from_forks(self, name, forks)
 
     def read(
         self,
