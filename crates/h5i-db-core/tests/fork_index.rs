@@ -666,3 +666,126 @@ async fn a_fork_created_after_the_index_was_built_is_seen_at_once() {
         "the shadow materialized in 'second' is missing from the index"
     );
 }
+
+// ---------------------------------------------------------------------------
+// what the index costs a database that never forks
+// ---------------------------------------------------------------------------
+
+/// The index is consulted by three operations that every database runs whether
+/// or not it forks, so its cost on a fork-free database is a real (if small)
+/// regression and belongs in a test rather than in an argument.
+///
+/// The index's contribution is exactly **one object read and two listings**
+/// per call, and it is deterministic: `refresh` reads `FORK_INDEX.json` (a 404
+/// here) and lists `forks/` and `catalog/forks/`. One of those listings
+/// replaces the `forks/` listing these paths already did, so the true delta is
+/// one 404 read plus one listing. Nothing is written, because a database with
+/// no forks keeps no index.
+///
+/// The absolute numbers below are dominated by what these verbs already did —
+/// vacuum's per-table sweep lists a table prefix and a staging prefix each —
+/// which is the point: the index is noise against them, and none of it is on a
+/// read or write path.
+#[tokio::test]
+async fn a_fork_free_database_pays_a_bounded_constant_price() {
+    let (_dir, db, counter, root) = counted_db().await;
+    seed_trades(&db).await;
+
+    counter.take();
+    db.vacuum(None, 0, false).await.unwrap();
+    let (vacuum_gets, vacuum_lists) = counter.take();
+
+    db.create_table("other", trades_schema(), default_options())
+        .await
+        .unwrap();
+    db.write(
+        "other",
+        vec![trades_batch(&[1], &["A"], &[1.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    counter.take();
+    db.drop_table("other").await.unwrap();
+    let (drop_gets, drop_lists) = counter.take();
+
+    counter.take();
+    db.set_retention("trades", RetentionCut::KeepLast(1), None)
+        .await
+        .unwrap();
+    let (retention_gets, retention_lists) = counter.take();
+
+    // Small absolute numbers, and none of them a function of anything that
+    // grows. The index contributes at most one 404 read and one listing each.
+    // Measured on this fixture (one table, then two): drop_table 3 reads / 4
+    // listings, set_retention 5 / 3, vacuum 6 / 8. The bounds carry a little
+    // slack so an unrelated change does not fail here, but they are tight
+    // enough that putting the index on a loop would break them.
+    assert!(
+        drop_gets <= 6,
+        "drop_table on a fork-free database read {drop_gets} objects"
+    );
+    assert!(
+        retention_gets <= 8,
+        "set_retention on a fork-free database read {retention_gets} objects"
+    );
+    assert!(
+        vacuum_gets <= 12,
+        "vacuum on a fork-free database read {vacuum_gets} objects"
+    );
+    for (op, lists) in [
+        ("vacuum", vacuum_lists),
+        ("drop_table", drop_lists),
+        ("set_retention", retention_lists),
+    ] {
+        assert!(lists <= 12, "{op} issued {lists} listings");
+    }
+
+    // And nothing was written: no index object exists to maintain.
+    assert!(
+        !index_path(&root).exists(),
+        "a fork-free database must not acquire an index"
+    );
+}
+
+/// The scan and append paths never consult the index at all — they resolve
+/// through the catalog and HEAD exactly as before forks existed. Asserted so a
+/// future consumer cannot quietly put a fork lookup on the hot path.
+#[tokio::test]
+async fn reads_and_writes_never_touch_the_fork_index() {
+    let (_dir, db, counter, root) = counted_db().await;
+    seed_trades(&db).await;
+    // Give the database a fork, so an index exists to be touched.
+    make_forks(&db, 3, "f", 10_000).await;
+    db.vacuum(None, 0, false).await.unwrap();
+    assert!(index_path(&root).exists());
+
+    let before = std::fs::metadata(index_path(&root))
+        .unwrap()
+        .modified()
+        .unwrap();
+    counter.take();
+    db.append(
+        "trades",
+        vec![trades_batch(&[20_000], &["A"], &[1.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    db.scan("trades", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    let (gets, _) = counter.take();
+
+    // A commit plus a scan on the base handle: a handful of metadata objects,
+    // and the index is not one of them (its mtime is unchanged).
+    assert!(gets < 20, "an append+scan read {gets} objects");
+    assert_eq!(
+        std::fs::metadata(index_path(&root))
+            .unwrap()
+            .modified()
+            .unwrap(),
+        before,
+        "the write path rewrote the fork index"
+    );
+}
