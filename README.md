@@ -1,5 +1,7 @@
 # h5i-db
 
+**English** · [Español](README.es.md) · [Français](README.fr.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
 **A fast, agent-native time-series database for quant research.
 Embedded, written in Rust.**
 
