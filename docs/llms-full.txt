@@ -185,7 +185,8 @@ $ h5i-db plan apply market.db trades 5c41…    # metadata-only swap
 ```
 
 Finally, `h5i-db ui market.db` serves a loopback-only review surface: pending
-plans with previews, the version timeline, and an SQL scratchpad.
+plans with previews, a live fork monitor, the version timeline, and an SQL
+scratchpad.
 
 ## Python
 
@@ -544,6 +545,98 @@ A snapshot is a tiny checksummed JSON map `{table → version}`: O(1) to
 create, free to keep. Snapshots make backtests reproducible ("run against
 `eod-2026-07-18`, forever") and answer audit questions ("what did we know at
 close on date X?"). A table pinned by a snapshot cannot be dropped.
+
+## Forks
+
+A snapshot pins a version so you can *read* it later. A **fork** pins one and
+lets you write on top:
+
+```console
+$ h5i-db fork create market.db agent-01
+$ h5i-db ingest market.db features out.parquet --fork agent-01
+```
+
+Creating a fork writes one small JSON object and copies no data. The first
+write to an existing table's name inside the fork copies that table's
+*manifest* — a list of segment metadata, kilobytes — into a new table, so the
+fork's rows are its own while the base's segments stay shared. Twenty agents
+forking a 50 GB dataset store 50 GB once plus whatever each of them writes.
+
+Because a fork's tables are ordinary tables, they contend with nothing: two
+agents writing "the same" table in two forks are writing two different tables.
+Reads resolve through the pin rather than through the head, so a fork neither
+sees nor is disturbed by commits landing on the base meanwhile.
+
+Work comes back with `promote`, which replaces one base table with the fork's
+version if the base has not moved since the fork was made:
+
+```console
+$ h5i-db fork diff market.db agent-01
+$ h5i-db fork promote market.db agent-01 --table features
+$ h5i-db fork drop market.db agent-02
+```
+
+The first promote wins and later ones are rejected rather than merged: the
+conflict unit is the whole table. There is no row-level merge, on purpose —
+speculative work is mostly discarded, and `drop` is the common ending.
+
+A fork pins the base versions it reads, so those versions cannot be expired
+while it lives; `fork list` shows how much each is holding back. Dropping the
+fork releases it.
+
+`--as-of` forks the past instead of the present:
+
+```console
+$ h5i-db fork create market.db backtest --as-of 2026-03-01T00:00:00Z
+```
+
+That gives a workspace where the base is frozen at a past instant but you can
+still materialise features, intermediate results, and scratch tables — the
+writable counterpart of a read-only historical pin.
+
+### Forks nest
+
+A fork is itself something to fork. Add `--fork` to `fork create` and the new
+fork is created *inside* that one, pinning its tables the way a top-level fork
+pins the database's:
+
+```console
+$ h5i-db fork create market.db trunk
+$ h5i-db fork create market.db branch-a --fork trunk
+```
+
+`branch-a` sees the database, plus whatever `trunk` had done when it was
+taken, plus its own work, and stays frozen against anything `trunk` does
+afterwards. `promote` moves work up exactly one level, so `branch-a` promotes
+onto `trunk`, never onto the database. That is what makes a search tree
+expressible: refine, evaluate, keep the good subtree, discard the rest.
+
+Depth costs nothing to read. A fork's manifest names its segments by path, so
+resolving a table twenty levels down takes the same number of reads as one
+level down. There is no chain to replay. Nesting is capped at 32 levels as a
+runaway guard.
+
+Dropping is the one place the tree matters: a fork that others are nested
+inside cannot be dropped out from under them, and the error names them.
+
+### Querying across forks
+
+`forks()` reads a table from every fork at once, labelling each row with the
+fork it came from:
+
+```console
+$ h5i-db query market.db "SELECT __fork, avg(price) FROM forks('trades') GROUP BY __fork"
+```
+
+This is how you compare outcomes without exporting anything. It is cheap for
+the same reason forking is: the forks share their segments, so a segment
+several forks can see is read **once** however many reference it, and only
+what each fork actually changed is read separately. Pass a comma-separated
+list to narrow it (`forks('trades', 'branch-a,branch-b')`), and use
+`db.fork_scan("trades")` for the same thing from Python.
+
+Forks whose schema for the table has diverged are refused rather than blended;
+`fork diff` is the tool for looking at that.
 
 ## Previewable mutations: plan / apply
 
@@ -1041,6 +1134,63 @@ Pin table versions under a name.
 | `snapshot list <db>` | List snapshots |
 | `snapshot delete <db> <name>` | Delete a snapshot (the versions it pinned remain readable by number) |
 
+### `h5i-db fork`
+
+Writable workspaces over a pinned base, for running several lines of work
+against one dataset at once. See [Forks](concepts.html#forks) for the model.
+
+| Subcommand | Meaning |
+|---|---|
+| `fork create <db> <name>` | Pin every table and open a workspace; `--note`, `--as-of`, `--meta`, `--count` supported |
+| `fork list <db>` | Every fork with lineage and liveness: `parent`/`depth`, `commits_own`, `last_write_ns`, `stale_shadows` (promotes that would now conflict), what it owns (`bytes_own`) and what it holds back (`bytes_pinned`) |
+| `fork show <db> <name>` | One fork's pins and metadata |
+| `fork diff <db> <name>` | What the fork changed, from manifests alone; `--table` to narrow |
+| `fork promote <db> <name> --table <t>` | Land one of its tables on the base |
+| `fork drop <db> <name>…` | Delete the named forks and everything they own |
+
+```console
+$ h5i-db fork create market.db agent-01 --note "hypothesis 1"
+$ h5i-db ingest market.db features out.parquet --fork agent-01
+$ h5i-db query market.db "SELECT count(*) FROM features" --fork agent-01
+$ h5i-db fork diff market.db agent-01
+$ h5i-db fork promote market.db agent-01 --table features
+$ h5i-db fork drop market.db agent-01
+```
+
+`fork create` accepts `--as-of <rfc3339>` to pin the past instead of the
+present, and `--meta` (inline JSON, `@file`, or `-`) to record whatever ties
+the fork back to the run that made it.
+
+**Wide fanouts.** `fork create <db> <name> --count N` creates
+`<name>-0000 … <name>-000(N-1)` over a *single* resolution of the base, and
+`fork drop` takes several names at once. Every fork of one base at one instant
+pins the same versions, so the batch does one pass over the catalog however
+many branches it makes, which is what makes a few hundred short-lived
+branches a reasonable thing to create and then throw away. With `--count` the
+command returns a JSON list; without it, a single object as before.
+
+**The `--fork` flag.** Every data command takes `--fork <name>` and then reads
+and writes inside that workspace, so an existing script runs unchanged against
+a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`,
+`set-retention`) refuse it and say so: they move state a fork's siblings
+depend on. `fork create` is the exception: with `--fork` it creates the new
+fork *inside* that one (see [Forks](concepts.html#forks-nest)).
+
+**Promotion conflicts.** `fork promote` compare-and-swaps against the version
+the fork started from. If the base moved, it exits 3 with
+`code: "promote_conflict"` and `retryable: false` — retrying cannot help,
+because the work was computed against a base that no longer exists. Re-fork
+and re-run, or drop the fork.
+
+Compaction is the one exception, and it is handled for you. If every
+intervening base commit was a compaction then the base's *rows* did not
+change, only where they live, so the promote is **rebased** onto the new
+layout instead of rejected, and the result reports `rebased_from`. That works
+while the fork still holds every row it inherited; a fork that deleted
+inherited rows cannot be replayed from metadata (a compacted segment may merge
+rows it dropped with rows it kept), so that case still conflicts and the
+message says why.
+
 ---
 
 ## Maintenance & tools
@@ -1103,8 +1253,23 @@ Launch the local review UI, loopback only.
 | `--port <N>` | Port (default 7351) |
 | `--allow-mutations` | Enable plan apply/discard from the UI (default: read-only) |
 
-The UI shows pending plans with previews, the version timeline with audit
-badges, version diffs, and an SQL scratchpad that reports pruning per query.
+The UI shows pending plans with previews, a live fork monitor, the version
+timeline with audit badges, version diffs, and an SQL scratchpad that reports
+pruning per query.
+
+The **Forks** tab renders the fork lineage as a tree that updates itself over
+a server-sent event stream: each fork carries one glanceable status —
+`conflict` (the base moved under a shadowed table, so promote will refuse),
+`working` (committed within the last 15 s), `ahead` (holds unpromoted
+commits), or `idle` — plus what it wrote, what its pins hold back, and the
+agent metadata attached at `fork create --meta`. Selecting a fork shows its
+per-table divergence and copy-ready promote/drop commands; the UI itself
+never mutates forks. `tools/fork_demo.sh <db>` drives a simulated agent
+swarm against a database if you want to watch the tree move, and
+`tools/demo_data.py` seeds one first — synthetic multi-symbol ticks
+(`synth --symbols AAPL,MSFT,NVDA --db <db>`) or a day of real 1s bars from
+Binance's public archive (`binance --symbols BTCUSDT,ETHUSDT --db <db>`,
+no API key).
 
 
 
@@ -1228,6 +1393,29 @@ Fill modes for synthesized instants:
     to one key first. Also note: observations that don't land exactly on the
     grid are dropped from the output; duplicate timestamps collapse to the
     last row; at most 1,000,000 rows are generated (`limit_exceeded` beyond).
+
+### `forks`
+
+```sql
+forks('table' [, 'fork-a,fork-b'])
+```
+
+Read a table from **every fork at once**, each row labelled with a `__fork`
+column (`''` for the base). This is the cross-fork aggregation step of a
+branch-per-hypothesis sweep: N agents write N forks, one query compares
+them.
+
+```sql
+SELECT __fork, count(*), avg(price) FROM forks('trades') GROUP BY __fork;
+SELECT __fork, vwap(price, size) FROM forks('trades', 'exp-a,exp-b') GROUP BY __fork;
+```
+
+- Segments shared between forks are opened **once** no matter how many forks
+  reference them; you pay for distinct data, not for fork count.
+- All included forks must agree on the table's schema; a mismatch errors and
+  names the fork rather than unioning loosely.
+- The second argument narrows to a comma-separated fork list; omit it for
+  base plus every fork. See [Forks](concepts.html#forks) for the model.
 
 ### `tail`
 
@@ -1465,6 +1653,15 @@ an agent can't quietly commit malformed rows.
 
 ## Patterns that work
 
+- **Branch per hypothesis:** give each agent its own
+  [fork](concepts.html#forks) instead of a table-name convention:
+  `fork create <db> sweep --count 100` opens a hundred isolated, writable
+  workspaces in one catalog pass, `--fork <name>` scopes every subsequent
+  command to one of them, and `--meta` attaches the run's parameters where
+  `fork show` and the UI's fork monitor surface them. Compare results across
+  the whole sweep with [`forks('table')`](sql.html#forks), promote the
+  winner, and `fork drop` the rest in one batch. A human can watch the
+  sweep live in `h5i-db ui` (the Forks tab) while it runs.
 - **Idempotent retries:** appends racing another writer raise
   `version_conflict` (exit 3 / `ConflictError`, `retryable: true`). The CLI
   retries pure appends itself (`ingest --retries`, default 5); in Python,
@@ -1550,7 +1747,7 @@ the right order and don't run destructive maintenance concurrently**.
    DB=/data/market.db BK=/backup/market.db-$(date +%F)
    mkdir -p "$BK"
    cp "$DB/FORMAT" "$BK/"
-   cp -r "$DB/catalog" "$DB/snapshots" "$BK/" 2>/dev/null || true
+   cp -r "$DB/catalog" "$DB/snapshots" "$DB/forks" "$BK/" 2>/dev/null || true
    for t in "$DB"/tables/*/; do
      b="$BK/tables/$(basename "$t")"; mkdir -p "$b"
      cp "$t/HEAD" "$b/"                        # 1. pin the version to back up
@@ -1596,6 +1793,12 @@ unreachable objects: segments referenced by no committed manifest and no
 live mutation plan, manifests above `HEAD` (crashed-writer leftovers), and
 `*.lock` / `HEAD.tmp.*` debris. Without `--apply` it is a dry run.
 
+Vacuum runs from the base database and treats every fork as a root: it
+consults every fork's pins and every fork's catalog, so a fork's tables and
+the base segments its shadows reference are never candidates. It refuses to
+run through a `--fork` handle, because reachability is a database-wide
+question.
+
 Guidance:
 
 - **Always review a dry run first** in scripted maintenance
@@ -1610,6 +1813,40 @@ Guidance:
   workload generates almost none.
 - **Never run two `vacuum --apply` concurrently**, and don't run it during
   backups (above).
+
+## Forks
+
+A fork is a named, writable workspace over a pinned view of the database. It
+costs one small JSON object and copies no data: its tables are ordinary
+tables, and the versions it forked from are shared by reference. Three things
+follow that an operator needs to know.
+
+**A fork is a GC root.** Its pin holds the base's retention floor down, so
+`set-retention` refuses to expire a version a fork pins, and `drop-table`
+refuses on a table a fork pins. Both name the fork in the error. The fix is
+always to promote or drop that fork, never to force the floor.
+
+**Forks nest.** `fork create <db> <child> --fork <parent>` creates a fork
+inside a fork, and a child pins its parent's tables the same way a top-level
+fork pins the database's. Dropping a parent that a child still pins is refused
+and names the children; `fork drop` one level at a time, or drop the whole
+subtree. Depth is capped at 32.
+
+**`FORK_INDEX.json` is a cache.** It sits at the database root and answers
+"which forks pin what" in one read instead of one per fork. It is rebuilt from
+the fork objects whenever it disagrees with them, so it is safe to delete at
+any time and **does not need to be backed up**: a restore without it simply
+rebuilds it on first use. Every other object is authoritative.
+
+Routine checks:
+
+```bash
+h5i-db fork list <db>       # age, tables owned, bytes_own, bytes_pinned
+h5i-db fork diff <db> <f>   # what it changed (manifests only, no segments)
+```
+
+Abandoned forks are the usual cause of a database that will not shrink; see
+Disk-usage math below.
 
 ## Compaction
 
@@ -1653,6 +1890,34 @@ Nothing is ever deleted except by vacuum, and vacuum only deletes
   exists.
 - Quick audit: `du -sh <db>/tables/*/segments` vs.
   `h5i-db tables <db>` row counts shows how much is history vs. head.
+
+### "Vacuum ran and disk did not shrink"
+
+The usual answer is a fork. Reclamation is *deferred*, not lost: a live fork
+pins the versions it forked from, the retention floor cannot rise past them,
+and so the segments they reference stay reachable, including the
+pre-compaction copies of segments main has since rewritten. Main pays nothing
+for a fork until main tries to reclaim.
+
+```bash
+h5i-db fork list <db>   # bytes_pinned per fork
+```
+
+`bytes_pinned` is everything in the pinned version, so it is an **upper
+bound** on what dropping that fork could release, not a measure of waste:
+main's current head usually shares most of those bytes. Two forks pinning the
+same version each report it, so the column does not sum.
+
+Order of operations to actually reclaim:
+
+1. `h5i-db fork drop <db> <name>` (or promote it first, if the work is
+   wanted). Nested forks must go from the leaves up.
+2. `h5i-db set-retention …`, now free to move past the released pin.
+3. `h5i-db vacuum <db> --apply`.
+
+A fork's *own* tables are not vacuumed piecemeal: debris inside them is
+reclaimed wholesale when the fork is dropped, which is why an abandoned fork
+costs more than an active one.
 
 ## Filesystem caveats
 

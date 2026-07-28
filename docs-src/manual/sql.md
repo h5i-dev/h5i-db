@@ -123,6 +123,29 @@ Fill modes for synthesized instants:
     grid are dropped from the output; duplicate timestamps collapse to the
     last row; at most 1,000,000 rows are generated (`limit_exceeded` beyond).
 
+### `forks`
+
+```sql
+forks('table' [, 'fork-a,fork-b'])
+```
+
+Read a table from **every fork at once**, each row labelled with a `__fork`
+column (`''` for the base). This is the cross-fork aggregation step of a
+branch-per-hypothesis sweep: N agents write N forks, one query compares
+them.
+
+```sql
+SELECT __fork, count(*), avg(price) FROM forks('trades') GROUP BY __fork;
+SELECT __fork, vwap(price, size) FROM forks('trades', 'exp-a,exp-b') GROUP BY __fork;
+```
+
+- Segments shared between forks are opened **once** no matter how many forks
+  reference them; you pay for distinct data, not for fork count.
+- All included forks must agree on the table's schema; a mismatch errors and
+  names the fork rather than unioning loosely.
+- The second argument narrows to a comma-separated fork list; omit it for
+  base plus every fork. See [Forks](concepts.html#forks) for the model.
+
 ### `tail`
 
 ```sql

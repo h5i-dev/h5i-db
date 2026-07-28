@@ -156,10 +156,18 @@ impl ColumnAcc {
     }
 
     fn insert_distinct(&mut self, value: &str) {
-        self.distinct.insert(value.to_string());
-        if self.distinct.len() > MAX_DISTINCT_VALUES {
-            self.distinct.clear();
-            self.distinct_dropped = true;
+        // Look up on the borrowed str and only allocate for a value actually
+        // new to the set. The columns this stat exists for are low-cardinality
+        // by definition (symbol, venue, side), so the overwhelming majority of
+        // rows are repeats — allocating a String per row to discover that made
+        // the cost of collecting the stat scale with rows rather than with
+        // distinct values.
+        if !self.distinct.contains(value) {
+            self.distinct.insert(value.to_string());
+            if self.distinct.len() > MAX_DISTINCT_VALUES {
+                self.distinct.clear();
+                self.distinct_dropped = true;
+            }
         }
     }
 
@@ -732,47 +740,68 @@ impl<'a> SegmentWriter<'a> {
         let bytes = std::mem::take(&mut self.buffered_bytes);
         let props = writer_properties(self.spec, &self.schema, Some((rows, bytes)));
 
-        // Encode to an in-memory Parquet buffer.
-        let mut buf: Vec<u8> = Vec::with_capacity(bytes / 4);
-        {
-            let mut writer = ArrowWriter::try_new(&mut buf, self.schema.clone(), Some(props))
-                .map_err(Error::Parquet)?;
-            for b in &batches {
-                writer.write(b).map_err(Error::Parquet)?;
-            }
-            writer.close().map_err(Error::Parquet)?;
-        }
-
-        // Statistics.
-        let mut accs: BTreeMap<String, ColumnAcc> = BTreeMap::new();
-        for b in &batches {
-            for (i, field) in self.schema.fields().iter().enumerate() {
-                let arr = b.column(i);
-                let acc = accs.entry(field.name().clone()).or_default();
-                match array_minmax(arr) {
-                    Some((min, max)) => acc.observe(min, max, arr.null_count() as u64),
-                    None => acc.drop_stats(arr.null_count() as u64),
+        // Parquet encoding, column statistics, and the whole-buffer checksum
+        // are pure CPU over owned batches, and a segment is megabytes. Run
+        // inline, they hold a runtime worker for the entire encode — and this
+        // database is embedded, so that worker is one the same process is
+        // using to serve queries and event streams. Hand the CPU section to
+        // the blocking pool and keep the async workers free.
+        let schema = self.schema.clone();
+        let time_column = self.spec.time_column.clone();
+        type Encoded = (
+            Vec<u8>,
+            String,
+            BTreeMap<String, ColumnStats>,
+            Option<(i64, i64)>,
+        );
+        let (buf, checksum, columns, time_range) =
+            tokio::task::spawn_blocking(move || -> Result<Encoded> {
+                let mut buf: Vec<u8> = Vec::with_capacity(bytes / 4);
+                {
+                    let mut writer = ArrowWriter::try_new(&mut buf, schema.clone(), Some(props))
+                        .map_err(Error::Parquet)?;
+                    for b in &batches {
+                        writer.write(b).map_err(Error::Parquet)?;
+                    }
+                    writer.close().map_err(Error::Parquet)?;
                 }
-                acc.observe_distinct(arr);
-            }
-        }
 
-        let time_range = match &self.spec.time_column {
-            Some(tc) => {
-                let mut mn = i64::MAX;
-                let mut mx = i64::MIN;
+                // Statistics.
+                let mut accs: BTreeMap<String, ColumnAcc> = BTreeMap::new();
                 for b in &batches {
-                    if let Some((bmn, bmx)) = time_min_max(b, tc)? {
-                        mn = mn.min(bmn);
-                        mx = mx.max(bmx);
+                    for (i, field) in schema.fields().iter().enumerate() {
+                        let arr = b.column(i);
+                        let acc = accs.entry(field.name().clone()).or_default();
+                        match array_minmax(arr) {
+                            Some((min, max)) => acc.observe(min, max, arr.null_count() as u64),
+                            None => acc.drop_stats(arr.null_count() as u64),
+                        }
+                        acc.observe_distinct(arr);
                     }
                 }
-                if mn <= mx { Some((mn, mx)) } else { None }
-            }
-            None => None,
-        };
 
-        let checksum = crate::util::checksum_hex(&buf);
+                let time_range = match &time_column {
+                    Some(tc) => {
+                        let mut mn = i64::MAX;
+                        let mut mx = i64::MIN;
+                        for b in &batches {
+                            if let Some((bmn, bmx)) = time_min_max(b, tc)? {
+                                mn = mn.min(bmn);
+                                mx = mx.max(bmx);
+                            }
+                        }
+                        if mn <= mx { Some((mn, mx)) } else { None }
+                    }
+                    None => None,
+                };
+
+                let checksum = crate::util::checksum_hex(&buf);
+                let columns = accs.into_iter().map(|(k, v)| (k, v.finish())).collect();
+                Ok((buf, checksum, columns, time_range))
+            })
+            .await
+            .map_err(Error::internal)??;
+
         let id = Uuid::new_v4();
         let path = crate::layout::segment_path(self.spec.table_id, id);
         let encoded_len = buf.len() as u64;
@@ -790,7 +819,7 @@ impl<'a> SegmentWriter<'a> {
                 sorted: self.input_sorted && !self.spec.sort_key.is_empty(),
                 schema_revision: self.spec.schema_revision,
                 created_by_sequence: self.created_by_sequence,
-                columns: accs.into_iter().map(|(k, v)| (k, v.finish())).collect(),
+                columns,
             },
         });
         Ok(())

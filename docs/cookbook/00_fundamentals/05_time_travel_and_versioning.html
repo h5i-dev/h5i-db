@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Time travel and versioning: which version did my backtest see? · h5i-db docs</title>
-  <meta name="description" content="Every write to an h5i-db table (append, write, delete, restore) is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is an O(1) manifest lookup, not a log replay. For …">
+  <meta name="description" content="Every write to an h5i-db table is an atomic commit that produces a new immutable version. That covers append, write, delete and restore. Old versions are never rewritten, and reading one is an O(1) manifest lookup …">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -16,12 +16,12 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Time travel and versioning: which version did my backtest see? · h5i-db docs">
-  <meta property="og:description" content="Every write to an h5i-db table (append, write, delete, restore) is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is an O(1) manifest lookup, not a log replay. For …">
+  <meta property="og:description" content="Every write to an h5i-db table is an atomic commit that produces a new immutable version. That covers append, write, delete and restore. Old versions are never rewritten, and reading one is an O(1) manifest lookup …">
   <meta property="og:url" content="https://db.h5i.dev/cookbook/00_fundamentals/05_time_travel_and_versioning.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Time travel and versioning: which version did my backtest see? · h5i-db docs">
-  <meta name="twitter:description" content="Every write to an h5i-db table (append, write, delete, restore) is an atomic commit that produces a new immutable version. Old versions are never rewritten; reading one is an O(1) manifest lookup, not a log replay. For …">
+  <meta name="twitter:description" content="Every write to an h5i-db table is an atomic commit that produces a new immutable version. That covers append, write, delete and restore. Old versions are never rewritten, and reading one is an O(1) manifest lookup …">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -61,7 +61,7 @@
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html" class="active">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html">Maintenance: verify, compact, and vacuum a versioned store</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="../../cookbook/00_fundamentals/01_quickstart.html">Quickstart: your first h5i-db market database</a></li><li><a href="../../cookbook/00_fundamentals/02_designing_market_data_schemas.html">Designing market data schemas</a></li><li><a href="../../cookbook/00_fundamentals/03_ingestion_patterns.html">Ingestion patterns: five sources, one table</a></li><li><a href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html">A SQL tour for quants</a></li><li><a href="../../cookbook/00_fundamentals/05_time_travel_and_versioning.html" class="active">Time travel and versioning: which version did my backtest see?</a></li><li><a href="../../cookbook/00_fundamentals/06_previewable_mutations.html">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="../../cookbook/00_fundamentals/07_streaming_appends_and_tail.html">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="../../cookbook/00_fundamentals/08_maintenance.html">Maintenance: verify, compact, vacuum</a></li><li><a href="../../cookbook/00_fundamentals/09_dataframe_builder.html">The DataFrame builder: queries as Python objects</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -74,37 +74,143 @@
 <span class="sep">/</span>
 <span>Time travel and versioning: which version did my backtest see?</span></div>
 <h1>Time travel and versioning: which version did my backtest see?</h1>
-<p>Every write to an h5i-db table (append, write, delete, restore) is an
-atomic commit that produces a new immutable version. Old versions are never
-rewritten; reading one is an O(1) manifest lookup, not a log replay. For
-quant work this is the difference between "the backtest ran on <em>some</em> state
-of the price file" and "the backtest ran on version 7, committed at
-14:02:31 UTC, and anyone can re-read exactly that". This recipe covers the
-full versioning surface:</p>
+<p>Every write to an h5i-db table is an atomic commit that produces a new
+immutable version. That covers <code>append</code>, <code>write</code>, <code>delete</code> and <code>restore</code>. Old
+versions are never rewritten, and reading one is an O(1) manifest lookup
+rather than a log replay.</p>
+<p>For quant work this is the difference between two sentences. "The backtest ran
+on <em>some</em> state of the price file." Versus "the backtest ran on version 7,
+committed at 14:02:31 UTC, and anyone can re-read exactly that."</p>
+<p>In this recipe we:</p>
 <ol>
-<li>the anatomy of <code>versions()</code>,</li>
-<li>three ways to time-travel: version number, commit wall-clock time
-   (<code>as_of</code>), and named snapshot, in Python and in SQL,</li>
-<li>a vendor restatement done as a <code>write()</code> with an audit note, and a SQL
-   diff between the two versions,</li>
-<li><code>restore()</code> as a rollback that <em>adds</em> history instead of erasing it.</li>
+<li>read the anatomy of <code>versions()</code>,</li>
+<li>time-travel three ways: by version number, by commit wall-clock time
+   (<code>as_of</code>), and by named snapshot, in both Python and SQL,</li>
+<li>take a vendor restatement as a <code>write()</code> with an audit note, and diff the
+   two versions in one query,</li>
+<li>use <code>restore()</code> as a rollback that <em>adds</em> history instead of erasing it.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
-<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
 
-<span class="kn">import</span> <span class="nn">h5i_db</span>
-<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_timetravel&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<h2 id="1-load-a-daily-price-panel-in-three-tranches">1. Load a daily price panel in three tranches<a class="headerlink" href="#1-load-a-daily-price-panel-in-three-tranches" title="Permanent link">#</a></h2>
-<p>A 120-day, 10-name daily OHLCV panel, appended in three 40-day tranches,
-the way a real price file grows, one delivery at a time. <code>note=</code> attaches a
-human-readable label to the commit; it shows up in <code>versions()</code> and is the
-cheapest audit trail you will ever build.</p>
+<h2 id="1-the-data">1. The data<a class="headerlink" href="#1-the-data" title="Permanent link">#</a></h2>
+<p>A daily OHLCV panel from <code>cu.make_daily_prices</code>: 10 names over 120 sessions,
+one row per symbol per session.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td><code>timestamp[us, tz=UTC]</code></td>
+<td>session close, 20:00 UTC</td>
+</tr>
+<tr>
+<td><code>symbol</code></td>
+<td><code>string</code></td>
+<td>ticker, <code>STK000</code> … <code>STK009</code></td>
+</tr>
+<tr>
+<td><code>open</code>, <code>high</code>, <code>low</code>, <code>close</code></td>
+<td><code>float64</code></td>
+<td>session prices</td>
+</tr>
+<tr>
+<td><code>volume</code></td>
+<td><code>int64</code></td>
+<td>shares traded</td>
+</tr>
+</tbody>
+</table></div>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">prices</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_daily_prices</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;STK</span><span class="si">{</span><span class="n">i</span><span class="si">:</span><span class="s2">03d</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">10</span><span class="p">)],</span> <span class="n">days</span><span class="o">=</span><span class="mi">120</span><span class="p">)</span>
-<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">prices</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">prices</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">prices</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">prices</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">1,200 rows x 7 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>open</th>
+      <th>high</th>
+      <th>low</th>
+      <th>close</th>
+      <th>volume</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK000</td>
+      <td>87.43</td>
+      <td>87.55</td>
+      <td>87.33</td>
+      <td>87.37</td>
+      <td>984106</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK001</td>
+      <td>276.03</td>
+      <td>276.24</td>
+      <td>274.87</td>
+      <td>275.39</td>
+      <td>528964</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK002</td>
+      <td>46.61</td>
+      <td>46.81</td>
+      <td>46.46</td>
+      <td>46.60</td>
+      <td>344298</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK003</td>
+      <td>185.78</td>
+      <td>186.18</td>
+      <td>185.08</td>
+      <td>185.34</td>
+      <td>348589</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK004</td>
+      <td>254.97</td>
+      <td>255.03</td>
+      <td>252.84</td>
+      <td>254.82</td>
+      <td>440186</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>We load it in three 40-day tranches, the way a real price file grows: one
+delivery at a time. <code>note=</code> attaches a human-readable label to the commit. It
+shows up in <code>versions()</code> and is the cheapest audit trail you will ever build.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">prices</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
 
 <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">prices</span><span class="p">)</span>
 <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">prices</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">n</span> <span class="o">//</span> <span class="mi">3</span><span class="p">),</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;vendor delivery: days 1-40&quot;</span><span class="p">)</span>
@@ -118,13 +224,17 @@ cheapest audit trail you will ever build.</p>
  &#x27;segments_total&#x27;: 3,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1784778937460156417}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785195690928901504}</pre></div></div>
 <h2 id="2-anatomy-of-versions">2. Anatomy of <code>versions()</code><a class="headerlink" href="#2-anatomy-of-versions" title="Permanent link">#</a></h2>
-<p>Each entry is one commit: <code>sequence</code> is the version number you pass to
-<code>read</code>/<code>h5i()</code>, <code>op</code> is what happened (<code>create</code>, <code>append</code>, <code>write</code>,
-<code>delete_range</code>, <code>replace_range</code>, <code>restore</code>, <code>compact</code>), <code>committed_at_ns</code>
-is the wall-clock commit time, and <code>rows</code>/<code>bytes</code>/<code>segments</code> describe the
-table <em>as of that version</em>, not the delta.</p>
+<p>Each entry is one commit:</p>
+<ul>
+<li><code>sequence</code> is the version number you pass to <code>read</code> and <code>h5i()</code>;</li>
+<li><code>op</code> is what happened: <code>create</code>, <code>append</code>, <code>write</code>, <code>delete_range</code>,
+  <code>replace_range</code>, <code>restore</code> or <code>compact</code>;</li>
+<li><code>committed_at_ns</code> is the wall-clock commit time;</li>
+<li><code>rows</code>, <code>bytes</code> and <code>segments</code> describe the table <em>as of that version</em>, not
+  the delta.</li>
+</ul>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">hist</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">))</span>
 <span class="n">hist</span><span class="p">[</span><span class="s2">&quot;committed_at&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">to_datetime</span><span class="p">(</span><span class="n">hist</span><span class="p">[</span><span class="s2">&quot;committed_at_ns&quot;</span><span class="p">],</span> <span class="n">utc</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="n">hist</span><span class="p">[[</span><span class="s2">&quot;sequence&quot;</span><span class="p">,</span> <span class="s2">&quot;op&quot;</span><span class="p">,</span> <span class="s2">&quot;committed_at&quot;</span><span class="p">,</span> <span class="s2">&quot;rows&quot;</span><span class="p">,</span> <span class="s2">&quot;segments&quot;</span><span class="p">,</span> <span class="s2">&quot;note&quot;</span><span class="p">]]</span>
@@ -148,7 +258,7 @@ table <em>as of that version</em>, not the delta.</p>
       <th>0</th>
       <td>0</td>
       <td>create</td>
-      <td>2026-07-23 03:55:37.424612436+00:00</td>
+      <td>2026-07-27 23:41:30.886546470+00:00</td>
       <td>0</td>
       <td>0</td>
       <td>NaN</td>
@@ -157,7 +267,7 @@ table <em>as of that version</em>, not the delta.</p>
       <th>1</th>
       <td>1</td>
       <td>append</td>
-      <td>2026-07-23 03:55:37.437370338+00:00</td>
+      <td>2026-07-27 23:41:30.896918827+00:00</td>
       <td>400</td>
       <td>1</td>
       <td>vendor delivery: days 1-40</td>
@@ -166,7 +276,7 @@ table <em>as of that version</em>, not the delta.</p>
       <th>2</th>
       <td>2</td>
       <td>append</td>
-      <td>2026-07-23 03:55:37.447296857+00:00</td>
+      <td>2026-07-27 23:41:30.919627681+00:00</td>
       <td>800</td>
       <td>2</td>
       <td>vendor delivery: days 41-80</td>
@@ -175,7 +285,7 @@ table <em>as of that version</em>, not the delta.</p>
       <th>3</th>
       <td>3</td>
       <td>append</td>
-      <td>2026-07-23 03:55:37.460156417+00:00</td>
+      <td>2026-07-27 23:41:30.928901504+00:00</td>
       <td>1200</td>
       <td>3</td>
       <td>vendor delivery: days 81-120</td>
@@ -185,12 +295,12 @@ table <em>as of that version</em>, not the delta.</p>
 </div></div></div></div>
 <h2 id="3-three-ways-to-time-travel">3. Three ways to time-travel<a class="headerlink" href="#3-three-ways-to-time-travel" title="Permanent link">#</a></h2>
 <ul>
-<li><strong>By version number:</strong> exact, and the one to persist in run metadata.</li>
-<li><strong>By commit time</strong> (<code>as_of</code>, RFC 3339): "what did we know at 9am?".
-  It resolves to the last version committed at or before that instant.</li>
-<li><strong>In SQL</strong> via the <code>h5i()</code> table function, which accepts either form
-  (and snapshot names, see section 6), so old and new states can meet in
-  one query.</li>
+<li><strong>By version number.</strong> Exact, and the one to persist in run metadata.</li>
+<li><strong>By commit time</strong> (<code>as_of</code>, RFC 3339). This answers "what did we know at
+  9am?" by resolving to the last version committed at or before that instant.</li>
+<li><strong>In SQL</strong> via the <code>h5i()</code> table function, which accepts either form as well
+  as snapshot names (section 6). Old and new states can therefore meet in one
+  query.</li>
 </ul>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">v1_rows</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
 
@@ -214,7 +324,7 @@ table <em>as of that version</em>, not the delta.</p>
 <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">version 1          : 400 rows
-as_of 2026-07-23T03:55:37.447296858+00:00: 800 rows</pre><div class="nb-html"><div>
+as_of 2026-07-27T23:41:30.919627682+00:00: 800 rows</pre><div class="nb-html"><div>
 
 <table border="1" class="dataframe">
   <thead>
@@ -248,26 +358,27 @@ as_of 2026-07-23T03:55:37.447296858+00:00: 800 rows</pre><div class="nb-html"><d
 </table>
 </div></div></div></div>
 <h2 id="4-a-restatement-and-the-version-it-did-not-destroy">4. A restatement, and the version it did not destroy<a class="headerlink" href="#4-a-restatement-and-the-version-it-did-not-destroy" title="Permanent link">#</a></h2>
-<p>First, a toy "backtest": the annualized mean daily return per symbol,
-computed straight off the live table. We record the head version alongside
-the result; this is the habit the whole recipe is arguing for.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">backtest_mean_return</span><span class="p">(</span><span class="n">read_point</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
-    <span class="k">return</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">        WITH r AS (</span>
-<span class="s2">            SELECT symbol,</span>
-<span class="s2">                   close / lag(close) OVER (PARTITION BY symbol ORDER BY ts) - 1 AS ret</span>
-<span class="s2">            FROM </span><span class="si">{</span><span class="n">read_point</span><span class="si">}</span>
-<span class="s2">        )</span>
-<span class="s2">        SELECT symbol, 252 * avg(ret) AS ann_mean_ret</span>
-<span class="s2">        FROM r WHERE ret IS NOT NULL</span>
-<span class="s2">        GROUP BY symbol ORDER BY symbol</span>
-<span class="s2">        &quot;&quot;&quot;</span>
-    <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<p>Start with a toy "backtest": the annualized mean daily return per symbol,
+computed straight off the live table. We record the head version alongside the
+result. That habit is what this whole recipe is arguing for.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">PREV_CLOSE</span> <span class="o">=</span> <span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;lag(close)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">backtest_mean_return</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;The same study, parameterized by read point rather than by SQL text.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">ret</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">PREV_CLOSE</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">())</span>
+        <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">ann_mean_ret</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="o">*</span> <span class="mi">252</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="p">)</span>
 
 
 <span class="n">v_pre</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span>
-<span class="n">result_original</span> <span class="o">=</span> <span class="n">backtest_mean_return</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
+<span class="n">result_original</span> <span class="o">=</span> <span class="n">backtest_mean_return</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;backtest ran against version </span><span class="si">{</span><span class="n">v_pre</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 <span class="n">result_original</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
 </pre></div>
@@ -300,10 +411,10 @@ the result; this is the habit the whole recipe is arguing for.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<p>Now the vendor restates day-2 closes (a bad closing auction print, say,
-corrected by +0.25%). The idiomatic move is a <code>write()</code> of the full
-corrected panel with a note: <code>write</code> replaces the table contents <em>as a new
-version</em>, and the pre-restatement table is still there, one integer away.</p>
+<p>Now the vendor restates day-2 closes: a bad closing auction print, corrected
+by +0.25%. The idiomatic move is a <code>write()</code> of the full corrected panel with
+a note. <code>write</code> replaces the table contents <em>as a new version</em>, so the
+pre-restatement table is still there, one integer away.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">df</span> <span class="o">=</span> <span class="n">prices</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 <span class="n">day2</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">()[</span><span class="mi">1</span><span class="p">]</span>
 <span class="n">df</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">day2</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">]</span> <span class="o">*=</span> <span class="mf">1.0025</span>
@@ -314,20 +425,24 @@ version</em>, and the pre-restatement table is still there, one integer away.</p
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;restatement committed as version </span><span class="si">{</span><span class="n">v_post</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">restatement committed as version 4</pre></div></div>
-<p>What exactly changed? Join the two versions in one SQL statement. No
-export, no second database: <code>h5i()</code> puts both states in the same query.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    SELECT new.ts, new.symbol,</span>
-<span class="s2">           old.close AS close_old, new.close AS close_new,</span>
-<span class="s2">           new.close - old.close  AS delta</span>
-<span class="s2">    FROM h5i(&#39;prices&#39;, </span><span class="si">{</span><span class="n">v_post</span><span class="si">}</span><span class="s2">) new</span>
-<span class="s2">    JOIN h5i(&#39;prices&#39;, </span><span class="si">{</span><span class="n">v_pre</span><span class="si">}</span><span class="s2">)  old</span>
-<span class="s2">      ON new.ts = old.ts AND new.symbol = old.symbol</span>
-<span class="s2">    WHERE new.close &lt;&gt; old.close</span>
-<span class="s2">    ORDER BY new.symbol</span>
-<span class="s2">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<p>What exactly changed? Join the two versions in one statement. There is no
+export step and no second database: two pinned <code>db.table(...)</code> reads put both
+states in the same query, and the join aliases them <code>l</code> and <code>r</code>.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">new</span><span class="p">,</span> <span class="n">old</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">v_post</span><span class="p">),</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">v_pre</span><span class="p">)</span>
+
+<span class="p">(</span>
+    <span class="n">new</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">old</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span>
+        <span class="n">ts</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">),</span>
+        <span class="n">symbol</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">),</span>
+        <span class="n">close_old</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;r&quot;</span><span class="p">),</span>
+        <span class="n">close_new</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">),</span>
+        <span class="n">delta</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;r&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close_new&quot;</span><span class="p">)</span> <span class="o">!=</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;close_old&quot;</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
 
@@ -426,11 +541,11 @@ export, no second database: <code>h5i()</code> puts both states in the same quer
   </tbody>
 </table>
 </div></div></div></div>
-<p>The restatement changes the backtest: slightly, silently, and
-irreversibly if you had overwritten a CSV. Here, re-running against the
+<p>The restatement moves the backtest slightly and silently. Had you overwritten
+a CSV, it would also have moved it irreversibly. Here, re-running against the
 <em>pinned</em> version reproduces the original numbers exactly.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">result_after</span> <span class="o">=</span> <span class="n">backtest_mean_return</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
-<span class="n">result_pinned</span> <span class="o">=</span> <span class="n">backtest_mean_return</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;h5i(&#39;prices&#39;, </span><span class="si">{</span><span class="n">v_pre</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">result_after</span> <span class="o">=</span> <span class="n">backtest_mean_return</span><span class="p">()</span>
+<span class="n">result_pinned</span> <span class="o">=</span> <span class="n">backtest_mean_return</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="n">v_pre</span><span class="p">)</span>
 
 <span class="n">drifted</span> <span class="o">=</span> <span class="p">(</span><span class="n">result_after</span><span class="p">[</span><span class="s2">&quot;ann_mean_ret&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">result_original</span><span class="p">[</span><span class="s2">&quot;ann_mean_ret&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
 <span class="n">pinned</span> <span class="o">=</span> <span class="p">(</span><span class="n">result_pinned</span><span class="p">[</span><span class="s2">&quot;ann_mean_ret&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">result_original</span><span class="p">[</span><span class="s2">&quot;ann_mean_ret&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">abs</span><span class="p">()</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
@@ -442,10 +557,10 @@ irreversibly if you had overwritten a CSV. Here, re-running against the
 max drift, re-run on version 3 : 0.00e+00  (bit-for-bit)</pre></div></div>
 <h2 id="5-restore-rollback-that-adds-history">5. <code>restore()</code>: rollback that adds history<a class="headerlink" href="#5-restore-rollback-that-adds-history" title="Permanent link">#</a></h2>
 <p>Suppose the restatement turns out to have been applied to the wrong day.
-<code>restore(version)</code> makes an old version the new head, as a <em>new commit</em>.
-Nothing is erased: the bad write stays in the log, attributable and
-diffable, which is exactly what you want when someone asks "who changed
-the price file last Tuesday?".</p>
+<code>restore(version)</code> makes an old version the new head, as a <em>new commit</em>.</p>
+<p>Nothing is erased. The bad write stays in the log, attributable and diffable,
+which is exactly what you want when someone asks who changed the price file
+last Tuesday.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">restore</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">v_pre</span><span class="p">)</span>
 
 <span class="n">hist</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">))</span>
@@ -515,17 +630,20 @@ the price file last Tuesday?".</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">head content == version 3</pre></div></div>
 <h2 id="6-named-snapshots-read-points-with-a-name">6. Named snapshots: read points with a name<a class="headerlink" href="#6-named-snapshots-read-points-with-a-name" title="Permanent link">#</a></h2>
-<p>Version numbers are precise but anonymous. <code>snapshot(name)</code> pins the
-current version of chosen tables under a name you can put in a run
-registry, an email, or a compliance report, and query directly from SQL.</p>
+<p>Version numbers are precise but anonymous. <code>snapshot(name)</code> pins the current
+version of the tables you choose under a name. That name can go in a run
+registry, an email or a compliance report, and it queries directly from SQL.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;model-run-2026-07-21&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;prices&quot;</span><span class="p">],</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;momentum study, run 42&quot;</span><span class="p">)</span>
 
-<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    SELECT count(*) AS rows, min(ts) AS first_day, max(ts) AS last_day</span>
-<span class="sd">    FROM h5i(&#39;prices&#39;, &#39;model-run-2026-07-21&#39;)</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;model-run-2026-07-21&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span>
+        <span class="n">rows</span><span class="o">=</span><span class="n">count_star</span><span class="p">(),</span>
+        <span class="n">first_day</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">(),</span>
+        <span class="n">last_day</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
 
@@ -550,19 +668,19 @@ registry, an email, or a compliance report, and query directly from SQL.</p>
 </div></div></div></div>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
-<li><code>versions()</code> is the audit trail: every commit has a sequence number, an
-  op, a wall-clock time, and (if you are disciplined about <code>note=</code>) a
-  reason. Discipline costs one keyword argument.</li>
-<li>Three read points, one mental model: <code>version=</code> for exactness, <code>as_of=</code>
-  for "what did we know at time T", snapshot names for things humans need
-  to refer to. All three work in <code>db.read</code> and in SQL via <code>h5i()</code>.</li>
-<li>Restatements are <code>write()</code> + note: the correction and the original
-  coexist, and one SQL join shows precisely what changed.</li>
-<li><code>restore()</code> rolls the head back without destroying the record of the
-  thing being rolled back.</li>
-<li>The habit that pays for all of it: <strong>record the version number next to
-  every research result.</strong> Re-running pinned is then bit-for-bit
-  reproducible; recipe <code>03_risk_and_production/02</code> has the full pattern.</li>
+<li><code>versions()</code> is the audit trail. Every commit has a sequence number, an op,
+  a wall-clock time and, if you are disciplined about <code>note=</code>, a reason. That
+  discipline costs one keyword argument.</li>
+<li>Three read points, one mental model: <code>version=</code> for exactness, <code>as_of=</code> for
+  "what did we know at time T", snapshot names for things humans refer to. All
+  three work in <code>db.read</code> and in SQL via <code>h5i()</code>.</li>
+<li>Restatements are <code>write()</code> plus a note. The correction and the original
+  coexist, and one join shows precisely what changed.</li>
+<li><code>restore()</code> rolls the head back without destroying the record of the thing
+  being rolled back.</li>
+<li>The habit that pays for all of it: <strong>record the version number next to every
+  research result.</strong> Re-running pinned is then bit-for-bit reproducible, a
+  pattern recipe <code>03_risk_and_production/02</code> develops in full.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>
@@ -570,7 +688,7 @@ registry, an email, or a compliance report, and query directly from SQL.</p>
     <nav class="page-nav"><a class="prev" href="../../cookbook/00_fundamentals/04_sql_tour_for_quants.html"><span class="dir">← Previous</span><span class="pn-title">A SQL tour for quants</span></a><a class="next" href="../../cookbook/00_fundamentals/06_previewable_mutations.html"><span class="dir">Next →</span><span class="pn-title">Previewable mutations: fix bad ticks without fearing the delete key</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-load-a-daily-price-panel-in-three-tranches">1. Load a daily price panel in three tranches</a></li><li><a href="#2-anatomy-of-versions">2. Anatomy of versions()</a></li><li><a href="#3-three-ways-to-time-travel">3. Three ways to time-travel</a></li><li><a href="#4-a-restatement-and-the-version-it-did-not-destroy">4. A restatement, and the version it did not destroy</a></li><li><a href="#5-restore-rollback-that-adds-history">5. restore(): rollback that adds history</a></li><li><a href="#6-named-snapshots-read-points-with-a-name">6. Named snapshots: read points with a name</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-anatomy-of-versions">2. Anatomy of versions()</a></li><li><a href="#3-three-ways-to-time-travel">3. Three ways to time-travel</a></li><li><a href="#4-a-restatement-and-the-version-it-did-not-destroy">4. A restatement, and the version it did not destroy</a></li><li><a href="#5-restore-rollback-that-adds-history">5. restore(): rollback that adds history</a></li><li><a href="#6-named-snapshots-read-points-with-a-name">6. Named snapshots: read points with a name</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

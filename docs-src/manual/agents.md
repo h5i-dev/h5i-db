@@ -115,6 +115,15 @@ an agent can't quietly commit malformed rows.
 
 ## Patterns that work
 
+- **Branch per hypothesis:** give each agent its own
+  [fork](concepts.html#forks) instead of a table-name convention:
+  `fork create <db> sweep --count 100` opens a hundred isolated, writable
+  workspaces in one catalog pass, `--fork <name>` scopes every subsequent
+  command to one of them, and `--meta` attaches the run's parameters where
+  `fork show` and the UI's fork monitor surface them. Compare results across
+  the whole sweep with [`forks('table')`](sql.html#forks), promote the
+  winner, and `fork drop` the rest in one batch. A human can watch the
+  sweep live in `h5i-db ui` (the Forks tab) while it runs.
 - **Idempotent retries:** appends racing another writer raise
   `version_conflict` (exit 3 / `ConflictError`, `retryable: true`). The CLI
   retries pure appends itself (`ingest --retries`, default 5); in Python,

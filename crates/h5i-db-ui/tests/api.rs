@@ -461,3 +461,138 @@ async fn scratchpad_disambiguates_duplicate_columns_and_flags_truncation() {
     assert_eq!(out["rows"].as_array().unwrap().len(), 1000);
     assert_eq!(out["truncated"], true);
 }
+
+// ---------------------------------------------------------------------------
+// fork monitor
+// ---------------------------------------------------------------------------
+
+/// Build the fork shape the monitor exists for: a fork with its own work, a
+/// nested fork inside it, and a base that moved underneath the shadow.
+async fn setup_forked() -> (tempfile::TempDir, axum::Router, Arc<Database>) {
+    let (dir, _router, db) = setup(false).await;
+    db.create_fork(
+        "exp-a",
+        Some("hypothesis A".into()),
+        None,
+        serde_json::Map::new(),
+    )
+    .await
+    .unwrap();
+    let fork_db = db.open_fork("exp-a").await.unwrap();
+    fork_db
+        .append(
+            "trades",
+            vec![batch(&[900, 901], 102.0)],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    fork_db
+        .create_fork("exp-a-child", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    // Move the base so exp-a's shadow is stale: promote would CAS-fail.
+    db.append(
+        "trades",
+        vec![batch(&[950], 103.0)],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let router = router_for(&db, false);
+    (dir, router, db)
+}
+
+#[tokio::test]
+async fn forks_endpoint_reports_lineage_and_liveness() {
+    let (_dir, router, _db) = setup_forked().await;
+    let (status, body) = get_json(&router, "/api/forks").await;
+    assert_eq!(status, StatusCode::OK);
+    let forks = body["forks"].as_array().unwrap();
+    assert_eq!(forks.len(), 2);
+
+    let a = forks.iter().find(|f| f["name"] == "exp-a").unwrap();
+    assert!(a["parent"].is_null());
+    assert_eq!(a["depth"], 0);
+    assert_eq!(a["tables_shadowed"], 1);
+    assert_eq!(a["tables_created"], 0);
+    assert_eq!(a["stale_shadows"], 1, "base moved past the shadow");
+    assert!(a["commits_own"].as_u64().unwrap() >= 1);
+    assert!(a["last_write_ns"].as_i64().unwrap() > 0);
+    assert_eq!(a["note"], "hypothesis A");
+
+    let c = forks.iter().find(|f| f["name"] == "exp-a-child").unwrap();
+    assert_eq!(c["parent"], "exp-a");
+    assert_eq!(c["depth"], 1);
+    assert_eq!(c["stale_shadows"], 0);
+    assert!(c["last_write_ns"].is_null(), "never wrote");
+
+    // The overview carries the same projection so the page boots complete.
+    let (_, ov) = get_json(&router, "/api/overview").await;
+    assert_eq!(ov["forks"].as_array().unwrap().len(), 2);
+    assert!(ov["fork"].is_null(), "base-scoped server");
+}
+
+#[tokio::test]
+async fn fork_detail_reports_divergence_and_pins() {
+    let (_dir, router, _db) = setup_forked().await;
+    let (status, d) = get_json(&router, "/api/fork/exp-a").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(d["info"]["name"], "exp-a");
+    let pins = d["info"]["pins"].as_object().unwrap();
+    assert_eq!(pins.len(), 1);
+    let tables = d["diff"]["tables"].as_array().unwrap();
+    assert_eq!(tables.len(), 1);
+    assert_eq!(tables[0]["table"], "trades");
+    assert_eq!(tables[0]["kind"], "shadowed");
+    assert_eq!(tables[0]["base_moved"], true);
+    assert!(tables[0]["fork_versions"].as_u64().unwrap() >= 1);
+
+    // Unknown fork → error envelope, not a panic.
+    let (status, e) = get_json(&router, "/api/fork/no-such-fork").await;
+    assert_ne!(status, StatusCode::OK);
+    assert!(e["code"].is_string());
+}
+
+#[tokio::test]
+async fn events_stream_sends_initial_frame() {
+    use futures::StreamExt;
+    let (_dir, router, _db) = setup_forked().await;
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/events")
+                .header("host", "127.0.0.1:8000")
+                .header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("text/event-stream")
+    );
+    // The first frame is pushed immediately; collect chunks until one full
+    // SSE event has arrived.
+    let mut stream = res.into_body().into_data_stream();
+    let mut text = String::new();
+    let deadline = std::time::Duration::from_secs(10);
+    while !text.contains("\n\n") {
+        let chunk = tokio::time::timeout(deadline, stream.next())
+            .await
+            .expect("first SSE frame within 10s")
+            .expect("stream ended before a frame")
+            .unwrap();
+        text.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    assert!(text.contains("event: update"), "got: {text}");
+    assert!(text.contains("\"forks\""), "frame carries forks: {text}");
+    assert!(text.contains("exp-a"), "frame names the fork: {text}");
+}

@@ -570,9 +570,26 @@ pub struct ForkSummary {
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub as_of_ns: Option<i64>,
+    /// The fork this one was created inside (`None` for a top-level fork).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Distance from the base database: 0 for a top-level fork.
+    pub depth: u32,
     pub tables_pinned: usize,
     pub tables_created: usize,
     pub tables_shadowed: usize,
+    /// Commits made inside the fork: the sum of its owned tables' own head
+    /// sequences (a shadow's history starts at the fork point, so its head
+    /// counts only fork-local work).
+    pub commits_own: u64,
+    /// `committed_at_ns` of the newest commit the fork made itself — the
+    /// closest thing a fork has to a liveness signal (`None` when it has
+    /// written nothing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_write_ns: Option<i64>,
+    /// Shadowed tables whose base has moved past the fork point, so a
+    /// `promote` of that table would fail its compare-and-swap.
+    pub stale_shadows: usize,
     /// Bytes the fork wrote itself.
     pub bytes_own: u64,
     /// Base bytes the fork's pins hold back from reclamation. This is the
@@ -823,6 +840,9 @@ impl crate::database::Database {
             let mut bytes_own = 0u64;
             let mut created = 0usize;
             let mut shadowed = 0usize;
+            let mut commits_own = 0u64;
+            let mut last_write_ns: Option<i64> = None;
+            let mut stale_shadows = 0usize;
             for fe in &entries {
                 if fe.is_shadow() {
                     shadowed += 1;
@@ -831,6 +851,23 @@ impl crate::database::Database {
                 }
                 let head = self.head(&fe.name, fe.table_id).await?.head.sequence;
                 let manifest = self.manifest_at(fe.table_id, head).await?;
+                commits_own += head;
+                last_write_ns = Some(match last_write_ns {
+                    None => manifest.committed_at_ns,
+                    Some(t) => t.max(manifest.committed_at_ns),
+                });
+                if let Some(origin) = &fe.origin {
+                    // The base head is read by table id, so this also works for
+                    // a nested fork whose "base" is its parent's table.
+                    let base_head = self
+                        .head(&fe.name, origin.base_table_id)
+                        .await?
+                        .head
+                        .sequence;
+                    if base_head > origin.base_sequence {
+                        stale_shadows += 1;
+                    }
+                }
                 let own_prefix = format!("{}/", layout::table_prefix(fe.table_id));
                 bytes_own += manifest
                     .segments
@@ -854,9 +891,14 @@ impl crate::database::Database {
                 created_at_ns: fork.created_at_ns,
                 note: fork.note.clone(),
                 as_of_ns: fork.as_of_ns,
+                parent: fork.parent.clone(),
+                depth: fork.depth(),
                 tables_pinned: fork.pins.len(),
                 tables_created: created,
                 tables_shadowed: shadowed,
+                commits_own,
+                last_write_ns,
+                stale_shadows,
                 bytes_own,
                 bytes_pinned,
             });

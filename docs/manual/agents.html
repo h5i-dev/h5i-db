@@ -191,6 +191,15 @@ violating batch is refused with <code>data_policy_violation</code> before it can
 an agent can't quietly commit malformed rows.</p>
 <h2 id="patterns-that-work">Patterns that work<a class="headerlink" href="#patterns-that-work" title="Permanent link">#</a></h2>
 <ul>
+<li><strong>Branch per hypothesis:</strong> give each agent its own
+  <a href="concepts.html#forks">fork</a> instead of a table-name convention:
+  <code>fork create &lt;db&gt; sweep --count 100</code> opens a hundred isolated, writable
+  workspaces in one catalog pass, <code>--fork &lt;name&gt;</code> scopes every subsequent
+  command to one of them, and <code>--meta</code> attaches the run's parameters where
+  <code>fork show</code> and the UI's fork monitor surface them. Compare results across
+  the whole sweep with <a href="sql.html#forks"><code>forks('table')</code></a>, promote the
+  winner, and <code>fork drop</code> the rest in one batch. A human can watch the
+  sweep live in <code>h5i-db ui</code> (the Forks tab) while it runs.</li>
 <li><strong>Idempotent retries:</strong> appends racing another writer raise
   <code>version_conflict</code> (exit 3 / <code>ConflictError</code>, <code>retryable: true</code>). The CLI
   retries pure appends itself (<code>ingest --retries</code>, default 5); in Python,

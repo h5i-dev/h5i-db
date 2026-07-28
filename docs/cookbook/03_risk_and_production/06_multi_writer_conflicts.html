@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Multi-writer coordination: optimistic locking, conflicts, and retries · h5i-db docs</title>
-  <meta name="description" content="An h5i-db database is a directory, and nothing stops two processes (a feed handler and a corrections job, or two teammates&#x27; notebooks) from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
+  <meta name="description" content="An h5i-db database is a directory, and nothing stops two processes from opening it at the same time: a feed handler and a corrections job, or two teammates&#x27; notebooks.">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -16,12 +16,12 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="Multi-writer coordination: optimistic locking, conflicts, and retries · h5i-db docs">
-  <meta property="og:description" content="An h5i-db database is a directory, and nothing stops two processes (a feed handler and a corrections job, or two teammates&#x27; notebooks) from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
+  <meta property="og:description" content="An h5i-db database is a directory, and nothing stops two processes from opening it at the same time: a feed handler and a corrections job, or two teammates&#x27; notebooks.">
   <meta property="og:url" content="https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="Multi-writer coordination: optimistic locking, conflicts, and retries · h5i-db docs">
-  <meta name="twitter:description" content="An h5i-db database is a directory, and nothing stops two processes (a feed handler and a corrections job, or two teammates&#x27; notebooks) from opening it at the same time. h5i-db&#x27;s answer to concurrent writers is …">
+  <meta name="twitter:description" content="An h5i-db database is a directory, and nothing stops two processes from opening it at the same time: a feed handler and a corrections job, or two teammates&#x27; notebooks.">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -61,7 +61,7 @@
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html" class="active">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_leakage_check.html">leakage-check: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html" class="active">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_arrival_delta.html">arrival-delta: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -74,28 +74,146 @@
 <span class="sep">/</span>
 <span>Multi-writer coordination: optimistic locking, conflicts, and retries</span></div>
 <h1>Multi-writer coordination: optimistic locking, conflicts, and retries</h1>
-<p>An h5i-db database is a directory, and nothing stops two processes (a feed
-handler and a corrections job, or two teammates' notebooks) from opening it
-at the same time. h5i-db's answer to concurrent writers is <em>optimistic
-concurrency</em>: every commit can carry an <code>expected_version</code>, and if the table
-head has moved since you read it, the commit is rejected with an explicit
-<code>ConflictError</code> instead of silently interleaving. That is the right trade
-for teams: a lost update in a positions or marks table is a silent P&amp;L
-error; a <code>ConflictError</code> is a retry.</p>
-<p>In this recipe we simulate two writers with two <code>Database</code> handles on the
-same path, then scale to three threads racing to ingest a chunked feed, and
-finally hit the same conflict machinery through the plan/apply mutation flow.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">threading</span>
+<p>An h5i-db database is a directory, and nothing stops two processes from
+opening it at the same time: a feed handler and a corrections job, or two
+teammates' notebooks.</p>
+<p>The answer to concurrent writers is <em>optimistic concurrency</em>. Every commit can
+carry an <code>expected_version</code>, and if the table head has moved since you read
+it, the commit is rejected with an explicit <code>ConflictError</code> instead of
+silently interleaving.</p>
+<p>That is the right trade for teams. A lost update in a positions or marks table
+is a silent P&amp;L error. A <code>ConflictError</code> is a retry.</p>
+<p>In this recipe we:</p>
+<ol>
+<li>simulate two writers with two <code>Database</code> handles on the same path,</li>
+<li>scale up to three threads racing to ingest a chunked feed,</li>
+<li>hit the same conflict machinery through the plan/apply mutation flow.</li>
+</ol>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">threading</span>
 
-<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
 
-<span class="kn">import</span> <span class="nn">h5i_db</span>
-<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
 
 <span class="n">path</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_writers&quot;</span><span class="p">)</span>
 <span class="n">writer_a</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-the-data">1. The data<a class="headerlink" href="#1-the-data" title="Permanent link">#</a></h2>
+<p><code>cu.make_trades</code> gives one session of ticks for three names, our "feed". One
+row per print.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td><code>timestamp[us, tz=UTC]</code></td>
+<td>trade timestamp, ascending</td>
+</tr>
+<tr>
+<td><code>symbol</code></td>
+<td><code>string</code></td>
+<td>ticker</td>
+</tr>
+<tr>
+<td><code>price</code></td>
+<td><code>float64</code></td>
+<td>trade price</td>
+</tr>
+<tr>
+<td><code>size</code></td>
+<td><code>int64</code></td>
+<td>shares traded</td>
+</tr>
+<tr>
+<td><code>exchange</code></td>
+<td><code>string</code></td>
+<td>reporting venue</td>
+</tr>
+<tr>
+<td><code>side</code></td>
+<td><code>string</code></td>
+<td><code>B</code> buyer-initiated, <code>S</code> seller-initiated</td>
+</tr>
+</tbody>
+</table></div>
+<p>Sections below carve it into time-contiguous chunks. The table is sorted by
+<code>ts</code>, so slices are windows.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">feed</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">8_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;feed: </span><span class="si">{</span><span class="n">feed</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">feed</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">feed</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">feed: 21,180 rows x 6 columns</pre><div class="nb-html"><div>
 
-<span class="n">schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>size</th>
+      <th>exchange</th>
+      <th>side</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:00.138654+00:00</td>
+      <td>NVDA</td>
+      <td>319.22</td>
+      <td>100</td>
+      <td>BATS</td>
+      <td>S</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:00.858361+00:00</td>
+      <td>AAPL</td>
+      <td>265.00</td>
+      <td>1</td>
+      <td>BATS</td>
+      <td>S</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:01.734996+00:00</td>
+      <td>MSFT</td>
+      <td>362.96</td>
+      <td>1</td>
+      <td>NYSE</td>
+      <td>S</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:01.982844+00:00</td>
+      <td>MSFT</td>
+      <td>363.05</td>
+      <td>1</td>
+      <td>NYSE</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:30:01.996525+00:00</td>
+      <td>AAPL</td>
+      <td>265.12</td>
+      <td>600</td>
+      <td>BATS</td>
+      <td>B</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
     <span class="p">[</span>
         <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
         <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
@@ -106,18 +224,20 @@ finally hit the same conflict machinery through the plan/apply mutation flow.</p
     <span class="p">]</span>
 <span class="p">)</span>
 <span class="n">writer_a</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
-
-<span class="c1"># One day of ticks - our &quot;feed&quot;. Sections below carve it into</span>
-<span class="c1"># time-contiguous chunks (the table is sorted by ts, so slices are windows).</span>
-<span class="n">feed</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">8_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;feed: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">feed</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">feed: 21,180 rows</pre></div></div>
-<h2 id="1-two-handles-one-database">1. Two handles, one database<a class="headerlink" href="#1-two-handles-one-database" title="Permanent link">#</a></h2>
-<p><code>writer_b</code> opens the <em>same</em> directory; think of it as a second process.
-Commits made through one handle are immediately visible through the other:
-both handles read the same manifest on disk, there is no per-handle cache of
-the table head to go stale.</p>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;table&#x27;: &#x27;trades&#x27;,
+ &#x27;sequence&#x27;: 0,
+ &#x27;op&#x27;: &#x27;create&#x27;,
+ &#x27;rows_total&#x27;: 0,
+ &#x27;segments_total&#x27;: 0,
+ &#x27;segments_added&#x27;: 0,
+ &#x27;segments_deduped&#x27;: 0,
+ &#x27;committed_at_ns&#x27;: 1785195773830604369}</pre></div></div>
+<h2 id="2-two-handles-one-database">2. Two handles, one database<a class="headerlink" href="#2-two-handles-one-database" title="Permanent link">#</a></h2>
+<p><code>writer_b</code> opens the <em>same</em> directory. Think of it as a second process.</p>
+<p>Commits made through one handle are immediately visible through the other.
+Both handles read the same manifest on disk, and there is no per-handle cache
+of the table head to go stale.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">writer_b</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>  <span class="c1"># no create: the db already exists</span>
 
 <span class="n">writer_a</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">feed</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3_000</span><span class="p">),</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;A: chunk 0&quot;</span><span class="p">)</span>
@@ -126,11 +246,12 @@ the table head to go stale.</p>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;head seen by A: v</span><span class="si">{</span><span class="n">head_a</span><span class="si">}</span><span class="s2">, by B: v</span><span class="si">{</span><span class="n">head_b</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">head seen by A: v1, by B: v1</pre></div></div>
-<h2 id="2-a-stale-expected_version-fails-loudly">2. A stale <code>expected_version</code> fails loudly<a class="headerlink" href="#2-a-stale-expected_version-fails-loudly" title="Permanent link">#</a></h2>
-<p>B reads the head (v1) and plans to append, but before it does, A commits
-another chunk. B's <code>append(..., expected_version=1)</code> is now a compare-and-
-swap against a head that no longer exists, and h5i-db rejects it. Note the
-error is machine-readable: <code>.code</code> for dispatch, <code>.retryable</code> telling you
+<h2 id="3-a-stale-expected_version-fails-loudly">3. A stale <code>expected_version</code> fails loudly<a class="headerlink" href="#3-a-stale-expected_version-fails-loudly" title="Permanent link">#</a></h2>
+<p>B reads the head at v1 and plans to append. Before it does, A commits another
+chunk.</p>
+<p>B's <code>append(..., expected_version=1)</code> is now a compare-and-swap against a head
+that no longer exists, and h5i-db rejects it.</p>
+<p>The error is machine-readable: <code>.code</code> for dispatch, <code>.retryable</code> telling you
 this is safe to retry, <code>.hint</code> for the operator.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">head_b_saw</span> <span class="o">=</span> <span class="n">writer_b</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span>  <span class="c1"># B reads: v1</span>
 
@@ -146,18 +267,20 @@ this is safe to retry, <code>.hint</code> for the operator.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">code      = version_conflict
 retryable = True
 hint      = re-read the head of &quot;trades&quot; and retry against it; pure appends rebase safely (the CLI and Python bindings already auto-retry those)</pre></div></div>
-<p>Nothing was written: B's rows are not in the table, and the version chain
-is untouched. Contrast this with "last writer wins" storage (plain Parquet
-directories, CSV drops), where B's write would have clobbered or interleaved
-with A's and nobody would know until reconciliation.</p>
+<p>Nothing was written. B's rows are not in the table, and the version chain is
+untouched.</p>
+<p>Contrast this with "last writer wins" storage such as plain Parquet
+directories or CSV drops. There, B's write would have clobbered or interleaved
+with A's, and nobody would know until reconciliation.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rows in table: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">writer_b</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">))</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">  (B&#39;s 1,500 rows were NOT committed)&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">rows in table: 4,500  (B&#x27;s 1,500 rows were NOT committed)</pre></div></div>
-<h2 id="3-the-retry-pattern">3. The retry pattern<a class="headerlink" href="#3-the-retry-pattern" title="Permanent link">#</a></h2>
-<p>Since <code>retryable=True</code>, the fix is mechanical: re-read the head, re-issue
-the append against it, give up after a few attempts. This is the same
-CAS-retry loop you would write against any optimistic-concurrency store.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">append_with_retry</span><span class="p">(</span><span class="n">handle</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
+<h2 id="4-the-retry-pattern">4. The retry pattern<a class="headerlink" href="#4-the-retry-pattern" title="Permanent link">#</a></h2>
+<p>Since <code>retryable=True</code>, the fix is mechanical. Re-read the head, re-issue the
+append against it, and give up after a few attempts.</p>
+<p>This is the same CAS-retry loop you would write against any
+optimistic-concurrency store.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">append_with_retry</span><span class="p">(</span><span class="n">handle</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Append with optimistic locking; retry on conflict.&quot;&quot;&quot;</span>
     <span class="k">for</span> <span class="n">attempt</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_attempts</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
         <span class="n">head</span> <span class="o">=</span> <span class="n">handle</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="n">table</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span>
@@ -173,15 +296,16 @@ CAS-retry loop you would write against any optimistic-concurrency store.</p>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;B committed v</span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> on attempt </span><span class="si">{</span><span class="n">attempts</span><span class="si">}</span><span class="s2">; rows_total=</span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;rows_total&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">B committed v3 on attempt 1; rows_total=6,000</pre></div></div>
-<h2 id="4-three-threads-racing-on-one-feed">4. Three threads racing on one feed<a class="headerlink" href="#4-three-threads-racing-on-one-feed" title="Permanent link">#</a></h2>
-<p>Now the stress test: the rest of the feed is split into 9 time-contiguous
+<h2 id="5-three-threads-racing-on-one-feed">5. Three threads racing on one feed<a class="headerlink" href="#5-three-threads-racing-on-one-feed" title="Permanent link">#</a></h2>
+<p>Now the stress test. The rest of the feed is split into 9 time-contiguous
 chunks, and three writer threads, each with its <strong>own</strong> <code>Database</code> handle,
-race to ingest them. Coordination is done <em>entirely</em> through the CAS: each
-thread derives "which chunk is next" from the committed head sequence and
-appends it with <code>expected_version=head</code>. When two threads pick the same
-chunk, exactly one commit lands; the loser gets <code>ConflictError</code>, re-reads
-the head, and moves on to the next chunk. No locks, no queue: the version
-chain is the queue.</p>
+race to ingest them.</p>
+<p>Coordination happens <em>entirely</em> through the CAS. Each thread derives which
+chunk is next from the committed head sequence, and appends it with
+<code>expected_version=head</code>.</p>
+<p>When two threads pick the same chunk, exactly one commit lands. The loser gets
+<code>ConflictError</code>, re-reads the head, and moves on to the next chunk. No locks
+and no queue: the version chain is the queue.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">N_CHUNKS</span> <span class="o">=</span> <span class="mi">9</span>
 <span class="n">base_rows</span> <span class="o">=</span> <span class="mi">6_000</span>  <span class="c1"># rows already committed in sections 1-3</span>
 <span class="n">late_rows</span> <span class="o">=</span> <span class="mi">1_500</span>  <span class="c1"># held back for section 5</span>
@@ -195,7 +319,7 @@ chain is the queue.</p>
 <span class="n">stats</span> <span class="o">=</span> <span class="p">{}</span>
 
 
-<span class="k">def</span> <span class="nf">feed_worker</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">feed_worker</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">handle</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>  <span class="c1"># per-thread handle, like a separate process</span>
     <span class="n">wins</span> <span class="o">=</span> <span class="n">conflicts</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">try</span><span class="p">:</span>
@@ -223,12 +347,12 @@ chain is the queue.</p>
 
 <span class="n">stats</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">9 chunks x 1,520 rows for the race</pre><pre>{&#x27;writer-1&#x27;: {&#x27;commits&#x27;: 9, &#x27;conflicts&#x27;: 0},
- &#x27;writer-0&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1},
- &#x27;writer-2&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1}}</pre></div></div>
-<p>Which thread lands which chunk varies run to run, but the <em>outcome</em> is
-deterministic: every chunk committed exactly once, in order, and the version
-chain is linear. Verify no rows were lost or duplicated:</p>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">9 chunks x 1,520 rows for the race</pre><pre>{&#x27;writer-0&#x27;: {&#x27;commits&#x27;: 9, &#x27;conflicts&#x27;: 0},
+ &#x27;writer-2&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1},
+ &#x27;writer-1&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1}}</pre></div></div>
+<p>Which thread lands which chunk varies run to run. The <em>outcome</em> is
+deterministic: every chunk committed exactly once, in order, with a linear
+version chain. Below we verify no rows were lost or duplicated.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">rows_after</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">writer_a</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))</span>
 <span class="n">expected</span> <span class="o">=</span> <span class="n">rows_before</span> <span class="o">+</span> <span class="n">thread_rows</span>
 <span class="k">assert</span> <span class="n">rows_after</span> <span class="o">==</span> <span class="n">expected</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;lost updates! </span><span class="si">{</span><span class="n">rows_after</span><span class="si">}</span><span class="s2"> != </span><span class="si">{</span><span class="n">expected</span><span class="si">}</span><span class="s2">&quot;</span>
@@ -250,18 +374,19 @@ version chain: v0..v12, strictly linear</pre></div></div>
     <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">writer_a</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">4</span><span class="p">:]</span>
 <span class="p">]</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre>[{&#x27;sequence&#x27;: 9, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 15120, &#x27;note&#x27;: &#x27;writer-1: chunk 5&#x27;},
- {&#x27;sequence&#x27;: 10, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 16640, &#x27;note&#x27;: &#x27;writer-1: chunk 6&#x27;},
- {&#x27;sequence&#x27;: 11, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 18160, &#x27;note&#x27;: &#x27;writer-1: chunk 7&#x27;},
- {&#x27;sequence&#x27;: 12, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 19680, &#x27;note&#x27;: &#x27;writer-1: chunk 8&#x27;}]</pre></div></div>
-<h2 id="5-planapply-hits-the-same-wall">5. Plan/apply hits the same wall<a class="headerlink" href="#5-planapply-hits-the-same-wall" title="Permanent link">#</a></h2>
-<p>The previewable-mutation flow (<code>plan_delete_range</code> → inspect → <code>apply</code>) is
-CAS-guarded too: a plan is built against a specific base version, and
-<code>apply()</code> refuses if the head has moved since. Here A plans to delete a
-window of suspect prints, but B commits fresh data before A applies,
-exactly the race you want caught when a feed and an ops job share a table.</p>
-<p>Range arguments are raw <strong>microseconds</strong> (the <code>ts</code> column's unit), and the
-end bound is exclusive.</p>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[{&#x27;sequence&#x27;: 9, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 15120, &#x27;note&#x27;: &#x27;writer-0: chunk 5&#x27;},
+ {&#x27;sequence&#x27;: 10, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 16640, &#x27;note&#x27;: &#x27;writer-0: chunk 6&#x27;},
+ {&#x27;sequence&#x27;: 11, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 18160, &#x27;note&#x27;: &#x27;writer-0: chunk 7&#x27;},
+ {&#x27;sequence&#x27;: 12, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 19680, &#x27;note&#x27;: &#x27;writer-0: chunk 8&#x27;}]</pre></div></div>
+<h2 id="6-planapply-hits-the-same-wall">6. Plan/apply hits the same wall<a class="headerlink" href="#6-planapply-hits-the-same-wall" title="Permanent link">#</a></h2>
+<p>The previewable-mutation flow, <code>plan_delete_range</code> then inspect then <code>apply</code>,
+is CAS-guarded too. A plan is built against a specific base version, and
+<code>apply()</code> refuses if the head has moved since.</p>
+<p>Here A plans to delete a window of suspect prints, but B commits fresh data
+before A applies. That is exactly the race you want caught when a feed and an
+ops job share a table.</p>
+<p>Range arguments are raw <strong>microseconds</strong>, the <code>ts</code> column's unit, and the end
+bound is exclusive.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">ts0</span> <span class="o">=</span> <span class="n">feed</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">value</span>  <span class="c1"># raw us since epoch</span>
 <span class="n">bad_lo</span><span class="p">,</span> <span class="n">bad_hi</span> <span class="o">=</span> <span class="n">ts0</span><span class="p">,</span> <span class="n">ts0</span> <span class="o">+</span> <span class="mi">60_000_000</span>  <span class="c1"># first minute of the day</span>
 
@@ -282,9 +407,9 @@ end bound is exclusive.</p>
 
 apply failed - code=version_conflict, retryable=True
 hint = re-read the head of &quot;trades&quot; and retry against it; pure appends rebase safely (the CLI and Python bindings already auto-retry those)</pre></div></div>
-<p>The stale plan is dead, but re-planning is cheap, and the second plan is
-built against the <em>new</em> head, so its preview reflects B's late chunk too.
-That is the point of the CAS: you re-decide with current facts, instead of
+<p>The stale plan is dead, but re-planning is cheap. The second plan is built
+against the <em>new</em> head, so its preview reflects B's late chunk too.</p>
+<p>That is the point of the CAS. You re-decide with current facts, instead of
 blindly mutating a table that changed under you.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">plan</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>  <span class="c1"># drop the stale plan</span>
 <span class="n">plan2</span> <span class="o">=</span> <span class="n">writer_a</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">bad_lo</span><span class="p">,</span> <span class="n">bad_hi</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;drop suspect open prints (re-planned)&quot;</span><span class="p">)</span>
@@ -297,7 +422,7 @@ blindly mutating a table that changed under you.</p>
     <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">writer_a</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">3</span><span class="p">:]</span>
 <span class="p">]</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">re-planned and applied as v14 (delete_range), rows_total=21,022</pre><pre>[{&#x27;sequence&#x27;: 12, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 19680, &#x27;note&#x27;: &#x27;writer-1: chunk 8&#x27;},
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">re-planned and applied as v14 (delete_range), rows_total=21,022</pre><pre>[{&#x27;sequence&#x27;: 12, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 19680, &#x27;note&#x27;: &#x27;writer-0: chunk 8&#x27;},
  {&#x27;sequence&#x27;: 13, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 21180, &#x27;note&#x27;: &#x27;B: late chunk&#x27;},
  {&#x27;sequence&#x27;: 14,
   &#x27;op&#x27;: &#x27;delete_range&#x27;,
@@ -305,20 +430,20 @@ blindly mutating a table that changed under you.</p>
   &#x27;note&#x27;: &#x27;drop suspect open prints (re-planned)&#x27;}]</pre></div></div>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
-<li>Multiple <code>Database</code> handles on one path are supported: commits through
-  one handle are immediately visible to the others, and the version chain
-  stays linear no matter who writes.</li>
+<li>Multiple <code>Database</code> handles on one path are first-class. Commits through one
+  handle are immediately visible to the others, and the version chain stays
+  linear no matter who writes.</li>
 <li><code>expected_version</code> turns <code>append</code> into a compare-and-swap. A stale write
-  raises <code>ConflictError</code> with <code>.code</code> / <code>.retryable</code> / <code>.hint</code>: an explicit,
-  retryable failure instead of a silent lost update.</li>
+  raises <code>ConflictError</code> carrying <code>.code</code>, <code>.retryable</code> and <code>.hint</code>: an
+  explicit, retryable failure instead of a silent lost update.</li>
 <li>The retry loop is five lines: re-read head, re-append, bounded attempts.
-  Three racing threads coordinated through nothing but the CAS ingested a
+  Three racing threads, coordinated through nothing but the CAS, ingested a
   chunked feed with zero lost rows.</li>
-<li><code>plan.apply()</code> is guarded by the same mechanism: plans bind to a base
+<li><code>plan.apply()</code> is guarded by the same mechanism. Plans bind to a base
   version, and a moved head forces a re-plan, so your preview can never be
   stale at apply time.</li>
-<li>Explicit conflict beats last-writer-wins for shared research/production
-  tables: the failure mode is a retry, not a reconciliation break.</li>
+<li>Explicit conflict beats last-writer-wins for shared research and production
+  tables. The failure mode is a retry, not a reconciliation break.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">writer_a</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 <span class="n">writer_b</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
@@ -327,7 +452,7 @@ blindly mutating a table that changed under you.</p>
     <nav class="page-nav"><a class="prev" href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html"><span class="dir">← Previous</span><span class="pn-title">A crash-safe paper-trading loop with full order attribution</span></a><a class="next" href="../../cookbook/03_risk_and_production/07_options_iv_surface.html"><span class="dir">Next →</span><span class="pn-title">Options: implied-vol surfaces as versioned marks</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-two-handles-one-database">1. Two handles, one database</a></li><li><a href="#2-a-stale-expected_version-fails-loudly">2. A stale expected_version fails loudly</a></li><li><a href="#3-the-retry-pattern">3. The retry pattern</a></li><li><a href="#4-three-threads-racing-on-one-feed">4. Three threads racing on one feed</a></li><li><a href="#5-planapply-hits-the-same-wall">5. Plan/apply hits the same wall</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-two-handles-one-database">2. Two handles, one database</a></li><li><a href="#3-a-stale-expected_version-fails-loudly">3. A stale expected_version fails loudly</a></li><li><a href="#4-the-retry-pattern">4. The retry pattern</a></li><li><a href="#5-three-threads-racing-on-one-feed">5. Three threads racing on one feed</a></li><li><a href="#6-planapply-hits-the-same-wall">6. Plan/apply hits the same wall</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

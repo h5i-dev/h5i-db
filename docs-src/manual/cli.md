@@ -434,7 +434,7 @@ against one dataset at once. See [Forks](concepts.html#forks) for the model.
 | Subcommand | Meaning |
 |---|---|
 | `fork create <db> <name>` | Pin every table and open a workspace; `--note`, `--as-of`, `--meta`, `--count` supported |
-| `fork list <db>` | Every fork, with what it owns (`bytes_own`) and what it holds back (`bytes_pinned`) |
+| `fork list <db>` | Every fork with lineage and liveness: `parent`/`depth`, `commits_own`, `last_write_ns`, `stale_shadows` (promotes that would now conflict), what it owns (`bytes_own`) and what it holds back (`bytes_pinned`) |
 | `fork show <db> <name>` | One fork's pins and metadata |
 | `fork diff <db> <name>` | What the fork changed, from manifests alone; `--table` to narrow |
 | `fork promote <db> <name> --table <t>` | Land one of its tables on the base |
@@ -545,5 +545,20 @@ Launch the local review UI, loopback only.
 | `--port <N>` | Port (default 7351) |
 | `--allow-mutations` | Enable plan apply/discard from the UI (default: read-only) |
 
-The UI shows pending plans with previews, the version timeline with audit
-badges, version diffs, and an SQL scratchpad that reports pruning per query.
+The UI shows pending plans with previews, a live fork monitor, the version
+timeline with audit badges, version diffs, and an SQL scratchpad that reports
+pruning per query.
+
+The **Forks** tab renders the fork lineage as a tree that updates itself over
+a server-sent event stream: each fork carries one glanceable status —
+`conflict` (the base moved under a shadowed table, so promote will refuse),
+`working` (committed within the last 15 s), `ahead` (holds unpromoted
+commits), or `idle` — plus what it wrote, what its pins hold back, and the
+agent metadata attached at `fork create --meta`. Selecting a fork shows its
+per-table divergence and copy-ready promote/drop commands; the UI itself
+never mutates forks. `tools/fork_demo.sh <db>` drives a simulated agent
+swarm against a database if you want to watch the tree move, and
+`tools/demo_data.py` seeds one first — synthetic multi-symbol ticks
+(`synth --symbols AAPL,MSFT,NVDA --db <db>`) or a day of real 1s bars from
+Binance's public archive (`binance --symbols BTCUSDT,ETHUSDT --db <db>`,
+no API key).

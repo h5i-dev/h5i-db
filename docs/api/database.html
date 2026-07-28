@@ -74,7 +74,7 @@
 <p>An h5i-db database directory: the top-level handle everything hangs off. A
 database is a plain directory on disk; there is no server. The handle is a
 context manager, so the idiomatic form is:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">h5i_db</span>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
 
 <span class="k">with</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="s2">&quot;market.db&quot;</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">as</span> <span class="n">db</span><span class="p">:</span>
     <span class="o">...</span>

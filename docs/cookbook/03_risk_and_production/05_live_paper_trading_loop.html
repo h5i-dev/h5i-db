@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>A crash-safe paper-trading loop with full order attribution · h5i-db docs</title>
-  <meta name="description" content="The hard part of a live loop is answering, a week later, &quot;why did we send that order?&quot;, not the strategy itself. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
+  <meta name="description" content="The hard part of a live loop is not the strategy. It is answering, a week later, &quot;why did we send that order?&quot;.">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -16,12 +16,12 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="A crash-safe paper-trading loop with full order attribution · h5i-db docs">
-  <meta property="og:description" content="The hard part of a live loop is answering, a week later, &quot;why did we send that order?&quot;, not the strategy itself. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
+  <meta property="og:description" content="The hard part of a live loop is not the strategy. It is answering, a week later, &quot;why did we send that order?&quot;.">
   <meta property="og:url" content="https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="A crash-safe paper-trading loop with full order attribution · h5i-db docs">
-  <meta name="twitter:description" content="The hard part of a live loop is answering, a week later, &quot;why did we send that order?&quot;, not the strategy itself. This recipe builds a sequential, deterministic paper-trading loop where every stage is a versioned commit …">
+  <meta name="twitter:description" content="The hard part of a live loop is not the strategy. It is answering, a week later, &quot;why did we send that order?&quot;.">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -61,7 +61,7 @@
 <div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="../../manual/index.html">Overview</a></li><li><a href="../../manual/installation.html">Installation</a></li><li><a href="../../manual/quickstart.html">Quickstart</a></li><li><a href="../../manual/migrating-from-duckdb.html">Migrating from DuckDB</a></li><li><a href="../../manual/concepts.html">Core concepts</a></li><li><a href="../../manual/cli.html">CLI reference</a></li><li><a href="../../manual/sql.html">SQL reference</a></li><li><a href="../../manual/agents.html">Agents &amp; automation</a></li><li><a href="../../manual/operations.html">Operations guide</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="../../api/index.html">Overview</a></li><li><a href="../../api/database.html">Database</a></li><li><a href="../../api/dataframe.html">DataFrame builder</a></li><li><a href="../../api/results-and-plans.html">QueryResult &amp; MutationPlan</a></li><li><a href="../../api/exceptions.html">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="../../cookbook/index.html">Cookbook</a></li></ul></div>
-<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html" class="active">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_leakage_check.html">leakage-check: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Risk &amp; production</div><ul><li><a href="../../cookbook/03_risk_and_production/01_var_expected_shortfall.html">VaR and Expected Shortfall with an auditable risk table</a></li><li><a href="../../cookbook/03_risk_and_production/02_reproducible_backtests.html">Reproducible backtests: pin the data, not just the code</a></li><li><a href="../../cookbook/03_risk_and_production/03_eod_snapshots_audit.html">EOD snapshots and the audit trail regulators actually ask for</a></li><li><a href="../../cookbook/03_risk_and_production/04_data_quality_gates.html">Data-quality gates: staging, policy, and previewable remediation</a></li><li><a href="../../cookbook/03_risk_and_production/05_live_paper_trading_loop.html" class="active">A crash-safe paper-trading loop with full order attribution</a></li><li><a href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html">Multi-writer coordination: optimistic locking, conflicts, and retries</a></li><li><a href="../../cookbook/03_risk_and_production/07_options_iv_surface.html">Options: implied-vol surfaces as versioned marks</a></li><li><a href="../../cookbook/03_risk_and_production/08_fx_crypto_24_7.html">FX and crypto: 24/7 data without an exchange session</a></li><li><a href="../../cookbook/03_risk_and_production/09_fixed_income_curves.html">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</a></li><li><a href="../../cookbook/03_risk_and_production/10_performance_tuning.html">Performance tuning: pruning, projection, commit granularity, caches</a></li><li><a href="../../cookbook/03_risk_and_production/11_arrival_delta.html">arrival-delta: which of last night&#x27;s backtests actually held up?</a></li></ul></div>
   </aside>
 
   <article class="doc" id="content">
@@ -74,31 +74,145 @@
 <span class="sep">/</span>
 <span>A crash-safe paper-trading loop with full order attribution</span></div>
 <h1>A crash-safe paper-trading loop with full order attribution</h1>
-<p>The hard part of a live loop is answering, a week later, <em>"why did we send
-that order?"</em>, not the strategy itself. This recipe builds a sequential,
-deterministic paper-trading loop where every stage is a versioned commit:
-each feed chunk is one <code>append</code> to <code>trades</code>, the signal is computed in SQL
-on exactly that head, and every order row <strong>stores the trades version
-(sequence number) that produced it</strong>. Attribution stops being forensics
-and becomes a join, and because <code>h5i('trades', v)</code> is O(1) time travel,
-you can replay any order's exact signal input on demand.</p>
-<p>Crash safety comes for free: every commit is an atomic manifest swap, so a
+<p>The hard part of a live loop is not the strategy. It is answering, a week
+later, <em>"why did we send that order?"</em>.</p>
+<p>This recipe builds a sequential, deterministic paper-trading loop where every
+stage is a versioned commit. Each feed chunk is one <code>append</code> to <code>trades</code>, the
+signal is computed in SQL on exactly that head, and every order row <strong>stores
+the trades version that produced it</strong>.</p>
+<p>Attribution stops being forensics and becomes a join. And because
+<code>h5i('trades', v)</code> is O(1) time travel, you can replay any order's exact
+signal input on demand.</p>
+<p>Crash safety comes for free. Every commit is an atomic manifest swap, so a
 <code>kill -9</code> mid-write leaves the previous head fully consistent, and the loop
 restarts by asking the database where the feed stopped.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
-<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
-<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
-<span class="kn">import</span> <span class="nn">h5i_db</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
 
-<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_paper&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<h2 id="1-three-append-only-tables-feed-orders-positions">1. Three append-only tables: feed, orders, positions<a class="headerlink" href="#1-three-append-only-tables-feed-orders-positions" title="Permanent link">#</a></h2>
-<p>Three pure-append tables. Append-only is not just a style choice: it keeps
-the version chain compatible with <code>tail()</code> streaming reads, and it means
-the order blotter is tamper-evident by construction.</p>
+<h2 id="1-the-data">1. The data<a class="headerlink" href="#1-the-data" title="Permanent link">#</a></h2>
+<p><code>cu.make_trades</code> gives one session of ticks for two names, one row per print.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td><code>timestamp[us, tz=UTC]</code></td>
+<td>trade timestamp, ascending</td>
+</tr>
+<tr>
+<td><code>symbol</code></td>
+<td><code>string</code></td>
+<td>ticker, <code>AAPL</code> or <code>MSFT</code></td>
+</tr>
+<tr>
+<td><code>price</code></td>
+<td><code>float64</code></td>
+<td>trade price</td>
+</tr>
+<tr>
+<td><code>size</code></td>
+<td><code>int64</code></td>
+<td>shares traded</td>
+</tr>
+<tr>
+<td><code>exchange</code></td>
+<td><code>string</code></td>
+<td>reporting venue</td>
+</tr>
+<tr>
+<td><code>side</code></td>
+<td><code>string</code></td>
+<td><code>B</code> buyer-initiated, <code>S</code> seller-initiated</td>
+</tr>
+</tbody>
+</table></div>
+<p>We chunk it into 5-minute deliveries: a deterministic stand-in for a live feed
+handler.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">feed</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">20_000</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">feed</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">feed</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">feed</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">33,056 rows x 6 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>size</th>
+      <th>exchange</th>
+      <th>side</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:00.230953+00:00</td>
+      <td>AAPL</td>
+      <td>265.06</td>
+      <td>1</td>
+      <td>NASDAQ</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:00.283636+00:00</td>
+      <td>AAPL</td>
+      <td>265.07</td>
+      <td>400</td>
+      <td>NYSE</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:00.447310+00:00</td>
+      <td>MSFT</td>
+      <td>363.04</td>
+      <td>200</td>
+      <td>NYSE</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:00.669981+00:00</td>
+      <td>AAPL</td>
+      <td>265.07</td>
+      <td>1</td>
+      <td>NASDAQ</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:30:00.684128+00:00</td>
+      <td>MSFT</td>
+      <td>362.97</td>
+      <td>1</td>
+      <td>NYSE</td>
+      <td>S</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="2-tables-feed-orders-positions-all-append-only">2. Tables: feed, orders, positions, all append-only<a class="headerlink" href="#2-tables-feed-orders-positions-all-append-only" title="Permanent link">#</a></h2>
+<p>Three pure-append tables. Append-only is not just a style choice. It keeps the
+version chain compatible with <code>tail()</code> streaming reads, and it makes the order
+blotter tamper-evident by construction.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trade_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
     <span class="p">[</span>
         <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
@@ -134,44 +248,46 @@ the order blotter is tamper-evident by construction.</p>
 <span class="n">db</span><span class="o">.</span><span class="n">tables</span><span class="p">()</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre>[&#x27;orders&#x27;, &#x27;positions&#x27;, &#x27;trades&#x27;]</pre></div></div>
-<h2 id="2-the-feed-and-the-signal">2. The feed and the signal<a class="headerlink" href="#2-the-feed-and-the-signal" title="Permanent link">#</a></h2>
-<p>One session of tick data for two names, chunked into 5-minute deliveries,
-a deterministic stand-in for a live feed handler. The signal is a fast/slow
-EWMA crossover on 1-minute closes, computed entirely in SQL against
-whatever the <code>trades</code> head is at that moment: <code>time_bucket</code> builds the
-bars, <code>ewma</code> window functions smooth them, <code>row_number()</code> picks the latest
-bar per symbol.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">feed</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">20_000</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-<span class="n">feed</span><span class="p">[</span><span class="s2">&quot;chunk&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">feed</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;5min&quot;</span><span class="p">)</span>
+<h2 id="3-the-signal">3. The signal<a class="headerlink" href="#3-the-signal" title="Permanent link">#</a></h2>
+<p>The signal is a fast/slow EWMA crossover on 1-minute closes, computed entirely
+in the database against whatever the <code>trades</code> head is at that moment.</p>
+<p><code>time_bucket</code> builds the bars, <code>ewma</code> window functions smooth them, and
+<code>row_number()</code> picks the latest bar per symbol.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">feed</span><span class="p">[</span><span class="s2">&quot;chunk&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">feed</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;5min&quot;</span><span class="p">)</span>
 <span class="n">chunks</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">feed</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;chunk&quot;</span><span class="p">,</span> <span class="n">sort</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">feed</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> ticks -&gt; </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span><span class="si">}</span><span class="s2"> five-minute deliveries&quot;</span><span class="p">)</span>
 
-<span class="k">def</span> <span class="nf">signal_sql</span><span class="p">(</span><span class="n">relation</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    WITH bars AS (</span>
-<span class="s2">        SELECT time_bucket(&#39;1m&#39;, ts) AS bar, symbol,</span>
-<span class="s2">               last_value(price ORDER BY ts) AS close</span>
-<span class="s2">        FROM </span><span class="si">{</span><span class="n">relation</span><span class="si">}</span>
-<span class="s2">        GROUP BY bar, symbol</span>
-<span class="s2">    ), sig AS (</span>
-<span class="s2">        SELECT bar, symbol, close,</span>
-<span class="s2">               ewma(close, 0.30) OVER (PARTITION BY symbol ORDER BY bar) AS fast,</span>
-<span class="s2">               ewma(close, 0.05) OVER (PARTITION BY symbol ORDER BY bar) AS slow</span>
-<span class="s2">        FROM bars</span>
-<span class="s2">    )</span>
-<span class="s2">    SELECT symbol, close, fast, slow</span>
-<span class="s2">    FROM (SELECT *, row_number() OVER (PARTITION BY symbol ORDER BY bar DESC) AS rn FROM sig)</span>
-<span class="s2">    WHERE rn = 1</span>
-<span class="s2">    ORDER BY symbol</span>
-<span class="s2">    &quot;&quot;&quot;</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">signal_frame</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Latest fast/slow EWMA crossover per symbol, at any read point.&quot;&quot;&quot;</span>
+    <span class="n">bars</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;1m&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">close</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="n">bars</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+            <span class="n">fast</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">ewma</span><span class="p">(</span><span class="mf">0.30</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span>
+            <span class="n">slow</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">ewma</span><span class="p">(</span><span class="mf">0.05</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+            <span class="n">rn</span><span class="o">=</span><span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;row_number()&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span>
+                <span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;rn&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="s2">&quot;fast&quot;</span><span class="p">,</span> <span class="s2">&quot;slow&quot;</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">33,056 ticks -&gt; 78 five-minute deliveries</pre></div></div>
-<h2 id="3-the-event-loop-append-chunk-sql-signal-append-orders-mark">3. The event loop: append chunk → SQL signal → append orders → mark<a class="headerlink" href="#3-the-event-loop-append-chunk-sql-signal-append-orders-mark" title="Permanent link">#</a></h2>
-<p>Sequential and deterministic: no threads, no sleeps. Per chunk: one
-commit for the ticks, one signal query on that exact head, at most one
-commit for orders (a batch, never per-row), one for the marks. The commit
-dict returned by <code>append</code> hands us the sequence number we stamp on each
-order. Long/flat logic: fast above slow → hold 100 shares, else flat.</p>
+<h2 id="4-the-event-loop-append-chunk-signal-append-orders-mark">4. The event loop: append chunk, signal, append orders, mark<a class="headerlink" href="#4-the-event-loop-append-chunk-signal-append-orders-mark" title="Permanent link">#</a></h2>
+<p>Sequential and deterministic, with no threads and no sleeps.</p>
+<p>Per chunk there is one commit for the ticks, one signal query on that exact
+head, at most one commit for orders as a batch rather than per row, and one
+for the marks. The commit dict returned by <code>append</code> hands us the sequence
+number we stamp on each order.</p>
+<p>The long/flat logic is simple: fast above slow means hold 100 shares,
+otherwise flat.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">TARGET</span> <span class="o">=</span> <span class="mi">100</span>
 <span class="n">pos</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;AAPL&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">}</span>
 <span class="n">cash</span> <span class="o">=</span> <span class="mf">0.0</span>
@@ -185,7 +301,7 @@ order. Long/flat logic: fast above slow → hold 100 shares, else flat.</p>
     <span class="n">commit</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
     <span class="n">seq</span> <span class="o">=</span> <span class="n">commit</span><span class="p">[</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span>
 
-    <span class="n">sig</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="n">signal_sql</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="n">sig</span> <span class="o">=</span> <span class="n">signal_frame</span><span class="p">()</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
     <span class="n">mark_ts</span> <span class="o">=</span> <span class="n">chunk_ts</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">minutes</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
 
     <span class="n">order_rows</span> <span class="o">=</span> <span class="p">[]</span>
@@ -214,17 +330,18 @@ order. Long/flat logic: fast above slow → hold 100 shares, else flat.</p>
         <span class="n">marks</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">]),</span> <span class="n">schema</span><span class="o">=</span><span class="n">position_schema</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
     <span class="n">equity_track</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">mark_ts</span><span class="p">,</span> <span class="n">cash</span> <span class="o">+</span> <span class="n">marks</span><span class="p">[</span><span class="s2">&quot;mkt_value&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()))</span>
 
-<span class="n">n_orders</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT count(*) AS n FROM orders&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;n&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">n_orders</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;orders&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">count_star</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;n&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;n&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;loop done: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span><span class="si">}</span><span class="s2"> chunks, </span><span class="si">{</span><span class="n">n_orders</span><span class="si">}</span><span class="s2"> orders, &quot;</span>
       <span class="sa">f</span><span class="s2">&quot;final positions </span><span class="si">{</span><span class="n">pos</span><span class="si">}</span><span class="s2">, final equity </span><span class="si">{</span><span class="n">equity_track</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">1</span><span class="p">]</span><span class="si">:</span><span class="s2">,.2f</span><span class="si">}</span><span class="s2"> USD&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">loop done: 78 chunks, 29 orders, final positions {&#x27;AAPL&#x27;: 0, &#x27;MSFT&#x27;: 100}, final equity -110.00 USD</pre></div></div>
-<h2 id="4-restart-recovery-the-database-is-the-checkpoint">4. Restart recovery: the database is the checkpoint<a class="headerlink" href="#4-restart-recovery-the-database-is-the-checkpoint" title="Permanent link">#</a></h2>
-<p>If the process dies anywhere in the loop, no partial state exists: each
-commit either fully happened or didn't. On restart, the resume point is a
-query, not a checkpoint file that might itself be stale:</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">resume</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="s2">&quot;SELECT max(ts) AS last_tick, count(*) AS rows_ingested FROM trades&quot;</span>
+<h2 id="5-restart-recovery-the-database-is-the-checkpoint">5. Restart recovery: the database is the checkpoint<a class="headerlink" href="#5-restart-recovery-the-database-is-the-checkpoint" title="Permanent link">#</a></h2>
+<p>If the process dies anywhere in the loop, no partial state exists. Each commit
+either fully happened or did not.</p>
+<p>On restart, the resume point is a query rather than a checkpoint file that
+might itself be stale.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">resume</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
+    <span class="n">last_tick</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="n">rows_ingested</span><span class="o">=</span><span class="n">count_star</span><span class="p">()</span>
 <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;on restart, continue the feed after:&quot;</span><span class="p">)</span>
 <span class="n">resume</span>
@@ -248,29 +365,37 @@ query, not a checkpoint file that might itself be stale:</p>
   </tbody>
 </table>
 </div></div></div></div>
-<h2 id="5-order-attribution-replay-the-exact-signal-input">5. Order attribution: replay the exact signal input<a class="headerlink" href="#5-order-attribution-replay-the-exact-signal-input" title="Permanent link">#</a></h2>
+<h2 id="6-order-attribution-replay-the-exact-signal-input">6. Order attribution: replay the exact signal input<a class="headerlink" href="#6-order-attribution-replay-the-exact-signal-input" title="Permanent link">#</a></h2>
 <p>Every order carries <code>data_version</code>. To audit one, point the <em>same</em> signal
-SQL at <code>h5i('trades', &lt;version&gt;)</code>, O(1) time travel to the head the loop
-saw, and confirm the decision. This is the difference between "we think
-the signal said buy" and "here is the signal, recomputed from the exact
-bytes, saying buy".</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">last_order</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="s2">&quot;SELECT ts, symbol, side, qty, price, data_version FROM orders ORDER BY ts DESC LIMIT 1&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+frame at that version, which is O(1) time travel to the head the loop saw, and
+confirm the decision.</p>
+<p>This is the difference between "we think the signal said buy" and "here is the
+signal, recomputed from the exact bytes, saying buy".</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">last_order</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;orders&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="s2">&quot;qty&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;data_version&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;auditing order:&quot;</span><span class="p">,</span> <span class="nb">dict</span><span class="p">(</span><span class="n">last_order</span><span class="p">))</span>
 
-<span class="n">replayed</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="n">signal_sql</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;h5i(&#39;trades&#39;, </span><span class="si">{</span><span class="nb">int</span><span class="p">(</span><span class="n">last_order</span><span class="p">[</span><span class="s1">&#39;data_version&#39;</span><span class="p">])</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+<span class="n">replayed</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">signal_frame</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">last_order</span><span class="p">[</span><span class="s2">&quot;data_version&quot;</span><span class="p">]))</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+<span class="p">)</span>
 <span class="n">row</span> <span class="o">=</span> <span class="n">replayed</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">last_order</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]]</span>
 <span class="n">replayed_desired</span> <span class="o">=</span> <span class="n">TARGET</span> <span class="k">if</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;fast&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;slow&quot;</span><span class="p">]</span> <span class="k">else</span> <span class="mi">0</span>
 
-<span class="n">held_after</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
-<span class="s2">    SELECT position FROM positions</span>
-<span class="s2">    WHERE symbol = &#39;</span><span class="si">{</span><span class="n">last_order</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span><span class="si">}</span><span class="s2">&#39; AND ts = &#39;</span><span class="si">{</span><span class="n">last_order</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isoformat</span><span class="p">()</span><span class="si">}</span><span class="s2">&#39;</span>
-<span class="s2">    &quot;&quot;&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;position&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">held_after</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;positions&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">last_order</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">],</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="n">last_order</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">isoformat</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;position&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;position&quot;</span><span class="p">]</span>
+    <span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;replayed signal at v</span><span class="si">{</span><span class="nb">int</span><span class="p">(</span><span class="n">last_order</span><span class="p">[</span><span class="s1">&#39;data_version&#39;</span><span class="p">])</span><span class="si">}</span><span class="s2">: &quot;</span>
       <span class="sa">f</span><span class="s2">&quot;fast=</span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;fast&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> slow=</span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="s1">&#39;slow&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> -&gt; desired position </span><span class="si">{</span><span class="n">replayed_desired</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
@@ -280,14 +405,15 @@ bytes, saying buy".</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">auditing order: {&#x27;ts&#x27;: Timestamp(&#x27;2026-06-01 20:00:00+0000&#x27;, tz=&#x27;UTC&#x27;), &#x27;symbol&#x27;: &#x27;AAPL&#x27;, &#x27;side&#x27;: &#x27;SELL&#x27;, &#x27;qty&#x27;: np.int64(100), &#x27;price&#x27;: np.float64(266.21), &#x27;data_version&#x27;: np.int64(78)}
 replayed signal at v78: fast=266.3084 slow=266.4002 -&gt; desired position 0
 recorded position after order: 0 - attribution verified</pre></div></div>
-<h2 id="6-the-reader-side-streaming-new-orders-with-tail">6. The reader side: streaming new orders with <code>tail()</code><a class="headerlink" href="#6-the-reader-side-streaming-new-orders-with-tail" title="Permanent link">#</a></h2>
-<p>A downstream consumer (risk checks, an execution bridge) follows the order
-blotter with <code>tail('orders', after_version, poll_ms)</code>. Two production
-rules: <code>tail</code> requires a <strong>pure-append</strong> version chain (any write/delete/
-restore/compact in the range errors out, one reason our blotter is
-append-only), and it is <strong>unbounded</strong>: it blocks until <code>LIMIT</code> rows have
-arrived, so always attach a LIMIT no larger than what you know is there,
-or a query timeout.</p>
+<h2 id="7-the-reader-side-streaming-new-orders-with-tail">7. The reader side: streaming new orders with <code>tail()</code><a class="headerlink" href="#7-the-reader-side-streaming-new-orders-with-tail" title="Permanent link">#</a></h2>
+<p>A downstream consumer, whether risk checks or an execution bridge, follows the
+order blotter with <code>tail('orders', after_version, poll_ms)</code>.</p>
+<p>Two production rules apply. <code>tail</code> requires a <strong>pure-append</strong> version chain,
+so any write, delete, restore or compact in the range errors out. That is one
+reason our blotter is append-only.</p>
+<p>And <code>tail</code> is <strong>unbounded</strong>. It blocks until <code>LIMIT</code> rows have arrived, so
+always attach a LIMIT no larger than what you know is there, or a query
+timeout.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">overs</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;orders&quot;</span><span class="p">)</span>
 <span class="n">after</span> <span class="o">=</span> <span class="n">overs</span><span class="p">[</span><span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">overs</span><span class="p">)</span> <span class="o">-</span> <span class="mi">6</span><span class="p">)]</span>          <span class="c1"># start ~5 commits behind head</span>
 <span class="n">available</span> <span class="o">=</span> <span class="n">overs</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;rows&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">after</span><span class="p">[</span><span class="s2">&quot;rows&quot;</span><span class="p">]</span>
@@ -359,18 +485,22 @@ or a query timeout.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<h2 id="7-session-wrap-up-equity-curve-and-blotter-hygiene">7. Session wrap-up: equity curve and blotter hygiene<a class="headerlink" href="#7-session-wrap-up-equity-curve-and-blotter-hygiene" title="Permanent link">#</a></h2>
-<p>The equity curve comes from the recorded marks. Then maintenance: a day of
-5-minute commits leaves ~78 small segments per table, so <code>compact()</code> merges
-them, as its own audited commit. (Note the trade-off: a compact commit
-breaks the pure-append chain for <code>tail()</code> ranges that span it, so compact
-<em>behind</em> your consumers' read positions.)</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<h2 id="8-session-wrap-up-equity-curve-and-blotter-hygiene">8. Session wrap-up: equity curve and blotter hygiene<a class="headerlink" href="#8-session-wrap-up-equity-curve-and-blotter-hygiene" title="Permanent link">#</a></h2>
+<p>The equity curve comes from the recorded marks.</p>
+<p>Then maintenance. A day of 5-minute commits leaves roughly 78 small segments
+per table, so <code>compact()</code> merges them, as its own audited commit.</p>
+<p>Note the trade-off: a compact commit breaks the pure-append chain for <code>tail()</code>
+ranges that span it, so compact <em>behind</em> your consumers' read positions.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
 
 <span class="n">eq</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">equity_track</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;equity&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
-<span class="n">posn</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
-    <span class="s2">&quot;SELECT ts, symbol, position FROM positions ORDER BY ts&quot;</span>
-<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">pivot</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="s2">&quot;position&quot;</span><span class="p">)</span>
+<span class="n">posn</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;positions&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;position&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">pivot</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="s2">&quot;position&quot;</span><span class="p">)</span>
+<span class="p">)</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="p">(</span><span class="n">ax1</span><span class="p">,</span> <span class="n">ax2</span><span class="p">)</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">6</span><span class="p">),</span> <span class="n">sharex</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
                                <span class="n">gridspec_kw</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;height_ratios&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">2</span><span class="p">,</span> <span class="mi">1</span><span class="p">]})</span>
@@ -397,16 +527,16 @@ orders: 28 segments -&gt; 1 (v29, op=compact)
 positions: 78 segments -&gt; 1 (v79, op=compact)</pre></div></div>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
-<li>One chunk = one commit; the commit's sequence number stamped into each
-  order row makes attribution a join and replay a <code>h5i('trades', v)</code> query.</li>
-<li>Atomic commits are the crash-safety story: <code>kill -9</code> mid-write leaves the
-  previous head intact, and the restart point is <code>SELECT max(ts)</code>, so the
+<li>One chunk is one commit. The commit's sequence number stamped into each
+  order row makes attribution a join, and replay a <code>h5i('trades', v)</code> query.</li>
+<li>Atomic commits are the crash-safety story. <code>kill -9</code> mid-write leaves the
+  previous head intact, and the restart point is <code>SELECT max(ts)</code>. The
   database is the checkpoint.</li>
-<li>Keep the blotter pure-append: it stays <code>tail()</code>-compatible for
-  downstream consumers and tamper-evident for auditors. Always LIMIT (and
-  ideally timeout) a <code>tail()</code> read; it blocks until enough rows arrive.</li>
-<li>Batch orders per cycle (never per-row commits), and <code>compact()</code> after the
-  session (behind your readers) to merge the day's small segments.</li>
+<li>Keep the blotter pure-append. It stays <code>tail()</code>-compatible for downstream
+  consumers and tamper-evident for auditors. Always LIMIT a <code>tail()</code> read, and
+  ideally give it a timeout, because it blocks until enough rows arrive.</li>
+<li>Batch orders per cycle rather than committing per row, and <code>compact()</code> after
+  the session, behind your readers, to merge the day's small segments.</li>
 </ul>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>
@@ -414,7 +544,7 @@ positions: 78 segments -&gt; 1 (v79, op=compact)</pre></div></div>
     <nav class="page-nav"><a class="prev" href="../../cookbook/03_risk_and_production/04_data_quality_gates.html"><span class="dir">← Previous</span><span class="pn-title">Data-quality gates: staging, policy, and previewable remediation</span></a><a class="next" href="../../cookbook/03_risk_and_production/06_multi_writer_conflicts.html"><span class="dir">Next →</span><span class="pn-title">Multi-writer coordination: optimistic locking, conflicts, and retries</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-three-append-only-tables-feed-orders-positions">1. Three append-only tables: feed, orders, positions</a></li><li><a href="#2-the-feed-and-the-signal">2. The feed and the signal</a></li><li><a href="#3-the-event-loop-append-chunk-sql-signal-append-orders-mark">3. The event loop: append chunk → SQL signal → append orders → mark</a></li><li><a href="#4-restart-recovery-the-database-is-the-checkpoint">4. Restart recovery: the database is the checkpoint</a></li><li><a href="#5-order-attribution-replay-the-exact-signal-input">5. Order attribution: replay the exact signal input</a></li><li><a href="#6-the-reader-side-streaming-new-orders-with-tail">6. The reader side: streaming new orders with tail()</a></li><li><a href="#7-session-wrap-up-equity-curve-and-blotter-hygiene">7. Session wrap-up: equity curve and blotter hygiene</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-tables-feed-orders-positions-all-append-only">2. Tables: feed, orders, positions, all append-only</a></li><li><a href="#3-the-signal">3. The signal</a></li><li><a href="#4-the-event-loop-append-chunk-signal-append-orders-mark">4. The event loop: append chunk, signal, append orders, mark</a></li><li><a href="#5-restart-recovery-the-database-is-the-checkpoint">5. Restart recovery: the database is the checkpoint</a></li><li><a href="#6-order-attribution-replay-the-exact-signal-input">6. Order attribution: replay the exact signal input</a></li><li><a href="#7-the-reader-side-streaming-new-orders-with-tail">7. The reader side: streaming new orders with tail()</a></li><li><a href="#8-session-wrap-up-equity-curve-and-blotter-hygiene">8. Session wrap-up: equity curve and blotter hygiene</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

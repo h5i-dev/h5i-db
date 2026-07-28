@@ -56,7 +56,8 @@ $ h5i-db plan apply market.db trades 5c41…    # metadata-only swap
 ```
 
 Finally, `h5i-db ui market.db` serves a loopback-only review surface: pending
-plans with previews, the version timeline, and an SQL scratchpad.
+plans with previews, a live fork monitor, the version timeline, and an SQL
+scratchpad.
 
 ## Python
 

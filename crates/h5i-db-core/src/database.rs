@@ -185,6 +185,14 @@ pub struct VersionSummary {
     pub segments: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// `planned` when the version went through plan review, `direct`
+    /// otherwise. Part of the summary because "how was this produced?" is an
+    /// audit question asked of *every* row of a history, and answering it
+    /// from the manifest the summary was built from costs nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_hash: Option<String>,
 }
 
 /// Fault-injection hook: called with a named commit step; returning an error
@@ -1069,9 +1077,21 @@ impl Database {
             .filter(|s| *s >= retention_floor && *s <= head_seq)
             .collect();
         sequences.sort_unstable();
-        let mut out = Vec::with_capacity(sequences.len());
-        for seq in sequences {
-            let m = self.manifest_at(entry.table_id, seq).await?;
+        // One manifest read per version, and they are independent: a serial
+        // loop costs one round trip per version, which is what makes a long
+        // history expensive to list on object storage. Bounded concurrency
+        // keeps the fan-out predictable; `buffered` preserves sequence order.
+        use futures::StreamExt;
+        let table_id = entry.table_id;
+        let mut manifests = futures::stream::iter(
+            sequences
+                .into_iter()
+                .map(|seq| async move { self.manifest_at(table_id, seq).await }),
+        )
+        .buffered(crate::backend::METADATA_FETCH_CONCURRENCY);
+        let mut out = Vec::new();
+        while let Some(m) = manifests.next().await {
+            let m = m?;
             out.push(VersionSummary {
                 sequence: m.sequence,
                 op: m.op.to_string(),
@@ -1080,6 +1100,10 @@ impl Database {
                 bytes: m.bytes,
                 segments: m.segments.len(),
                 note: m.note,
+                // Carried here so an audit view does not have to re-resolve
+                // every version one by one to learn how it was produced.
+                execution_mode: m.execution_mode,
+                plan_hash: m.plan_hash,
             });
         }
         Ok(out)
