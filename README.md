@@ -1,19 +1,23 @@
 # h5i-db
 
-**A fast, fully versioned, embedded time-series database for quant research.
-Written in Rust.**
+**A fast, agent-native time-series database for quant research.
+Embedded, written in Rust.**
 
-- **Built for time-series shape:** over 4.5× faster than DuckDB and Polars
-  for OHLCV+VWAP rollups on 20M rows, with full SQL via DataFusion.
-- **Immutable and versioned:** every write is an atomic commit; any past version
-  reads in O(1), so a bad ingest is one `restore` away from undone.
-- **Time-series SQL:** ASOF join, timezone-aware `time_bucket`,
+- **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
+  on OHLCV+VWAP rollups over 20M rows.
+- **Fork a database in milliseconds:** forks share data instead of copying it,
+  whatever the size. Agents can run wide trial-and-error loops (fork, mutate,
+  evaluate, discard) at almost zero cost, and you review a fork's diff before
+  merging.
+- **Every write is an atomic, versioned commit:** any past version reads in
+  O(1), so a bad ingest (human or agent) is one `restore` away from undone.
+- **Safety policies for agent writes:** previewable mutations, policy gates,
+  fail-closed constraints that block destructive operations, and an audit
+  trail of what changed and why.
+- **Point-in-time reads:** pin a decision time and the frame that reaches
+  pandas cannot contain rows from after it. No lookahead bias, by construction.
+- **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
   gapfill/resample, rolling windows, `vwap`, `ewma`.
-- **Point-in-time reads:** pin a read point and the data you pull is bounded by
-  it, so the frame that reaches pandas cannot contain rows from after the
-  decision instant. `arrival-delta` measures what a later restatement changed.
-- **Agent-friendly design:** previewable mutations, policy gates,
-  fail-closed data constraints, crash-safe commits, and an audit trail.
 - **Embedded:** one directory, no server, no daemon. Apache-2.0.
 
 📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
