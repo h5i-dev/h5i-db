@@ -5,6 +5,8 @@ Embedded, written in Rust.**
 
 - **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
   on OHLCV+VWAP rollups over 20M rows.
+- **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
+  gapfill/resample, rolling windows, `vwap`, `ewma`.
 - **Fork a database in milliseconds:** forks share data instead of copying it. 
   Agents can run wide trial-and-error loops (fork, mutate, evaluate, discard) 
   at almost zero cost.
@@ -15,8 +17,6 @@ Embedded, written in Rust.**
   trail of what changed and why.
 - **Point-in-time reads:** pin a decision time and the frame that reaches
   pandas cannot contain rows from after it. No lookahead bias, by construction.
-- **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
-  gapfill/resample, rolling windows, `vwap`, `ewma`.
 - **Embedded:** one directory, no server, no daemon. Apache-2.0.
 
 📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
