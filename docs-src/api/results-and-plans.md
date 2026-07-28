@@ -2,6 +2,7 @@
 title: QueryResult & MutationPlan
 description: Converting query results to Arrow, pandas, and Polars; previewing and applying mutation plans.
 order: 2
+seo_title: "h5i_db QueryResult and MutationPlan"
 ---
 
 # `QueryResult` & `MutationPlan`

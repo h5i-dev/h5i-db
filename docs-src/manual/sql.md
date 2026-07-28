@@ -1,6 +1,6 @@
 ---
 title: SQL reference
-description: "h5i-db's SQL surface beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill/resample, tail, time_bucket, vwap, ewma, and rolling window sugar."
+description: "h5i-db's SQL beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill and resample, tail, time_bucket, vwap, ewma, and rolling sugar."
 order: 5
 ---
 

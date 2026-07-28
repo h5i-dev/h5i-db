@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Streaming appends and tail(): a live feed on a versioned store · h5i-db docs</title>
-  <meta name="description" content="An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that remembers the last version it processed can fetch exactly the rows added …">
+  <title>Streaming appends and tail(): a live feed on a versioned store</title>
+  <meta name="description" content="An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that…">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -15,18 +15,20 @@
 
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
-  <meta property="og:title" content="Streaming appends and tail(): a live feed on a versioned store · h5i-db docs">
-  <meta property="og:description" content="An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that remembers the last version it processed can fetch exactly the rows added …">
+  <meta property="og:title" content="Streaming appends and tail(): a live feed on a versioned store">
+  <meta property="og:description" content="An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that…">
   <meta property="og:url" content="https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail.html">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="Streaming appends and tail(): a live feed on a versioned store · h5i-db docs">
-  <meta name="twitter:description" content="An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that remembers the last version it processed can fetch exactly the rows added …">
+  <meta name="twitter:title" content="Streaming appends and tail(): a live feed on a versioned store">
+  <meta name="twitter:description" content="An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that…">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="../../_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail.html#article","headline":"Streaming appends and tail(): a live feed on a versioned store","name":"Streaming appends and tail(): a live feed on a versioned store","description":"An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that\u2026","url":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail.html","inLanguage":"en","dateModified":"2026-07-27","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail.html#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"Streaming appends and tail(): a live feed on a versioned store","item":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail.html"}]}]}</script>
 </head>
 <body>
 

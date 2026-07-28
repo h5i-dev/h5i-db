@@ -1,7 +1,8 @@
 ---
 title: DataFrame builder
-description: "Build queries as Python instead of SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, ASOF joins, and the SQL each one compiles to."
+description: "Build queries as Python, not SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, and ASOF joins."
 order: 1.5
+seo_title: "h5i_db DataFrame builder: Python query API"
 ---
 
 # DataFrame builder

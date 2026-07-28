@@ -61,6 +61,13 @@ STYLE_RE = re.compile(r"<style[^>]*>.*?</style>", re.S)
 SCRIPT_RE = re.compile(r"<script[^>]*>.*?</script>", re.S)
 TAG_RE = re.compile(r"<[^>]+>")
 
+# Search engines cut the <title> around 60 characters and the description
+# around 160. Both budgets are for the *rendered* string, so the branding
+# suffix has to be counted against the title, not added after it.
+TITLE_BUDGET = 60
+DESC_BUDGET = 155
+TITLE_SUFFIXES = (" · h5i-db docs", " · h5i-db", "")
+
 
 # ── Page model ───────────────────────────────────────────────────
 
@@ -77,6 +84,38 @@ class Page:
     group: str = ""     # sidebar group label (cookbook sections)
     order: float = 0.0
     source: "Path | None" = None   # source markdown file, for llms-full.txt
+    # Title for <title>/og/twitter when the nav title is too terse to stand
+    # alone in a search result ("Overview" says nothing, and two sections
+    # both have one). Frontmatter `seo_title:`; defaults to `title`.
+    seo_title: str = ""
+
+
+def head_title(page: "Page") -> str:
+    """Search-result title: the page's own words first, branding only if it
+    still fits the ~60-character budget."""
+    base = page.seo_title or page.title
+    for suffix in TITLE_SUFFIXES:
+        if len(base) + len(suffix) <= TITLE_BUDGET:
+            return base + suffix
+    return base
+
+
+def trim_description(text: str) -> str:
+    """Fit a description to the snippet budget, preferring a clean sentence
+    end over a mid-thought ellipsis."""
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= DESC_BUDGET:
+        return text
+    # Longest run of whole sentences that fits.
+    out = ""
+    for part in re.findall(r"[^.!?]*[.!?]+(?:\s|$)", text):
+        if len(out) + len(part) > DESC_BUDGET:
+            break
+        out += part
+    out = out.strip()
+    if len(out) >= 80:          # enough to be a real snippet
+        return out
+    return text[: DESC_BUDGET - 1].rsplit(" ", 1)[0].rstrip(",;:·-") + "…"
 
 
 # ── Markdown rendering ───────────────────────────────────────────
@@ -451,8 +490,10 @@ def render_notebook(path: Path) -> tuple[str, str, str, str, list]:
                 )
                 description = re.sub(r"\s+", " ", TAG_RE.sub("", para))
                 description = re.sub(r"[*_`]|\[|\]\([^)]*\)", "", description)
-                if len(description) > 220:  # cut at a word boundary
-                    description = description[:220].rsplit(" ", 1)[0].rstrip(",;:") + " …"
+                # A notebook has no frontmatter, so its opening paragraph is
+                # the only description available; fit it to the snippet
+                # budget so search results end on a sentence, not mid-clause.
+                description = trim_description(description)
                 first_md = False
             body, cell_toc = render_markdown(source)
             toc_tokens.extend(cell_toc)
@@ -519,8 +560,51 @@ def sidebar_html(groups: list[tuple[str, list[Page]]], current: Page, root: str)
     return "\n".join(out)
 
 
+def jsonld(page: Page, trail: "list[tuple[str, str]]", modified: str) -> str:
+    """Structured data for one page: what it is, and where it sits.
+
+    The breadcrumb trail is the same one rendered above the article, so the
+    markup can never disagree with what a reader sees — which is the
+    condition search engines actually enforce.
+    """
+    kind = {"api": "APIReference"}.get(page.section, "TechArticle")
+    url = f"{BASE_URL}{page.url}"
+    doc = {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": kind,
+                "@id": f"{url}#article",
+                "headline": page.seo_title or page.title,
+                "name": page.seo_title or page.title,
+                "description": page.description,
+                "url": url,
+                "inLanguage": "en",
+                "dateModified": modified,
+                "isPartOf": {"@type": "WebSite", "@id": f"{BASE_URL}#website"},
+                "publisher": {"@type": "Organization", "@id": "https://h5i.dev/#org"},
+                "about": {"@type": "SoftwareApplication", "name": "h5i-db",
+                          "applicationCategory": "DeveloperApplication"},
+            },
+            {
+                "@type": "BreadcrumbList",
+                "@id": f"{url}#breadcrumb",
+                "itemListElement": [
+                    {"@type": "ListItem", "position": i + 1, "name": name,
+                     **({"item": item} if item else {})}
+                    for i, (name, item) in enumerate(trail)
+                ],
+            },
+        ],
+    }
+    return ('<script type="application/ld+json">'
+            + json.dumps(doc, separators=(",", ":"))
+            + "</script>")
+
+
 def render_page(page: Page, template: str, sidebar: str, breadcrumb: str,
-                prev_page: Page | None, next_page: Page | None) -> str:
+                prev_page: Page | None, next_page: Page | None,
+                structured_data: str = "") -> str:
     depth = page.url.count("/")
     root = "../" * depth if depth else "./"
     prevnext = ""
@@ -537,6 +621,8 @@ def render_page(page: Page, template: str, sidebar: str, breadcrumb: str,
     out = template
     for key, val in {
         "{{title}}": html.escape(page.title),
+        "{{head_title}}": html.escape(head_title(page)),
+        "{{jsonld}}": structured_data,
         "{{description}}": html.escape(page.description),
         "{{root}}": root,
         "{{canonical}}": f"{BASE_URL}{page.url}",
@@ -570,6 +656,7 @@ def load_md_pages(directory: Path, section: str) -> list[Page]:
             url=f"{section}/{slug}",
             section=section,
             title=title,
+            seo_title=meta.get("seo_title", ""),
             description=meta.get("description", ""),
             body_html=body,
             toc_tokens=toc_tokens,
@@ -603,8 +690,8 @@ EXTRA_MANUAL = [
         {
             "title": "Operations guide",
             "description": "Running h5i-db in production: backup and restore, vacuum and "
-                           "compaction cadence, plan hygiene, disk-usage math, filesystem "
-                           "caveats, and the torn-HEAD recovery runbook.",
+                           "compaction cadence, disk-usage math, and the torn-HEAD "
+                           "recovery runbook.",
             "order": "7",
         },
     ),
@@ -719,9 +806,18 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
 
     # ── Write pages ─────────────────────────────────────────────
     section_labels = {"manual": "Manual", "api": "Python API", "cookbook": "Cookbook"}
+    today = datetime.date.today().isoformat()
     for i, page in enumerate(ordered):
         depth = page.url.count("/")
         root = "../" * depth if depth else "./"
+        # One trail, rendered twice: as the visible breadcrumb and as the
+        # BreadcrumbList. A group (cookbook section) has no page of its own,
+        # so it is a name without an `item`.
+        trail = [("h5i-db", BASE_URL),
+                 (section_labels[page.section], f"{BASE_URL}{page.section}/")]
+        if page.group:
+            trail.append((page.group, ""))
+        trail.append((page.title, f"{BASE_URL}{page.url}"))
         crumbs = [f'<a href="{root}">h5i-db</a>', '<span class="sep">/</span>',
                   f'<a href="{root}{page.section}/">{section_labels[page.section]}</a>']
         if page.group:
@@ -734,6 +830,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             sidebar_html(groups_for(page), page, root),
             "\n".join(crumbs),
             prev_page, next_page,
+            jsonld(page, trail, today),
         )
         dest = OUT / page.url
         dest.parent.mkdir(parents=True, exist_ok=True)

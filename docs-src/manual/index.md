@@ -2,6 +2,7 @@
 title: Overview
 description: What h5i-db is, what it is for, and how the documentation is organized.
 order: 0
+seo_title: "h5i-db manual: versioned time-series database"
 ---
 
 # h5i-db documentation

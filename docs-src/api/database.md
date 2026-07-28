@@ -2,6 +2,7 @@
 title: Database
 description: "h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, mutation plans, policy, and maintenance."
 order: 1
+seo_title: "h5i_db.Database Python API reference"
 ---
 
 # `Database`

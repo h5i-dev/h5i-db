@@ -1,6 +1,6 @@
 ---
 title: Migrating from DuckDB
-description: "Move tables from a .duckdb file into a versioned h5i-db store using DuckDB's own Parquet export, plus a SQL dialect and workflow checklist for what changes."
+description: "Move tables from a .duckdb file into a versioned h5i-db store via Parquet, and the query differences to expect once they land."
 order: 2.5
 ---
 
