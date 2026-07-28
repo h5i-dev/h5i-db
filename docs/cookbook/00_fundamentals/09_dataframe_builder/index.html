@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The DataFrame builder: queries as Python objects · h5i-db</title>
+  <meta name="description" content="db.table(...) starts a lazy query that you assemble with method calls instead of a SQL string. Nothing runs until a terminal call such as .collect().">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="The DataFrame builder: queries as Python objects · h5i-db">
+  <meta property="og:description" content="db.table(...) starts a lazy query that you assemble with method calls instead of a SQL string. Nothing runs until a terminal call such as .collect().">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="The DataFrame builder: queries as Python objects · h5i-db">
+  <meta name="twitter:description" content="db.table(...) starts a lazy query that you assemble with method calls instead of a SQL string. Nothing runs until a terminal call such as .collect().">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/#article","headline":"The DataFrame builder: queries as Python objects","name":"The DataFrame builder: queries as Python objects","description":"db.table(...) starts a lazy query that you assemble with method calls instead of a SQL string. Nothing runs until a terminal call such as .collect().","url":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/","inLanguage":"en","dateModified":"2026-07-27","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"The DataFrame builder: queries as Python objects","item":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/operations/">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="/cookbook/00_fundamentals/01_quickstart/">Quickstart: your first h5i-db market database</a></li><li><a href="/cookbook/00_fundamentals/02_designing_market_data_schemas/">Designing market data schemas</a></li><li><a href="/cookbook/00_fundamentals/03_ingestion_patterns/">Ingestion patterns: five sources, one table</a></li><li><a href="/cookbook/00_fundamentals/04_sql_tour_for_quants/">A SQL tour for quants</a></li><li><a href="/cookbook/00_fundamentals/05_time_travel_and_versioning/">Time travel and versioning: which version did my backtest see?</a></li><li><a href="/cookbook/00_fundamentals/06_previewable_mutations/">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="/cookbook/00_fundamentals/07_streaming_appends_and_tail/">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="/cookbook/00_fundamentals/08_maintenance/">Maintenance: verify, compact, vacuum</a></li><li><a href="/cookbook/00_fundamentals/09_dataframe_builder/" class="active">The DataFrame builder: queries as Python objects</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Fundamentals</span>
+<span class="sep">/</span>
+<span>The DataFrame builder: queries as Python objects</span></div>
+<h1>The DataFrame builder: queries as Python objects</h1>
+<p><code>db.table(...)</code> starts a <strong>lazy</strong> query that you assemble with method calls
+instead of a SQL string. Nothing runs until a terminal call such as
+<code>.collect()</code>.</p>
+<p>It is a compiler, not a second engine. Every verb lowers to SQL that goes
+through <code>db.sql()</code>, so a built query sees the same session, the same table
+functions and the same version pins as the string you would have written by
+hand. <code>.sql()</code> shows you exactly what it produced.</p>
+<p>The payoff for a research desk is generated queries. A factor library that
+sweeps windows and columns in a loop builds SQL with f-strings today, and that
+is where quoting bugs and <code>'</code> injection live. Here the identifiers are quoted
+at one site, and a partially-built pipeline is an ordinary Python value you
+can pass around, extend and reuse.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span><span class="p">,</span> <span class="n">when</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_dataframe_builder&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="the-data">The data<a class="headerlink" href="#the-data" title="Permanent link">#</a></h2>
+<p>Two tables, because the builder's verbs split along the same line. Tick-level
+<code>trades</code> from <code>cu.make_trades</code> exercise bucketing and aggregation.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td><code>timestamp[us, tz=UTC]</code></td>
+<td>trade timestamp, ascending</td>
+</tr>
+<tr>
+<td><code>symbol</code></td>
+<td><code>string</code></td>
+<td>ticker</td>
+</tr>
+<tr>
+<td><code>price</code></td>
+<td><code>float64</code></td>
+<td>trade price</td>
+</tr>
+<tr>
+<td><code>size</code></td>
+<td><code>int64</code></td>
+<td>shares traded</td>
+</tr>
+<tr>
+<td><code>exchange</code></td>
+<td><code>string</code></td>
+<td>reporting venue</td>
+</tr>
+<tr>
+<td><code>side</code></td>
+<td><code>string</code></td>
+<td><code>B</code> buyer-initiated, <code>S</code> seller-initiated</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">20_000</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;trades: </span><span class="si">{</span><span class="n">trades</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">trades</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">trades</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">trades: 195,277 rows x 6 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>size</th>
+      <th>exchange</th>
+      <th>side</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:00.111237+00:00</td>
+      <td>NVDA</td>
+      <td>319.22</td>
+      <td>1</td>
+      <td>NASDAQ</td>
+      <td>S</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:00.168881+00:00</td>
+      <td>NVDA</td>
+      <td>319.27</td>
+      <td>1</td>
+      <td>ARCA</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:00.204185+00:00</td>
+      <td>NVDA</td>
+      <td>319.28</td>
+      <td>1</td>
+      <td>IEX</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:00.329485+00:00</td>
+      <td>MSFT</td>
+      <td>363.06</td>
+      <td>1</td>
+      <td>NASDAQ</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:30:00.381450+00:00</td>
+      <td>NVDA</td>
+      <td>319.22</td>
+      <td>300</td>
+      <td>ARCA</td>
+      <td>S</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>A daily OHLCV panel from <code>cu.make_daily_prices</code>, 50 names over 500 sessions,
+exercises the window and cross-sectional verbs: <code>ts</code>, <code>symbol</code>, <code>open</code>,
+<code>high</code>, <code>low</code>, <code>close</code>, <code>volume</code>.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">prices</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_daily_prices</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">500</span><span class="p">)</span>  <span class="c1"># 50 names x 500 sessions</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;prices: </span><span class="si">{</span><span class="n">prices</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">prices</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">prices</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">prices: 25,000 rows x 7 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>open</th>
+      <th>high</th>
+      <th>low</th>
+      <th>close</th>
+      <th>volume</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK000</td>
+      <td>25.80</td>
+      <td>25.88</td>
+      <td>25.73</td>
+      <td>25.86</td>
+      <td>451179</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK001</td>
+      <td>240.29</td>
+      <td>241.67</td>
+      <td>240.06</td>
+      <td>240.88</td>
+      <td>208895</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK002</td>
+      <td>243.93</td>
+      <td>244.20</td>
+      <td>242.34</td>
+      <td>243.66</td>
+      <td>388381</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK003</td>
+      <td>197.96</td>
+      <td>198.65</td>
+      <td>196.13</td>
+      <td>198.47</td>
+      <td>776701</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK004</td>
+      <td>77.51</td>
+      <td>78.01</td>
+      <td>77.39</td>
+      <td>77.51</td>
+      <td>348154</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">prices</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">prices</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">tables</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[&#x27;prices&#x27;, &#x27;trades&#x27;]</pre></div></div>
+<h2 id="1-a-frame-is-a-query-that-has-not-run">1. A frame is a query that has not run<a class="headerlink" href="#1-a-frame-is-a-query-that-has-not-run" title="Permanent link">#</a></h2>
+<p><code>db.table("trades")</code> is the whole table as a starting point. Verbs return
+<strong>new</strong> frames, so nothing is mutated and a partial pipeline is safe to reuse.
+<code>.sql()</code> renders it and <code>.collect()</code> runs it.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">liquid</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">([</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">]))</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">liquid</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT *
+FROM &quot;trades&quot;
+WHERE &quot;symbol&quot; IN (&#x27;AAPL&#x27;, &#x27;NVDA&#x27;)</pre></div></div>
+<p>Here is the idiomatic OHLCV rollup, built. <code>group_by(...).agg(...)</code> projects
+the keys alongside the aggregates. <code>.first("ts")</code> and <code>.last("ts")</code> are the
+<code>first_value(x ORDER BY ts)</code> idiom, which gives bar opens and closes without a
+self-join.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">bars</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;1m&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">),</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;high&quot;</span><span class="p">),</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;low&quot;</span><span class="p">),</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">),</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;volume&quot;</span><span class="p">),</span>
+        <span class="n">vwap</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;vwap&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;bar&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">bars</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT time_bucket(&#x27;1m&#x27;, &quot;ts&quot;) AS &quot;bar&quot;, &quot;symbol&quot;, first_value(&quot;price&quot; ORDER BY &quot;ts&quot;) AS &quot;open&quot;, max(&quot;price&quot;) AS &quot;high&quot;, min(&quot;price&quot;) AS &quot;low&quot;, last_value(&quot;price&quot; ORDER BY &quot;ts&quot;) AS &quot;close&quot;, sum(&quot;size&quot;) AS &quot;volume&quot;, vwap(&quot;price&quot;, &quot;size&quot;) AS &quot;vwap&quot;
+FROM &quot;trades&quot;
+GROUP BY &quot;bar&quot;, &quot;symbol&quot;
+ORDER BY &quot;bar&quot;, &quot;symbol&quot;</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">bars</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>bar</th>
+      <th>symbol</th>
+      <th>open</th>
+      <th>high</th>
+      <th>low</th>
+      <th>close</th>
+      <th>volume</th>
+      <th>vwap</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:00+00:00</td>
+      <td>AAPL</td>
+      <td>265.05</td>
+      <td>265.23</td>
+      <td>265.01</td>
+      <td>265.17</td>
+      <td>10308</td>
+      <td>265.137426</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:00+00:00</td>
+      <td>MSFT</td>
+      <td>363.06</td>
+      <td>363.17</td>
+      <td>362.76</td>
+      <td>363.12</td>
+      <td>9544</td>
+      <td>362.944815</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:00+00:00</td>
+      <td>NVDA</td>
+      <td>319.22</td>
+      <td>319.43</td>
+      <td>318.97</td>
+      <td>319.29</td>
+      <td>12402</td>
+      <td>319.220094</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:31:00+00:00</td>
+      <td>AAPL</td>
+      <td>265.16</td>
+      <td>265.28</td>
+      <td>265.13</td>
+      <td>265.22</td>
+      <td>11005</td>
+      <td>265.199838</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:31:00+00:00</td>
+      <td>MSFT</td>
+      <td>363.11</td>
+      <td>363.11</td>
+      <td>362.73</td>
+      <td>362.75</td>
+      <td>10846</td>
+      <td>362.922534</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>2026-06-01 13:31:00+00:00</td>
+      <td>NVDA</td>
+      <td>319.38</td>
+      <td>319.38</td>
+      <td>318.78</td>
+      <td>319.31</td>
+      <td>10606</td>
+      <td>319.094032</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="2-expressions">2. Expressions<a class="headerlink" href="#2-expressions" title="Permanent link">#</a></h2>
+<p><code>col(name)</code> is a column and <code>lit(value)</code> a constant. Arithmetic and
+comparisons build up from there. Two traps are worth meeting early:</p>
+<ul>
+<li>Python cannot overload <code>and</code>, <code>or</code> and <code>not</code>, so boolean logic uses <code>&amp;</code>,
+  <code>|</code> and <code>~</code>. Those bind <em>tighter</em> than comparisons, so each comparison needs
+  its own parentheses.</li>
+<li>Expressions keep <strong>SQL</strong> semantics, not Python's. <code>/</code> between two integer
+  columns is integer division. Cast when you mean true division.</li>
+</ul>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">signed</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">((</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">100</span><span class="p">))</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span>
+        <span class="s2">&quot;ts&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;symbol&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;price&quot;</span><span class="p">,</span>
+        <span class="n">notional</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">),</span>
+        <span class="n">lots</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="s2">&quot;DOUBLE&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="mi">100</span><span class="p">,</span>
+        <span class="n">direction</span><span class="o">=</span><span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;side&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;B&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)),</span>
+    <span class="p">)</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">signed</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT &quot;ts&quot;, &quot;symbol&quot;, &quot;price&quot;, &quot;price&quot; * &quot;size&quot; AS &quot;notional&quot;, CAST(&quot;size&quot; AS DOUBLE) / 100 AS &quot;lots&quot;, CASE WHEN &quot;side&quot; = &#x27;B&#x27; THEN 1 ELSE -1 END AS &quot;direction&quot;
+FROM &quot;trades&quot;
+WHERE &quot;price&quot; &gt; 0 AND &quot;size&quot; &gt;= 100</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">signed</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>notional</th>
+      <th>lots</th>
+      <th>direction</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 19:43:31.725041+00:00</td>
+      <td>MSFT</td>
+      <td>371.50</td>
+      <td>37150.0</td>
+      <td>1.0</td>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 19:43:31.806613+00:00</td>
+      <td>MSFT</td>
+      <td>371.51</td>
+      <td>37151.0</td>
+      <td>1.0</td>
+      <td>1</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 19:43:31.906285+00:00</td>
+      <td>AAPL</td>
+      <td>267.47</td>
+      <td>26747.0</td>
+      <td>1.0</td>
+      <td>-1</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 19:43:32.388267+00:00</td>
+      <td>AAPL</td>
+      <td>267.51</td>
+      <td>26751.0</td>
+      <td>1.0</td>
+      <td>1</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Identifiers are always quoted, so case survives: <code>col("Symbol")</code> finds a field
+named <code>Symbol</code>, which bare SQL would fold to lowercase. And a string literal
+is always a string, never syntax:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;&#39;; DROP TABLE trades; --&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT *
+FROM &quot;trades&quot;
+WHERE &quot;symbol&quot; = &#x27;&#x27;&#x27;; DROP TABLE trades; --&#x27;</pre></div></div>
+<h2 id="3-how-a-pipeline-becomes-sql">3. How a pipeline becomes SQL<a class="headerlink" href="#3-how-a-pipeline-becomes-sql" title="Permanent link">#</a></h2>
+<p>Most pipelines compile to one flat <code>SELECT</code>. Independent <code>with_columns</code> calls
+coalesce, and filtering a <em>base</em> column stays in the same <code>WHERE</code>.</p>
+<p>A stage that reads a column an earlier stage <strong>computed</strong> gets its own level,
+because SQL resolves <code>WHERE</code> against the <code>FROM</code> rather than against sibling
+entries in the select list. Aggregation, <code>LIMIT</code> and <code>DISTINCT</code> also close a
+level, since whatever follows them acts on their output.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">movers</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">ret</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mf">0.01</span><span class="p">)</span>  <span class="c1"># reads a computed column -&gt; subquery</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">movers</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT *
+FROM (
+  SELECT *, &quot;close&quot; / &quot;open&quot; - 1 AS &quot;ret&quot;
+  FROM &quot;prices&quot;
+) AS &quot;_s1&quot;
+WHERE &quot;ret&quot; &gt; 0.01
+ORDER BY &quot;ret&quot; DESC
+LIMIT 5</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">movers</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>open</th>
+      <th>high</th>
+      <th>low</th>
+      <th>close</th>
+      <th>volume</th>
+      <th>ret</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2023-07-06 20:00:00+00:00</td>
+      <td>STK003</td>
+      <td>192.62</td>
+      <td>195.55</td>
+      <td>192.03</td>
+      <td>195.05</td>
+      <td>514942</td>
+      <td>0.012616</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2024-08-14 20:00:00+00:00</td>
+      <td>STK020</td>
+      <td>131.80</td>
+      <td>133.81</td>
+      <td>131.03</td>
+      <td>133.38</td>
+      <td>270545</td>
+      <td>0.011988</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2023-01-09 20:00:00+00:00</td>
+      <td>STK016</td>
+      <td>30.51</td>
+      <td>30.94</td>
+      <td>30.42</td>
+      <td>30.85</td>
+      <td>480125</td>
+      <td>0.011144</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2023-01-06 20:00:00+00:00</td>
+      <td>STK008</td>
+      <td>96.41</td>
+      <td>97.76</td>
+      <td>96.36</td>
+      <td>97.47</td>
+      <td>339522</td>
+      <td>0.010995</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2023-07-04 20:00:00+00:00</td>
+      <td>STK043</td>
+      <td>342.13</td>
+      <td>347.28</td>
+      <td>341.83</td>
+      <td>345.81</td>
+      <td>292791</td>
+      <td>0.010756</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Knowing <em>where</em> levels close is the one thing worth internalizing, because it
+decides what the next stage can see.</p>
+<p>While the pipeline stays flat, a verb still reaches the base table.
+<code>select("ts", "symbol").sort("close")</code> resolves fine, because SQL's
+<code>ORDER BY</code> reads the <code>FROM</code>, not the select list. Once an aggregate closes the
+level, that column is genuinely gone and the engine says so:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">count_star</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;n&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">H5iError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="nb">str</span><span class="p">(</span><span class="n">e</span><span class="p">)[:</span><span class="mi">180</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">H5iError: [query] Error during planning: Column in ORDER BY must be in GROUP BY or an aggregate function: While expanding wildcard, column &quot;prices.close&quot; must appear in the GROUP BY clause o</pre></div></div>
+<h2 id="4-the-payoff-queries-you-generate">4. The payoff: queries you generate<a class="headerlink" href="#4-the-payoff-queries-you-generate" title="Permanent link">#</a></h2>
+<p>This is where the builder earns its place. A sweep over several lookbacks is a
+Python loop over frames rather than string surgery, and each frame is a value
+you can hold, name and reuse. Below: the gap between price and its own
+trailing mean, at three windows.</p>
+<p>Rolling methods take a <code>window</code> and an <code>order_by</code>, and optionally a
+<code>partition_by</code>. Unlike the <code>rolling_avg</code> SQL sugar, they carry a real
+<code>PARTITION BY</code>, so they do <strong>not</strong> mix symbols on a multi-symbol table.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">WINDOWS</span> <span class="o">=</span> <span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">60</span><span class="p">)</span>
+
+<span class="n">base</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">([</span><span class="s2">&quot;STK000&quot;</span><span class="p">,</span> <span class="s2">&quot;STK001&quot;</span><span class="p">,</span> <span class="s2">&quot;STK002&quot;</span><span class="p">]))</span>
+
+<span class="n">ma_gap</span> <span class="o">=</span> <span class="n">base</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+    <span class="o">**</span><span class="p">{</span>
+        <span class="sa">f</span><span class="s2">&quot;gap_</span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">d&quot;</span><span class="p">:</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">rolling_mean</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span>
+        <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">WINDOWS</span>
+    <span class="p">}</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">ma_gap</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT *, &quot;close&quot; / avg(&quot;close&quot;) OVER (PARTITION BY &quot;symbol&quot; ORDER BY &quot;ts&quot; ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) - 1 AS &quot;gap_5d&quot;, &quot;close&quot; / avg(&quot;close&quot;) OVER (PARTITION BY &quot;symbol&quot; ORDER BY &quot;ts&quot; ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) - 1 AS &quot;gap_20d&quot;, &quot;close&quot; / avg(&quot;close&quot;) OVER (PARTITION BY &quot;symbol&quot; ORDER BY &quot;ts&quot; ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) - 1 AS &quot;gap_60d&quot;
+FROM &quot;prices&quot;
+WHERE &quot;symbol&quot; IN (&#x27;STK000&#x27;, &#x27;STK001&#x27;, &#x27;STK002&#x27;)</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">ma_gap</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="o">*</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;gap_</span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">d&quot;</span> <span class="k">for</span> <span class="n">n</span> <span class="ow">in</span> <span class="n">WINDOWS</span><span class="p">])</span><span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">tail</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>gap_5d</th>
+      <th>gap_20d</th>
+      <th>gap_60d</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>1494</th>
+      <td>2024-11-28 20:00:00+00:00</td>
+      <td>STK000</td>
+      <td>0.000589</td>
+      <td>0.046048</td>
+      <td>0.064262</td>
+    </tr>
+    <tr>
+      <th>1495</th>
+      <td>2024-11-28 20:00:00+00:00</td>
+      <td>STK001</td>
+      <td>-0.002695</td>
+      <td>0.028779</td>
+      <td>0.034177</td>
+    </tr>
+    <tr>
+      <th>1496</th>
+      <td>2024-11-28 20:00:00+00:00</td>
+      <td>STK002</td>
+      <td>-0.019274</td>
+      <td>-0.018988</td>
+      <td>0.043117</td>
+    </tr>
+    <tr>
+      <th>1497</th>
+      <td>2024-11-29 20:00:00+00:00</td>
+      <td>STK000</td>
+      <td>0.014864</td>
+      <td>0.060963</td>
+      <td>0.083427</td>
+    </tr>
+    <tr>
+      <th>1498</th>
+      <td>2024-11-29 20:00:00+00:00</td>
+      <td>STK001</td>
+      <td>-0.017498</td>
+      <td>0.010656</td>
+      <td>0.018326</td>
+    </tr>
+    <tr>
+      <th>1499</th>
+      <td>2024-11-29 20:00:00+00:00</td>
+      <td>STK002</td>
+      <td>0.015216</td>
+      <td>0.017048</td>
+      <td>0.080730</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Cross-sectional operators rank a value against its peers <em>at the same
+instant</em>, so they take the bucket to compare within. Combining a few z-scored
+signals into one composite is the whole shape of a factor build:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">combo</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+        <span class="n">z_ret</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">cs_zscore</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span>
+        <span class="n">z_vol</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;volume&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="s2">&quot;DOUBLE&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">cs_zscore</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">score</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;z_ret&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;z_vol&quot;</span><span class="p">))</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;z_ret&quot;</span><span class="p">,</span> <span class="s2">&quot;z_vol&quot;</span><span class="p">,</span> <span class="s2">&quot;score&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;score&quot;</span><span class="p">],</span> <span class="n">descending</span><span class="o">=</span><span class="p">[</span><span class="kc">False</span><span class="p">,</span> <span class="kc">True</span><span class="p">])</span>
+<span class="p">)</span>
+<span class="n">combo</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>z_ret</th>
+      <th>z_vol</th>
+      <th>score</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK034</td>
+      <td>1.935241</td>
+      <td>-0.691824</td>
+      <td>1.313533</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK040</td>
+      <td>0.791453</td>
+      <td>-1.559526</td>
+      <td>1.175490</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK021</td>
+      <td>0.728941</td>
+      <td>-1.457394</td>
+      <td>1.093167</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK001</td>
+      <td>1.070606</td>
+      <td>-1.111451</td>
+      <td>1.091028</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>STK005</td>
+      <td>0.683265</td>
+      <td>-1.265949</td>
+      <td>0.974607</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="5-version-pins-and-joins">5. Version pins and joins<a class="headerlink" href="#5-version-pins-and-joins" title="Permanent link">#</a></h2>
+<p>A read point passes straight to <code>db.table()</code> and lowers to <code>h5i()</code>, so a
+pinned builder query is bound at the source exactly like hand-written SQL.</p>
+<p><code>.join()</code> renders both sides as subqueries aliased <code>l</code> and <code>r</code>, and those
+aliases are the contract for reaching a specific side. Together they make the
+"same query across N versions" comparison a function call:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="s2">&quot;2026-06-04&quot;</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">8</span><span class="p">))</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">per_symbol</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">count_star</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;n&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;last_ts&quot;</span><span class="p">)</span>
+    <span class="p">)</span>
+
+
+<span class="n">drift</span> <span class="o">=</span> <span class="n">per_symbol</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">per_symbol</span><span class="p">(),</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
+    <span class="n">symbol</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">),</span>
+    <span class="n">trades_added</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;n&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;n&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">drift</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT &quot;l&quot;.&quot;symbol&quot; AS &quot;symbol&quot;, &quot;r&quot;.&quot;n&quot; - &quot;l&quot;.&quot;n&quot; AS &quot;trades_added&quot;
+FROM (
+  SELECT &quot;symbol&quot;, count(*) AS &quot;n&quot;, max(&quot;ts&quot;) AS &quot;last_ts&quot;
+  FROM h5i(&#x27;trades&#x27;, 1)
+  GROUP BY &quot;symbol&quot;
+) AS &quot;l&quot;
+INNER JOIN (
+  SELECT &quot;symbol&quot;, count(*) AS &quot;n&quot;, max(&quot;ts&quot;) AS &quot;last_ts&quot;
+  FROM &quot;trades&quot;
+  GROUP BY &quot;symbol&quot;
+) AS &quot;r&quot;
+  ON &quot;l&quot;.&quot;symbol&quot; = &quot;r&quot;.&quot;symbol&quot;</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">drift</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>symbol</th>
+      <th>trades_added</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>AAPL</td>
+      <td>24438</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>MSFT</td>
+      <td>14065</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>NVDA</td>
+      <td>22443</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p><code>.join_asof()</code> lowers to the <code>asof_join</code> table function. That function takes
+<em>table names</em> and reads both at latest, so the builder refuses a side that
+already has verbs applied or a pin, rather than silently ignoring it. Filter
+after the join instead.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">tape</span><span class="p">,</span> <span class="n">quotes</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades_and_quotes</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>  <span class="c1"># shared base prices</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="p">((</span><span class="s2">&quot;tape&quot;</span><span class="p">,</span> <span class="n">tape</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">,</span> <span class="n">quotes</span><span class="p">)):</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">data</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
+
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;tape&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;AAPL&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">join_asof</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">),</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="se">\n</span><span class="s2">hint: </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">InvalidInputError: [invalid_input] join_asof() needs a plain table on the left side, but operations have already been applied
+hint: join first and filter afterwards, or materialise the side with .collect() and write it back</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">tq</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;tape&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">join_asof</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">),</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">tolerance</span><span class="o">=</span><span class="mi">5_000_000</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;AAPL&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="n">mid</span><span class="o">=</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">))</span> <span class="o">/</span> <span class="mi">2</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">tq</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT &quot;ts&quot;, &quot;symbol&quot;, &quot;price&quot;, &quot;bid&quot;, &quot;ask&quot;, (&quot;bid&quot; + &quot;ask&quot;) / 2 AS &quot;mid&quot;
+FROM asof_join(&#x27;tape&#x27;, &#x27;quotes&#x27;, &#x27;ts&#x27;, &#x27;ts&#x27;, &#x27;symbol&#x27;, &#x27;backward&#x27;, 5000000)
+WHERE &quot;symbol&quot; = &#x27;AAPL&#x27;</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">tq</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>bid</th>
+      <th>ask</th>
+      <th>mid</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 18:49:25.682786+00:00</td>
+      <td>AAPL</td>
+      <td>263.23</td>
+      <td>268.26</td>
+      <td>268.29</td>
+      <td>268.275</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 18:49:28.862195+00:00</td>
+      <td>AAPL</td>
+      <td>263.13</td>
+      <td>268.33</td>
+      <td>268.37</td>
+      <td>268.350</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 18:49:31.289757+00:00</td>
+      <td>AAPL</td>
+      <td>263.26</td>
+      <td>268.27</td>
+      <td>268.30</td>
+      <td>268.285</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 18:49:31.955769+00:00</td>
+      <td>AAPL</td>
+      <td>263.26</td>
+      <td>268.28</td>
+      <td>268.31</td>
+      <td>268.295</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="6-the-escape-hatch-and-the-door-back-to-sql">6. The escape hatch, and the door back to SQL<a class="headerlink" href="#6-the-escape-hatch-and-the-door-back-to-sql" title="Permanent link">#</a></h2>
+<p>Full SQL coverage through verbs is deliberately not a goal. <code>sql_expr()</code> drops
+a raw fragment anywhere an expression is accepted. Its text goes in verbatim,
+which makes it the one place where quoting is yours to get right.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">tails</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">p01</span><span class="o">=</span><span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;approx_percentile_cont(close, 0.01)&quot;</span><span class="p">),</span>
+        <span class="n">p99</span><span class="o">=</span><span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;approx_percentile_cont(close, 0.99)&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="n">tails</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>symbol</th>
+      <th>p01</th>
+      <th>p99</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>STK000</td>
+      <td>25.7775</td>
+      <td>68.6225</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>STK001</td>
+      <td>172.5800</td>
+      <td>259.4775</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>STK002</td>
+      <td>209.8525</td>
+      <td>357.6050</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>STK003</td>
+      <td>110.8075</td>
+      <td>215.2300</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>The escape hatch you will reach for most is <code>lag</code>. There is no <code>.lag()</code>
+method, but a <code>sql_expr</code> fragment is windowable, so it takes <code>.over()</code> like
+any aggregate. That covers <code>lag</code>, <code>lead</code>, <code>row_number</code> and the rest of the SQL
+window catalogue. Daily returns are the single most common shape in this
+cookbook:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">PREV_CLOSE</span> <span class="o">=</span> <span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;lag(close)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+
+<span class="n">rets</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">prev_close</span><span class="o">=</span><span class="n">PREV_CLOSE</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">ret</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;prev_close&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_not_null</span><span class="p">())</span>
+    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;ret&quot;</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">rets</span><span class="o">.</span><span class="n">sql</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SELECT &quot;ts&quot;, &quot;symbol&quot;, &quot;ret&quot;
+FROM (
+  SELECT *, &quot;close&quot; / &quot;prev_close&quot; - 1 AS &quot;ret&quot;
+  FROM (
+    SELECT *, lag(close) OVER (PARTITION BY &quot;symbol&quot; ORDER BY &quot;ts&quot;) AS &quot;prev_close&quot;
+    FROM &quot;prices&quot;
+  ) AS &quot;_s1&quot;
+) AS &quot;_s2&quot;
+WHERE &quot;ret&quot; IS NOT NULL</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">rets</span><span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>ret</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2023-01-03 20:00:00+00:00</td>
+      <td>STK000</td>
+      <td>0.015468</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2023-01-03 20:00:00+00:00</td>
+      <td>STK001</td>
+      <td>-0.001578</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2023-01-03 20:00:00+00:00</td>
+      <td>STK002</td>
+      <td>0.025035</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2023-01-03 20:00:00+00:00</td>
+      <td>STK003</td>
+      <td>0.015922</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Note the two-step <code>with_columns</code>. <code>ret</code> reads <code>prev_close</code>, which the stage
+before it computed, so the builder closes a level rather than emit SQL that
+would not resolve. Binding the fragment to a Python name once, as <code>PREV_CLOSE</code>
+here, and reusing it is the habit that keeps a factor library honest.</p>
+<p>When a pipeline outgrows the builder, <code>.sql()</code> hands you the query to paste
+into <code>db.sql()</code> and keep going from there. The two surfaces are one system
+with a door in the middle, and the generated SQL is deterministic, so it is
+safe to snapshot-test or diff.</p>
+<p>Some things stay in <code>db.sql()</code> because there is no verb for them and the
+string is genuinely clearer: <code>UNION ALL</code>, deep multi-CTE chains, scalar
+subqueries, and the table functions <code>gapfill</code>, <code>resample</code> and <code>tail</code>. Stacking
+two read points into one labelled result is the everyday example:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT &#39;version 1&#39; AS read_point, count(*) AS rows FROM h5i(&#39;trades&#39;, 1)</span>
+<span class="sd">    UNION ALL</span>
+<span class="sd">    SELECT &#39;latest&#39;,                  count(*)         FROM trades</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>read_point</th>
+      <th>rows</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>version 1</td>
+      <td>195277</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>latest</td>
+      <td>256223</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li><code>db.table(...)</code> is a lazy query. Verbs return new frames and nothing runs
+  until <code>.collect()</code> or <code>.to_pandas()</code>. <code>.sql()</code> shows the compiled SQL.</li>
+<li>The builder is a compiler over <code>db.sql()</code>, not a second engine: same
+  session, same table functions, same <code>h5i()</code> version pins.</li>
+<li>Use <code>&amp;</code>, <code>|</code> and <code>~</code> for boolean logic, and remember that expressions carry
+  SQL semantics, so integer <code>/</code> truncates.</li>
+<li>Reach for it when queries are <strong>generated</strong>, such as a sweep over windows or
+  columns in a loop, where f-string SQL means quoting bugs. For a query you
+  write once, plain SQL is often shorter.</li>
+<li><code>rolling_*</code> and <code>cs_*</code> methods carry a real <code>PARTITION BY</code>, unlike the
+  <code>rolling_avg</code> SQL sugar, which is a global trailing row window.</li>
+<li><code>sql_expr()</code> is the escape hatch and <code>.sql()</code> is the door back. Neither
+  surface is second-class.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/00_fundamentals/08_maintenance/"><span class="dir">← Previous</span><span class="pn-title">Maintenance: verify, compact, vacuum</span></a><a class="next" href="/cookbook/01_market_data_engineering/01_ohlcv_bars/"><span class="dir">Next →</span><span class="pn-title">OHLCV bars from tick data</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-data">The data</a></li><li><a href="#1-a-frame-is-a-query-that-has-not-run">1. A frame is a query that has not run</a></li><li><a href="#2-expressions">2. Expressions</a></li><li><a href="#3-how-a-pipeline-becomes-sql">3. How a pipeline becomes SQL</a></li><li><a href="#4-the-payoff-queries-you-generate">4. The payoff: queries you generate</a></li><li><a href="#5-version-pins-and-joins">5. Version pins and joins</a></li><li><a href="#6-the-escape-hatch-and-the-door-back-to-sql">6. The escape hatch, and the door back to SQL</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

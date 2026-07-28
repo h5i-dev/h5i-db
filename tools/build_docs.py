@@ -9,8 +9,10 @@ Sources:
                             executed notebooks, rendered as tutorials
   docs-src/templates/       page.html shell, docs.css, docs.js
 
-Output (committed, served by GitHub Pages):
-  docs/manual/*.html  docs/api/*.html  docs/cookbook/<section>/*.html
+Output (committed, served by GitHub Pages). Pages live at directory URLs
+(/manual/sql/), with a redirect stub left at each page's former *.html path:
+  docs/manual/<page>/index.html  docs/api/<page>/index.html
+  docs/cookbook/<section>/<page>/index.html
   docs/_static/docs.css  docs/_static/docs.js  docs/_static/search-index.json
 
 Usage:
@@ -69,12 +71,61 @@ DESC_BUDGET = 155
 TITLE_SUFFIXES = (" · h5i-db docs", " · h5i-db", "")
 
 
+# In-content cross-links are authored relative to the source tree
+# ("sql.html", "../manual/concepts.html#forks"). Pages are served from
+# directory URLs, so rewrite them to root-absolute paths, which cannot go
+# stale when a page's depth changes.
+_DOC_LINK_RE = re.compile(r'href="(?!https?:|/|#)([^"]+?)\.html(#[^"]*)?"')
+
+
+def absolutize_links(body: str, section: str) -> str:
+    def sub(m: "re.Match") -> str:
+        target, frag = m.group(1), m.group(2) or ""
+        parts = [seg for seg in target.split("/") if seg not in ("", ".")]
+        while parts and parts[0] == "..":
+            parts.pop(0)
+            # a leading ".." meant "leave my section"; the rest names its own
+        if parts and parts[0] in ("manual", "api", "cookbook"):
+            path = "/".join(parts)
+        else:
+            path = f"{section}/" + "/".join(parts)
+        if path.endswith("/index"):
+            path = path[: -len("index")]
+        else:
+            path += "/"
+        return f'href="/{path}{frag}"'
+    return _DOC_LINK_RE.sub(sub, body)
+
+
+def write_redirect(old_url: str, new_url: str) -> None:
+    """Leave a redirect where a page used to live.
+
+    The site was published with `.html` URLs; moving to directory URLs would
+    otherwise 404 every link already in the wild. A zero-delay meta refresh
+    is the only redirect a static host can serve, and the canonical plus
+    noindex keep the stub itself out of the index.
+    """
+    dest = OUT / old_url
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    target = f"/{new_url}"
+    dest.write_text(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        f'<meta http-equiv="refresh" content="0; url={target}">\n'
+        '<meta name="robots" content="noindex, follow">\n'
+        f'<link rel="canonical" href="{BASE_URL}{new_url}">\n'
+        "<title>Moved</title>\n</head>\n<body>\n"
+        f'<p>This page moved to <a href="{target}">{target}</a>.</p>\n'
+        f'<script>location.replace("{target}" + location.hash);</script>\n'
+        "</body>\n</html>\n"
+    )
+
+
 # ── Page model ───────────────────────────────────────────────────
 
 
 @dataclass
 class Page:
-    url: str            # site-relative, e.g. "manual/quickstart.html"
+    url: str            # site-relative directory URL, e.g. "manual/quickstart/"
     section: str        # top nav section key: manual | api | cookbook
     title: str
     description: str
@@ -290,8 +341,8 @@ def write_llms_index(manual, api, cookbook_groups, cookbook_index, skip_cookbook
 # `Sitemap:` line cross-submitted from https://h5i.dev/robots.txt).
 
 # Landing page first, then section indexes, then leaf pages.
-SITEMAP_PRIORITY = {"": "1.0", "manual/index.html": "0.9",
-                    "api/index.html": "0.9", "cookbook/index.html": "0.8",
+SITEMAP_PRIORITY = {"": "1.0", "manual/": "0.9",
+                    "api/": "0.9", "cookbook/": "0.8",
                     "demo/": "0.4", "demo/ui/": "0.4"}
 
 # Hand-maintained pages that build() does not generate but index.html links to.
@@ -605,8 +656,7 @@ def jsonld(page: Page, trail: "list[tuple[str, str]]", modified: str) -> str:
 def render_page(page: Page, template: str, sidebar: str, breadcrumb: str,
                 prev_page: Page | None, next_page: Page | None,
                 structured_data: str = "") -> str:
-    depth = page.url.count("/")
-    root = "../" * depth if depth else "./"
+    root = "/"
     prevnext = ""
     if prev_page:
         prevnext += (
@@ -650,7 +700,7 @@ def load_md_pages(directory: Path, section: str) -> list[Page]:
         style = enhance_style(section, path.stem)
         if style:
             body = enhance_api_html(body, style)
-        slug = "index.html" if path.stem == "index" else f"{path.stem}.html"
+        slug = "" if path.stem == "index" else f"{path.stem}/"
         title = meta.get("title", path.stem.replace("-", " ").title())
         page = Page(
             url=f"{section}/{slug}",
@@ -706,7 +756,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
         _, body_src = parse_front_matter(path.read_text())
         body, toc_tokens = render_markdown(body_src)
         manual_pages.append(Page(
-            url=f"manual/{slug}.html",
+            url=f"manual/{slug}/",
             section="manual",
             title=meta["title"],
             description=meta["description"],
@@ -732,7 +782,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             for nb_path in sorted((nb_root / sec_dir).glob("*.ipynb")):
                 title, desc, body, search_text, toc_tokens = render_notebook(nb_path)
                 page = Page(
-                    url=f"cookbook/{sec_dir}/{nb_path.stem}.html",
+                    url=f"cookbook/{sec_dir}/{nb_path.stem}/",
                     section="cookbook",
                     title=title,
                     description=desc,
@@ -759,14 +809,14 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             cards = []
             for i, p in enumerate(cookbook_groups[sec_label], 1):
                 cards.append(
-                    f'<a class="card" href="{p.url.split("cookbook/", 1)[1]}">'
+                    f'<a class="card" href="/{p.url}">'
                     f'<span class="card-no">{i:02d}</span>'
                     f'<span class="card-title">{html.escape(p.title)}</span>'
                     f'<span class="card-desc">{html.escape(p.description)}</span></a>'
                 )
             idx_parts.append(f'<div class="card-grid">{"".join(cards)}</div>')
         cookbook_index = Page(
-            url="cookbook/index.html",
+            url="cookbook/",
             section="cookbook",
             title="Cookbook",
             description="Executed notebook tutorials for h5i-db: fundamentals, market data "
@@ -792,7 +842,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             groups.append(("Cookbook", [cookbook_index]))
             for _sec_dir, sec_label in COOKBOOK_SECTIONS:
                 sec_pages = cookbook_groups[sec_label]
-                if page.group == sec_label or page.url == "cookbook/index.html":
+                if page.group == sec_label or page.url == "cookbook/":
                     if page.group == sec_label:
                         groups.append((sec_label, sec_pages))
         else:
@@ -808,8 +858,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
     section_labels = {"manual": "Manual", "api": "Python API", "cookbook": "Cookbook"}
     today = datetime.date.today().isoformat()
     for i, page in enumerate(ordered):
-        depth = page.url.count("/")
-        root = "../" * depth if depth else "./"
+        root = "/"
         # One trail, rendered twice: as the visible breadcrumb and as the
         # BreadcrumbList. A group (cookbook section) has no page of its own,
         # so it is a name without an `item`.
@@ -825,6 +874,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
         crumbs += ['<span class="sep">/</span>', f"<span>{html.escape(page.title)}</span>"]
         prev_page = ordered[i - 1] if i > 0 else None
         next_page = ordered[i + 1] if i + 1 < len(ordered) else None
+        page.body_html = absolutize_links(page.body_html, page.section)
         html_out = render_page(
             page, template,
             sidebar_html(groups_for(page), page, root),
@@ -832,9 +882,12 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             prev_page, next_page,
             jsonld(page, trail, today),
         )
-        dest = OUT / page.url
+        dest = OUT / page.url / "index.html"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(html_out)
+        # Where this page used to live, before directory URLs.
+        if page.url.rstrip("/") and not page.url.endswith(("manual/", "api/", "cookbook/")):
+            write_redirect(page.url.rstrip("/") + ".html", page.url)
 
     # ── Static assets ───────────────────────────────────────────
     static = OUT / "_static"

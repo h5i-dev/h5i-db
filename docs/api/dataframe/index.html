@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>h5i_db DataFrame builder: Python query API · h5i-db docs</title>
+  <meta name="description" content="Build queries as Python, not SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, and ASOF joins.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/api/dataframe/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="h5i_db DataFrame builder: Python query API · h5i-db docs">
+  <meta property="og:description" content="Build queries as Python, not SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, and ASOF joins.">
+  <meta property="og:url" content="https://db.h5i.dev/api/dataframe/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="h5i_db DataFrame builder: Python query API · h5i-db docs">
+  <meta name="twitter:description" content="Build queries as Python, not SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, and ASOF joins.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"APIReference","@id":"https://db.h5i.dev/api/dataframe/#article","headline":"h5i_db DataFrame builder: Python query API","name":"h5i_db DataFrame builder: Python query API","description":"Build queries as Python, not SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, and ASOF joins.","url":"https://db.h5i.dev/api/dataframe/","inLanguage":"en","dateModified":"2026-07-27","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/api/dataframe/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Python API","item":"https://db.h5i.dev/api/"},{"@type":"ListItem","position":3,"name":"DataFrame builder","item":"https://db.h5i.dev/api/dataframe/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" class="active">Python API</a></li>
+    <li><a href="/cookbook/" >Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/operations/">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/" class="active">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/api/">Python API</a>
+<span class="sep">/</span>
+<span>DataFrame builder</span></div>
+<h1 id="dataframe-builder">DataFrame builder<a class="headerlink" href="#dataframe-builder" title="Permanent link">#</a></h1>
+<p><code>db.table(...)</code> starts a <strong>lazy</strong> query you build up with methods instead of
+writing a SQL string. Nothing runs until a terminal method like <code>.collect()</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span>
+
+<span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="s2">&quot;2026-07-01T00:00:00Z&quot;</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">([</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">]))</span>
+   <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;px&quot;</span><span class="p">))</span>
+   <span class="o">.</span><span class="n">collect</span><span class="p">())</span>
+</code></pre></div>
+
+<p>The builder is a <strong>compiler, not a second engine</strong>. Every verb lowers to SQL
+run through <a href="/api/database/#databasesql"><code>Database.sql()</code></a>, so a built query
+sees the same session, the same <a href="/manual/sql/">table functions</a> and the
+same version pins as the equivalent string. <code>.sql()</code> shows exactly what it
+produced:</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span><span class="p">,</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;px&quot;</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;2026-07-01T00:00:00Z&#39;</span><span class="p">)</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span><span class="w"> </span><span class="k">IN</span><span class="w"> </span><span class="p">(</span><span class="s1">&#39;AAPL&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;MSFT&#39;</span><span class="p">)</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span>
+</code></pre></div>
+
+<div class="admonition note">
+<p class="admonition-title">When to reach for it</p>
+<p>For a query you write once, SQL is usually shorter and clearer. The
+builder pays off when queries are <strong>generated</strong> (a factor library sweeping
+windows and columns in a loop), where f-string SQL means quoting bugs, and
+when you want a partially-built pipeline you can reuse and extend. Neither
+surface is second-class; <code>.sql()</code> is the door between them.</p>
+</div>
+<h2 id="reading-a-table">Reading a table<a class="headerlink" href="#reading-a-table" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="databasetable"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">table</span></code><a class="headerlink" href="#databasetable" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">LazyFrame</span>
+</code></pre></div><div class="api-body">
+
+<p>Start a query. Pass at most one read point; passing two raises
+<code>InvalidInputError</code>.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Reads</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>db.table("trades")</code></td>
+<td>The bare table name, snapshot-bound for the query, so two references to it inside one query always agree</td>
+</tr>
+<tr>
+<td><code>db.table("trades", version=42)</code></td>
+<td><code>h5i('trades', 42)</code></td>
+</tr>
+<tr>
+<td><code>db.table("trades", as_of="2026-07-01T00:00:00Z")</code></td>
+<td><code>h5i('trades', '…')</code>, the latest version committed at or before that instant</td>
+</tr>
+<tr>
+<td><code>db.table("trades", snapshot="eod-2026-07-18")</code></td>
+<td><code>h5i('trades', 'eod-…')</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Because pins lower to <code>h5i()</code>, a pinned builder query is bound at the source
+exactly like hand-written SQL, including under a research-mode pin.</p>
+</div></section><h2 id="verbs">Verbs<a class="headerlink" href="#verbs" title="Permanent link">#</a></h2>
+<p>Every verb returns a <strong>new</strong> frame, so a partial pipeline is safe to reuse as
+a base for several queries.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Verb</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.filter(*preds)</code></td>
+<td>Keep matching rows; several predicates are ANDed</td>
+</tr>
+<tr>
+<td><code>.select(*exprs, **named)</code></td>
+<td>Replace the projection</td>
+</tr>
+<tr>
+<td><code>.with_columns(*exprs, replace=None, **named)</code></td>
+<td>Add columns, keeping the rest</td>
+</tr>
+<tr>
+<td><code>.group_by(*keys).agg(...)</code></td>
+<td>Aggregate; keys are projected alongside</td>
+</tr>
+<tr>
+<td><code>.group_by(*keys).count()</code></td>
+<td>Rows per group</td>
+</tr>
+<tr>
+<td><code>.sort(by, descending=False)</code></td>
+<td>Order the result</td>
+</tr>
+<tr>
+<td><code>.limit(n, offset=0)</code> / <code>.head(n)</code></td>
+<td>Take rows (still lazy)</td>
+</tr>
+<tr>
+<td><code>.unique()</code></td>
+<td><code>SELECT DISTINCT</code></td>
+</tr>
+<tr>
+<td><code>.join(other, on=…, how=…)</code></td>
+<td>Join two frames</td>
+</tr>
+<tr>
+<td><code>.join_asof(other, on=…, by=…)</code></td>
+<td>ASOF join via <code>asof_join</code></td>
+</tr>
+<tr>
+<td><code>.pipe(fn, *args)</code></td>
+<td><code>fn(frame, *args)</code>, for reusable helpers</td>
+</tr>
+</tbody>
+</table></div>
+<p>Strings are column names wherever an expression is accepted, so
+<code>.group_by("symbol")</code> and <code>.group_by(col("symbol"))</code> are the same thing.
+Keyword arguments name the result: <code>with_columns(ret=col("close") - 1)</code>.</p>
+<p><code>with_columns</code> <strong>adds</strong>. Naming a column that already exists is an error,
+because <code>SELECT *</code> would then carry two of it. Say so explicitly to
+overwrite one:</p>
+<div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">price</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="mi">2</span><span class="p">,</span> <span class="n">replace</span><span class="o">=</span><span class="s2">&quot;price&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">EXCEPT</span><span class="w"> </span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="p">),</span><span class="w"> </span><span class="ss">&quot;price&quot;</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;price&quot;</span>
+<span class="k">FROM</span><span class="w"> </span><span class="ss">&quot;trades&quot;</span>
+</code></pre></div>
+
+<p>The builder never reads the schema, which is what keeps it lazy, so a
+<code>replace</code> name that does not exist is caught by the engine rather than at
+build time.</p>
+<section class="api-member"><h3 id="terminal-methods">Terminal methods<a class="headerlink" href="#terminal-methods" title="Permanent link">#</a></h3><div class="api-body">
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Returns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.collect(memory_limit=, timeout=, max_rows=)</code></td>
+<td><a href="/api/results-and-plans/"><code>QueryResult</code></a></td>
+</tr>
+<tr>
+<td><code>.to_arrow()</code> / <code>.to_pandas()</code> / <code>.to_polars()</code></td>
+<td>The frame, converted</td>
+</tr>
+<tr>
+<td><code>.sql()</code></td>
+<td>The generated SQL, as a string</td>
+</tr>
+<tr>
+<td><code>.explain(analyze=False)</code></td>
+<td><code>EXPLAIN</code> / <code>EXPLAIN ANALYZE</code> of it</td>
+</tr>
+<tr>
+<td><code>.schema()</code></td>
+<td>Result schema via a <code>LIMIT 0</code> run; no data read</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>.collect()</code> takes the same guardrails as <code>db.sql()</code>: <code>max_rows</code> raises
+<code>LimitError</code> as soon as the result exceeds it, and <code>timeout</code> raises
+<code>TimeoutError</code>.</p>
+</div></section><h2 id="expressions">Expressions<a class="headerlink" href="#expressions" title="Permanent link">#</a></h2>
+<p><code>col(name)</code> references a column, <code>lit(value)</code> a constant. The name is one
+identifier and is never split on <code>.</code>, so a column really named <code>a.b</code> works;
+pass <code>col("price", relation="l")</code> to qualify a side of a join.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">when</span>
+
+<span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span>              <span class="c1"># arithmetic</span>
+<span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">100</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">5</span><span class="p">)</span>   <span class="c1"># &amp; | ~ , not and/or/not</span>
+<span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">([</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">])</span>
+<span class="n">col</span><span class="p">(</span><span class="s2">&quot;px&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_null</span><span class="p">()</span>
+<span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">between</span><span class="p">(</span><span class="n">t0</span><span class="p">,</span> <span class="n">t1</span><span class="p">)</span>
+<span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">like</span><span class="p">(</span><span class="s2">&quot;A%&quot;</span><span class="p">)</span>
+<span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="s2">&quot;DOUBLE&quot;</span><span class="p">)</span>
+<span class="n">when</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">100</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+</code></pre></div>
+
+<div class="admonition warning">
+<p class="admonition-title">Use <code>&amp;</code>, <code>|</code>, <code>~</code></p>
+<p>Python cannot overload <code>and</code> / <code>or</code> / <code>not</code>, so an Expr raises
+<code>TypeError</code> if used as a truth value. Mind the precedence too: <code>&amp;</code> binds
+tighter than <code>&gt;</code>, so the comparisons need parentheses.</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Operators mean what SQL means</p>
+<p>Expressions compile to SQL and keep SQL's semantics, not Python's. Most
+visibly, <code>/</code> between two integer columns is <strong>integer</strong> division, so
+<code>col("size") / 4</code> truncates. Cast for true division:
+<code>col("size").cast("DOUBLE") / 4</code>. The rule is deliberate: the same
+expression must not mean one thing here and another in <code>db.sql()</code>.</p>
+</div>
+<p>Identifiers and literals are quoted at a single site, and identifiers are
+always quoted so case survives (<code>col("Symbol")</code> finds a field named
+<code>Symbol</code>, which bare SQL would fold to lowercase). A value containing
+<code>'; DROP TABLE trades; --</code> is a string, never syntax.</p>
+<p>Aggregates are methods: <code>.sum()</code>, <code>.mean()</code>, <code>.min()</code>, <code>.max()</code>, <code>.count()</code>,
+<code>.n_unique()</code>, <code>.std()</code>, <code>.var()</code>, <code>.median()</code>, <code>.quantile(q)</code>,
+<code>.first(order_by=)</code>, <code>.last(order_by=)</code>. So are scalars: <code>.abs()</code>, <code>.log()</code>,
+<code>.log10()</code>, <code>.exp()</code>, <code>.sqrt()</code>, <code>.sign()</code>, <code>.round(n)</code>, <code>.floor()</code>,
+<code>.ceil()</code>, <code>.coalesce(...)</code>, <code>.greatest(...)</code>, <code>.least(...)</code>. Plus
+<code>count_star()</code>, <code>vwap(price, size)</code>, <code>wavg(weight, value)</code> and
+<code>time_bucket(interval, ts)</code> as functions.</p>
+<p>A <code>when(...).then(...)</code> chain is already a complete expression (a <code>CASE</code>
+with no <code>ELSE</code> yields NULL), so it can be aliased without <code>.otherwise()</code>.</p>
+<p>The idiomatic OHLCV query, built:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
+
+<span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;5m&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">),</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;high&quot;</span><span class="p">),</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;low&quot;</span><span class="p">),</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">last</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">),</span>
+        <span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;volume&quot;</span><span class="p">),</span>
+        <span class="n">vwap</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;vwap&quot;</span><span class="p">))</span>
+   <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">))</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">time_bucket</span><span class="p">(</span><span class="s1">&#39;5m&#39;</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;ts&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;bar&quot;</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span><span class="p">,</span>
+<span class="w">       </span><span class="n">first_value</span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;ts&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;open&quot;</span><span class="p">,</span><span class="w"> </span><span class="k">max</span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;high&quot;</span><span class="p">,</span>
+<span class="w">       </span><span class="k">min</span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;low&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">last_value</span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;ts&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;close&quot;</span><span class="p">,</span>
+<span class="w">       </span><span class="k">sum</span><span class="p">(</span><span class="ss">&quot;size&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;volume&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">vwap</span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;size&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;vwap&quot;</span>
+<span class="k">FROM</span><span class="w"> </span><span class="ss">&quot;trades&quot;</span>
+<span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;bar&quot;</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;bar&quot;</span>
+</code></pre></div>
+
+<h2 id="rolling-and-cross-sectional-operators">Rolling and cross-sectional operators<a class="headerlink" href="#rolling-and-cross-sectional-operators" title="Permanent link">#</a></h2>
+<p>Rolling methods take a <code>window</code> and an <code>order_by</code>, and optionally a
+<code>partition_by</code>. The window is either a row count or a duration string
+(<code>'30s'</code>, <code>'5m'</code>, <code>'1.5h'</code>, <code>'1d'</code>, <code>'1w'</code>, <code>'1mo'</code>, <code>'1y'</code>).</p>
+<div class="highlight"><pre><span></span><code><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">rolling_mean</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">avg</span><span class="p">(</span><span class="ss">&quot;close&quot;</span><span class="p">)</span><span class="w"> </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;ts&quot;</span>
+<span class="w">                   </span><span class="k">ROWS</span><span class="w"> </span><span class="k">BETWEEN</span><span class="w"> </span><span class="mi">19</span><span class="w"> </span><span class="n">PRECEDING</span><span class="w"> </span><span class="k">AND</span><span class="w"> </span><span class="k">CURRENT</span><span class="w"> </span><span class="k">ROW</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Unlike the <a href="/manual/sql/"><code>rolling_avg</code> SQL sugar</a>, these carry a
+<code>PARTITION BY</code>, so they do not mix symbols on a multi-symbol table.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Lowers to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.rolling_mean</code> <code>.rolling_sum</code> <code>.rolling_min</code> <code>.rolling_max</code></td>
+<td><code>avg</code> <code>sum</code> <code>min</code> <code>max</code></td>
+</tr>
+<tr>
+<td><code>.rolling_std</code> <code>.rolling_var</code> <code>.rolling_count</code></td>
+<td><code>stddev</code> <code>var_samp</code> <code>count</code></td>
+</tr>
+<tr>
+<td><code>.rolling_mad</code> <code>.rolling_skew</code> <code>.rolling_kurt</code></td>
+<td><code>mad</code> <code>skew</code> <code>kurt</code></td>
+</tr>
+<tr>
+<td><code>.rolling_rank</code></td>
+<td><code>ts_rank</code>, the percentile of the current value in the window</td>
+</tr>
+<tr>
+<td><code>.rolling_idxmax</code> <code>.rolling_idxmin</code></td>
+<td><code>idxmax</code> <code>idxmin</code>, 1-based position</td>
+</tr>
+<tr>
+<td><code>.rolling_corr(other, …)</code> <code>.rolling_cov(other, …)</code></td>
+<td><code>ts_corr</code> <code>ts_cov</code></td>
+</tr>
+<tr>
+<td><code>.ewma(alpha, order_by, partition_by)</code></td>
+<td><code>ewma</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Cross-sectional methods rank a value against its peers <em>at the same instant</em>,
+so they take the bucket to compare within:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Lowers to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.cs_rank(partition_by)</code></td>
+<td><code>cs_rank(x) OVER (PARTITION BY …)</code></td>
+</tr>
+<tr>
+<td><code>.cs_winsorize(lower, upper, partition_by)</code></td>
+<td><code>cs_winsorize(x, lo, hi) OVER (…)</code></td>
+</tr>
+<tr>
+<td><code>.cs_demean(partition_by)</code></td>
+<td><code>x - avg(x) OVER (…)</code>, plain SQL</td>
+</tr>
+<tr>
+<td><code>.cs_zscore(partition_by)</code></td>
+<td><code>(x - avg(x) OVER (…)) / stddev(x) OVER (…)</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>For a raw window frame, <code>.over(partition_by=, order_by=, rows=, duration=)</code>
+applies to a single aggregate, where <code>rows</code> is a trailing count or a
+<code>(preceding, following)</code> pair with <code>None</code> for unbounded. SQL attaches <code>OVER</code>
+to one function call, so window each part of a compound expression
+separately: <code>col("a").sum().over(...) / count_star().over(...)</code>, not
+<code>(col("a").sum() / count_star()).over(...)</code>, which is rejected.</p>
+<h2 id="joins">Joins<a class="headerlink" href="#joins" title="Permanent link">#</a></h2>
+<p><code>.join()</code> renders both sides as subqueries aliased <code>l</code> and <code>r</code>. Those aliases
+are part of the contract: reach a specific side with
+<code>col("price", relation="l")</code>, or an arbitrary condition with
+<code>predicate=sql_expr('l."a" &gt; r."b"')</code>.</p>
+<p><code>how=</code> is <code>inner</code> (default), <code>left</code>, <code>right</code>, <code>full</code>, <code>cross</code>, <code>semi</code> or
+<code>anti</code>. Keys come from <code>on=</code> (same name both sides) or <code>left_on=</code>/<code>right_on=</code>.</p>
+<div class="admonition warning">
+<p class="admonition-title">Column names are not deduplicated</p>
+<p><code>SELECT *</code> over a join of two tables sharing a column name yields both
+copies. Project explicitly to avoid the ambiguity.</p>
+</div>
+<p>Comparing one table at two pinned versions, the "same query across N
+versions" pattern:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">mean_px</span><span class="p">(</span><span class="n">version</span><span class="p">):</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
+              <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+              <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;px&quot;</span><span class="p">)))</span>
+
+<span class="n">drift</span> <span class="o">=</span> <span class="p">(</span><span class="n">mean_px</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">mean_px</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+         <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span>
+                 <span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;px&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;r&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;px&quot;</span><span class="p">,</span> <span class="n">relation</span><span class="o">=</span><span class="s2">&quot;l&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;drift&quot;</span><span class="p">)))</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="ss">&quot;l&quot;</span><span class="p">.</span><span class="ss">&quot;symbol&quot;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;r&quot;</span><span class="p">.</span><span class="ss">&quot;px&quot;</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="ss">&quot;l&quot;</span><span class="p">.</span><span class="ss">&quot;px&quot;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;drift&quot;</span>
+<span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span><span class="p">,</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;px&quot;</span>
+<span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span>
+<span class="w">  </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;l&quot;</span>
+<span class="k">INNER</span><span class="w"> </span><span class="k">JOIN</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span><span class="p">,</span><span class="w"> </span><span class="k">avg</span><span class="p">(</span><span class="ss">&quot;price&quot;</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;px&quot;</span>
+<span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="n">h5i</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span>
+<span class="w">  </span><span class="k">GROUP</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;symbol&quot;</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;r&quot;</span>
+<span class="w">  </span><span class="k">ON</span><span class="w"> </span><span class="ss">&quot;l&quot;</span><span class="p">.</span><span class="ss">&quot;symbol&quot;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ss">&quot;r&quot;</span><span class="p">.</span><span class="ss">&quot;symbol&quot;</span>
+</code></pre></div>
+
+<section class="api-member"><h3 id="join_asof"><code><span class="api-name">join_asof</span></code><a class="headerlink" href="#join_asof" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">join_asof</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">direction</span><span class="o">=</span><span class="s2">&quot;backward&quot;</span><span class="p">,</span> <span class="n">tolerance</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+          <span class="n">left_on</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">right_on</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">LazyFrame</span>
+</code></pre></div><div class="api-body">
+
+<p>For each left row, take the most recent right row at or before it
+(<code>"backward"</code>) or the first at or after it (<code>"forward"</code>). The result is LEFT
+and 1:1 with the left side. <code>tolerance</code> is an integer in the time column's
+raw units; for a <code>timestamp[us]</code> column, <code>5000000</code> is five seconds.</p>
+<div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">join_asof</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">),</span> <span class="n">on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span>
+                             <span class="n">tolerance</span><span class="o">=</span><span class="mi">5_000_000</span><span class="p">)</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">asof_join</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;quotes&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ts&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;ts&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;backward&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">5000000</span><span class="p">)</span>
+</code></pre></div>
+
+<div class="admonition warning">
+<p class="admonition-title">Both sides must be plain, unpinned tables</p>
+<p>The <code>asof_join</code> table function takes table names and reads both at
+<strong>latest</strong>. So <code>join_asof</code> refuses a side that already has verbs applied,
+and refuses a pinned side outright rather than silently ignoring the pin.
+Filter <em>after</em> the join, or for a pinned ASOF use <code>db.sql()</code> with the
+<a href="/manual/sql/#asof_join"><code>ASOF JOIN</code> keyword form</a> over
+session-bound names.</p>
+</div>
+</div></section><h2 id="how-pipelines-become-sql">How pipelines become SQL<a class="headerlink" href="#how-pipelines-become-sql" title="Permanent link">#</a></h2>
+<p>Most pipelines compile to one flat <code>SELECT</code>. A stage that reads a column an
+earlier stage <em>computed</em> gets its own level, because SQL resolves <code>WHERE</code> and
+<code>SELECT</code> against the <code>FROM</code>, not against sibling projections:</p>
+<div class="highlight"><pre><span></span><code><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;bars&quot;</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">ret</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span>          <span class="c1"># reads a computed column -&gt; subquery</span>
+   <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;ret&quot;</span><span class="p">,</span> <span class="n">descending</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">limit</span><span class="p">(</span><span class="mi">10</span><span class="p">))</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span>
+<span class="k">FROM</span><span class="w"> </span><span class="p">(</span>
+<span class="w">  </span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="p">,</span><span class="w"> </span><span class="ss">&quot;close&quot;</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="ss">&quot;open&quot;</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;ret&quot;</span>
+<span class="w">  </span><span class="k">FROM</span><span class="w"> </span><span class="ss">&quot;bars&quot;</span>
+<span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="ss">&quot;_s1&quot;</span>
+<span class="k">WHERE</span><span class="w"> </span><span class="ss">&quot;ret&quot;</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">0</span>
+<span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="ss">&quot;ret&quot;</span><span class="w"> </span><span class="k">DESC</span>
+<span class="k">LIMIT</span><span class="w"> </span><span class="mi">10</span>
+</code></pre></div>
+
+<p>Filtering a <em>base</em> column instead stays flat, and independent <code>with_columns</code>
+calls coalesce into one projection. Aggregation, <code>LIMIT</code> and <code>DISTINCT</code>
+always close a level, since whatever follows acts on their output. So does a
+projection holding a <strong>window function or aggregate</strong>: SQL evaluates <code>WHERE</code>
+before the select list, so filtering in the same level would recompute the
+window over only the surviving rows.</p>
+<p>Because levels close, a stage can only see what the stage before it emitted.
+Filtering or sorting by a column an earlier <code>.select()</code> dropped is an error
+naming that column, as it would be for a DataFrame.</p>
+<p>The generated SQL is deterministic, so it is safe to snapshot-test or diff.</p>
+<h2 id="escape-hatch">Escape hatch<a class="headerlink" href="#escape-hatch" title="Permanent link">#</a></h2>
+<p><code>sql_expr()</code> embeds a raw fragment anywhere an expression is accepted. Full
+SQL coverage through builder verbs is deliberately not a goal, so reach for
+this rather than waiting for a method:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">sql_expr</span>
+
+<span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+   <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;approx_percentile_cont(price, 0.99)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;p99&quot;</span><span class="p">)))</span>
+</code></pre></div>
+
+<p>Its text is inserted verbatim, so it is the one place quoting is yours to get
+right; never build it from untrusted input. Because its column references are
+opaque to the builder, it conservatively forces a subquery when the current
+stage defines any computed name.</p>
+<p>When a pipeline outgrows the builder, <code>.sql()</code> gives you the query to paste
+into <code>db.sql()</code> and keep going from there.</p>
+    <nav class="page-nav"><a class="prev" href="/api/database/"><span class="dir">← Previous</span><span class="pn-title">Database</span></a><a class="next" href="/api/results-and-plans/"><span class="dir">Next →</span><span class="pn-title">QueryResult &amp; MutationPlan</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#reading-a-table">Reading a table</a><ul><li><a href="#databasetable">Database.table</a></li></ul></li><li><a href="#verbs">Verbs</a><ul><li><a href="#terminal-methods">Terminal methods</a></li></ul></li><li><a href="#expressions">Expressions</a></li><li><a href="#rolling-and-cross-sectional-operators">Rolling and cross-sectional operators</a></li><li><a href="#joins">Joins</a><ul><li><a href="#join_asof">join_asof</a></li></ul></li><li><a href="#how-pipelines-become-sql">How pipelines become SQL</a></li><li><a href="#escape-hatch">Escape hatch</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

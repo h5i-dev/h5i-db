@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agents &amp; automation · h5i-db docs</title>
+  <meta name="description" content="The machine contract: structured output and errors, stable exit codes, resource limits as flags, and policy-gated review for AI agents and pipelines.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/agents/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Agents &amp; automation · h5i-db docs">
+  <meta property="og:description" content="The machine contract: structured output and errors, stable exit codes, resource limits as flags, and policy-gated review for AI agents and pipelines.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/agents/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Agents &amp; automation · h5i-db docs">
+  <meta name="twitter:description" content="The machine contract: structured output and errors, stable exit codes, resource limits as flags, and policy-gated review for AI agents and pipelines.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/agents/#article","headline":"Agents & automation","name":"Agents & automation","description":"The machine contract: structured output and errors, stable exit codes, resource limits as flags, and policy-gated review for AI agents and pipelines.","url":"https://db.h5i.dev/manual/agents/","inLanguage":"en","dateModified":"2026-07-27","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/agents/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Agents & automation","item":"https://db.h5i.dev/manual/agents/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" class="active">Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" >Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/" class="active">Agents &amp; automation</a></li><li><a href="/manual/operations/">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/manual/">Manual</a>
+<span class="sep">/</span>
+<span>Agents &amp; automation</span></div>
+<h1 id="agents-automation">Agents &amp; automation<a class="headerlink" href="#agents-automation" title="Permanent link">#</a></h1>
+<p>h5i-db needs no MCP server or custom protocol to be driven by AI agents,
+schedulers, or CI: agents use the same CLI and Python API as everyone else.
+What makes that safe is a deliberate machine contract: structured output,
+structured errors, hard resource limits, and a write path that policy can
+gate behind human review.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT symbol, vwap(price, size) FROM trades GROUP BY symbol&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--format<span class="w"> </span>json<span class="w"> </span>--max-rows<span class="w"> </span><span class="m">1000</span><span class="w"> </span>--timeout<span class="w"> </span>30s<span class="w">        </span><span class="c1"># machine formats + hard limits</span>
+
+<span class="gp">$ </span>h5i-db<span class="w"> </span>delete-range<span class="w"> </span>market.db<span class="w"> </span>trades<span class="w"> </span>--start<span class="w"> </span><span class="m">09</span>:30…<span class="w"> </span>--end<span class="w"> </span><span class="m">09</span>:31…<span class="w"> </span>--plan
+<span class="go">{&quot;plan_id&quot;: &quot;5c41…&quot;, &quot;summary&quot;: {&quot;rows_affected&quot;: 12481, &quot;segments_reused&quot;: 127}}</span>
+
+<span class="gp">$ </span>h5i-db<span class="w"> </span>policy<span class="w"> </span><span class="nb">set</span><span class="w"> </span>market.db<span class="w"> </span><span class="nv">direct_delete</span><span class="o">=</span><span class="nb">false</span><span class="w">      </span><span class="c1"># agents must preview; humans can too</span>
+</code></pre></div>
+
+<h2 id="machine-readable-everything">Machine-readable everything<a class="headerlink" href="#machine-readable-everything" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Output</strong>: <code>--format json | jsonl | csv | arrow</code> on every command
+  (<a href="/manual/cli/#output-formats">formats</a>). <code>jsonl</code> is the natural choice for
+  streaming consumers.</li>
+<li><strong>Errors</strong>: a single JSON envelope on stderr,
+  <code>{"code", "message", "retryable", "hint"}</code>. <code>code</code> is a stable identifier
+  (<code>version_conflict</code>, <code>table_not_found</code>, <code>limit_exceeded</code>, …), <code>retryable</code>
+  says whether backing off and retrying can help, and <code>hint</code> names the next
+  thing to try.</li>
+<li><strong>Exit codes</strong> are stable and branchable: <code>0</code> ok, <code>2</code> user error,
+  <code>3</code> conflict, <code>4</code> limit exceeded, <code>5</code> internal
+  (<a href="/manual/cli/#errors-and-exit-codes">details</a>).</li>
+</ul>
+<p>In Python the same envelope arrives as a
+<a href="/api/exceptions/">typed exception hierarchy</a>: every <code>H5iError</code> carries
+<code>.code</code>, <code>.hint</code>, and <code>.retryable</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">batch</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">ConflictError</span><span class="p">:</span>
+    <span class="o">...</span>                      <span class="c1"># retryable: another writer won; re-read and retry</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="p">)</span>            <span class="c1"># not retryable: fix the call</span>
+</code></pre></div>
+
+<h2 id="resource-limits-as-flags">Resource limits as flags<a class="headerlink" href="#resource-limits-as-flags" title="Permanent link">#</a></h2>
+<p>A supervisor can hard-cap any call without touching the database:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>CLI</th>
+<th>Python</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--max-rows N</code></td>
+<td><code>sql(max_rows=N)</code></td>
+<td>Stop as soon as the result exceeds N rows, with a clean <code>limit_exceeded</code> error instead of silent truncation</td>
+</tr>
+<tr>
+<td><code>--timeout 30s</code></td>
+<td><code>sql(timeout=30)</code></td>
+<td>Deadline; cancels execution on expiry</td>
+</tr>
+<tr>
+<td><code>--memory-limit-mb N</code></td>
+<td><code>sql(memory_limit=N)</code></td>
+<td>Memory budget with disk spilling under pressure</td>
+</tr>
+<tr>
+<td><code>--max-bytes N</code></td>
+<td>—</td>
+<td>Cap output bytes at batch boundaries</td>
+</tr>
+<tr>
+<td>(open read-only)</td>
+<td><code>Database(path, read_only=True)</code></td>
+<td>Reject every write at the handle level</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="the-agent-output-profile">The agent output profile<a class="headerlink" href="#the-agent-output-profile" title="Permanent link">#</a></h3>
+<p>Passing a limit on every call only works if the caller remembers, and one
+forgotten flag can end a session. <code>H5I_DB_PROFILE=agent</code> moves the budget into
+the environment instead:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span><span class="nb">export</span><span class="w"> </span><span class="nv">H5I_DB_PROFILE</span><span class="o">=</span>agent
+<span class="gp">$ </span>h5i-db<span class="w"> </span>query<span class="w"> </span>market.db<span class="w"> </span><span class="s2">&quot;SELECT * FROM trades&quot;</span><span class="w"> </span>--format<span class="w"> </span>jsonl
+<span class="go">{&quot;ts&quot;:&quot;2026-07-01T09:30:00Z&quot;,&quot;symbol&quot;:&quot;AAPL&quot;,&quot;price&quot;:210.5}</span>
+<span class="go">… 1000 rows …</span>
+</code></pre></div>
+
+<p>stdout stops at 1000 rows or 1 MiB, and a JSON summary on stderr reports what
+was withheld:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">&quot;profile&quot;</span><span class="p">:</span><span class="s2">&quot;agent&quot;</span><span class="p">,</span><span class="nt">&quot;truncated&quot;</span><span class="p">:</span><span class="kc">true</span><span class="p">,</span><span class="nt">&quot;total_rows&quot;</span><span class="p">:</span><span class="mi">2841193</span><span class="p">,</span><span class="nt">&quot;returned_rows&quot;</span><span class="p">:</span><span class="mi">1000</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">&quot;full_result_path&quot;</span><span class="p">:</span><span class="s2">&quot;/tmp/h5i-db-results/result-….parquet&quot;</span><span class="p">,</span><span class="nt">&quot;full_result_rows&quot;</span><span class="p">:</span><span class="mi">2841193</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Nothing is lost, only withheld: the rows that did not fit are in that Parquet
+file. <code>H5I_DB_RESULT_DIR</code> moves where those land. Two properties hold in this
+mode. Output content never depends on whether stdout is a terminal, so a piped
+run produces the same bytes as an interactive one. And an explicit
+<code>--max-bytes</code> you pass yourself stays a hard <code>limit_exceeded</code> error rather
+than a soft truncation.</p>
+<h2 id="policy-gated-review">Policy-gated review<a class="headerlink" href="#policy-gated-review" title="Permanent link">#</a></h2>
+<p>The <a href="/manual/concepts/#the-mutation-policy">mutation policy</a> forces chosen
+operations through the previewable plan/apply flow:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>policy<span class="w"> </span><span class="nb">set</span><span class="w"> </span>market.db<span class="w"> </span><span class="nv">direct_delete</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="nv">direct_write</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="nv">direct_replace</span><span class="o">=</span><span class="nb">false</span>
+</code></pre></div>
+
+<p>An agent that then tries a direct delete gets a <code>policy_violation</code> error whose
+hint points at <code>--plan</code>. The staged plan carries exact affected-row counts and
+before/after samples; a human reviews it in the
+<a href="/manual/cli/#h5i-db-ui">UI</a> (<code>h5i-db ui market.db</code>) or via <code>plan show</code>, and
+applies or discards it. Every committed manifest records its
+<code>execution_mode</code> and plan hash, so the audit trail distinguishes reviewed
+from direct writes forever.</p>
+<p>Where the <em>mutation</em> policy gates who may write directly, a per-table
+<a href="/manual/cli/#h5i-db-data-policy">data policy</a> gates <em>what data may be written</em>:
+typed constraints (<code>not_null</code>, <code>compare</code>, <code>in_set</code>, composed with
+<code>and</code>/<code>or</code>/<code>not</code>) checked fail-closed on every write and at plan time. A
+violating batch is refused with <code>data_policy_violation</code> before it can land, so
+an agent can't quietly commit malformed rows.</p>
+<h2 id="patterns-that-work">Patterns that work<a class="headerlink" href="#patterns-that-work" title="Permanent link">#</a></h2>
+<ul>
+<li><strong>Branch per hypothesis:</strong> give each agent its own
+  <a href="/manual/concepts/#forks">fork</a> instead of a table-name convention:
+  <code>fork create &lt;db&gt; sweep --count 100</code> opens a hundred isolated, writable
+  workspaces in one catalog pass, <code>--fork &lt;name&gt;</code> scopes every subsequent
+  command to one of them, and <code>--meta</code> attaches the run's parameters where
+  <code>fork show</code> and the UI's fork monitor surface them. Compare results across
+  the whole sweep with <a href="/manual/sql/#forks"><code>forks('table')</code></a>, promote the
+  winner, and <code>fork drop</code> the rest in one batch. A human can watch the
+  sweep live in <code>h5i-db ui</code> (the Forks tab) while it runs.</li>
+<li><strong>Idempotent retries:</strong> appends racing another writer raise
+  <code>version_conflict</code> (exit 3 / <code>ConflictError</code>, <code>retryable: true</code>). The CLI
+  retries pure appends itself (<code>ingest --retries</code>, default 5); in Python,
+  <code>append()</code> retries internally as well. For read-modify-write flows, pass
+  <code>--expected-version</code> and re-derive on conflict rather than blindly retrying.</li>
+<li><strong>Pin what you read:</strong> have agents record the version they computed from
+  (<code>versions</code>, or read via <code>h5i('t', v)</code>), so every downstream artifact is
+  attributable to an exact input state. The cookbook works this through in
+  <a href="/cookbook/03_risk_and_production/02_reproducible_backtests/">reproducible backtests</a>
+  and the <a href="/cookbook/03_risk_and_production/05_live_paper_trading_loop/">paper-trading loop</a>.</li>
+<li><strong>Bound the pull, not the loop:</strong> a cutoff applied when the data leaves the
+  database survives the trip into pandas, where nothing else can enforce it.
+  <a href="/manual/cli/#point-in-time-reads"><code>query --decision-time &lt;ts&gt;</code></a> hides rows
+  stamped later and <code>--as-of</code> pins which commits exist; set
+  <code>H5I_DB_DECISION_TIME</code> to bound a whole session.</li>
+<li><strong>Measure what the data did afterwards.</strong> No cutoff can prevent a vendor
+  restating history, so measure it instead:
+  <a href="/manual/cli/#h5i-db-arrival-delta"><code>arrival-delta … --as-of &lt;decision-time&gt;</code></a>
+  re-runs a query at both read points and reports how much the answer moved.
+  Read <code>vacuous</code> before the number: on a database with no arrival history the
+  zero is arithmetic rather than evidence.</li>
+<li><strong>Orient in one call:</strong> <a href="/manual/cli/#h5i-db-context"><code>context</code></a> answers what
+  <code>tables</code>, <code>schema</code>, <code>sample</code> and <code>versions</code> answer, in one deterministic
+  document that also names any staged plan and the operations policy gates.</li>
+<li><strong>Notes are for provenance:</strong> <code>--note</code> / <code>note=</code> lands in the version
+  manifest; make agents write <em>why</em> ("re-mark after vendor restatement,
+  ticket DX-142"), and <code>versions</code> becomes your change log.</li>
+<li><strong>Incremental consumers use <code>tail</code>:</strong> strictly ordered commits mean
+  "give me exactly the rows since version N" is
+  <a href="/manual/sql/#tail"><code>tail('t', N)</code></a>, with no timestamp cursors.</li>
+</ul>
+    <nav class="page-nav"><a class="prev" href="/manual/sql/"><span class="dir">← Previous</span><span class="pn-title">SQL reference</span></a><a class="next" href="/manual/operations/"><span class="dir">Next →</span><span class="pn-title">Operations guide</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#machine-readable-everything">Machine-readable everything</a></li><li><a href="#resource-limits-as-flags">Resource limits as flags</a><ul><li><a href="#the-agent-output-profile">The agent output profile</a></li></ul></li><li><a href="#policy-gated-review">Policy-gated review</a></li><li><a href="#patterns-that-work">Patterns that work</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>
