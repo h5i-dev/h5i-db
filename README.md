@@ -66,6 +66,7 @@ db.append("trades", pa.table({
 }))
 
 df = db.sql("SELECT symbol, avg(price) AS px FROM trades GROUP BY symbol").to_pandas()
+# df = db.table("trades").group_by("symbol").agg(px=col("price").mean()).to_pandas()
 old = db.read("trades", version=1)                # time travel: read any past version
 
 plan = db.plan_delete_range("trades", 1_700_0_000_000)
