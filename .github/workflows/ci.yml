@@ -97,6 +97,46 @@ jobs:
           grep -q '^name:' skills/h5i-db/SKILL.md
           grep -q '^description:' skills/h5i-db/SKILL.md
 
+  # A translated README that quietly describes an older version is worse than
+  # no translation, because a reader cannot tell it is stale. This fails a PR
+  # that edits README.md while leaving every README.<lang>.md untouched.
+  # Escape hatch for changes that genuinely do not affect the translations
+  # (a typo, an English-only aside): put [skip i18n] in the PR title or in any
+  # commit message on the branch.
+  readme-i18n:
+    name: README translations kept in step
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Translations touched when README.md is
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          changed=$(git diff --name-only "$BASE" "$HEAD")
+          echo "$changed" | sed 's/^/  changed: /'
+          echo "$changed" | grep -qx 'README.md' || {
+            echo "README.md untouched — nothing to check."; exit 0; }
+          if printf '%s' "$PR_TITLE" | grep -qiF '[skip i18n]' \
+             || git log --format=%B "$BASE".."$HEAD" | grep -qiF '[skip i18n]'; then
+            echo "[skip i18n] found — exempting this PR."; exit 0
+          fi
+          if echo "$changed" | grep -qE '^README\..+\.md$'; then
+            echo "README.md and at least one translation changed together."; exit 0
+          fi
+          echo
+          echo "README.md changed but no translation did."
+          echo "Update the ones the change affects:"
+          for f in README.*.md; do echo "  $f"; done
+          echo
+          echo "If the change does not affect them (typo, English-only aside),"
+          echo "add [skip i18n] to the PR title or a commit message."
+          exit 1
+
   # Supply-chain gates: RustSec advisories, license allowlist, duplicate
   # crates, registry sources (deny.toml) + cargo-audit over Cargo.lock.
   supply-chain:
