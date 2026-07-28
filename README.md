@@ -5,10 +5,9 @@ Embedded, written in Rust.**
 
 - **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
   on OHLCV+VWAP rollups over 20M rows.
-- **Fork a database in milliseconds:** forks share data instead of copying it,
-  whatever the size. Agents can run wide trial-and-error loops (fork, mutate,
-  evaluate, discard) at almost zero cost, and you review a fork's diff before
-  merging.
+- **Fork a database in milliseconds:** forks share data instead of copying it. 
+  Agents can run wide trial-and-error loops (fork, mutate, evaluate, discard) 
+  at almost zero cost.
 - **Every write is an atomic, versioned commit:** any past version reads in
   O(1), so a bad ingest (human or agent) is one `restore` away from undone.
 - **Safety policies for agent writes:** previewable mutations, policy gates,
