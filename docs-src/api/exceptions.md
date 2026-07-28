@@ -2,6 +2,7 @@
 title: Exceptions
 description: "The typed error hierarchy: every h5i-db error carries a stable code, a hint you can act on, and a retryable flag."
 order: 3
+seo_title: "h5i_db exceptions and error codes"
 ---
 
 # Exceptions

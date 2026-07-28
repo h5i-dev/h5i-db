@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Designing market data schemas · h5i-db docs</title>
+  <meta name="description" content="A table in h5i-db is an Arrow schema plus a time column, persisted as immutable, time-sorted Parquet segments under versioned manifests.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/00_fundamentals/02_designing_market_data_schemas/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Designing market data schemas · h5i-db docs">
+  <meta property="og:description" content="A table in h5i-db is an Arrow schema plus a time column, persisted as immutable, time-sorted Parquet segments under versioned manifests.">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/00_fundamentals/02_designing_market_data_schemas/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Designing market data schemas · h5i-db docs">
+  <meta name="twitter:description" content="A table in h5i-db is an Arrow schema plus a time column, persisted as immutable, time-sorted Parquet segments under versioned manifests.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/02_designing_market_data_schemas/#article","headline":"Designing market data schemas","name":"Designing market data schemas","description":"A table in h5i-db is an Arrow schema plus a time column, persisted as immutable, time-sorted Parquet segments under versioned manifests.","url":"https://db.h5i.dev/cookbook/00_fundamentals/02_designing_market_data_schemas/","inLanguage":"en","dateModified":"2026-07-27","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/02_designing_market_data_schemas/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"Designing market data schemas","item":"https://db.h5i.dev/cookbook/00_fundamentals/02_designing_market_data_schemas/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/operations/">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Fundamentals</div><ul><li><a href="/cookbook/00_fundamentals/01_quickstart/">Quickstart: your first h5i-db market database</a></li><li><a href="/cookbook/00_fundamentals/02_designing_market_data_schemas/" class="active">Designing market data schemas</a></li><li><a href="/cookbook/00_fundamentals/03_ingestion_patterns/">Ingestion patterns: five sources, one table</a></li><li><a href="/cookbook/00_fundamentals/04_sql_tour_for_quants/">A SQL tour for quants</a></li><li><a href="/cookbook/00_fundamentals/05_time_travel_and_versioning/">Time travel and versioning: which version did my backtest see?</a></li><li><a href="/cookbook/00_fundamentals/06_previewable_mutations/">Previewable mutations: fix bad ticks without fearing the delete key</a></li><li><a href="/cookbook/00_fundamentals/07_streaming_appends_and_tail/">Streaming appends and tail(): a live feed on a versioned store</a></li><li><a href="/cookbook/00_fundamentals/08_maintenance/">Maintenance: verify, compact, vacuum</a></li><li><a href="/cookbook/00_fundamentals/09_dataframe_builder/">The DataFrame builder: queries as Python objects</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Fundamentals</span>
+<span class="sep">/</span>
+<span>Designing market data schemas</span></div>
+<h1>Designing market data schemas</h1>
+<p>A table in h5i-db is an Arrow schema plus a time column, persisted as
+immutable, time-sorted Parquet segments under versioned manifests. Immutable
+segments are what makes schema design the one decision you cannot cheaply
+revisit.</p>
+<p>The types you pick decide storage size and which SQL operators apply cleanly.
+The <code>time_column</code> and <code>sort_key</code> decide how well scans prune, and how fast
+ASOF joins and bar rollups run.</p>
+<p>In this recipe we:</p>
+<ol>
+<li>look at the three feeds every equity desk starts with,</li>
+<li>justify each type choice, column by column,</li>
+<li>declare <code>time_column</code> and <code>sort_key</code>, and say what they buy,</li>
+<li>probe the strict append contract: what h5i-db rejects at the door,</li>
+<li>map out which schema changes are cheap later, and which are a rebuild.</li>
+</ol>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+
+<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_schemas&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-the-data">1. The data<a class="headerlink" href="#1-the-data" title="Permanent link">#</a></h2>
+<p>Three feeds, three tables. Trades are the tick tape from <code>cu.make_trades</code>:
+one row per print.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td><code>timestamp[us, tz=UTC]</code></td>
+<td>trade timestamp, ascending</td>
+</tr>
+<tr>
+<td><code>symbol</code></td>
+<td><code>string</code></td>
+<td>ticker</td>
+</tr>
+<tr>
+<td><code>price</code></td>
+<td><code>float64</code></td>
+<td>trade price</td>
+</tr>
+<tr>
+<td><code>size</code></td>
+<td><code>int64</code></td>
+<td>shares traded</td>
+</tr>
+<tr>
+<td><code>exchange</code></td>
+<td><code>string</code></td>
+<td>reporting venue</td>
+</tr>
+<tr>
+<td><code>side</code></td>
+<td><code>string</code></td>
+<td><code>B</code> buyer-initiated, <code>S</code> seller-initiated</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">trades</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">trades_per_day</span><span class="o">=</span><span class="mi">5_000</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;trades: </span><span class="si">{</span><span class="n">trades</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">trades</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">trades</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">trades: 30,693 rows x 6 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>price</th>
+      <th>size</th>
+      <th>exchange</th>
+      <th>side</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:00.594488+00:00</td>
+      <td>MSFT</td>
+      <td>362.97</td>
+      <td>1</td>
+      <td>NASDAQ</td>
+      <td>S</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:01.205602+00:00</td>
+      <td>MSFT</td>
+      <td>363.04</td>
+      <td>100</td>
+      <td>ARCA</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:01.566281+00:00</td>
+      <td>MSFT</td>
+      <td>363.03</td>
+      <td>200</td>
+      <td>NYSE</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:02.098951+00:00</td>
+      <td>MSFT</td>
+      <td>363.02</td>
+      <td>300</td>
+      <td>IEX</td>
+      <td>B</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:30:02.652735+00:00</td>
+      <td>MSFT</td>
+      <td>362.99</td>
+      <td>1</td>
+      <td>NASDAQ</td>
+      <td>S</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Quotes are top-of-book snapshots: one row every time the best bid or offer
+changes, carrying <code>bid</code> / <code>ask</code> prices and <code>bid_size</code> / <code>ask_size</code> depth.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">quotes</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_quotes</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">quotes_per_day</span><span class="o">=</span><span class="mi">8_000</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;quotes: </span><span class="si">{</span><span class="n">quotes</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">quotes</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">quotes</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">quotes: 48,047 rows x 6 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>bid</th>
+      <th>ask</th>
+      <th>bid_size</th>
+      <th>ask_size</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:00.074233+00:00</td>
+      <td>MSFT</td>
+      <td>219.73</td>
+      <td>219.75</td>
+      <td>1200</td>
+      <td>500</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:00.910121+00:00</td>
+      <td>AAPL</td>
+      <td>86.28</td>
+      <td>86.30</td>
+      <td>300</td>
+      <td>200</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:01.689185+00:00</td>
+      <td>NVDA</td>
+      <td>256.50</td>
+      <td>256.58</td>
+      <td>300</td>
+      <td>600</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:01.924107+00:00</td>
+      <td>AAPL</td>
+      <td>86.27</td>
+      <td>86.30</td>
+      <td>500</td>
+      <td>1500</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:30:01.976125+00:00</td>
+      <td>AAPL</td>
+      <td>86.28</td>
+      <td>86.30</td>
+      <td>600</td>
+      <td>200</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Daily bars are the same three names rolled up to one row per symbol per
+session, with <code>ts</code> stamped at the 20:00 UTC close.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">daily</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_daily_prices</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">250</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;daily:  </span><span class="si">{</span><span class="n">daily</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">daily</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">daily</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">daily:  750 rows x 7 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>open</th>
+      <th>high</th>
+      <th>low</th>
+      <th>close</th>
+      <th>volume</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>AAPL</td>
+      <td>51.28</td>
+      <td>51.30</td>
+      <td>50.89</td>
+      <td>51.04</td>
+      <td>526289</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>MSFT</td>
+      <td>283.45</td>
+      <td>284.02</td>
+      <td>282.00</td>
+      <td>283.46</td>
+      <td>448788</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2023-01-02 20:00:00+00:00</td>
+      <td>NVDA</td>
+      <td>193.62</td>
+      <td>194.47</td>
+      <td>193.38</td>
+      <td>194.18</td>
+      <td>1295946</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2023-01-03 20:00:00+00:00</td>
+      <td>AAPL</td>
+      <td>52.18</td>
+      <td>52.35</td>
+      <td>51.86</td>
+      <td>51.99</td>
+      <td>315611</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2023-01-03 20:00:00+00:00</td>
+      <td>MSFT</td>
+      <td>291.72</td>
+      <td>292.44</td>
+      <td>290.22</td>
+      <td>292.41</td>
+      <td>322050</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="2-type-choices-for-tick-level-trades">2. Type choices for tick-level trades<a class="headerlink" href="#2-type-choices-for-tick-level-trades" title="Permanent link">#</a></h2>
+<p>The decisions that matter, column by column:</p>
+<ul>
+<li><strong><code>ts</code>: <code>timestamp[us, tz=UTC]</code>, non-nullable.</strong> Microseconds cover
+  consolidated-feed granularity. Timezone-aware UTC removes a whole class of
+  DST bugs: convert to exchange time at query time with <code>time_bucket</code>'s
+  timezone argument, never at storage time. Make it non-nullable, because a
+  print without a timestamp is not data. Every raw-unit argument elsewhere in
+  the API (plan ranges, gapfill steps, ASOF tolerances) is then in
+  microseconds too.</li>
+<li><strong><code>price</code>: <code>float64</code>.</strong> <code>decimal128</code> is exact and the right call in a
+  settlement ledger. At the research layer float64 wins: it round-trips
+  cent-grid equity prices exactly up to ~$10^{13}$, it is what every analytics
+  function (<code>vwap</code>, <code>ewma</code>, <code>stddev</code>, <code>corr</code>) expects, and it is half the
+  width. Keep decimals for books and records systems.</li>
+<li><strong><code>size</code>: <code>int64</code>.</strong> Never float. Share counts are integers, and int64
+  headroom covers everything from odd lots to index rebalance crosses with one
+  type.</li>
+<li><strong><code>symbol</code>, <code>exchange</code>, <code>side</code>: <code>utf8</code>.</strong> Parquet dictionary-encodes
+  low-cardinality strings inside the segment automatically. Plain <code>utf8</code> at the
+  schema layer therefore costs almost nothing on disk and keeps the schema
+  simple.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">trades_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;exchange&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+
+<span class="n">quotes_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;bid_size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ask_size&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+
+<span class="n">bars_1d_schema</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">timestamp</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">),</span> <span class="n">nullable</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;open&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;high&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;low&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span>
+        <span class="n">pa</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;volume&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="3-time_column-and-sort_key">3. <code>time_column</code> and <code>sort_key</code><a class="headerlink" href="#3-time_column-and-sort_key" title="Permanent link">#</a></h2>
+<p>Declaring <code>time_column="ts"</code> is not metadata decoration. It is the contract
+h5i-db builds everything else on:</p>
+<ul>
+<li>segments are stored <strong>sorted by <code>ts</code></strong>, and each segment's time range goes
+  into the manifest, so a <code>WHERE ts BETWEEN ...</code> predicate skips whole
+  segments without opening them;</li>
+<li><strong>ASOF joins</strong> and <strong><code>time_bucket</code> rollups</strong> stream over that sort order
+  instead of re-sorting your ticks on every query;</li>
+<li><code>append</code> can enforce feed semantics, because "later than everything stored"
+  is now well defined.</li>
+</ul>
+<p><code>sort_key=["ts", "symbol"]</code> adds a secondary order within each timestamp tie.
+More importantly, it groups rows so per-symbol scans touch contiguous runs of
+data. The rule: the sort key must start with the time column, and the column
+you filter by most often (almost always <code>symbol</code>) goes next.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">,</span> <span class="n">quotes_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;bars_1d&quot;</span><span class="p">,</span> <span class="n">bars_1d_schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">tables</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[&#x27;bars_1d&#x27;, &#x27;quotes&#x27;, &#x27;trades&#x27;]</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="p">[(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">,</span> <span class="n">quotes</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;bars_1d&quot;</span><span class="p">,</span> <span class="n">daily</span><span class="p">)]:</span>
+    <span class="n">commit</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;initial load&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">:</span><span class="s2">8s</span><span class="si">}</span><span class="s2"> v</span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;rows_total&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&gt;7,</span><span class="si">}</span><span class="s2"> rows, &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;segments_total&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> segment(s)&quot;</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">schema</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">trades   v1:  30,693 rows, 1 segment(s)
+quotes   v1:  48,047 rows, 1 segment(s)
+bars_1d  v1:     750 rows, 1 segment(s)</pre><pre>ts: timestamp[us, tz=UTC] not null
+symbol: string
+price: double
+size: int64
+exchange: string
+side: string</pre></div></div>
+<p>A quick query to confirm the schemas earn their keep: per-symbol quoted spread
+in basis points, straight off the quotes table. Plain <code>utf8</code> symbol columns
+group and filter exactly as you would hope, with no special "category" type at
+this layer.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">mid</span> <span class="o">=</span> <span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span> <span class="o">+</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">))</span> <span class="o">/</span> <span class="mi">2</span>
+
+<span class="p">(</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;quotes&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">quotes</span><span class="o">=</span><span class="n">count_star</span><span class="p">(),</span>
+        <span class="n">avg_spread_bps</span><span class="o">=</span><span class="p">(((</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">))</span> <span class="o">/</span> <span class="n">mid</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="o">*</span> <span class="mf">1e4</span><span class="p">)</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+        <span class="n">min_bid</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;bid&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+        <span class="n">max_ask</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ask&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>symbol</th>
+      <th>quotes</th>
+      <th>avg_spread_bps</th>
+      <th>min_bid</th>
+      <th>max_ask</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>AAPL</td>
+      <td>16564</td>
+      <td>1.76</td>
+      <td>86.04</td>
+      <td>87.76</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>MSFT</td>
+      <td>14687</td>
+      <td>1.76</td>
+      <td>216.74</td>
+      <td>224.45</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>NVDA</td>
+      <td>16796</td>
+      <td>1.75</td>
+      <td>251.23</td>
+      <td>262.48</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="4-what-strict-append-rejects">4. What strict append rejects<a class="headerlink" href="#4-what-strict-append-rejects" title="Permanent link">#</a></h2>
+<p><code>append</code> has feed semantics. The batch must match the declared schema, be
+sorted by the time column, and start at or after the table's current maximum
+timestamp. Everything else is rejected <em>before</em> anything is written, so the
+table head never moves on a failed append.</p>
+<p>In a database shared by a team, or written by an agent, that strictness is the
+point. Malformed vendor files and out-of-order backfills fail loudly at ingest
+instead of quietly corrupting downstream research.</p>
+<p>Every h5i-db exception carries a machine-readable <code>.code</code>, a <code>.retryable</code> flag
+and often a <code>.hint</code> with the recommended fix.</p>
+<p><strong>Rejection 1: schema mismatch.</strong> A vendor "helpfully" ships prices as
+float32 and forgets the <code>side</code> column:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">bad_schema_batch</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">(</span>
+    <span class="p">{</span>
+        <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">],</span>
+        <span class="s2">&quot;symbol&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">],</span>
+        <span class="s2">&quot;price&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">]</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">float32</span><span class="p">()),</span>   <span class="c1"># wrong width</span>
+        <span class="s2">&quot;size&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">],</span>
+        <span class="s2">&quot;exchange&quot;</span><span class="p">:</span> <span class="n">trades</span><span class="p">[</span><span class="s2">&quot;exchange&quot;</span><span class="p">][:</span><span class="mi">100</span><span class="p">],</span>
+        <span class="c1"># &#39;side&#39; column missing entirely</span>
+    <span class="p">}</span>
+<span class="p">)</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">bad_schema_batch</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rejected  code=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;message   </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hint      </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">&#39;(none - the message says it all)&#39;</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rejected  code=schema_mismatch
+message   [schema_mismatch] schema mismatch: expected 6 columns, got 5
+hint      (none - the message says it all)</pre></div></div>
+<p><strong>Rejection 2: unsorted data.</strong> The same rows, shuffled. This is the classic
+outcome of concatenating per-exchange files without a final sort:</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+
+<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">shuffled</span> <span class="o">=</span> <span class="n">trades</span><span class="o">.</span><span class="n">take</span><span class="p">(</span><span class="n">rng</span><span class="o">.</span><span class="n">permutation</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">trades</span><span class="p">)))</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">shuffled</span><span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rejected  code=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hint      </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rejected  code=sort_order_violation
+hint      append requires input sorted by the time column with min &gt;= current table max; use `write` or sort the input</pre></div></div>
+<p><strong>Rejection 3: overlapping time range.</strong> Re-delivering data the table already
+holds, so that the batch's minimum <code>ts</code> falls before the stored maximum, is
+refused for the same reason. <code>append</code> means <em>extend the feed</em>, never
+<em>interleave into history</em>. Deliberate restatements go through <code>write</code> or the
+previewable <code>plan_replace_range</code> flow, which recipes 05 and 06 cover.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">try</span><span class="p">:</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">trades</span><span class="p">)</span>  <span class="c1"># the exact batch already ingested</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rejected  code=</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;hint      </span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">hint</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rejected  code=sort_order_violation
+hint      append requires input sorted by the time column with min &gt;= current table max; use `write` or sort the input</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="c1"># The head never moved: still one data commit per table.</span>
+<span class="p">[{</span><span class="n">k</span><span class="p">:</span> <span class="n">v</span><span class="p">[</span><span class="n">k</span><span class="p">]</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;sequence&quot;</span><span class="p">,</span> <span class="s2">&quot;op&quot;</span><span class="p">,</span> <span class="s2">&quot;rows&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">k</span> <span class="ow">in</span> <span class="n">v</span><span class="p">}</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[{&#x27;sequence&#x27;: 0, &#x27;op&#x27;: &#x27;create&#x27;, &#x27;rows&#x27;: 0},
+ {&#x27;sequence&#x27;: 1, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 30693}]</pre></div></div>
+<h2 id="5-schema-evolution-know-the-limits-up-front">5. Schema evolution: know the limits up front<a class="headerlink" href="#5-schema-evolution-know-the-limits-up-front" title="Permanent link">#</a></h2>
+<p>Segments are immutable, so schemas are deliberately hard to change. Plan for
+the evolutions that are cheap and avoid the ones that are not.</p>
+<ul>
+<li><strong>Cheap:</strong> appending <em>trailing nullable</em> columns, which old segments read
+  back as NULL, and <em>widening</em> numerics (int32 → int64, float32 → float64).</li>
+<li><strong>Expensive:</strong> renames, type narrowing, reordering and dropping columns.
+  Each of those means writing a new table and backfilling it.</li>
+</ul>
+<p>The practical consequence is to start wide: <code>int64</code>, <code>float64</code>,
+<code>timestamp[us]</code>. And if a column <em>might</em> exist one day, such as a <code>condition</code>
+code on trades, it costs little to include it as nullable from day one.</p>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>A table is an Arrow schema plus a <code>time_column</code>. Segments are stored as
+  time-sorted Parquet, so declaring the time column buys pruning, streaming
+  <code>time_bucket</code> rollups and sort-free ASOF joins.</li>
+<li>Defaults that serve quant work well: <code>timestamp[us, tz=UTC]</code> non-nullable
+  for time, <code>float64</code> for prices at the research layer, <code>int64</code> for sizes,
+  plain <code>utf8</code> for symbols.</li>
+<li><code>sort_key=["ts", "symbol"]</code> must start with the time column. The secondary
+  key is what makes per-symbol scans touch contiguous data.</li>
+<li>Strict append rejects schema mismatches, unsorted batches and overlapping
+  time ranges before writing anything. Errors carry <code>.code</code> and <code>.hint</code>, and
+  the table head never moves on failure.</li>
+<li>Evolve schemas by trailing nullable adds and numeric widening. Anything else
+  is a rebuild, so start wide.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/00_fundamentals/01_quickstart/"><span class="dir">← Previous</span><span class="pn-title">Quickstart: your first h5i-db market database</span></a><a class="next" href="/cookbook/00_fundamentals/03_ingestion_patterns/"><span class="dir">Next →</span><span class="pn-title">Ingestion patterns: five sources, one table</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-type-choices-for-tick-level-trades">2. Type choices for tick-level trades</a></li><li><a href="#3-time_column-and-sort_key">3. time_column and sort_key</a></li><li><a href="#4-what-strict-append-rejects">4. What strict append rejects</a></li><li><a href="#5-schema-evolution-know-the-limits-up-front">5. Schema evolution: know the limits up front</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

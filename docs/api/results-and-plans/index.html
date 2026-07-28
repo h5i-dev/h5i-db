@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>h5i_db QueryResult and MutationPlan · h5i-db docs</title>
+  <meta name="description" content="Converting query results to Arrow, pandas, and Polars; previewing and applying mutation plans.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/api/results-and-plans/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="h5i_db QueryResult and MutationPlan · h5i-db docs">
+  <meta property="og:description" content="Converting query results to Arrow, pandas, and Polars; previewing and applying mutation plans.">
+  <meta property="og:url" content="https://db.h5i.dev/api/results-and-plans/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="h5i_db QueryResult and MutationPlan · h5i-db docs">
+  <meta name="twitter:description" content="Converting query results to Arrow, pandas, and Polars; previewing and applying mutation plans.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"APIReference","@id":"https://db.h5i.dev/api/results-and-plans/#article","headline":"h5i_db QueryResult and MutationPlan","name":"h5i_db QueryResult and MutationPlan","description":"Converting query results to Arrow, pandas, and Polars; previewing and applying mutation plans.","url":"https://db.h5i.dev/api/results-and-plans/","inLanguage":"en","dateModified":"2026-07-27","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/api/results-and-plans/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Python API","item":"https://db.h5i.dev/api/"},{"@type":"ListItem","position":3,"name":"QueryResult & MutationPlan","item":"https://db.h5i.dev/api/results-and-plans/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" class="active">Python API</a></li>
+    <li><a href="/cookbook/" >Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/operations/">Operations guide</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/" class="active">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/api/">Python API</a>
+<span class="sep">/</span>
+<span>QueryResult &amp; MutationPlan</span></div>
+<h1 id="queryresult-mutationplan"><code>QueryResult</code> &amp; <code>MutationPlan</code><a class="headerlink" href="#queryresult-mutationplan" title="Permanent link">#</a></h1>
+<p>Two small result objects returned by <a href="/api/database/"><code>Database</code></a>: the holder a
+finished query produces, and the staged handle a mutation plan produces.</p>
+<h2 id="queryresult">QueryResult<a class="headerlink" href="#queryresult" title="Permanent link">#</a></h2>
+<p>Returned by <a href="/api/database/#databasesql"><code>Database.sql()</code></a>. The query has
+already run; this holds its Arrow result and converts on demand, so data stays
+in Arrow until you ask for a specific frame type. For a query that has <em>not</em>
+run yet, see the <a href="/api/dataframe/">DataFrame builder</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">res</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT symbol, vwap(price, size) AS v FROM trades GROUP BY symbol&quot;</span><span class="p">)</span>
+<span class="n">res</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>     <span class="c1"># -&gt; pandas.DataFrame</span>
+<span class="nb">len</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>            <span class="c1"># -&gt; row count</span>
+</code></pre></div>
+
+<section class="api-member"><h3 id="queryresultto_arrow"><code><span class="api-name">QueryResult</span><span class="api-dot">.</span><span class="api-name">to_arrow</span></code><a class="headerlink" href="#queryresultto_arrow" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_arrow</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span>
+</code></pre></div><div class="api-body">
+
+<p>The underlying Arrow table, types preserved exactly (timestamps keep unit and
+timezone). Zero-copy.</p>
+</div></section><section class="api-member"><h3 id="queryresultto_pandas"><code><span class="api-name">QueryResult</span><span class="api-dot">.</span><span class="api-name">to_pandas</span></code><a class="headerlink" href="#queryresultto_pandas" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_pandas</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">pandas</span><span class="o">.</span><span class="n">DataFrame</span>
+</code></pre></div><div class="api-body">
+
+<p>Convert to a pandas DataFrame.</p>
+</div></section><section class="api-member"><h3 id="queryresultto_polars"><code><span class="api-name">QueryResult</span><span class="api-dot">.</span><span class="api-name">to_polars</span></code><a class="headerlink" href="#queryresultto_polars" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">to_polars</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="n">polars</span><span class="o">.</span><span class="n">DataFrame</span>
+</code></pre></div><div class="api-body">
+
+<p>Convert to a Polars DataFrame.</p>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>ImportError</code></dt>
+<dd>Polars is not installed (it is an optional dependency).</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="dunder-methods">Dunder methods<a class="headerlink" href="#dunder-methods" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="nb">len</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>     <span class="c1"># row count</span>
+<span class="nb">repr</span><span class="p">(</span><span class="n">res</span><span class="p">)</span>    <span class="c1"># repr of the underlying Arrow table</span>
+</code></pre></div><div class="api-body">
+
+</div></section><h2 id="mutationplan">MutationPlan<a class="headerlink" href="#mutationplan" title="Permanent link">#</a></h2>
+<p>A previewable, not-yet-published mutation, returned by
+<a href="/api/database/#databaseplan_replace_range"><code>plan_replace_range</code> / <code>plan_delete_range</code></a>
+and <a href="/api/database/#databaselist_plans"><code>list_plans</code></a>. The staged segments
+already exist on disk; publishing is a metadata-only atomic swap.</p>
+<div class="highlight"><pre><span></span><code><span class="n">plan</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_delete_range</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">t0_us</span><span class="p">,</span> <span class="n">t1_us</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;strip bad ticks&quot;</span><span class="p">)</span>
+
+<span class="n">plan</span><span class="o">.</span><span class="n">summary</span>            <span class="c1"># {&quot;rows_affected&quot;: 12481, &quot;segments_reused&quot;: 127, …}</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">before_sample</span>      <span class="c1"># pyarrow.Table of rows as they are now</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">after_sample</span>       <span class="c1"># pyarrow.Table of rows as they would become</span>
+
+<span class="n">plan</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>            <span class="c1"># publish (or plan.discard())</span>
+</code></pre></div>
+
+<section class="api-member"><h3 id="attributes">Attributes<a class="headerlink" href="#attributes" title="Permanent link">#</a></h3><div class="api-body">
+<dl>
+<dt><code>table</code> (<code>str</code>)</dt>
+<dd>Table the plan targets.</dd>
+<dt><code>plan_id</code> (<code>str</code>)</dt>
+<dd>UUID, also usable from the CLI (<code>h5i-db plan apply …</code>) and the review UI.</dd>
+<dt><code>summary</code> (<code>dict</code>)</dt>
+<dd>Machine-readable impact: affected rows, segments rewritten vs. reused.</dd>
+<dt><code>raw</code> (<code>dict</code>)</dt>
+<dd>The full plan document as stored.</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="mutationplanbefore_sample"><code><span class="api-name">MutationPlan</span><span class="api-dot">.</span><span class="api-name">before_sample</span></code><a class="headerlink" href="#mutationplanbefore_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">before_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
+
+<p>A property holding a sample of the affected rows <strong>before</strong> the mutation, or
+<code>None</code> when the plan carries no sample.</p>
+</div></section><section class="api-member"><h3 id="mutationplanafter_sample"><code><span class="api-name">MutationPlan</span><span class="api-dot">.</span><span class="api-name">after_sample</span></code><a class="headerlink" href="#mutationplanafter_sample" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">after_sample</span> <span class="o">-&gt;</span> <span class="n">pyarrow</span><span class="o">.</span><span class="n">Table</span> <span class="o">|</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
+
+<p>A property holding the same rows <strong>after</strong> the mutation would apply.</p>
+</div></section><section class="api-member"><h3 id="mutationplanapply"><code><span class="api-name">MutationPlan</span><span class="api-dot">.</span><span class="api-name">apply</span></code><a class="headerlink" href="#mutationplanapply" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">apply</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p>Publish the plan as a new version.</p>
+<p class="api-label">Returns</p>
+<p><code>dict</code> with commit metadata for the new version.</p>
+<p class="api-label">Raises</p>
+<dl>
+<dt><code>ConflictError</code></dt>
+<dd>The table head moved since the plan was made. <strong>Re-plan instead of
+retrying</strong>: the plan was computed against a base version that no longer
+reflects reality.</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="mutationplandiscard"><code><span class="api-name">MutationPlan</span><span class="api-dot">.</span><span class="api-name">discard</span></code><a class="headerlink" href="#mutationplandiscard" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">discard</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</code></pre></div><div class="api-body">
+
+<p>Drop the plan; its staged segments become vacuum candidates immediately.
+Abandoned plans (neither applied nor discarded) expire after 7 days; see
+<a href="/manual/operations/#mutation-plan-hygiene">plan hygiene</a>.</p>
+<div class="admonition tip">
+<p class="admonition-title">Policy interaction</p>
+<p>With the <a href="/manual/concepts/#the-mutation-policy">mutation policy</a>
+gating direct deletes/writes, the plan flow is the <em>only</em> way to mutate.
+That is the point: every destructive change gets a previewed, auditable
+checkpoint.</p>
+</div></div></section>
+    <nav class="page-nav"><a class="prev" href="/api/dataframe/"><span class="dir">← Previous</span><span class="pn-title">DataFrame builder</span></a><a class="next" href="/api/exceptions/"><span class="dir">Next →</span><span class="pn-title">Exceptions</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#queryresult">QueryResult</a><ul><li><a href="#queryresultto_arrow">QueryResult.to_arrow</a></li><li><a href="#queryresultto_pandas">QueryResult.to_pandas</a></li><li><a href="#queryresultto_polars">QueryResult.to_polars</a></li><li><a href="#dunder-methods">Dunder methods</a></li></ul></li><li><a href="#mutationplan">MutationPlan</a><ul><li><a href="#attributes">Attributes</a></li><li><a href="#mutationplanbefore_sample">MutationPlan.before_sample</a></li><li><a href="#mutationplanafter_sample">MutationPlan.after_sample</a></li><li><a href="#mutationplanapply">MutationPlan.apply</a></li><li><a href="#mutationplandiscard">MutationPlan.discard</a></li></ul></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

@@ -9,8 +9,10 @@ Sources:
                             executed notebooks, rendered as tutorials
   docs-src/templates/       page.html shell, docs.css, docs.js
 
-Output (committed, served by GitHub Pages):
-  docs/manual/*.html  docs/api/*.html  docs/cookbook/<section>/*.html
+Output (committed, served by GitHub Pages). Pages live at directory URLs
+(/manual/sql/), with a redirect stub left at each page's former *.html path:
+  docs/manual/<page>/index.html  docs/api/<page>/index.html
+  docs/cookbook/<section>/<page>/index.html
   docs/_static/docs.css  docs/_static/docs.js  docs/_static/search-index.json
 
 Usage:
@@ -61,13 +63,69 @@ STYLE_RE = re.compile(r"<style[^>]*>.*?</style>", re.S)
 SCRIPT_RE = re.compile(r"<script[^>]*>.*?</script>", re.S)
 TAG_RE = re.compile(r"<[^>]+>")
 
+# Search engines cut the <title> around 60 characters and the description
+# around 160. Both budgets are for the *rendered* string, so the branding
+# suffix has to be counted against the title, not added after it.
+TITLE_BUDGET = 60
+DESC_BUDGET = 155
+TITLE_SUFFIXES = (" · h5i-db docs", " · h5i-db", "")
+
+
+# In-content cross-links are authored relative to the source tree
+# ("sql.html", "../manual/concepts.html#forks"). Pages are served from
+# directory URLs, so rewrite them to root-absolute paths, which cannot go
+# stale when a page's depth changes.
+_DOC_LINK_RE = re.compile(r'href="(?!https?:|/|#)([^"]+?)\.html(#[^"]*)?"')
+
+
+def absolutize_links(body: str, section: str) -> str:
+    def sub(m: "re.Match") -> str:
+        target, frag = m.group(1), m.group(2) or ""
+        parts = [seg for seg in target.split("/") if seg not in ("", ".")]
+        while parts and parts[0] == "..":
+            parts.pop(0)
+            # a leading ".." meant "leave my section"; the rest names its own
+        if parts and parts[0] in ("manual", "api", "cookbook"):
+            path = "/".join(parts)
+        else:
+            path = f"{section}/" + "/".join(parts)
+        if path.endswith("/index"):
+            path = path[: -len("index")]
+        else:
+            path += "/"
+        return f'href="/{path}{frag}"'
+    return _DOC_LINK_RE.sub(sub, body)
+
+
+def write_redirect(old_url: str, new_url: str) -> None:
+    """Leave a redirect where a page used to live.
+
+    The site was published with `.html` URLs; moving to directory URLs would
+    otherwise 404 every link already in the wild. A zero-delay meta refresh
+    is the only redirect a static host can serve, and the canonical plus
+    noindex keep the stub itself out of the index.
+    """
+    dest = OUT / old_url
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    target = f"/{new_url}"
+    dest.write_text(
+        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+        f'<meta http-equiv="refresh" content="0; url={target}">\n'
+        '<meta name="robots" content="noindex, follow">\n'
+        f'<link rel="canonical" href="{BASE_URL}{new_url}">\n'
+        "<title>Moved</title>\n</head>\n<body>\n"
+        f'<p>This page moved to <a href="{target}">{target}</a>.</p>\n'
+        f'<script>location.replace("{target}" + location.hash);</script>\n'
+        "</body>\n</html>\n"
+    )
+
 
 # ── Page model ───────────────────────────────────────────────────
 
 
 @dataclass
 class Page:
-    url: str            # site-relative, e.g. "manual/quickstart.html"
+    url: str            # site-relative directory URL, e.g. "manual/quickstart/"
     section: str        # top nav section key: manual | api | cookbook
     title: str
     description: str
@@ -77,6 +135,38 @@ class Page:
     group: str = ""     # sidebar group label (cookbook sections)
     order: float = 0.0
     source: "Path | None" = None   # source markdown file, for llms-full.txt
+    # Title for <title>/og/twitter when the nav title is too terse to stand
+    # alone in a search result ("Overview" says nothing, and two sections
+    # both have one). Frontmatter `seo_title:`; defaults to `title`.
+    seo_title: str = ""
+
+
+def head_title(page: "Page") -> str:
+    """Search-result title: the page's own words first, branding only if it
+    still fits the ~60-character budget."""
+    base = page.seo_title or page.title
+    for suffix in TITLE_SUFFIXES:
+        if len(base) + len(suffix) <= TITLE_BUDGET:
+            return base + suffix
+    return base
+
+
+def trim_description(text: str) -> str:
+    """Fit a description to the snippet budget, preferring a clean sentence
+    end over a mid-thought ellipsis."""
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= DESC_BUDGET:
+        return text
+    # Longest run of whole sentences that fits.
+    out = ""
+    for part in re.findall(r"[^.!?]*[.!?]+(?:\s|$)", text):
+        if len(out) + len(part) > DESC_BUDGET:
+            break
+        out += part
+    out = out.strip()
+    if len(out) >= 80:          # enough to be a real snippet
+        return out
+    return text[: DESC_BUDGET - 1].rsplit(" ", 1)[0].rstrip(",;:·-") + "…"
 
 
 # ── Markdown rendering ───────────────────────────────────────────
@@ -251,8 +341,8 @@ def write_llms_index(manual, api, cookbook_groups, cookbook_index, skip_cookbook
 # `Sitemap:` line cross-submitted from https://h5i.dev/robots.txt).
 
 # Landing page first, then section indexes, then leaf pages.
-SITEMAP_PRIORITY = {"": "1.0", "manual/index.html": "0.9",
-                    "api/index.html": "0.9", "cookbook/index.html": "0.8",
+SITEMAP_PRIORITY = {"": "1.0", "manual/": "0.9",
+                    "api/": "0.9", "cookbook/": "0.8",
                     "demo/": "0.4", "demo/ui/": "0.4"}
 
 # Hand-maintained pages that build() does not generate but index.html links to.
@@ -451,8 +541,10 @@ def render_notebook(path: Path) -> tuple[str, str, str, str, list]:
                 )
                 description = re.sub(r"\s+", " ", TAG_RE.sub("", para))
                 description = re.sub(r"[*_`]|\[|\]\([^)]*\)", "", description)
-                if len(description) > 220:  # cut at a word boundary
-                    description = description[:220].rsplit(" ", 1)[0].rstrip(",;:") + " …"
+                # A notebook has no frontmatter, so its opening paragraph is
+                # the only description available; fit it to the snippet
+                # budget so search results end on a sentence, not mid-clause.
+                description = trim_description(description)
                 first_md = False
             body, cell_toc = render_markdown(source)
             toc_tokens.extend(cell_toc)
@@ -519,10 +611,52 @@ def sidebar_html(groups: list[tuple[str, list[Page]]], current: Page, root: str)
     return "\n".join(out)
 
 
+def jsonld(page: Page, trail: "list[tuple[str, str]]", modified: str) -> str:
+    """Structured data for one page: what it is, and where it sits.
+
+    The breadcrumb trail is the same one rendered above the article, so the
+    markup can never disagree with what a reader sees — which is the
+    condition search engines actually enforce.
+    """
+    kind = {"api": "APIReference"}.get(page.section, "TechArticle")
+    url = f"{BASE_URL}{page.url}"
+    doc = {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": kind,
+                "@id": f"{url}#article",
+                "headline": page.seo_title or page.title,
+                "name": page.seo_title or page.title,
+                "description": page.description,
+                "url": url,
+                "inLanguage": "en",
+                "dateModified": modified,
+                "isPartOf": {"@type": "WebSite", "@id": f"{BASE_URL}#website"},
+                "publisher": {"@type": "Organization", "@id": "https://h5i.dev/#org"},
+                "about": {"@type": "SoftwareApplication", "name": "h5i-db",
+                          "applicationCategory": "DeveloperApplication"},
+            },
+            {
+                "@type": "BreadcrumbList",
+                "@id": f"{url}#breadcrumb",
+                "itemListElement": [
+                    {"@type": "ListItem", "position": i + 1, "name": name,
+                     **({"item": item} if item else {})}
+                    for i, (name, item) in enumerate(trail)
+                ],
+            },
+        ],
+    }
+    return ('<script type="application/ld+json">'
+            + json.dumps(doc, separators=(",", ":"))
+            + "</script>")
+
+
 def render_page(page: Page, template: str, sidebar: str, breadcrumb: str,
-                prev_page: Page | None, next_page: Page | None) -> str:
-    depth = page.url.count("/")
-    root = "../" * depth if depth else "./"
+                prev_page: Page | None, next_page: Page | None,
+                structured_data: str = "") -> str:
+    root = "/"
     prevnext = ""
     if prev_page:
         prevnext += (
@@ -537,6 +671,8 @@ def render_page(page: Page, template: str, sidebar: str, breadcrumb: str,
     out = template
     for key, val in {
         "{{title}}": html.escape(page.title),
+        "{{head_title}}": html.escape(head_title(page)),
+        "{{jsonld}}": structured_data,
         "{{description}}": html.escape(page.description),
         "{{root}}": root,
         "{{canonical}}": f"{BASE_URL}{page.url}",
@@ -564,12 +700,13 @@ def load_md_pages(directory: Path, section: str) -> list[Page]:
         style = enhance_style(section, path.stem)
         if style:
             body = enhance_api_html(body, style)
-        slug = "index.html" if path.stem == "index" else f"{path.stem}.html"
+        slug = "" if path.stem == "index" else f"{path.stem}/"
         title = meta.get("title", path.stem.replace("-", " ").title())
         page = Page(
             url=f"{section}/{slug}",
             section=section,
             title=title,
+            seo_title=meta.get("seo_title", ""),
             description=meta.get("description", ""),
             body_html=body,
             toc_tokens=toc_tokens,
@@ -603,8 +740,8 @@ EXTRA_MANUAL = [
         {
             "title": "Operations guide",
             "description": "Running h5i-db in production: backup and restore, vacuum and "
-                           "compaction cadence, plan hygiene, disk-usage math, filesystem "
-                           "caveats, and the torn-HEAD recovery runbook.",
+                           "compaction cadence, disk-usage math, and the torn-HEAD "
+                           "recovery runbook.",
             "order": "7",
         },
     ),
@@ -619,7 +756,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
         _, body_src = parse_front_matter(path.read_text())
         body, toc_tokens = render_markdown(body_src)
         manual_pages.append(Page(
-            url=f"manual/{slug}.html",
+            url=f"manual/{slug}/",
             section="manual",
             title=meta["title"],
             description=meta["description"],
@@ -645,7 +782,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             for nb_path in sorted((nb_root / sec_dir).glob("*.ipynb")):
                 title, desc, body, search_text, toc_tokens = render_notebook(nb_path)
                 page = Page(
-                    url=f"cookbook/{sec_dir}/{nb_path.stem}.html",
+                    url=f"cookbook/{sec_dir}/{nb_path.stem}/",
                     section="cookbook",
                     title=title,
                     description=desc,
@@ -672,14 +809,14 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             cards = []
             for i, p in enumerate(cookbook_groups[sec_label], 1):
                 cards.append(
-                    f'<a class="card" href="{p.url.split("cookbook/", 1)[1]}">'
+                    f'<a class="card" href="/{p.url}">'
                     f'<span class="card-no">{i:02d}</span>'
                     f'<span class="card-title">{html.escape(p.title)}</span>'
                     f'<span class="card-desc">{html.escape(p.description)}</span></a>'
                 )
             idx_parts.append(f'<div class="card-grid">{"".join(cards)}</div>')
         cookbook_index = Page(
-            url="cookbook/index.html",
+            url="cookbook/",
             section="cookbook",
             title="Cookbook",
             description="Executed notebook tutorials for h5i-db: fundamentals, market data "
@@ -705,7 +842,7 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             groups.append(("Cookbook", [cookbook_index]))
             for _sec_dir, sec_label in COOKBOOK_SECTIONS:
                 sec_pages = cookbook_groups[sec_label]
-                if page.group == sec_label or page.url == "cookbook/index.html":
+                if page.group == sec_label or page.url == "cookbook/":
                     if page.group == sec_label:
                         groups.append((sec_label, sec_pages))
         else:
@@ -719,9 +856,17 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
 
     # ── Write pages ─────────────────────────────────────────────
     section_labels = {"manual": "Manual", "api": "Python API", "cookbook": "Cookbook"}
+    today = datetime.date.today().isoformat()
     for i, page in enumerate(ordered):
-        depth = page.url.count("/")
-        root = "../" * depth if depth else "./"
+        root = "/"
+        # One trail, rendered twice: as the visible breadcrumb and as the
+        # BreadcrumbList. A group (cookbook section) has no page of its own,
+        # so it is a name without an `item`.
+        trail = [("h5i-db", BASE_URL),
+                 (section_labels[page.section], f"{BASE_URL}{page.section}/")]
+        if page.group:
+            trail.append((page.group, ""))
+        trail.append((page.title, f"{BASE_URL}{page.url}"))
         crumbs = [f'<a href="{root}">h5i-db</a>', '<span class="sep">/</span>',
                   f'<a href="{root}{page.section}/">{section_labels[page.section]}</a>']
         if page.group:
@@ -729,15 +874,20 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
         crumbs += ['<span class="sep">/</span>', f"<span>{html.escape(page.title)}</span>"]
         prev_page = ordered[i - 1] if i > 0 else None
         next_page = ordered[i + 1] if i + 1 < len(ordered) else None
+        page.body_html = absolutize_links(page.body_html, page.section)
         html_out = render_page(
             page, template,
             sidebar_html(groups_for(page), page, root),
             "\n".join(crumbs),
             prev_page, next_page,
+            jsonld(page, trail, today),
         )
-        dest = OUT / page.url
+        dest = OUT / page.url / "index.html"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(html_out)
+        # Where this page used to live, before directory URLs.
+        if page.url.rstrip("/") and not page.url.endswith(("manual/", "api/", "cookbook/")):
+            write_redirect(page.url.rstrip("/") + ".html", page.url)
 
     # ── Static assets ───────────────────────────────────────────
     static = OUT / "_static"

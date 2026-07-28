@@ -4,6 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>h5i-db · overview film</title>
+<meta name="description" content="A 60-second animated tour of h5i-db: benchmark numbers against Polars, DuckDB, pandas and PyArrow, and what versioned storage buys you.">
+<link rel="canonical" href="https://db.h5i.dev/demo/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="h5i-db">
+<meta property="og:title" content="h5i-db overview film">
+<meta property="og:description" content="A 60-second animated tour of h5i-db: benchmark numbers against Polars, DuckDB, pandas and PyArrow, and what versioned storage buys you.">
+<meta property="og:url" content="https://db.h5i.dev/demo/">
+<meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="h5i-db overview film">
+<meta name="twitter:description" content="A 60-second animated tour of h5i-db: benchmark numbers against Polars, DuckDB, pandas and PyArrow, and what versioned storage buys you.">
 <link rel="icon" type="image/png" href="../_static/logo.png">
 <style>
 :root{
@@ -37,8 +48,8 @@ html,body{height:100%;background:var(--bg);overflow:hidden}
 .cur{display:inline-block;width:10px;height:21px;background:var(--text);vertical-align:-4px}
 .titlecard{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
   justify-content:center;text-align:center;gap:22px}
-.titlecard h1{font-size:54px;font-weight:700;letter-spacing:-.01em}
-.titlecard h1 b{color:var(--redtext)}
+.titlecard h1,.titlecard h2{font-size:54px;font-weight:700;letter-spacing:-.01em}
+.titlecard h1 b,.titlecard h2 b{color:var(--redtext)}
 .titlecard p{font-size:22px;color:var(--dim);max-width:760px;line-height:1.6}
 .titlecard .mono{font-family:var(--mono);font-size:17px;color:var(--faint)}
 .cols{display:flex;gap:28px;height:100%}
@@ -60,6 +71,7 @@ html,body{height:100%;background:var(--bg);overflow:hidden}
 .bnum.ours{top:5px;color:#fff;font-weight:700}
 .bnum.pols{top:33px}
 </style>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://db.h5i.dev/demo/#webpage","name":"h5i-db overview film","description":"A 60-second animated tour of h5i-db: benchmark numbers against Polars, DuckDB, pandas and PyArrow, and what versioned storage buys you.","url":"https://db.h5i.dev/demo/","inLanguage":"en","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/demo/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"h5i-db overview film","item":"https://db.h5i.dev/demo/"}]}]}</script>
 </head>
 <body>
 <div id="stage">
@@ -106,7 +118,7 @@ html,body{height:100%;background:var(--bg);overflow:hidden}
   <!-- scene 3: performance -->
   <div class="scene" id="s3">
     <div class="titlecard" style="justify-content:flex-start;padding-top:6px">
-      <h1 style="font-size:34px">disk-backed, 20M rows · <b>vs the best of Polars · DuckDB · pandas · PyArrow</b></h1>
+      <h2 style="font-size:34px">disk-backed, 20M rows · <b>vs the best of Polars · DuckDB · pandas · PyArrow</b></h2>
     </div>
     <div class="bars" style="margin-top:90px">
       <div class="barrow" id="b0"><span class="bl">time-range scan 0.01%</span>
@@ -131,7 +143,7 @@ plus time travel, snapshots, and crash-safe commits none of the baselines have</
   <!-- scene 4: close -->
   <div class="scene" id="s4">
     <div class="titlecard">
-      <h1>quant-grade speed.<br><b>agent-grade safety.</b></h1>
+      <h2>quant-grade speed.<br><b>agent-grade safety.</b></h2>
       <p class="mono">h5i-db init market.db · h5i-db ui market.db · pip install h5i-db</p>
     </div>
   </div>

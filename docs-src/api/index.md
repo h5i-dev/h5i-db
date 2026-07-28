@@ -2,6 +2,7 @@
 title: Overview
 description: "The h5i_db Python library: install, the five-minute tour, data interchange, and error handling."
 order: 0
+seo_title: "h5i-db Python API (h5i_db)"
 ---
 
 # Python API

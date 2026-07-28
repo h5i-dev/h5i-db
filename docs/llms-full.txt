@@ -9,7 +9,7 @@ This file concatenates the manual and Python API reference as plain markdown for
 
 ---
 
-# Overview   (https://db.h5i.dev/manual/index.html)
+# Overview   (https://db.h5i.dev/manual/)
 
 h5i-db is a fast analytical database for quantitative
 finance and time-series workloads: an embedded, versioned store with DataFusion SQL,
@@ -71,7 +71,7 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
 
 ---
 
-# Installation   (https://db.h5i.dev/manual/installation.html)
+# Installation   (https://db.h5i.dev/manual/installation/)
 
 h5i-db ships as two installable artifacts backed by the same Rust core: the
 `h5i-db` command-line tool and the `h5i_db` Python library. Install either or
@@ -133,7 +133,7 @@ Next: the [Quickstart](quickstart.html).
 
 ---
 
-# Quickstart   (https://db.h5i.dev/manual/quickstart.html)
+# Quickstart   (https://db.h5i.dev/manual/quickstart/)
 
 Five minutes from an empty directory to time-series SQL with time travel. The
 CLI and the Python library drive the same engine and the same on-disk format,
@@ -261,7 +261,7 @@ except h5i_db.ConflictError as e:     # another writer won the race
 
 ---
 
-# Migrating from DuckDB   (https://db.h5i.dev/manual/migrating-from-duckdb.html)
+# Migrating from DuckDB   (https://db.h5i.dev/manual/migrating-from-duckdb/)
 
 h5i-db does **not** read `.duckdb` files directly, and that is deliberate. DuckDB's
 on-disk format is an internal, engine-versioned block format; a native reader
@@ -455,7 +455,7 @@ are in the
 
 ---
 
-# Core concepts   (https://db.h5i.dev/manual/concepts.html)
+# Core concepts   (https://db.h5i.dev/manual/concepts/)
 
 h5i-db rests on a handful of ideas. Once they click, every command and API
 method is predictable.
@@ -712,7 +712,7 @@ Cadence and disk-usage math: [Operations guide](operations.html).
 
 ---
 
-# CLI reference   (https://db.h5i.dev/manual/cli.html)
+# CLI reference   (https://db.h5i.dev/manual/cli/)
 
 ```console
 $ h5i-db <command> <db> [args…] [--format table|json|jsonl|csv|arrow]
@@ -1275,7 +1275,7 @@ no API key).
 
 ---
 
-# SQL reference   (https://db.h5i.dev/manual/sql.html)
+# SQL reference   (https://db.h5i.dev/manual/sql/)
 
 h5i-db speaks full DataFusion SQL (joins, CTEs, window functions,
 `date_trunc`, `stddev`, `corr`, `approx_percentile_cont`, `INTERVAL`
@@ -1542,7 +1542,7 @@ and [Performance tuning](../cookbook/03_risk_and_production/10_performance_tunin
 
 ---
 
-# Agents & automation   (https://db.h5i.dev/manual/agents.html)
+# Agents & automation   (https://db.h5i.dev/manual/agents/)
 
 h5i-db needs no MCP server or custom protocol to be driven by AI agents,
 schedulers, or CI: agents use the same CLI and Python API as everyone else.
@@ -1697,7 +1697,7 @@ an agent can't quietly commit malformed rows.
 
 ---
 
-# Operations guide   (https://db.h5i.dev/manual/operations.html)
+# Operations guide   (https://db.h5i.dev/manual/operations/)
 
 How to run an h5i-db database in production: backup and restore, vacuum and
 compaction cadence, plan hygiene, disk-usage math, filesystem caveats, and
@@ -2009,7 +2009,7 @@ the table now stands.
 
 ---
 
-# Overview   (https://db.h5i.dev/api/index.html)
+# Overview   (https://db.h5i.dev/api/)
 
 The <code>h5i_db</code> package is an ergonomic wrapper over the
 native Rust engine. All tabular data crosses the boundary as Arrow, so it plugs
@@ -2096,7 +2096,7 @@ itself as internal.
 
 ---
 
-# Database   (https://db.h5i.dev/api/database.html)
+# Database   (https://db.h5i.dev/api/database/)
 
 An h5i-db database directory: the top-level handle everything hangs off. A
 database is a plain directory on disk; there is no server. The handle is a
@@ -2689,7 +2689,7 @@ Structural integrity check: checksum chain and object existence.
 
 ---
 
-# DataFrame builder   (https://db.h5i.dev/api/dataframe.html)
+# DataFrame builder   (https://db.h5i.dev/api/dataframe/)
 
 `db.table(...)` starts a **lazy** query you build up with methods instead of
 writing a SQL string. Nothing runs until a terminal method like `.collect()`.
@@ -3054,7 +3054,7 @@ into `db.sql()` and keep going from there.
 
 ---
 
-# QueryResult & MutationPlan   (https://db.h5i.dev/api/results-and-plans.html)
+# QueryResult & MutationPlan   (https://db.h5i.dev/api/results-and-plans/)
 
 Two small result objects returned by [`Database`](database.html): the holder a
 finished query produces, and the staged handle a mutation plan produces.
@@ -3196,7 +3196,7 @@ Abandoned plans (neither applied nor discarded) expire after 7 days; see
 
 ---
 
-# Exceptions   (https://db.h5i.dev/api/exceptions.html)
+# Exceptions   (https://db.h5i.dev/api/exceptions/)
 
 Every h5i-db failure raises a subclass of `h5i_db.H5iError`, and every
 instance carries the same structured envelope the CLI prints on stderr:
