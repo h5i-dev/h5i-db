@@ -11,8 +11,8 @@ against.
     panel.ic().to_pandas()
     panel.quantile_returns()
 
-Divergences from alphalens are deliberate, enumerated, and tested; see
-``docs-src/manual/quant_divergences.md``.
+Divergences from alphalens are deliberate, enumerated, and tested; see the
+divergence table in ``docs-src/manual/quant.md``.
 """
 
 from __future__ import annotations

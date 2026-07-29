@@ -13,6 +13,7 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [CLI reference](https://db.h5i.dev/manual/cli/): Every command, flag, output format, and exit code of the h5i-db command-line tool.
 - [SQL reference](https://db.h5i.dev/manual/sql/): h5i-db's SQL beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill and resample, tail, time_bucket, vwap, ewma, and rolling sugar.
 - [Agents & automation](https://db.h5i.dev/manual/agents/): The machine contract: structured output and errors, stable exit codes, resource limits as flags, and policy-gated review for AI agents and pipelines.
+- [Quant workflows](https://db.h5i.dev/manual/quant/): Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.
 - [Operations guide](https://db.h5i.dev/manual/operations/): Running h5i-db in production: backup and restore, vacuum and compaction cadence, disk-usage math, and the torn-HEAD recovery runbook.
 
 ## Python API
@@ -57,6 +58,7 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [Intraday seasonality: volume U-shape, volatility smile, spread decay](https://db.h5i.dev/cookbook/02_alpha_research/08_intraday_seasonality/): Almost every execution and alpha model conditions on time of day. Volume concentrates at the open and close, volatility peaks in the first hour, spreads…
 - [Lead-lag discovery: cross-correlations on irregular ticks](https://db.h5i.dev/cookbook/02_alpha_research/09_lead_lag/): Who moves first? Lead-lag analysis pairs related instruments: index against futures, ADR against home listing, correlated FX crosses.
 - [Portfolio rebalancing with versioned holdings](https://db.h5i.dev/cookbook/02_alpha_research/10_portfolio_rebalancing/): A portfolio book is the canonical versioned dataset. " become version queries rather than spreadsheet archaeology.
+- [Retrieval-augmented forecasting: historical analogs as a knowledge base](https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/): "What happened the last twenty times the tape looked like this?" Analog forecasting is one of the oldest ideas in the business. Retrieval-augmented…
 
 ## Cookbook: Risk & production
 - [VaR and Expected Shortfall with an auditable risk table](https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/): A risk number nobody can reproduce is a liability.
