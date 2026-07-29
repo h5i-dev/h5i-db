@@ -286,3 +286,117 @@ async fn candles_ingest_as_bars_and_keep_their_close_stamp() {
         1
     );
 }
+
+// ---------------------------------------------------------------------------
+// idempotent ingestion (Tier 2, item 6)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn reloading_the_same_plan_writes_nothing_twice() {
+    // The failure this prevents: the natural response to a partial failure
+    // is to run the loader again, which without a digest doubles the book.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("idem.db")).await.unwrap();
+    let plan = hyperliquid_plan();
+
+    let first = write_plan(&db, &plan, UnixNanos::new(0)).await.unwrap();
+    assert!(first.was_written());
+    let books_after_first = store::read_book_events(&db, ReadAt::Latest, None)
+        .await
+        .unwrap()
+        .len();
+
+    let second = write_plan(&db, &plan, UnixNanos::new(0)).await.unwrap();
+    assert!(!second.was_written(), "a reload must be recognised");
+    assert_eq!(first.digest(), second.digest());
+    assert_eq!(
+        store::read_book_events(&db, ReadAt::Latest, None)
+            .await
+            .unwrap()
+            .len(),
+        books_after_first,
+        "no rows were duplicated"
+    );
+}
+
+#[tokio::test]
+async fn two_plans_over_the_same_window_are_merged_before_writing() {
+    // Two venues covering the same hours share a book_deltas table, so
+    // they are one load, not two: merging keeps the stream in time order,
+    // which is what an append requires.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("two.db")).await.unwrap();
+
+    let combined = hyperliquid_plan().merge(polymarket_plan());
+    let outcome = write_plan(&db, &combined, UnixNanos::new(0)).await.unwrap();
+    assert!(outcome.was_written());
+    assert_ne!(combined.digest(), hyperliquid_plan().digest());
+
+    let log = store::read_ingest_log(&db).await.unwrap();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].instruments, 2);
+}
+
+#[tokio::test]
+async fn loading_an_earlier_window_afterwards_says_what_to_do_instead() {
+    // A backfill is refused rather than interleaved: a book rebuilt from
+    // interleaved appends is neither the old one nor the new one.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("backfill.db")).await.unwrap();
+    write_plan(&db, &hyperliquid_plan(), UnixNanos::new(0))
+        .await
+        .unwrap();
+
+    let error = write_plan(&db, &polymarket_plan(), UnixNanos::new(0))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("append forward in time"), "{error}");
+    assert!(error.contains("merge"), "the message must say what to do");
+}
+
+#[tokio::test]
+async fn the_digest_depends_on_content_not_on_assembly_order() {
+    // Two plans built differently but covering the same data must collide,
+    // or a reload assembled another way would write again.
+    let one = hyperliquid_plan();
+    let mut records = one.book_events.clone();
+    records.reverse();
+    records.sort_by_key(|record| record.ts().get());
+    let two = IngestPlan::new("hyperliquid")
+        .with_instruments(one.instruments.clone())
+        .with_book_events(records)
+        .with_funding(one.funding.clone());
+    assert_eq!(one.digest(), two.digest());
+}
+
+#[tokio::test]
+async fn changing_a_single_price_changes_the_digest() {
+    let plan = hyperliquid_plan();
+    let mut altered = plan.clone();
+    altered.funding = h5i_db_venues::hyperliquid::parse_funding(
+        r#"[{"coin":"BTC","fundingRate":"0.0002","premium":"0.0","time":3600000},
+            {"coin":"BTC","fundingRate":"0.0001","premium":"0.0","time":7200000}]"#,
+        "BTC-PERP",
+    )
+    .unwrap();
+    assert_ne!(plan.digest(), altered.digest());
+}
+
+#[tokio::test]
+async fn the_ingest_log_records_what_was_loaded() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("log.db")).await.unwrap();
+    let plan = hyperliquid_plan();
+    write_plan(&db, &plan, UnixNanos::new(42)).await.unwrap();
+
+    let log = store::read_ingest_log(&db).await.unwrap();
+    assert_eq!(log.len(), 1);
+    let entry = &log[0];
+    assert_eq!(entry.vendor, "hyperliquid");
+    assert_eq!(entry.records, plan.record_count() as i64);
+    assert_eq!(entry.instruments, 1);
+    assert_eq!(entry.ts, UnixNanos::new(42));
+    // The window recorded is the span the data actually covers.
+    assert_eq!(entry.window, plan.loaded_window());
+}

@@ -39,6 +39,7 @@
 //! tables.
 
 use h5i_db_backtest::error::{BacktestError, Result};
+use h5i_db_backtest::event::MarketEvent;
 use h5i_db_backtest::event::Record;
 use h5i_db_backtest::instrument::Instrument;
 use h5i_db_backtest::settlement::Resolution;
@@ -123,6 +124,43 @@ impl IngestPlan {
         }
     }
 
+    /// A content hash of everything this plan would write.
+    ///
+    /// Two plans covering the same data have the same digest regardless of
+    /// how they were assembled, which is what makes a reload recognisable.
+    /// Every field that ends up in a table contributes; the vendor name
+    /// does too, so the same bytes from two sources are still two loads.
+    pub fn digest(&self) -> String {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(self.vendor.as_bytes());
+        for instrument in &self.instruments {
+            hasher.update(instrument.id.as_str().as_bytes());
+            hasher.update(&instrument.outcome_count().to_le_bytes());
+            hasher.update(&instrument.tick_size.raw().to_le_bytes());
+        }
+        for (label, stream) in [
+            (b"b".as_slice(), &self.book_events),
+            (b"t".as_slice(), &self.trades),
+            (b"f".as_slice(), &self.funding),
+        ] {
+            hasher.update(label);
+            for record in stream {
+                hasher.update(&record.stamps.ts_event.get().to_le_bytes());
+                hasher.update(&record.stamps.ts_init.get().to_le_bytes());
+                hasher.update(record.instrument.as_str().as_bytes());
+                hasher.update(&record.outcome.0.to_le_bytes());
+                hasher.update(record.event.kind().as_bytes());
+                hash_event(&mut hasher, &record.event);
+            }
+        }
+        for resolution in &self.resolutions {
+            hasher.update(resolution.instrument.as_str().as_bytes());
+            hasher.update(&resolution.winner.0.to_le_bytes());
+            hasher.update(&resolution.observable_at.get().to_le_bytes());
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
     pub fn record_count(&self) -> usize {
         self.book_events.len() + self.trades.len() + self.funding.len()
     }
@@ -192,10 +230,81 @@ impl IngestPlan {
     }
 }
 
+/// Hash the payload of one event, so two different books do not collide.
+fn hash_event(hasher: &mut blake3::Hasher, event: &MarketEvent) {
+    match event {
+        MarketEvent::BookSnapshot { bids, asks } => {
+            for (side, levels) in [(b"B".as_slice(), bids), (b"A".as_slice(), asks)] {
+                hasher.update(side);
+                for (price, size) in levels {
+                    hasher.update(&price.raw().to_le_bytes());
+                    hasher.update(&size.raw().to_le_bytes());
+                }
+            }
+        }
+        MarketEvent::BookDelta(delta) => {
+            hasher.update(delta.side.as_str().as_bytes());
+            hasher.update(&delta.price.raw().to_le_bytes());
+            hasher.update(&delta.size.raw().to_le_bytes());
+        }
+        MarketEvent::Trade { price, size, aggressor } => {
+            hasher.update(&price.raw().to_le_bytes());
+            hasher.update(&size.raw().to_le_bytes());
+            hasher.update(aggressor.map(|s| s.as_str()).unwrap_or("?").as_bytes());
+        }
+        MarketEvent::Funding { rate } => {
+            hasher.update(&rate.raw().to_le_bytes());
+        }
+        MarketEvent::Bar { open, high, low, close, volume } => {
+            for value in [open.raw(), high.raw(), low.raw(), close.raw()] {
+                hasher.update(&value.to_le_bytes());
+            }
+            hasher.update(&volume.raw().to_le_bytes());
+        }
+        MarketEvent::Gap => {}
+    }
+}
+
+/// What a call to [`write_plan`] did.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum IngestOutcome {
+    /// The plan was new and its rows were written.
+    Written { digest: String, records: usize },
+    /// An identical plan was already present; nothing was written.
+    AlreadyPresent { digest: String },
+}
+
+impl IngestOutcome {
+    pub fn digest(&self) -> &str {
+        match self {
+            IngestOutcome::Written { digest, .. } => digest,
+            IngestOutcome::AlreadyPresent { digest } => digest,
+        }
+    }
+
+    pub fn was_written(&self) -> bool {
+        matches!(self, IngestOutcome::Written { .. })
+    }
+}
+
 /// Commit a plan to the canonical tables, creating them if needed.
-pub async fn write_plan(db: &Database, plan: &IngestPlan, known_at: UnixNanos) -> Result<()> {
+///
+/// **Idempotent.** A plan whose digest is already in the ingest log is
+/// skipped, so the natural response to a partial failure -- run it again --
+/// does not silently double the data. A doubled book is not obviously wrong
+/// until a fill happens at an impossible size, which is a long way from the
+/// cause.
+pub async fn write_plan(
+    db: &Database,
+    plan: &IngestPlan,
+    known_at: UnixNanos,
+) -> Result<IngestOutcome> {
     plan.validate()?;
+    let digest = plan.digest();
     store::create_market_data_tables(db).await?;
+    if already_ingested(db, &digest).await? {
+        return Ok(IngestOutcome::AlreadyPresent { digest });
+    }
     if !plan.instruments.is_empty() {
         store::write_instruments(db, &plan.instruments, known_at).await?;
     }
@@ -211,7 +320,36 @@ pub async fn write_plan(db: &Database, plan: &IngestPlan, known_at: UnixNanos) -
     if !plan.resolutions.is_empty() {
         store::write_resolutions(db, &plan.resolutions).await?;
     }
-    Ok(())
+    record_ingest(db, plan, &digest, known_at).await?;
+    Ok(IngestOutcome::Written {
+        digest,
+        records: plan.record_count(),
+    })
+}
+
+async fn already_ingested(db: &Database, digest: &str) -> Result<bool> {
+    let entries = store::read_ingest_log(db).await?;
+    Ok(entries.iter().any(|entry| entry.digest == digest))
+}
+
+async fn record_ingest(
+    db: &Database,
+    plan: &IngestPlan,
+    digest: &str,
+    known_at: UnixNanos,
+) -> Result<()> {
+    store::write_ingest_log(
+        db,
+        store::IngestEntry {
+            ts: known_at,
+            vendor: plan.vendor.to_string(),
+            digest: digest.to_string(),
+            records: plan.record_count() as i64,
+            window: plan.loaded_window(),
+            instruments: plan.instruments.len() as i64,
+        },
+    )
+    .await
 }
 
 #[cfg(test)]

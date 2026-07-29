@@ -39,7 +39,10 @@ fn core_err(error: h5i_db_core::Error) -> BacktestError {
 
 /// Create every market-data table that does not already exist.
 pub async fn create_market_data_tables(db: &Database) -> Result<()> {
-    create_tables(db, schema::market_data_tables()).await
+    let mut tables = schema::market_data_tables();
+    // The ingest log travels with the market data it describes.
+    tables.push(schema::ingest_log_table());
+    create_tables(db, tables).await
 }
 
 /// Create every run-output table that does not already exist.
@@ -793,6 +796,66 @@ pub async fn read_signals(
     Ok(out)
 }
 
+// -- ingest log -------------------------------------------------------------
+
+/// One completed load, as recorded for idempotency.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct IngestEntry {
+    pub ts: UnixNanos,
+    pub vendor: String,
+    /// Content hash of everything the load contained.
+    pub digest: String,
+    pub records: i64,
+    pub window: Option<TimeWindow>,
+    pub instruments: i64,
+}
+
+pub async fn write_ingest_log(db: &Database, entry: IngestEntry) -> Result<()> {
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(TimestampNanosecondArray::from(vec![entry.ts.get()])),
+        Arc::new(StringArray::from(vec![entry.vendor.as_str()])),
+        Arc::new(StringArray::from(vec![entry.digest.as_str()])),
+        Arc::new(Int64Array::from(vec![entry.records])),
+        Arc::new(Int64Array::from(vec![
+            entry.window.map(|w| w.start().get()),
+        ])),
+        Arc::new(Int64Array::from(vec![entry.window.map(|w| w.end().get())])),
+        Arc::new(Int64Array::from(vec![entry.instruments])),
+    ];
+    append(db, schema::INGEST_LOG, schema::ingest_log(), columns).await
+}
+
+pub async fn read_ingest_log(db: &Database) -> Result<Vec<IngestEntry>> {
+    let batches = scan_optional(db, schema::INGEST_LOG, ReadAt::Latest, None).await?;
+    let mut out = Vec::new();
+    for batch in &batches {
+        let ts = column::<TimestampNanosecondArray>(batch, "ts")?;
+        let vendor = column::<StringArray>(batch, "vendor")?;
+        let digest = column::<StringArray>(batch, "digest")?;
+        let records = column::<Int64Array>(batch, "records")?;
+        let start = column::<Int64Array>(batch, "window_start_ns")?;
+        let end = column::<Int64Array>(batch, "window_end_ns")?;
+        let instruments = column::<Int64Array>(batch, "instruments")?;
+        for row in 0..batch.num_rows() {
+            let window = match (opt_i64(start, row), opt_i64(end, row)) {
+                (Some(from), Some(to)) => {
+                    TimeWindow::new(UnixNanos::new(from), UnixNanos::new(to)).ok()
+                }
+                _ => None,
+            };
+            out.push(IngestEntry {
+                ts: UnixNanos::new(ts.value(row)),
+                vendor: vendor.value(row).to_string(),
+                digest: digest.value(row).to_string(),
+                records: records.value(row),
+                window,
+                instruments: instruments.value(row),
+            });
+        }
+    }
+    Ok(out)
+}
+
 // -- run outputs ------------------------------------------------------------
 
 /// Write a finished run's `bt_*` tables.
@@ -1093,7 +1156,24 @@ async fn append(
     })?;
     db.append(table, vec![batch], WriteOptions::default())
         .await
-        .map_err(core_err)?;
+        .map_err(|error| {
+            // Appends move forward in time. A load whose earliest record
+            // precedes what is already stored is a *backfill*, and the
+            // engine will not silently interleave it, because a book
+            // reconstructed from interleaved appends is neither the old
+            // one nor the new one.
+            if error.code() == "sort_order_violation" {
+                BacktestError::invalid(format!(
+                    "{table} already holds rows later than this load's \
+                     earliest record. Loads append forward in time; to add \
+                     data covering an earlier window, merge the plans \
+                     before writing (IngestPlan::merge) or load them in \
+                     time order. Underlying: {error}"
+                ))
+            } else {
+                core_err(error)
+            }
+        })?;
     Ok(())
 }
 

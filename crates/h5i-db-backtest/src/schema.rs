@@ -36,6 +36,8 @@ pub const RESOLUTIONS: &str = "resolutions";
 pub const SIGNALS: &str = "signals";
 /// Perpetual funding rates.
 pub const FUNDING: &str = "funding";
+/// What has already been ingested, so a reload is a no-op.
+pub const INGEST_LOG: &str = "ingest_log";
 
 /// Run output: one row describing the run.
 pub const RUN: &str = "bt_run";
@@ -176,6 +178,26 @@ pub fn funding() -> SchemaRef {
         // Per-interval rate, not annualised: positive means longs pay.
         float("rate"),
         opt_text("source_vendor"),
+    ]))
+}
+
+/// `ingest_log`: one row per completed load.
+///
+/// The `digest` is a content hash of everything the load contained, which
+/// makes ingestion idempotent: re-running a loader over a window already
+/// present is recognised and skipped rather than appending the rows a
+/// second time. Without it the natural response to a partial failure --
+/// run it again -- silently doubles the data, and a doubled book is not
+/// obviously wrong until a fill happens at an impossible size.
+pub fn ingest_log() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        ts("ts"),
+        text("vendor"),
+        text("digest"),
+        int("records"),
+        opt_int("window_start_ns"),
+        opt_int("window_end_ns"),
+        int("instruments"),
     ]))
 }
 
@@ -327,6 +349,12 @@ pub fn market_data_tables() -> Vec<(&'static str, SchemaRef, TableOptions)> {
     ]
 }
 
+/// The ingest log, which is metadata *about* loads rather than market data,
+/// and so is indexed on when the load happened.
+pub fn ingest_log_table() -> (&'static str, SchemaRef, TableOptions) {
+    (INGEST_LOG, ingest_log(), run_output_options())
+}
+
 /// The signals table, which a caller creates only when driving a Tier 1
 /// replay from stored intent.
 pub fn signals_table() -> (&'static str, SchemaRef, TableOptions) {
@@ -429,6 +457,7 @@ mod tests {
             .map(|(n, _, _)| n)
             .chain(run_output_tables().into_iter().map(|(n, _, _)| n))
             .chain(std::iter::once(signals_table().0))
+            .chain(std::iter::once(ingest_log_table().0))
             .collect();
         let count = names.len();
         names.sort_unstable();

@@ -11,6 +11,7 @@ description = "Venue adapters for h5i-db backtesting: vendor payloads into canon
 h5i-db-backtest = { workspace = true }
 h5i-db-core = { workspace = true }
 serde_json = { workspace = true }
+blake3 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
