@@ -22,7 +22,15 @@ from typing import Any, Optional, Union
 from ..dataframe import LazyFrame, quote_ident
 from ._common import Pin, Provenance, indent, resolve_source, sql_number
 
-__all__ = ["returns", "ReturnSeries", "DAILY", "WEEKLY", "MONTHLY", "YEARLY"]
+__all__ = [
+    "returns",
+    "from_levels",
+    "ReturnSeries",
+    "DAILY",
+    "WEEKLY",
+    "MONTHLY",
+    "YEARLY",
+]
 
 # empyrical's ANNUALIZATION_FACTORS, spelled out so a caller can pass a bar
 # count directly for anything else (24 * 365 for hourly crypto, say).
@@ -74,6 +82,71 @@ def returns(
         pin=read_pin,
         parameters={"annualization": annualization, "deterministic": deterministic},
         sources={"returns": described},
+        sql={"returns": base},
+    )
+    return ReturnSeries(
+        db=db,
+        _sql=base,
+        annualization=float(annualization),
+        provenance=provenance,
+        deterministic=deterministic,
+    )
+
+
+def from_levels(
+    db: Any,
+    source: Union[str, LazyFrame],
+    *,
+    ts: str = TS,
+    level: str = "equity",
+    annualization: float = DAILY,
+    pin: Optional[Pin] = None,
+    version: Optional[Any] = None,
+    as_of: Optional[str] = None,
+    snapshot: Optional[str] = None,
+    event_time_cutoff: Optional[Any] = None,
+    deterministic: bool = True,
+) -> "ReturnSeries":
+    """Open a returns series from a *level* series such as an equity curve.
+
+    This is what turns a backtest run into a tearsheet: a run writes
+    ``bt_equity`` into its fork, and
+
+        series = quant.perf.from_levels(fork, "bt_equity")
+        quant.tearsheet(series, path="run.html")
+
+    is the whole path from simulation to report. The first bar has no prior
+    level and so has no return; it is dropped rather than being called zero,
+    which would put a fake flat bar at the start of every curve.
+    """
+    read_pin = Pin.coerce(
+        pin,
+        version=version,
+        as_of=as_of,
+        snapshot=snapshot,
+        event_time_cutoff=event_time_cutoff,
+    )
+    sql_text, described = resolve_source(db, source, read_pin, ts, "levels")
+    q_ts, q_level = quote_ident(ts), quote_ident(level)
+    base = (
+        f"SELECT {quote_ident(TS)}, {quote_ident(RET)} FROM (\n"
+        f"  SELECT {q_ts} AS {quote_ident(TS)},\n"
+        f"         CAST({q_level} AS DOUBLE) / NULLIF(lag(CAST({q_level} AS DOUBLE)) "
+        f"OVER (ORDER BY {q_ts}), 0) - 1 AS {quote_ident(RET)}\n"
+        f"  FROM (\n{indent(sql_text, 4)}\n  ) AS {quote_ident('_lv')}\n"
+        f") AS {quote_ident('_r')}\n"
+        f"WHERE {quote_ident(RET)} IS NOT NULL"
+    )
+    provenance = Provenance(
+        kind="return_series",
+        pin=read_pin,
+        parameters={
+            "annualization": annualization,
+            "deterministic": deterministic,
+            "derived_from": "levels",
+            "level_column": level,
+        },
+        sources={"levels": described},
         sql={"returns": base},
     )
     return ReturnSeries(

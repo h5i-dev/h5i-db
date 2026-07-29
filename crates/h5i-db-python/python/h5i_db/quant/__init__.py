@@ -20,7 +20,15 @@ from __future__ import annotations
 from . import perf, report
 from ._common import Pin, Provenance
 from .factor import FactorPanel, MaxLossExceededError, build_panel
-from .perf import DAILY, MONTHLY, WEEKLY, YEARLY, ReturnSeries, returns
+from .perf import (
+    DAILY,
+    MONTHLY,
+    WEEKLY,
+    YEARLY,
+    ReturnSeries,
+    from_levels,
+    returns,
+)
 from .report import factor_report, report_payload, tearsheet
 from .sweep import (
     SweepResult,
@@ -38,6 +46,7 @@ __all__ = [
     "build_panel",
     "ReturnSeries",
     "returns",
+    "from_levels",
     "perf",
     "DAILY",
     "WEEKLY",
