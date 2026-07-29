@@ -40,6 +40,8 @@ pub mod priority {
     pub const DELTA: u32 = 20;
     /// Prints.
     pub const TRADE: u32 = 30;
+    /// Funding, after prints so it settles against a current book.
+    pub const FUNDING: u32 = 35;
     /// Aggregates, which summarise everything above them.
     pub const BAR: u32 = 40;
 }

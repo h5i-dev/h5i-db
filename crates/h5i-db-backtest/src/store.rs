@@ -346,9 +346,12 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
                 push(name, Some(delta.side), p, q, true);
             }
             MarketEvent::Gap => push("gap", None, None, None, true),
-            MarketEvent::Trade { .. } | MarketEvent::Bar { .. } => {
+            MarketEvent::Trade { .. }
+            | MarketEvent::Bar { .. }
+            | MarketEvent::Funding { .. } => {
                 return Err(BacktestError::invalid(
-                    "trades and bars belong in their own tables, not book_deltas",
+                    "trades, bars and funding belong in their own tables, \
+                     not book_deltas",
                 ));
             }
         }
@@ -567,6 +570,68 @@ pub async fn read_trades(
     Ok(out)
 }
 
+// -- funding ----------------------------------------------------------------
+
+pub async fn write_funding(db: &Database, records: &[Record]) -> Result<()> {
+    let mut ts_init = TimestampNanosecondBuilder::new();
+    let mut ts_event = TimestampNanosecondBuilder::new();
+    let mut instrument = StringBuilder::new();
+    let mut rate = Float64Builder::new();
+    let mut vendor = StringBuilder::new();
+
+    for record in records {
+        let MarketEvent::Funding { rate: value } = &record.event else {
+            return Err(BacktestError::invalid(
+                "write_funding takes funding records only",
+            ));
+        };
+        ts_init.append_value(record.stamps.ts_init.get());
+        ts_event.append_value(record.stamps.ts_event.get());
+        instrument.append_value(record.instrument.as_str());
+        rate.append_value(value.to_f64());
+        vendor.append_null();
+    }
+
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(ts_init.finish()),
+        Arc::new(ts_event.finish()),
+        Arc::new(instrument.finish()),
+        Arc::new(rate.finish()),
+        Arc::new(vendor.finish()),
+    ];
+    append(db, schema::FUNDING, schema::funding(), columns).await
+}
+
+pub async fn read_funding(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<Vec<Record>> {
+    let batches = scan(db, schema::FUNDING, at, window).await?;
+    let mut out = Vec::new();
+    for batch in &batches {
+        let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
+        let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
+        let instrument = column::<StringArray>(batch, "instrument_id")?;
+        let rate = column::<Float64Array>(batch, "rate")?;
+        for row in 0..batch.num_rows() {
+            out.push(Record::new(
+                Stamps::new(
+                    UnixNanos::new(ts_event.value(row)),
+                    UnixNanos::new(ts_init.value(row)),
+                )?,
+                InstrumentId::new(instrument.value(row))?,
+                OutcomeId::FIRST,
+                MarketEvent::Funding {
+                    rate: Price::from_f64(rate.value(row))?,
+                },
+            ));
+        }
+    }
+    out.sort_by_key(|record| record.ts().get());
+    Ok(out)
+}
+
 // -- resolutions ------------------------------------------------------------
 
 pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Result<()> {
@@ -606,6 +671,91 @@ pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolutio
             ));
         }
     }
+    Ok(out)
+}
+
+// -- signals ----------------------------------------------------------------
+
+/// Read a signal table as timestamped order intents.
+///
+/// This is what makes a Tier 1 strategy a *query result* rather than code:
+/// whatever produced the table -- a factor pipeline, a notebook, an agent --
+/// the kernel sees only intent, and executes it through the full matching,
+/// fee and latency path.
+pub async fn read_signals(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<Vec<(UnixNanos, crate::engine::OrderRequest)>> {
+    use crate::engine::OrderRequest;
+    use crate::order::TimeInForce;
+
+    let batches = scan(db, schema::SIGNALS, at, window).await?;
+    let mut out = Vec::new();
+    for batch in &batches {
+        let ts = column::<TimestampNanosecondArray>(batch, "ts")?;
+        let instrument = column::<StringArray>(batch, "instrument_id")?;
+        let outcome = column::<UInt16Array>(batch, "outcome")?;
+        let side = column::<StringArray>(batch, "side")?;
+        let quantity = column::<Float64Array>(batch, "quantity")?;
+        let kind = column::<StringArray>(batch, "kind")?;
+        let limit = column::<Float64Array>(batch, "limit_price")?;
+        let tif = column::<StringArray>(batch, "time_in_force")?;
+        let tag = column::<StringArray>(batch, "tag")?;
+        let reduce_only = column::<BooleanArray>(batch, "reduce_only")?;
+
+        for row in 0..batch.num_rows() {
+            let id = InstrumentId::new(instrument.value(row))?;
+            let out_id = OutcomeId(outcome.value(row));
+            let parsed_side = Side::parse(side.value(row))?;
+            let size = Qty::from_f64(quantity.value(row))?;
+            let mut request = match kind.value(row) {
+                "market" => OrderRequest::market(id, out_id, parsed_side, size),
+                "limit" => {
+                    // A limit order without a price is a data error, not a
+                    // market order: guessing which one the author meant is
+                    // how a backtest quietly trades at the wrong price.
+                    let price = opt_f64(limit, row).ok_or_else(|| {
+                        BacktestError::invalid(format!(
+                            "limit signal for {} at {} has no limit_price",
+                            instrument.value(row),
+                            ts.value(row)
+                        ))
+                    })?;
+                    OrderRequest::limit(id, out_id, parsed_side, Price::from_f64(price)?, size)
+                }
+                other => {
+                    return Err(BacktestError::Parse {
+                        what: "signal kind",
+                        value: other.to_string(),
+                    });
+                }
+            };
+            if let Some(text) = opt_str(tif, row) {
+                request = request.with_time_in_force(match text {
+                    "gtc" => TimeInForce::GoodTilCancel,
+                    "ioc" => TimeInForce::ImmediateOrCancel,
+                    "fok" => TimeInForce::FillOrKill,
+                    other => {
+                        return Err(BacktestError::Parse {
+                            what: "time in force",
+                            value: other.to_string(),
+                        });
+                    }
+                });
+            }
+            if let Some(text) = opt_str(tag, row) {
+                request = request.with_tag(text);
+            }
+            if reduce_only.is_valid(row) && reduce_only.value(row) {
+                request = request.reduce_only();
+            }
+            out.push((UnixNanos::new(ts.value(row)), request));
+        }
+    }
+    // Signal replay requires timestamp order, and a table has none by
+    // nature. Sorting here means a caller never has to think about it.
+    out.sort_by_key(|(ts, _)| ts.get());
     Ok(out)
 }
 

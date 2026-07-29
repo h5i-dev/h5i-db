@@ -203,6 +203,10 @@ where
     }
     let book_events = store::read_book_events(db, spec.read_at.clone(), spec.window).await?;
     let trades = store::read_trades(db, spec.read_at.clone(), spec.window).await?;
+    // Funding only exists for perpetuals; an absent table is not an error.
+    let funding = store::read_funding(db, spec.read_at.clone(), spec.window)
+        .await
+        .unwrap_or_default();
 
     let coverage = spec.window.map(|requested| {
         let observed: Vec<i64> = book_events
@@ -228,6 +232,7 @@ where
     let mut replay = Replay::builder()
         .stream("book", priority::SNAPSHOT, book_events)
         .stream("trades", priority::TRADE, trades)
+        .stream("funding", priority::FUNDING, funding)
         .build()?;
 
     let builder = Engine::builder(instruments.clone())

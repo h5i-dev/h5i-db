@@ -32,6 +32,10 @@ pub const BARS: &str = "bars";
 pub const INSTRUMENTS: &str = "instruments";
 /// How markets resolved. Never read by a strategy; see [`crate::settlement`].
 pub const RESOLUTIONS: &str = "resolutions";
+/// Order intents for a Tier 1 signal replay.
+pub const SIGNALS: &str = "signals";
+/// Perpetual funding rates.
+pub const FUNDING: &str = "funding";
 
 /// Run output: one row describing the run.
 pub const RUN: &str = "bt_run";
@@ -163,6 +167,55 @@ pub fn resolutions() -> SchemaRef {
     ]))
 }
 
+/// `funding`: perpetual funding rates as they became due.
+pub fn funding() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        ts("ts_init"),
+        ts("ts_event"),
+        text("instrument_id"),
+        // Per-interval rate, not annualised: positive means longs pay.
+        float("rate"),
+        opt_text("source_vendor"),
+    ]))
+}
+
+/// `signals`: what a Tier 1 strategy wants to do, as data.
+///
+/// A signal table *is* the strategy for a signal replay: no callback code,
+/// no state machine, just timestamped intent that the kernel executes
+/// through the full matching, fee and latency path. It is also what a
+/// factor pipeline naturally emits, so research output feeds simulation
+/// without an adapter in between.
+pub fn signals() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        // When the strategy wants to act. Replay submits the intent the
+        // first time the clock reaches it.
+        ts("ts"),
+        text("instrument_id"),
+        outcome(),
+        // "buy" | "sell"
+        text("side"),
+        float("quantity"),
+        // "market" | "limit"
+        text("kind"),
+        // Required for limit orders, ignored for market ones.
+        opt_float("limit_price"),
+        // "gtc" | "ioc" | "fok"; defaults per order kind when null.
+        opt_text("time_in_force"),
+        opt_text("tag"),
+        Field::new("reduce_only", DataType::Boolean, true),
+    ]))
+}
+
+/// Table options for the signals table.
+pub fn signals_options() -> TableOptions {
+    TableOptions {
+        time_column: Some("ts".to_string()),
+        sort_key: vec!["ts".to_string()],
+        ..Default::default()
+    }
+}
+
 /// `bt_run`: the run manifest.
 pub fn run() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -270,7 +323,14 @@ pub fn market_data_tables() -> Vec<(&'static str, SchemaRef, TableOptions)> {
         (BARS, bars(), market_data_options()),
         (INSTRUMENTS, instruments(), market_data_options()),
         (RESOLUTIONS, resolutions(), market_data_options()),
+        (FUNDING, funding(), market_data_options()),
     ]
+}
+
+/// The signals table, which a caller creates only when driving a Tier 1
+/// replay from stored intent.
+pub fn signals_table() -> (&'static str, SchemaRef, TableOptions) {
+    (SIGNALS, signals(), signals_options())
 }
 
 /// Every run-output table.
@@ -368,6 +428,7 @@ mod tests {
             .into_iter()
             .map(|(n, _, _)| n)
             .chain(run_output_tables().into_iter().map(|(n, _, _)| n))
+            .chain(std::iter::once(signals_table().0))
             .collect();
         let count = names.len();
         names.sort_unstable();

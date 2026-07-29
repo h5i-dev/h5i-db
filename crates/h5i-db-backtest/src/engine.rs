@@ -254,6 +254,9 @@ pub struct RunResult {
     pub marks: BTreeMap<BookKey, Price>,
     /// The equity curve, sampled on a fixed interval of simulated time.
     pub equity: Vec<EquityPoint>,
+    /// Net funding paid out over the run. Negative means funding was
+    /// received, which is the whole point of a carry strategy.
+    pub funding_paid: Money,
 }
 
 /// The engine.
@@ -281,6 +284,7 @@ pub struct Engine {
     equity_interval: i64,
     next_equity_sample: Option<i64>,
     equity: Vec<EquityPoint>,
+    funding_paid: Money,
 }
 
 impl Engine {
@@ -426,9 +430,41 @@ impl Engine {
             MarketEvent::Bar { close, .. } => {
                 self.marks.insert(key.clone(), *close);
             }
+            MarketEvent::Funding { rate } => {
+                self.apply_funding(&record.instrument, *rate)?;
+            }
         }
         if let Some(mid) = self.books.get(&key).and_then(|b| b.mid()) {
             self.marks.insert(key, mid);
+        }
+        Ok(())
+    }
+
+    /// Settle a funding payment against every open position in an
+    /// instrument.
+    ///
+    /// `payment = position * mark * rate`, charged to the holder, so a
+    /// positive rate takes cash from longs and pays it to shorts. A position
+    /// with no mark cannot be valued and is skipped rather than funded at a
+    /// guessed price -- silently funding at the entry price would make a
+    /// stale position drift for free.
+    fn apply_funding(&mut self, instrument: &InstrumentId, rate: Price) -> Result<()> {
+        let mut total = Money::ZERO;
+        for position in self.portfolio.open_positions() {
+            if &position.instrument != instrument {
+                continue;
+            }
+            let key = (position.instrument.clone(), position.outcome);
+            let Some(mark) = self.marks.get(&key) else {
+                continue;
+            };
+            let exposure = position.exposure(*mark)?;
+            let payment = notional(rate, Qty::from_raw(exposure.raw()))?;
+            total = total.checked_sub(payment)?;
+        }
+        if !total.is_zero() {
+            self.cash = self.cash.checked_add(total)?;
+            self.funding_paid = self.funding_paid.checked_sub(total)?;
         }
         Ok(())
     }
@@ -686,6 +722,7 @@ impl Engine {
             records_processed: self.records,
             marks: self.marks.clone(),
             equity: self.equity.clone(),
+            funding_paid: self.funding_paid,
         })
     }
 
@@ -773,6 +810,7 @@ impl EngineBuilder {
             equity_interval: self.equity_interval,
             next_equity_sample: None,
             equity: Vec::new(),
+            funding_paid: Money::ZERO,
         }
     }
 }

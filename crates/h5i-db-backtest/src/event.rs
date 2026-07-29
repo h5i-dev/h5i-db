@@ -26,6 +26,16 @@ pub enum MarketEvent {
         /// is common and must not be guessed.
         aggressor: Option<Side>,
     },
+    /// A funding payment becoming due on a perpetual.
+    ///
+    /// Carried as a market event rather than a periodic venue module so it
+    /// inherits the replay's deterministic ordering: funding at the same
+    /// instant as a book update resolves the same way on every run, which a
+    /// module firing off its own clock would not guarantee.
+    Funding {
+        /// Positive means longs pay shorts, the near-universal convention.
+        rate: Price,
+    },
     /// An aggregated bar.
     Bar {
         open: Price,
@@ -43,6 +53,7 @@ impl MarketEvent {
             MarketEvent::BookDelta(_) => "book_delta",
             MarketEvent::Gap => "gap",
             MarketEvent::Trade { .. } => "trade",
+            MarketEvent::Funding { .. } => "funding",
             MarketEvent::Bar { .. } => "bar",
         }
     }

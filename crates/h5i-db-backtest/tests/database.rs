@@ -592,3 +592,158 @@ async fn marks_and_settlement_agree_on_the_stored_positions() {
     assert!(marks.contains_key(&(id(), OutcomeId::FIRST)));
     assert!(settled.market_exit_pnl.is_some());
 }
+
+// ---------------------------------------------------------------------------
+// perpetuals: funding
+// ---------------------------------------------------------------------------
+
+const PERP: &str = "BTC-PERP";
+
+fn perp_id() -> InstrumentId {
+    InstrumentId::new(PERP).unwrap()
+}
+
+fn perp_snapshot(at: i64, mid: f64) -> Record {
+    Record::new(
+        Stamps::immediate(ts(at)),
+        perp_id(),
+        OutcomeId::FIRST,
+        MarketEvent::BookSnapshot {
+            bids: vec![(price(mid - 0.5), qty(100.0))],
+            asks: vec![(price(mid + 0.5), qty(100.0))],
+        },
+    )
+}
+
+fn funding_at(at: i64, rate: f64) -> Record {
+    Record::new(
+        Stamps::immediate(ts(at)),
+        perp_id(),
+        OutcomeId::FIRST,
+        MarketEvent::Funding {
+            rate: Price::from_f64(rate).unwrap(),
+        },
+    )
+}
+
+/// A perpetual market with a flat book and two funding stamps.
+async fn perp_db(dir: &tempfile::TempDir) -> Database {
+    let db = Database::create(&dir.path().join("perp.db")).await.unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+    store::write_instruments(
+        &db,
+        &[Instrument::perpetual(PERP, "hyperliquid")
+            .unwrap()
+            .with_tick_size(Price::from_f64(0.5).unwrap())],
+        ts(0),
+    )
+    .await
+    .unwrap();
+
+    let books: Vec<Record> = (1..=10).map(|step| perp_snapshot(step * SECOND, 100.0)).collect();
+    store::write_book_events(&db, &books).await.unwrap();
+    store::write_funding(
+        &db,
+        &[funding_at(4 * SECOND, 0.0001), funding_at(8 * SECOND, 0.0001)],
+    )
+    .await
+    .unwrap();
+    db
+}
+
+#[tokio::test]
+async fn funding_records_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = perp_db(&dir).await;
+    let read = store::read_funding(&db, ReadAt::Latest, None).await.unwrap();
+    assert_eq!(read.len(), 2);
+    assert_eq!(read[0], funding_at(4 * SECOND, 0.0001));
+}
+
+#[tokio::test]
+async fn a_long_pays_funding_when_the_rate_is_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = perp_db(&dir).await;
+
+    let mut strategy = SignalReplay::new(vec![(
+        ts(2 * SECOND),
+        OrderRequest::market(perp_id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
+    )])
+    .unwrap();
+    let report = run_in_fork(&db, RunSpec::new("long", money(10_000.0)), &mut strategy, |b| b)
+        .await
+        .unwrap();
+
+    // Long 10 at mark 100 = 1000 exposure; 0.0001 twice = 0.20 paid.
+    assert_eq!(report.result.funding_paid, money(0.2));
+    assert!(
+        report.result.funding_paid.is_positive(),
+        "a long pays when the rate is positive"
+    );
+}
+
+#[tokio::test]
+async fn a_short_receives_funding_when_the_rate_is_positive() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = perp_db(&dir).await;
+
+    let mut strategy = SignalReplay::new(vec![(
+        ts(2 * SECOND),
+        OrderRequest::market(perp_id(), OutcomeId::FIRST, Side::Sell, qty(10.0)),
+    )])
+    .unwrap();
+    let report = run_in_fork(&db, RunSpec::new("short", money(10_000.0)), &mut strategy, |b| b)
+        .await
+        .unwrap();
+
+    assert_eq!(report.result.funding_paid, money(-0.2));
+    assert!(
+        report.result.funding_paid.is_negative(),
+        "the carry side receives"
+    );
+}
+
+#[tokio::test]
+async fn funding_before_a_position_exists_costs_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = perp_db(&dir).await;
+
+    // Enter after both funding stamps have passed.
+    let mut strategy = SignalReplay::new(vec![(
+        ts(9 * SECOND),
+        OrderRequest::market(perp_id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
+    )])
+    .unwrap();
+    let report = run_in_fork(&db, RunSpec::new("late", money(10_000.0)), &mut strategy, |b| b)
+        .await
+        .unwrap();
+    assert_eq!(report.result.funding_paid, Money::ZERO);
+}
+
+#[tokio::test]
+async fn funding_moves_cash_and_therefore_equity() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = perp_db(&dir).await;
+    let mut strategy = SignalReplay::new(vec![(
+        ts(2 * SECOND),
+        OrderRequest::market(perp_id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
+    )])
+    .unwrap();
+    let report = run_in_fork(&db, RunSpec::new("carry", money(10_000.0)), &mut strategy, |b| b)
+        .await
+        .unwrap();
+
+    let before = report
+        .result
+        .equity
+        .iter()
+        .find(|p| p.ts.get() >= 3 * SECOND)
+        .unwrap()
+        .equity;
+    let after = report.result.equity.last().unwrap().equity;
+    assert_eq!(
+        before.checked_sub(after).unwrap(),
+        money(0.2),
+        "funding is a real cash cost, not a reporting line"
+    );
+}
