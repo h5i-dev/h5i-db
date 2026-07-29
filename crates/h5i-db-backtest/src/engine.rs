@@ -21,8 +21,12 @@
 
 use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 
+use crate::account::{
+    margin_requirement, margin_state, Liquidation, MarginModel, MarginState,
+};
 use crate::book::OrderBook;
 use crate::clock::{Clock, TimeEvent};
+use crate::currency::FxBook;
 use crate::error::{BacktestError, Result};
 use crate::event::{MarketEvent, Record};
 use crate::instrument::{InstrumentId, InstrumentSet, OutcomeId};
@@ -258,6 +262,11 @@ pub struct RunResult {
     /// Net funding paid out over the run. Negative means funding was
     /// received, which is the whole point of a carry strategy.
     pub funding_paid: Money,
+    /// Positions the venue closed because the account fell below its
+    /// maintenance requirement.
+    pub liquidations: Vec<Liquidation>,
+    /// Orders refused because the account could not fund them.
+    pub rejected_for_margin: u64,
 }
 
 /// The engine.
@@ -288,6 +297,10 @@ pub struct Engine {
     funding_paid: Money,
     /// Displayed size still ahead of each resting order at its price.
     queue_ahead: BTreeMap<OrderId, i64>,
+    margin: Option<Box<dyn MarginModel>>,
+    fx: FxBook,
+    liquidations: Vec<Liquidation>,
+    rejected_for_margin: u64,
 }
 
 impl Engine {
@@ -300,6 +313,8 @@ impl Engine {
             fill_model: Box::new(BookFills),
             latency_model: Box::new(NoLatency),
             equity_interval: DEFAULT_EQUITY_INTERVAL_NANOS,
+            margin: None,
+            fx: FxBook::new(),
         }
     }
 
@@ -347,6 +362,11 @@ impl Engine {
         // 4. Resting orders the new book crosses.
         self.match_resting(ts, strategy)?;
 
+        // 4b. A mark that moved may have made the account insolvent. The
+        //     venue acts before the strategy gets another turn, which is
+        //     the order a real one would use.
+        self.check_liquidation(ts, strategy)?;
+
         // 5. Now the strategy.
         self.with_context(|ctx| strategy.on_event(ctx, record))?;
 
@@ -360,6 +380,118 @@ impl Engine {
         self.simulated_through = Some(ts);
         self.sample_equity(ts)?;
         Ok(())
+    }
+
+    /// The account's margin position right now, or `None` when no margin
+    /// model is in force (a cash account cannot be called).
+    pub fn margin_state(&self) -> Result<Option<MarginState>> {
+        let Some(model) = self.margin.as_deref() else {
+            return Ok(None);
+        };
+        let requirement = margin_requirement(
+            model,
+            self.portfolio.open_positions(),
+            &self.instruments,
+            &self.marks,
+        )?;
+        // Collateral is cash; unrealized profit is the rest of equity.
+        let collateral = crate::account::Valuation {
+            total: self.cash,
+            currency: crate::currency::Currency::new("USD")?,
+            unconvertible: Vec::new(),
+        };
+        let mut unrealized = Money::ZERO;
+        for position in self.portfolio.open_positions() {
+            let key = (position.instrument.clone(), position.outcome);
+            if let Some(mark) = self.marks.get(&key) {
+                unrealized = unrealized.checked_add(position.unrealized_pnl(*mark)?)?;
+            }
+        }
+        Ok(Some(margin_state(&collateral, unrealized, &requirement)?))
+    }
+
+    /// Close everything if the account has fallen below maintenance.
+    ///
+    /// Liquidation is all-or-nothing here rather than partial. A partial
+    /// close needs a venue-specific rule for how much to take, and inventing
+    /// one would be a guess dressed as a model; closing the book is the
+    /// conservative reading and is what a margin call ultimately means.
+    /// Positions are closed in instrument order so the sequence is the same
+    /// on every run.
+    fn check_liquidation(&mut self, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
+        let Some(state) = self.margin_state()? else {
+            return Ok(());
+        };
+        if !state.liquidatable {
+            return Ok(());
+        }
+        let doomed: Vec<(InstrumentId, OutcomeId, Qty)> = self
+            .portfolio
+            .open_positions()
+            .map(|p| (p.instrument.clone(), p.outcome, p.quantity))
+            .collect();
+        for (instrument, outcome, quantity) in doomed {
+            let key = (instrument.clone(), outcome);
+            let Some(mark) = self.marks.get(&key).copied() else {
+                continue;
+            };
+            // Close by crossing the book in the opposite direction.
+            let side = if quantity.is_positive() {
+                Side::Sell
+            } else {
+                Side::Buy
+            };
+            self.next_order_id += 1;
+            let id = OrderId(self.next_order_id);
+            let mut order = Order::new(
+                id,
+                instrument.clone(),
+                outcome,
+                side,
+                OrderKind::Market,
+                Qty::from_raw(quantity.raw().abs()),
+                TimeInForce::ImmediateOrCancel,
+                ts,
+            )?;
+            order.status = OrderStatus::Accepted;
+            order.accepted_at = Some(ts);
+            order.tag = Some("liquidation".to_string());
+            self.orders.insert(id, order);
+            self.try_fill(id, ts, strategy)?;
+
+            self.liquidations.push(Liquidation {
+                instrument,
+                outcome,
+                quantity,
+                mark,
+                equity: state.equity,
+                maintenance: state.maintenance,
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether the account can fund a new order.
+    fn can_fund(&self, order: &Order) -> Result<bool> {
+        let Some(model) = self.margin.as_deref() else {
+            return Ok(true);
+        };
+        let Some(state) = self.margin_state()? else {
+            return Ok(true);
+        };
+        // An incomplete valuation is not a licence to trade freely, but
+        // neither is it grounds to refuse: it is reported and allowed, in
+        // the same spirit as not liquidating on partial information.
+        if state.incomplete {
+            return Ok(true);
+        }
+        let key = (order.instrument.clone(), order.outcome);
+        let Some(mark) = self.marks.get(&key) else {
+            return Ok(true);
+        };
+        let instrument = self.instruments.get(&order.instrument)?;
+        let needed = model.initial_margin(instrument, order.remaining(), *mark)?;
+        Ok(state.available() >= needed)
     }
 
     /// Record an equity point when the sampling interval has elapsed.
@@ -542,6 +674,14 @@ impl Engine {
             released.push(self.inflight.pop().expect("peeked").order);
         }
         for mut order in released {
+            if !self.can_fund(&order)? {
+                order.status = OrderStatus::Rejected;
+                order.reject_reason =
+                    Some("insufficient margin for this order".to_string());
+                self.orders.insert(order.id, order);
+                self.rejected_for_margin += 1;
+                continue;
+            }
             order.status = OrderStatus::Accepted;
             order.accepted_at = Some(ts);
             self.orders.insert(order.id, order.clone());
@@ -811,22 +951,14 @@ impl Engine {
         strategy: &mut dyn Strategy,
     ) -> Result<()> {
         let order = self.orders.get(&id).cloned().expect("order exists");
-        let instrument = self.instruments.get(&order.instrument)?;
+        let instrument = self.instruments.get(&order.instrument)?.clone();
         let commission = self.fee_model.commission(FeeContext {
-            instrument,
+            instrument: &instrument,
             side: order.side,
             price,
             quantity,
             is_taker,
         })?;
-
-        let gross = notional(price, quantity)?;
-        // Buying spends cash, selling receives it; commission always costs.
-        let delta = match order.side {
-            Side::Buy => Money::from_raw(-gross.raw()),
-            Side::Sell => gross,
-        };
-        self.cash = self.cash.checked_add(delta)?.checked_sub(commission)?;
 
         let fill = Fill {
             order_id: id,
@@ -840,7 +972,35 @@ impl Engine {
             ts,
             tag: order.tag.clone(),
         };
+        // How cash moves depends on what kind of thing this is. A funded
+        // instrument is bought: the notional leaves (or arrives) and the
+        // asset is held. A derivative is collateralised: only realised
+        // profit and fees touch cash, because nothing was purchased.
+        let realized_before = self
+            .portfolio
+            .position(&order.instrument, order.outcome)
+            .map(|position| position.realized_pnl)
+            .unwrap_or(Money::ZERO);
         self.portfolio.apply(&fill)?;
+        if instrument.kind.is_funded() {
+            let gross = notional(price, quantity)?;
+            let delta = match order.side {
+                Side::Buy => Money::from_raw(-gross.raw()),
+                Side::Sell => gross,
+            };
+            self.cash = self.cash.checked_add(delta)?.checked_sub(commission)?;
+        } else {
+            let realized_after = self
+                .portfolio
+                .position(&order.instrument, order.outcome)
+                .map(|position| position.realized_pnl)
+                .unwrap_or(Money::ZERO);
+            // The position already netted the commission out of realised
+            // profit, so this one delta carries both.
+            self.cash = self
+                .cash
+                .checked_add(realized_after.checked_sub(realized_before)?)?;
+        }
         if let Some(order) = self.orders.get_mut(&id) {
             order.record_fill(quantity)?;
         }
@@ -871,6 +1031,8 @@ impl Engine {
             marks: self.marks.clone(),
             equity: self.equity.clone(),
             funding_paid: self.funding_paid,
+            liquidations: self.liquidations.clone(),
+            rejected_for_margin: self.rejected_for_margin,
         })
     }
 
@@ -891,6 +1053,8 @@ pub struct EngineBuilder {
     fill_model: Box<dyn FillModel>,
     latency_model: Box<dyn LatencyModel>,
     equity_interval: i64,
+    margin: Option<Box<dyn MarginModel>>,
+    fx: FxBook,
 }
 
 impl EngineBuilder {
@@ -916,6 +1080,23 @@ impl EngineBuilder {
 
     pub fn latency_model(mut self, model: Box<dyn LatencyModel>) -> Self {
         self.latency_model = model;
+        self
+    }
+
+    /// Enforce a margin model: orders that would exceed available
+    /// collateral are rejected, and a position that falls below maintenance
+    /// is liquidated.
+    ///
+    /// Without one, leverage is infinite, and a strategy that would have
+    /// been closed out by the venue instead reports a profit.
+    pub fn margin_model(mut self, model: Box<dyn MarginModel>) -> Self {
+        self.margin = Some(model);
+        self
+    }
+
+    /// Seed exchange rates for multi-currency valuation.
+    pub fn fx(mut self, fx: FxBook) -> Self {
+        self.fx = fx;
         self
     }
 
@@ -960,6 +1141,10 @@ impl EngineBuilder {
             equity: Vec::new(),
             funding_paid: Money::ZERO,
             queue_ahead: BTreeMap::new(),
+            margin: self.margin,
+            fx: self.fx,
+            liquidations: Vec::new(),
+            rejected_for_margin: 0,
         }
     }
 }

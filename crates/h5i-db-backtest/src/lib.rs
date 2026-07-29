@@ -24,8 +24,10 @@
 //! the engine, and the engine crates build and pass their tests with it
 //! deleted.
 
+pub mod account;
 pub mod book;
 pub mod clock;
+pub mod currency;
 pub mod engine;
 pub mod error;
 pub mod event;
@@ -41,7 +43,11 @@ pub mod store;
 pub mod types;
 pub mod window;
 
+pub use account::{
+    Account, CashMargin, LinearMargin, MarginModel, MarginRequirement, MarginState, Valuation,
+};
 pub use book::{BookAction, BookDelta, BookStatus, BookWalk, OrderBook};
+pub use currency::{Currency, FxBook, Haircuts};
 pub use clock::{Clock, TimeEvent};
 pub use engine::{Context, Engine, EngineBuilder, OrderRequest, RunResult, SignalReplay, Strategy};
 pub use error::{BacktestError, Result};

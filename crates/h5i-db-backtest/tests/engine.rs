@@ -872,3 +872,264 @@ fn queue_fills_are_reproducible() {
     }
     assert!(!first.fills.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// margin and liquidation (Tier 1, item 3)
+// ---------------------------------------------------------------------------
+
+use h5i_db_backtest::account::{CashMargin, LinearMargin};
+use h5i_db_backtest::instrument::Instrument as Inst;
+
+const PERP: &str = "BTC-PERP";
+
+fn perp_instruments() -> InstrumentSet {
+    let mut set = InstrumentSet::new();
+    set.insert(
+        Inst::perpetual(PERP, "hyperliquid")
+            .unwrap()
+            .with_tick_size(price(0.5)),
+    )
+    .unwrap();
+    set
+}
+
+fn perp_snapshot(at: i64, mid: f64) -> Record {
+    Record::new(
+        Stamps::immediate(ts(at)),
+        InstrumentId::new(PERP).unwrap(),
+        OutcomeId::FIRST,
+        MarketEvent::BookSnapshot {
+            bids: vec![(price(mid - 0.5), qty(1_000.0))],
+            asks: vec![(price(mid + 0.5), qty(1_000.0))],
+        },
+    )
+}
+
+struct BuyPerp {
+    quantity: Qty,
+    submitted: bool,
+}
+
+impl Strategy for BuyPerp {
+    fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+        if !self.submitted {
+            self.submitted = true;
+            ctx.submit(OrderRequest::market(
+                InstrumentId::new(PERP).unwrap(),
+                OutcomeId::FIRST,
+                Side::Buy,
+                self.quantity,
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn run_perp(
+    strategy: &mut dyn Strategy,
+    records: Vec<Record>,
+    cash: f64,
+    leverage: Option<f64>,
+) -> Result<RunResult> {
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, records)
+        .build()?;
+    let mut builder = Engine::builder(perp_instruments()).starting_cash(money(cash));
+    if let Some(leverage) = leverage {
+        builder = builder.margin_model(Box::new(LinearMargin::from_leverage(leverage)?));
+    }
+    let mut engine = builder.build();
+    engine.run(&mut replay, strategy)
+}
+
+#[test]
+fn without_a_margin_model_leverage_is_unlimited() {
+    // The behaviour this whole feature exists to remove: 100 BTC on 1000
+    // of cash, with no complaint.
+    let mut strategy = BuyPerp {
+        quantity: qty(100.0),
+        submitted: false,
+    };
+    let result = run_perp(
+        &mut strategy,
+        vec![perp_snapshot(1_000, 100.0), perp_snapshot(2_000, 100.0)],
+        1_000.0,
+        None,
+    )
+    .unwrap();
+    assert_eq!(result.fills.len(), 1);
+    assert_eq!(result.rejected_for_margin, 0);
+    // 100 BTC at ~100 is 10,000 of exposure against 1,000 of cash: a
+    // hundredfold position nobody would have been allowed to hold.
+    let portfolio = h5i_db_backtest::position::Portfolio::replay(&result.fills).unwrap();
+    let position = portfolio
+        .position(&InstrumentId::new(PERP).unwrap(), OutcomeId::FIRST)
+        .unwrap();
+    let exposure = position.exposure(price(100.0)).unwrap();
+    assert!(
+        exposure.to_f64() > result.starting_cash.to_f64() * 9.0,
+        "exposure {exposure} against {} of cash",
+        result.starting_cash
+    );
+    assert!(result.liquidations.is_empty(), "and never called");
+}
+
+#[test]
+fn a_margin_model_refuses_an_order_the_account_cannot_fund() {
+    let mut strategy = BuyPerp {
+        quantity: qty(100.0),
+        submitted: false,
+    };
+    // 100 BTC at ~100 is 10,000 notional; at 10x that needs 1,000 of
+    // margin, and the account holds 500.
+    let result = run_perp(
+        &mut strategy,
+        vec![perp_snapshot(1_000, 100.0), perp_snapshot(2_000, 100.0)],
+        500.0,
+        Some(10.0),
+    )
+    .unwrap();
+    assert!(result.fills.is_empty());
+    assert_eq!(result.rejected_for_margin, 1);
+    assert_eq!(result.orders[0].status, OrderStatus::Rejected);
+    assert!(result.orders[0]
+        .reject_reason
+        .as_deref()
+        .unwrap()
+        .contains("margin"));
+}
+
+#[test]
+fn an_affordable_order_passes_the_margin_check() {
+    let mut strategy = BuyPerp {
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    // 10 BTC at ~100 is 1,000 notional; 10x needs 100, and we hold 500.
+    let result = run_perp(
+        &mut strategy,
+        vec![perp_snapshot(1_000, 100.0), perp_snapshot(2_000, 100.0)],
+        500.0,
+        Some(10.0),
+    )
+    .unwrap();
+    assert_eq!(result.fills.len(), 1);
+    assert_eq!(result.rejected_for_margin, 0);
+}
+
+#[test]
+fn a_position_that_falls_below_maintenance_is_liquidated() {
+    let mut strategy = BuyPerp {
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    // Enter 10 BTC at ~100 (1,000 notional, 100 initial, 50 maintenance)
+    // with 120 of cash, then let the mark collapse.
+    let result = run_perp(
+        &mut strategy,
+        vec![
+            perp_snapshot(1_000, 100.0),
+            perp_snapshot(2_000, 100.0),
+            perp_snapshot(3_000, 92.0),
+            perp_snapshot(4_000, 85.0),
+            perp_snapshot(5_000, 85.0),
+        ],
+        120.0,
+        Some(10.0),
+    )
+    .unwrap();
+
+    assert!(
+        !result.liquidations.is_empty(),
+        "a 15% adverse move on 10x leverage must call the position"
+    );
+    let liquidation = &result.liquidations[0];
+    assert_eq!(liquidation.instrument.as_str(), PERP);
+    assert!(liquidation.equity < liquidation.maintenance);
+    // The position was actually closed, not merely reported.
+    let portfolio = h5i_db_backtest::position::Portfolio::replay(&result.fills).unwrap();
+    assert!(
+        portfolio
+            .position(&InstrumentId::new(PERP).unwrap(), OutcomeId::FIRST)
+            .unwrap()
+            .is_flat(),
+        "liquidation must flatten the book"
+    );
+}
+
+#[test]
+fn a_solvent_account_is_never_liquidated() {
+    let mut strategy = BuyPerp {
+        quantity: qty(1.0),
+        submitted: false,
+    };
+    let result = run_perp(
+        &mut strategy,
+        vec![
+            perp_snapshot(1_000, 100.0),
+            perp_snapshot(2_000, 100.0),
+            perp_snapshot(3_000, 98.0),
+            perp_snapshot(4_000, 99.0),
+        ],
+        1_000.0,
+        Some(10.0),
+    )
+    .unwrap();
+    assert!(result.liquidations.is_empty());
+    assert_eq!(result.fills.len(), 1, "the entry, and nothing else");
+}
+
+#[test]
+fn a_cash_account_is_never_liquidated_however_far_the_mark_falls() {
+    // A prepaid position cannot be called: the money is already spent.
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                perp_snapshot(1_000, 100.0),
+                perp_snapshot(2_000, 100.0),
+                perp_snapshot(3_000, 1.0),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(perp_instruments())
+        .starting_cash(money(1_000.0))
+        .margin_model(Box::new(CashMargin))
+        .build();
+    let mut strategy = BuyPerp {
+        quantity: qty(5.0),
+        submitted: false,
+    };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+    assert!(result.liquidations.is_empty());
+}
+
+#[test]
+fn liquidation_is_reproducible() {
+    let run = || {
+        let mut strategy = BuyPerp {
+            quantity: qty(10.0),
+            submitted: false,
+        };
+        run_perp(
+            &mut strategy,
+            vec![
+                perp_snapshot(1_000, 100.0),
+                perp_snapshot(2_000, 100.0),
+                perp_snapshot(3_000, 90.0),
+                perp_snapshot(4_000, 84.0),
+                perp_snapshot(5_000, 84.0),
+            ],
+            120.0,
+            Some(10.0),
+        )
+        .unwrap()
+    };
+    let first = run();
+    assert!(!first.liquidations.is_empty());
+    for _ in 0..4 {
+        assert_eq!(run(), first);
+    }
+}

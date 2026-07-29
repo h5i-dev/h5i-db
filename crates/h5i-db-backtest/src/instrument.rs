@@ -77,6 +77,19 @@ impl InstrumentKind {
     pub fn is_probability(&self) -> bool {
         matches!(self, InstrumentKind::PredictionMarket)
     }
+
+    /// Whether opening a position *buys* something or merely *collateralises*
+    /// it.
+    ///
+    /// A prediction-market contract and a spot asset are paid for: cash
+    /// leaves the account for the full notional and the asset arrives. A
+    /// perpetual is not bought at all -- margin is posted, and cash moves
+    /// only as profit is realised. Settling a perp as if it were purchased
+    /// drives cash deeply negative on entry, which then reads as an
+    /// insolvent account and liquidates a perfectly healthy position.
+    pub fn is_funded(&self) -> bool {
+        matches!(self, InstrumentKind::PredictionMarket | InstrumentKind::Spot)
+    }
 }
 
 /// One tradable instrument.
@@ -90,6 +103,10 @@ pub struct Instrument {
     pub outcomes: Vec<String>,
     pub tick_size: Price,
     pub lot_size: Qty,
+    /// What cash this instrument settles in. A run holding instruments in
+    /// several currencies keeps their balances apart, and needs a rate to
+    /// report one number across them.
+    pub settlement_currency: crate::currency::Currency,
     /// When trading stops, if it ever does.
     pub expiration: Option<UnixNanos>,
     /// The first instant at which this market's resolution could have been
@@ -118,6 +135,7 @@ impl Instrument {
             outcomes,
             tick_size: Price::from_raw(SCALE / 10_000), // 0.0001
             lot_size: Qty::from_raw(SCALE),             // one contract
+            settlement_currency: crate::currency::Currency::new("USDC")?,
             expiration: None,
             settlement_observable: None,
         })
@@ -136,6 +154,7 @@ impl Instrument {
             outcomes: vec!["-".into()],
             tick_size: Price::from_raw(SCALE / 100),
             lot_size: Qty::from_raw(SCALE / 1_000),
+            settlement_currency: crate::currency::Currency::new("USDC")?,
             expiration: None,
             settlement_observable: None,
         })
@@ -148,6 +167,11 @@ impl Instrument {
 
     pub fn with_lot_size(mut self, lot: Qty) -> Self {
         self.lot_size = lot;
+        self
+    }
+
+    pub fn with_settlement_currency(mut self, currency: crate::currency::Currency) -> Self {
+        self.settlement_currency = currency;
         self
     }
 
