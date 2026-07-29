@@ -1729,3 +1729,333 @@ fn a_rate_makes_the_same_position_valuable_again() {
         "with a rate, a 50% adverse move on 10x leverage is a liquidation"
     );
 }
+
+// ---------------------------------------------------------------------------
+// corporate actions (Tier 1, item 5)
+// ---------------------------------------------------------------------------
+
+use h5i_db_backtest::corporate::CorporateAction;
+
+const EQUITY: &str = "ACME";
+
+fn equity_instruments() -> InstrumentSet {
+    let mut set = InstrumentSet::new();
+    set.insert(
+        Inst::perpetual(EQUITY, "xnas")
+            .unwrap()
+            .with_tick_size(price(0.01)),
+    )
+    .unwrap();
+    set
+}
+
+fn equity_snapshot(at: i64, mid: f64) -> Record {
+    Record::new(
+        Stamps::immediate(ts(at)),
+        InstrumentId::new(EQUITY).unwrap(),
+        OutcomeId::FIRST,
+        MarketEvent::BookSnapshot {
+            bids: vec![(price(mid - 0.01), qty(10_000.0))],
+            asks: vec![(price(mid + 0.01), qty(10_000.0))],
+        },
+    )
+}
+
+fn action_at(at: i64, action: CorporateAction) -> Record {
+    Record::new(
+        Stamps::immediate(ts(at)),
+        InstrumentId::new(EQUITY).unwrap(),
+        OutcomeId::FIRST,
+        MarketEvent::Corporate(action),
+    )
+}
+
+struct BuyEquity {
+    quantity: Qty,
+    submitted: bool,
+}
+
+impl Strategy for BuyEquity {
+    fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+        if !self.submitted {
+            self.submitted = true;
+            ctx.submit(OrderRequest::market(
+                InstrumentId::new(EQUITY).unwrap(),
+                OutcomeId::FIRST,
+                Side::Buy,
+                self.quantity,
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn run_equity(strategy: &mut dyn Strategy, records: Vec<Record>, cash: f64) -> Result<RunResult> {
+    let books: Vec<Record> = records
+        .iter()
+        .filter(|r| !matches!(r.event, MarketEvent::Corporate(_)))
+        .cloned()
+        .collect();
+    let actions: Vec<Record> = records
+        .into_iter()
+        .filter(|r| matches!(r.event, MarketEvent::Corporate(_)))
+        .collect();
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, books)
+        .stream("corporate", priority::CORPORATE, actions)
+        .build()?;
+    let mut engine = Engine::builder(equity_instruments())
+        .starting_cash(money(cash))
+        .build();
+    engine.run(&mut replay, strategy)
+}
+
+#[test]
+fn a_split_leaves_the_position_worth_what_it_was() {
+    let mut strategy = BuyEquity {
+        quantity: qty(100.0),
+        submitted: false,
+    };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(3_000, CorporateAction::Split { ratio: price(2.0) }),
+            equity_snapshot(4_000, 25.0),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+
+    let portfolio = h5i_db_backtest::position::Portfolio::replay(&result.fills).unwrap();
+    // Portfolio::replay does not see the action, so compare against the
+    // engine's own view via the equity curve instead: value is unchanged.
+    let before = result
+        .equity
+        .iter()
+        .find(|point| point.ts.get() >= 2_000)
+        .unwrap()
+        .equity;
+    let after = result.equity.last().unwrap().equity;
+    assert!(
+        (before.to_f64() - after.to_f64()).abs() < 1.0,
+        "a split moved equity from {before} to {after}"
+    );
+    let _ = portfolio;
+    assert_eq!(result.metrics.corporate_actions, 1);
+}
+
+#[test]
+fn a_dividend_pays_a_long_and_charges_a_short() {
+    let long_result = {
+        let mut strategy = BuyEquity {
+            quantity: qty(100.0),
+            submitted: false,
+        };
+        run_equity(
+            &mut strategy,
+            vec![
+                equity_snapshot(1_000, 50.0),
+                equity_snapshot(2_000, 50.0),
+                action_at(
+                    3_000,
+                    CorporateAction::Dividend {
+                        per_share: money(0.25),
+                    },
+                ),
+                equity_snapshot(4_000, 50.0),
+            ],
+            10_000.0,
+        )
+        .unwrap()
+    };
+    // 100 shares at 0.25 each.
+    assert_eq!(long_result.dividends_received, money(25.0));
+
+    struct SellEquity {
+        submitted: bool,
+    }
+    impl Strategy for SellEquity {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            if !self.submitted {
+                self.submitted = true;
+                ctx.submit(OrderRequest::market(
+                    InstrumentId::new(EQUITY).unwrap(),
+                    OutcomeId::FIRST,
+                    Side::Sell,
+                    qty(100.0),
+                ));
+            }
+            Ok(())
+        }
+    }
+    let mut shorting = SellEquity { submitted: false };
+    let short_result = run_equity(
+        &mut shorting,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(
+                3_000,
+                CorporateAction::Dividend {
+                    per_share: money(0.25),
+                },
+            ),
+            equity_snapshot(4_000, 50.0),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+    assert_eq!(
+        short_result.dividends_received,
+        money(-25.0),
+        "a short pays the dividend"
+    );
+}
+
+#[test]
+fn a_delisting_cashes_the_position_out_at_the_stated_price() {
+    let mut strategy = BuyEquity {
+        quantity: qty(100.0),
+        submitted: false,
+    };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(
+                3_000,
+                CorporateAction::Delist {
+                    final_price: price(60.0),
+                },
+            ),
+            equity_snapshot(4_000, 50.0),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+
+    let portfolio = h5i_db_backtest::position::Portfolio::replay(&result.fills).unwrap();
+    assert!(
+        portfolio
+            .position(&InstrumentId::new(EQUITY).unwrap(), OutcomeId::FIRST)
+            .unwrap()
+            .is_flat(),
+        "a delisting must close the position"
+    );
+    let settlement = result
+        .fills
+        .iter()
+        .find(|fill| fill.tag.as_deref() == Some("delisting"))
+        .expect("the cash settlement is tagged");
+    assert_eq!(settlement.price, price(60.0));
+    assert!(!settlement.is_taker, "a settlement crosses no book");
+}
+
+#[test]
+fn a_worthless_delisting_is_a_total_loss_not_an_error() {
+    let mut strategy = BuyEquity {
+        quantity: qty(100.0),
+        submitted: false,
+    };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(
+                3_000,
+                CorporateAction::Delist {
+                    final_price: Price::ZERO,
+                },
+            ),
+            equity_snapshot(4_000, 50.0),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+    let portfolio = h5i_db_backtest::position::Portfolio::replay(&result.fills).unwrap();
+    let position = portfolio
+        .position(&InstrumentId::new(EQUITY).unwrap(), OutcomeId::FIRST)
+        .unwrap();
+    assert!(position.is_flat());
+    // Bought around 50, settled at 0: the whole outlay is gone.
+    assert!(position.realized_pnl.to_f64() < -4_900.0);
+}
+
+#[test]
+fn a_split_reprices_a_resting_order_rather_than_leaving_it_marketable() {
+    // The failure this prevents: a limit at 26 on a stock that halves from
+    // 50 to 25 would suddenly be far through the market.
+    struct RestBelow {
+        submitted: bool,
+    }
+    impl Strategy for RestBelow {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            if !self.submitted {
+                self.submitted = true;
+                ctx.submit(OrderRequest::limit(
+                    InstrumentId::new(EQUITY).unwrap(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(26.0),
+                    qty(100.0),
+                ));
+            }
+            Ok(())
+        }
+    }
+    let mut strategy = RestBelow { submitted: false };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(3_000, CorporateAction::Split { ratio: price(2.0) }),
+            equity_snapshot(4_000, 25.0),
+            equity_snapshot(5_000, 25.0),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+
+    assert!(
+        result.fills.is_empty(),
+        "the order should have been repriced to 13, not left at 26"
+    );
+    let order = &result.orders[0];
+    assert_eq!(order.limit_price(), Some(price(13.0)));
+    assert_eq!(order.quantity, qty(200.0), "and doubled in size");
+}
+
+#[test]
+fn corporate_actions_land_before_anything_is_priced_against_them() {
+    // Priority: an action at the same instant as a book update must be
+    // applied first, or the book is read against a stale share count.
+    let mut strategy = BuyEquity {
+        quantity: qty(100.0),
+        submitted: false,
+    };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(3_000, CorporateAction::Split { ratio: price(2.0) }),
+            equity_snapshot(3_000, 25.0),
+            equity_snapshot(4_000, 25.0),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+    assert_eq!(result.metrics.corporate_actions, 1);
+    let last = result.equity.last().unwrap();
+    // 200 shares at 25 is the same 5,000 of exposure as 100 at 50.
+    assert!(
+        (last.position_value.to_f64() - 5_000.0).abs() < 20.0,
+        "position value drifted to {}",
+        last.position_value
+    );
+}

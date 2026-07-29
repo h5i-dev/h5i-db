@@ -27,6 +27,7 @@
 pub mod account;
 pub mod book;
 pub mod clock;
+pub mod corporate;
 pub mod currency;
 pub mod engine;
 pub mod error;
@@ -48,6 +49,7 @@ pub use account::{
     Account, CashMargin, LinearMargin, MarginModel, MarginRequirement, MarginState, Valuation,
 };
 pub use book::{BookAction, BookDelta, BookStatus, BookWalk, OrderBook};
+pub use corporate::{CorporateAction, SymbolRegistry, Universe};
 pub use currency::{Currency, FxBook, Haircuts};
 pub use clock::{Clock, TimeEvent};
 pub use engine::{Context, Engine, EngineBuilder, OrderRequest, RunResult, SignalReplay, Strategy};

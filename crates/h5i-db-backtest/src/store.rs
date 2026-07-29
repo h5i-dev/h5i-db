@@ -384,10 +384,11 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
             MarketEvent::Gap => push("gap", None, None, None, true),
             MarketEvent::Trade { .. }
             | MarketEvent::Bar { .. }
-            | MarketEvent::Funding { .. } => {
+            | MarketEvent::Funding { .. }
+            | MarketEvent::Corporate(_) => {
                 return Err(BacktestError::invalid(
-                    "trades, bars and funding belong in their own tables, \
-                     not book_deltas",
+                    "trades, bars, funding and corporate actions belong in \
+                     their own tables, not book_deltas",
                 ));
             }
         }

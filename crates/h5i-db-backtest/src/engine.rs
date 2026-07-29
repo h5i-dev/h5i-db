@@ -227,6 +227,13 @@ pub trait Strategy {
     }
 }
 
+/// Stands in where the engine itself initiates a fill (a delisting cash
+/// settlement), which no strategy asked for and none should be notified of
+/// as if it had.
+struct NoStrategy;
+
+impl Strategy for NoStrategy {}
+
 /// An order waiting out its latency before the venue sees it.
 #[derive(PartialEq, Eq)]
 struct InFlight {
@@ -276,6 +283,7 @@ pub struct RunMetrics {
     /// Times a resting order sat behind queue volume it never cleared.
     pub queue_joins: u64,
     pub liquidations: u64,
+    pub corporate_actions: u64,
 }
 
 impl RunMetrics {
@@ -358,6 +366,8 @@ pub struct RunResult {
     pub funding_paid: Money,
     /// Positions the venue closed because the account fell below its
     /// maintenance requirement.
+    /// Cash received from dividends, net of what a short paid.
+    pub dividends_received: Money,
     pub liquidations: Vec<Liquidation>,
     /// Orders refused because the account could not fund them.
     pub rejected_for_margin: u64,
@@ -402,6 +412,8 @@ pub struct Engine {
     rejected_for_margin: u64,
     self_trades_prevented: u64,
     reporting_currency: crate::currency::Currency,
+    dividends_received: Money,
+    delisted: std::collections::BTreeSet<InstrumentId>,
     metrics: RunMetrics,
     execution: Box<dyn ExecutionClient>,
 }
@@ -708,6 +720,9 @@ impl Engine {
             MarketEvent::Funding { rate } => {
                 self.apply_funding(&record.instrument, *rate)?;
             }
+            MarketEvent::Corporate(action) => {
+                self.apply_corporate_action(&record.instrument, *action, ts)?;
+            }
         }
         if let Some(mid) = self.books.get(&key).and_then(|b| b.mid()) {
             self.marks.insert(key, mid);
@@ -740,6 +755,110 @@ impl Engine {
         if !total.is_zero() {
             self.cash = self.cash.checked_add(total)?;
             self.funding_paid = self.funding_paid.checked_sub(total)?;
+        }
+        Ok(())
+    }
+
+    /// Apply a corporate action to positions, resting orders and cash.
+    ///
+    /// Forward only: nothing already replayed is rewritten. A split scales
+    /// the position and any resting order together -- a limit at 50 on a
+    /// stock that just halved is a limit at 25 for twice the size, which is
+    /// what the venue does and what stops an untouched order from becoming
+    /// wildly marketable the instant the split lands.
+    fn apply_corporate_action(
+        &mut self,
+        instrument: &InstrumentId,
+        action: crate::corporate::CorporateAction,
+        ts: UnixNanos,
+    ) -> Result<()> {
+        use crate::corporate::CorporateAction;
+        action.validate()?;
+        match action {
+            CorporateAction::Split { ratio } => {
+                self.portfolio.apply_split(instrument, ratio)?;
+                let resting: Vec<OrderId> = self.resting.clone();
+                for id in resting {
+                    let Some(order) = self.orders.get(&id).cloned() else {
+                        continue;
+                    };
+                    if &order.instrument != instrument {
+                        continue;
+                    }
+                    let Some(limit) = order.limit_price() else {
+                        continue;
+                    };
+                    let (quantity, price) =
+                        CorporateAction::split_position(ratio, order.quantity, limit)?;
+                    if let Some(order) = self.orders.get_mut(&id) {
+                        order.quantity = quantity;
+                        order.kind = OrderKind::Limit { limit: price };
+                    }
+                }
+                // Marks are quoted prices, and the quote is now post-split.
+                let keys: Vec<BookKey> = self
+                    .marks
+                    .keys()
+                    .filter(|(id, _)| id == instrument)
+                    .cloned()
+                    .collect();
+                for key in keys {
+                    if let Some(mark) = self.marks.get(&key).copied() {
+                        let (_, adjusted) =
+                            CorporateAction::split_position(ratio, Qty::ZERO, mark)?;
+                        self.marks.insert(key, adjusted);
+                    }
+                }
+                self.metrics.corporate_actions += 1;
+            }
+            CorporateAction::Dividend { per_share } => {
+                let due = self.portfolio.dividend_due(instrument, per_share)?;
+                if !due.is_zero() {
+                    self.cash = self.cash.checked_add(due)?;
+                    self.dividends_received = self.dividends_received.checked_add(due)?;
+                }
+                self.metrics.corporate_actions += 1;
+            }
+            CorporateAction::Delist { final_price } => {
+                // Cash out whatever is open at the delisting price, then
+                // the instrument is untradeable for the rest of the run.
+                let open: Vec<(InstrumentId, OutcomeId, Qty)> = self
+                    .portfolio
+                    .open_positions()
+                    .filter(|position| &position.instrument == instrument)
+                    .map(|position| {
+                        (position.instrument.clone(), position.outcome, position.quantity)
+                    })
+                    .collect();
+                for (id, outcome, quantity) in open {
+                    let side = if quantity.is_positive() {
+                        Side::Sell
+                    } else {
+                        Side::Buy
+                    };
+                    self.next_order_id += 1;
+                    let order_id = OrderId(self.next_order_id);
+                    let mut order = Order::new(
+                        order_id,
+                        id.clone(),
+                        outcome,
+                        side,
+                        OrderKind::Market,
+                        Qty::from_raw(quantity.raw().abs()),
+                        TimeInForce::ImmediateOrCancel,
+                        ts,
+                    )?;
+                    order.status = OrderStatus::Accepted;
+                    order.accepted_at = Some(ts);
+                    order.tag = Some("delisting".to_string());
+                    self.orders.insert(order_id, order);
+                    // Settled at the stated price, not against a book that
+                    // may no longer exist.
+                    self.execute(order_id, final_price, Qty::from_raw(quantity.raw().abs()), false, ts, &mut NoStrategy)?;
+                }
+                self.delisted.insert(instrument.clone());
+                self.metrics.corporate_actions += 1;
+            }
         }
         Ok(())
     }
@@ -1294,6 +1413,7 @@ impl Engine {
             marks: self.marks.clone(),
             equity: self.equity.clone(),
             funding_paid: self.funding_paid,
+            dividends_received: self.dividends_received,
             liquidations: self.liquidations.clone(),
             rejected_for_margin: self.rejected_for_margin,
             self_trades_prevented: self.self_trades_prevented,
@@ -1437,6 +1557,8 @@ impl EngineBuilder {
             rejected_for_margin: 0,
             self_trades_prevented: 0,
             reporting_currency: self.reporting_currency,
+            dividends_received: Money::ZERO,
+            delisted: Default::default(),
             metrics: RunMetrics::default(),
             execution: self.execution,
         }

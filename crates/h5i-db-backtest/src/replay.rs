@@ -44,6 +44,9 @@ pub mod priority {
     pub const SNAPSHOT: u32 = 10;
     /// Incremental book updates.
     pub const DELTA: u32 = 20;
+    /// Corporate actions, which change what a position *is* and so must
+    /// land before anything is priced against it.
+    pub const CORPORATE: u32 = 5;
     /// Prints.
     pub const TRADE: u32 = 30;
     /// Funding, after prints so it settles against a current book.

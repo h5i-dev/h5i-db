@@ -36,6 +36,12 @@ pub enum MarketEvent {
         /// Positive means longs pay shorts, the near-universal convention.
         rate: Price,
     },
+    /// A corporate action taking effect.
+    ///
+    /// Applied forward, to positions and resting orders, at the instant it
+    /// becomes effective. Replayed prices are never rewritten: nobody ever
+    /// traded a split-adjusted price.
+    Corporate(crate::corporate::CorporateAction),
     /// An aggregated bar.
     Bar {
         open: Price,
@@ -54,6 +60,7 @@ impl MarketEvent {
             MarketEvent::Gap => "gap",
             MarketEvent::Trade { .. } => "trade",
             MarketEvent::Funding { .. } => "funding",
+            MarketEvent::Corporate(_) => "corporate",
             MarketEvent::Bar { .. } => "bar",
         }
     }

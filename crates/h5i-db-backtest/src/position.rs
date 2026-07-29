@@ -107,6 +107,25 @@ impl Position {
         Ok(())
     }
 
+    /// Apply a share split to this position.
+    ///
+    /// Quantity scales up and basis scales down, leaving the position's
+    /// value unchanged. Realised profit is untouched: a split does not
+    /// realise anything.
+    pub fn apply_split(&mut self, ratio: Price) -> Result<()> {
+        if self.is_flat() {
+            return Ok(());
+        }
+        let (quantity, basis) = crate::corporate::CorporateAction::split_position(
+            ratio,
+            self.quantity,
+            self.average_price,
+        )?;
+        self.quantity = quantity;
+        self.average_price = basis;
+        Ok(())
+    }
+
     /// Mark-to-market profit on the open quantity at `mark`.
     pub fn unrealized_pnl(&self, mark: Price) -> Result<Money> {
         if self.is_flat() {
@@ -154,6 +173,36 @@ impl Portfolio {
             portfolio.apply(fill)?;
         }
         Ok(portfolio)
+    }
+
+    /// Apply a split to every outcome of one instrument.
+    pub fn apply_split(&mut self, instrument: &InstrumentId, ratio: Price) -> Result<()> {
+        for position in self.positions.values_mut() {
+            if &position.instrument == instrument {
+                position.apply_split(ratio)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Cash owed on a dividend: positive to a long, negative from a short.
+    pub fn dividend_due(
+        &self,
+        instrument: &InstrumentId,
+        per_share: Money,
+    ) -> Result<Money> {
+        let mut total = Money::ZERO;
+        for position in self.positions.values() {
+            if &position.instrument != instrument || position.is_flat() {
+                continue;
+            }
+            let due = crate::types::notional(
+                Price::from_raw(per_share.raw()),
+                position.quantity,
+            )?;
+            total = total.checked_add(due)?;
+        }
+        Ok(total)
     }
 
     pub fn mark(&mut self, instrument: &InstrumentId, outcome: OutcomeId, price: Price) {
