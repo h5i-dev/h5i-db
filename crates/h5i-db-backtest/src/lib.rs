@@ -34,6 +34,7 @@ pub mod error;
 pub mod event;
 pub mod execution;
 pub mod instrument;
+pub mod l3;
 pub mod models;
 pub mod order;
 pub mod position;
@@ -57,6 +58,7 @@ pub use error::{BacktestError, Result};
 pub use execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
 pub use event::{MarketEvent, Record};
 pub use instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
+pub use l3::{L3Book, MboMessage};
 pub use models::{
     BookFills, ConstantLatency, FeeModel, FillModel, LatencyModel, NoFees, NoLatency,
     PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage,

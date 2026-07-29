@@ -261,6 +261,20 @@ fn hash_event(hasher: &mut blake3::Hasher, event: &MarketEvent) {
             }
             hasher.update(&volume.raw().to_le_bytes());
         }
+        MarketEvent::Corporate(action) => {
+            hasher.update(action.kind().as_bytes());
+            match action {
+                h5i_db_backtest::corporate::CorporateAction::Split { ratio } => {
+                    hasher.update(&ratio.raw().to_le_bytes());
+                }
+                h5i_db_backtest::corporate::CorporateAction::Dividend { per_share } => {
+                    hasher.update(&per_share.raw().to_le_bytes());
+                }
+                h5i_db_backtest::corporate::CorporateAction::Delist { final_price } => {
+                    hasher.update(&final_price.raw().to_le_bytes());
+                }
+            }
+        }
         MarketEvent::Gap => {}
     }
 }
