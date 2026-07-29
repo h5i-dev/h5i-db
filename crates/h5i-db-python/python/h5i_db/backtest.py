@@ -39,23 +39,36 @@ from .backtest_config import (
     inspect,
 )
 from .backtest_result import BacktestResult, _persist_config, list_runs, open_result
+from .backtest_strategy import from_signals, target_positions
+from .backtest_study import (
+    BacktestStudy,
+    StudyResult,
+    ValidationWindows,
+    study,
+)
 
 __all__ = [
     "BacktestConfig",
     "BacktestResult",
+    "BacktestStudy",
     "DataConfig",
     "ExecutionConfig",
     "OutputConfig",
     "PortfolioConfig",
     "PreflightInspection",
     "ReplayFidelity",
+    "StudyResult",
+    "ValidationWindows",
     "run",
     "execute",
+    "from_signals",
     "inspect",
     "list_runs",
     "open_result",
     "SIGNAL_SCHEMA",
     "signal_table",
+    "study",
+    "target_positions",
     "create_signal_table",
     "MARKET_DATA_TABLES",
     "RESULT_TABLES",

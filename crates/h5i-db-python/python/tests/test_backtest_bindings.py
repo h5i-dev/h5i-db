@@ -416,3 +416,82 @@ def test_configuration_rejects_silently_overridden_execution_models():
         backtest.ExecutionConfig(queue_position=True, slippage_ticks=1)
     with pytest.raises(ValueError, match="mutually exclusive"):
         backtest.ExecutionConfig(maker_rebate=-0.001, maker_fee_rate=0.001)
+
+
+def test_signal_and_target_position_adapters_compile_to_intent():
+    times = [
+        dt.datetime(2024, 1, 1, 0, 0, 1),
+        dt.datetime(2024, 1, 1, 0, 0, 2),
+        dt.datetime(2024, 1, 1, 0, 0, 3),
+    ]
+    signals = backtest.from_signals(
+        times,
+        instrument_id=MARKET,
+        entries=[False, True, False],
+        exits=[False, False, True],
+        size=10.0,
+        tag="zscore",
+    ).to_pylist()
+    assert [row["side"] for row in signals] == ["buy", "sell"]
+    assert [row["tag"] for row in signals] == ["zscore-entry", "zscore-exit"]
+    assert signals[1]["reduce_only"]
+
+    targets = backtest.target_positions(
+        times,
+        [0.0, 10.0, 4.0],
+        instrument_id=MARKET,
+    ).to_pylist()
+    assert [(row["side"], row["quantity"]) for row in targets] == [
+        ("buy", 10.0),
+        ("sell", 6.0),
+    ]
+    with pytest.raises(ValueError, match="both true"):
+        backtest.from_signals(
+            times[:1],
+            instrument_id=MARKET,
+            entries=[True],
+            exits=[True],
+        )
+
+
+def test_backtest_study_uses_isolated_forks_and_returns_a_leaderboard():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        base = backtest.BacktestConfig(
+            run_id="study-template",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+            execution=backtest.ExecutionConfig(
+                fee_kind="prediction_market",
+                fee_rate=0.0,
+            ),
+        )
+        result = backtest.study(
+            db,
+            study_id="fees",
+            base=base,
+            parameters={"execution.fee_rate": [0.0, 0.07]},
+        )
+        board = result.leaderboard("final_cash")
+        assert len(board) == 2
+        assert board[0]["final_cash"] > board[1]["final_cash"]
+        assert board[0]["fork"] == "bt-fees-0000-run"
+        assert not result.failures
+        assert "<table>" in result.to_html(metric="final_cash")
+        assert set(db.fork_names()) >= {
+            "bt-fees-0000-run",
+            "bt-fees-0001-run",
+        }
+        result.drop()
+        db.close()

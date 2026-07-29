@@ -6,7 +6,7 @@ import html
 import json
 import secrets
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Union
 
 import pyarrow as pa
 
@@ -161,7 +161,7 @@ class BacktestResult(dict):
 
     def tearsheet(
         self,
-        path: Optional[str | Path] = None,
+        path: Optional[Union[str, Path]] = None,
         *,
         title: Optional[str] = None,
     ) -> str:
@@ -312,7 +312,7 @@ class BacktestResult(dict):
     def drop(self) -> int:
         return self._db.drop_fork(self.fork_name)
 
-    def html_summary(self, path: Optional[str | Path] = None) -> str:
+    def html_summary(self, path: Optional[Union[str, Path]] = None) -> str:
         """Small dependency-free execution report for runs without equity."""
         summary = self.summary()
         explanation = self.explain()

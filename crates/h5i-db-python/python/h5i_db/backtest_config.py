@@ -5,10 +5,11 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Union
 
 __all__ = [
     "BacktestConfig",
@@ -23,6 +24,7 @@ __all__ = [
 ]
 
 _SCHEMA_VERSION = 1
+_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _MARKET_TABLES = ("book_deltas", "trades", "bars", "funding", "resolutions")
 _REQUIRED_COLUMNS = {
     "instruments": {
@@ -218,8 +220,11 @@ class BacktestConfig:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.run_id or not isinstance(self.run_id, str):
-            raise ValueError("run_id must be a non-empty string")
+        if not isinstance(self.run_id, str) or not _RUN_ID.fullmatch(self.run_id):
+            raise ValueError(
+                "run_id must be 1-128 characters using letters, digits, '.', '_', "
+                "or '-', and must start with a letter or digit"
+            )
         if self.schema_version != _SCHEMA_VERSION:
             raise ValueError(
                 f"unsupported backtest config schema_version {self.schema_version}; "
@@ -239,7 +244,9 @@ class BacktestConfig:
         payload = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def to_json(self, path: Optional[str | Path] = None, *, indent: int = 2) -> str:
+    def to_json(
+        self, path: Optional[Union[str, Path]] = None, *, indent: int = 2
+    ) -> str:
         text = json.dumps(self.to_dict(), sort_keys=True, indent=indent)
         if path is not None:
             Path(path).write_text(text + "\n", encoding="utf-8")
@@ -272,7 +279,7 @@ class BacktestConfig:
         )
 
     @classmethod
-    def from_json(cls, value: str | Path) -> "BacktestConfig":
+    def from_json(cls, value: Union[str, Path]) -> "BacktestConfig":
         candidate = Path(value) if isinstance(value, Path) else None
         if candidate is not None or (
             isinstance(value, str)
