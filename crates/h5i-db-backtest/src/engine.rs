@@ -117,6 +117,11 @@ impl OrderRequest {
 enum Command {
     Submit(OrderRequest),
     Cancel(OrderId),
+    Amend {
+        id: OrderId,
+        quantity: Option<Qty>,
+        limit: Option<Price>,
+    },
 }
 
 /// What a strategy may do and see.
@@ -178,6 +183,21 @@ impl<'a> Context<'a> {
 
     pub fn cancel(&mut self, id: OrderId) {
         self.commands.push_back(Command::Cancel(id));
+    }
+
+    /// Change a resting order's size or price.
+    ///
+    /// Queue priority follows the rule every real venue uses: a price
+    /// change or a size *increase* goes to the back of the queue, while a
+    /// size *decrease* keeps its place. Modelling amendment as free would
+    /// let a strategy sit at the front of a queue and resize at will, which
+    /// is the cheapest way to invent maker fills that never happened.
+    pub fn amend(&mut self, id: OrderId, quantity: Option<Qty>, limit: Option<Price>) {
+        self.commands.push_back(Command::Amend {
+            id,
+            quantity,
+            limit,
+        });
     }
 
     /// Ask for a timer. Honoured after the current record is processed.
@@ -267,6 +287,9 @@ pub struct RunResult {
     pub liquidations: Vec<Liquidation>,
     /// Orders refused because the account could not fund them.
     pub rejected_for_margin: u64,
+    /// Orders refused because they would have crossed with this account's
+    /// own resting book.
+    pub self_trades_prevented: u64,
 }
 
 /// The engine.
@@ -301,6 +324,7 @@ pub struct Engine {
     fx: FxBook,
     liquidations: Vec<Liquidation>,
     rejected_for_margin: u64,
+    self_trades_prevented: u64,
 }
 
 impl Engine {
@@ -625,11 +649,103 @@ impl Engine {
                     {
                         order.status = OrderStatus::Cancelled;
                         self.resting.retain(|open| *open != id);
+                        self.queue_ahead.remove(&id);
                     }
                 }
+                Command::Amend {
+                    id,
+                    quantity,
+                    limit,
+                } => self.amend(id, quantity, limit)?,
             }
         }
         Ok(())
+    }
+
+    /// Apply an amendment, moving the order to the back of the queue when
+    /// the change deserves it.
+    fn amend(
+        &mut self,
+        id: OrderId,
+        quantity: Option<Qty>,
+        limit: Option<Price>,
+    ) -> Result<()> {
+        let Some(order) = self.orders.get(&id).cloned() else {
+            return Ok(());
+        };
+        if !order.is_open() {
+            return Ok(());
+        }
+        let mut updated = order.clone();
+        let mut loses_priority = false;
+
+        if let Some(new_limit) = limit {
+            let instrument = self.instruments.get(&order.instrument)?;
+            instrument.check_price(new_limit)?;
+            if order.limit_price() != Some(new_limit) {
+                updated.kind = OrderKind::Limit { limit: new_limit };
+                loses_priority = true;
+            }
+        }
+        if let Some(new_quantity) = quantity {
+            if !new_quantity.is_positive() {
+                return Err(BacktestError::invalid(
+                    "an amended quantity must be positive; cancel instead",
+                ));
+            }
+            if new_quantity < order.filled {
+                return Err(BacktestError::invalid(format!(
+                    "cannot amend order {id} below the {} already filled",
+                    order.filled
+                )));
+            }
+            // Growing the order is a new claim on the queue; shrinking it
+            // is not.
+            if new_quantity > order.quantity {
+                loses_priority = true;
+            }
+            updated.quantity = new_quantity;
+        }
+
+        self.orders.insert(id, updated);
+        if loses_priority {
+            self.queue_ahead.remove(&id);
+            if let Some(order) = self.orders.get(&id).cloned() {
+                self.join_queue(&order);
+            }
+        }
+        Ok(())
+    }
+
+    /// Would this order trade against the account's own resting book?
+    ///
+    /// Venues prevent wash trades, and a simulator that allows them lets a
+    /// strategy cross with itself for free -- printing volume, paying two
+    /// sides of a spread it never really crossed, and in a queue model
+    /// filling its own passive orders on demand.
+    fn would_self_trade(&self, order: &Order) -> Option<OrderId> {
+        let limit = order.limit_price();
+        self.resting.iter().copied().find(|id| {
+            let Some(resting) = self.orders.get(id) else {
+                return false;
+            };
+            if resting.instrument != order.instrument
+                || resting.outcome != order.outcome
+                || resting.side == order.side
+                || !resting.is_open()
+            {
+                return false;
+            }
+            let Some(resting_price) = resting.limit_price() else {
+                return false;
+            };
+            match (order.side, limit) {
+                // A marketable order crosses whatever is resting.
+                (_, None) => true,
+                (Side::Buy, Some(cap)) => resting_price <= cap,
+                (Side::Sell, Some(floor)) => resting_price >= floor,
+            }
+        })
     }
 
     fn accept(&mut self, request: OrderRequest) -> Result<()> {
@@ -674,6 +790,15 @@ impl Engine {
             released.push(self.inflight.pop().expect("peeked").order);
         }
         for mut order in released {
+            if let Some(other) = self.would_self_trade(&order) {
+                order.status = OrderStatus::Rejected;
+                order.reject_reason = Some(format!(
+                    "would trade against this account's own resting order {other}"
+                ));
+                self.orders.insert(order.id, order);
+                self.self_trades_prevented += 1;
+                continue;
+            }
             if !self.can_fund(&order)? {
                 order.status = OrderStatus::Rejected;
                 order.reject_reason =
@@ -1033,6 +1158,7 @@ impl Engine {
             funding_paid: self.funding_paid,
             liquidations: self.liquidations.clone(),
             rejected_for_margin: self.rejected_for_margin,
+            self_trades_prevented: self.self_trades_prevented,
         })
     }
 
@@ -1145,6 +1271,7 @@ impl EngineBuilder {
             fx: self.fx,
             liquidations: Vec::new(),
             rejected_for_margin: 0,
+            self_trades_prevented: 0,
         }
     }
 }

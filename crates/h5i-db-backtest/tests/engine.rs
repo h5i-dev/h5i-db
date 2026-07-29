@@ -1133,3 +1133,257 @@ fn liquidation_is_reproducible() {
         assert_eq!(run(), first);
     }
 }
+
+// ---------------------------------------------------------------------------
+// amendment and self-trade prevention (Tier 1, item 2)
+// ---------------------------------------------------------------------------
+
+/// Rests a buy limit, then amends it on the next event.
+struct RestThenAmend {
+    limit: Price,
+    quantity: Qty,
+    new_quantity: Option<Qty>,
+    new_limit: Option<Price>,
+    id: Option<h5i_db_backtest::order::OrderId>,
+    step: u32,
+}
+
+impl Strategy for RestThenAmend {
+    fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+        self.step += 1;
+        if self.step == 1 {
+            ctx.submit(OrderRequest::limit(
+                instrument_id(),
+                OutcomeId::FIRST,
+                Side::Buy,
+                self.limit,
+                self.quantity,
+            ));
+        } else if self.step == 2 {
+            // Order ids are assigned in submission order from 1.
+            self.id = Some(h5i_db_backtest::order::OrderId(1));
+            ctx.amend(
+                h5i_db_backtest::order::OrderId(1),
+                self.new_quantity,
+                self.new_limit,
+            );
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn shrinking_an_order_keeps_its_queue_place() {
+    let mut strategy = RestThenAmend {
+        limit: price(0.40),
+        quantity: qty(20.0),
+        new_quantity: Some(qty(10.0)),
+        new_limit: None,
+        id: None,
+        step: 0,
+    };
+    let result = run_queued(
+        &mut strategy,
+        vec![
+            deep_snapshot(1_000),
+            deep_snapshot(2_000),
+            // 100 ahead, then 30 more: with priority kept, we fill.
+            print_at(3_000, 0.40, 100.0, Some(Side::Sell)),
+            print_at(4_000, 0.40, 30.0, Some(Side::Sell)),
+            deep_snapshot(5_000),
+        ],
+        QueuePositionFills::new(),
+    )
+    .unwrap();
+    assert_eq!(result.fills.len(), 1);
+    assert_eq!(result.fills[0].quantity, qty(10.0), "the amended size");
+}
+
+#[test]
+fn growing_an_order_sends_it_to_the_back_of_the_queue() {
+    let mut strategy = RestThenAmend {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        new_quantity: Some(qty(30.0)),
+        new_limit: None,
+        id: None,
+        step: 0,
+    };
+    let result = run_queued(
+        &mut strategy,
+        vec![
+            deep_snapshot(1_000),
+            deep_snapshot(2_000),
+            // Exactly enough to clear the original queue, and no more.
+            print_at(3_000, 0.40, 100.0, Some(Side::Sell)),
+            deep_snapshot(4_000),
+        ],
+        QueuePositionFills::new(),
+    )
+    .unwrap();
+    assert!(
+        result.fills.is_empty(),
+        "a larger order rejoins behind the size displayed at its price"
+    );
+}
+
+#[test]
+fn repricing_an_order_sends_it_to_the_back_of_the_queue() {
+    let mut strategy = RestThenAmend {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        new_quantity: None,
+        new_limit: Some(price(0.39)),
+        id: None,
+        step: 0,
+    };
+    let result = run_queued(
+        &mut strategy,
+        vec![
+            deep_snapshot(1_000),
+            deep_snapshot(2_000),
+            // Clears the 0.40 queue; our order has moved to 0.39.
+            print_at(3_000, 0.40, 1_000.0, Some(Side::Sell)),
+            deep_snapshot(4_000),
+        ],
+        QueuePositionFills::new(),
+    )
+    .unwrap();
+    assert!(result.fills.is_empty(), "a reprice loses priority");
+    let order = &result.orders[0];
+    assert_eq!(order.limit_price(), Some(price(0.39)), "and takes effect");
+}
+
+#[test]
+fn an_amendment_below_the_filled_quantity_is_refused() {
+    // Shrinking an order past what it has already traded is not a smaller
+    // order, it is an inconsistent one.
+    struct Overshrink {
+        step: u32,
+    }
+    impl Strategy for Overshrink {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            if self.step == 1 {
+                // 0.42 takes the 50 displayed there and rests the other
+                // 50, so the order is partially filled and still open --
+                // which is the only state in which this guard can fire.
+                ctx.submit(OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.42),
+                    qty(100.0),
+                ));
+            } else if self.step == 3 {
+                ctx.amend(
+                    h5i_db_backtest::order::OrderId(1),
+                    Some(qty(1.0)),
+                    None,
+                );
+            }
+            Ok(())
+        }
+    }
+    let mut strategy = Overshrink { step: 0 };
+    // The offer at 0.42 is taken on the first snapshot and then moves
+    // away, so the order stays half filled and open -- the only state in
+    // which shrinking below the filled quantity is expressible.
+    let error = run_with(
+        &mut strategy,
+        vec![
+            snapshot(1_000, 0.40, 100.0, 0.42, 50.0),
+            snapshot(2_000, 0.40, 100.0, 0.45, 100.0),
+            snapshot(3_000, 0.40, 100.0, 0.45, 100.0),
+            snapshot(4_000, 0.40, 100.0, 0.45, 100.0),
+        ],
+        1_000.0,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("already filled"), "{error}");
+}
+
+#[test]
+fn an_order_that_would_cross_this_accounts_own_book_is_refused() {
+    // A wash trade: rest a bid, then send a marketable offer into it.
+    struct SelfCross {
+        step: u32,
+    }
+    impl Strategy for SelfCross {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            if self.step == 1 {
+                ctx.submit(OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.35),
+                    qty(10.0),
+                ));
+            } else if self.step == 3 {
+                ctx.submit(OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Sell,
+                    price(0.30),
+                    qty(10.0),
+                ));
+            }
+            Ok(())
+        }
+    }
+    let mut strategy = SelfCross { step: 0 };
+    let result = run_with(
+        &mut strategy,
+        vec![
+            deep_snapshot(1_000),
+            deep_snapshot(2_000),
+            deep_snapshot(3_000),
+            deep_snapshot(4_000),
+        ],
+        1_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(result.self_trades_prevented, 1);
+    let rejected = result
+        .orders
+        .iter()
+        .find(|order| order.status == OrderStatus::Rejected)
+        .expect("the crossing order is rejected");
+    assert!(rejected
+        .reject_reason
+        .as_deref()
+        .unwrap()
+        .contains("own resting order"));
+}
+
+#[test]
+fn orders_on_the_same_side_never_self_trade() {
+    struct TwoBuys {
+        step: u32,
+    }
+    impl Strategy for TwoBuys {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            if self.step <= 2 {
+                ctx.submit(OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.35),
+                    qty(5.0),
+                ));
+            }
+            Ok(())
+        }
+    }
+    let mut strategy = TwoBuys { step: 0 };
+    let result = run_with(
+        &mut strategy,
+        vec![deep_snapshot(1_000), deep_snapshot(2_000), deep_snapshot(3_000)],
+        1_000.0,
+    )
+    .unwrap();
+    assert_eq!(result.self_trades_prevented, 0);
+}
