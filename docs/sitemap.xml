@@ -79,6 +79,12 @@
     <priority>0.7</priority>
   </url>
   <url>
+    <loc>https://db.h5i.dev/manual/backtest/</loc>
+    <lastmod>2026-07-29</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://db.h5i.dev/api/</loc>
     <lastmod>2026-07-29</lastmod>
     <changefreq>weekly</changefreq>

@@ -776,22 +776,18 @@ class FactorPanel:
         """Fraction of each quantile's names that were not in it ``period`` bars ago."""
         if period < 1:
             raise ValueError("period must be >= 1")
+        # dense_rank over the panel's own rows gives each *date* its ordinal
+        # directly, because equal timestamps share a rank. Ranking distinct
+        # dates in a separate CTE and joining back reads the panel twice,
+        # and a panel is the expensive part of this pipeline.
         ctes = [("_panel", self._sql)]
         ctes.append(
             (
-                "_dates",
-                f"SELECT {quote_ident(TS)}, dense_rank() OVER "
-                f"(ORDER BY {quote_ident(TS)}) AS _r\n"
-                f"FROM (SELECT DISTINCT {quote_ident(TS)} FROM _panel)",
-            )
-        )
-        ctes.append(
-            (
                 "_m",
-                f"SELECT p.{quote_ident(TS)}, p.{quote_ident(ASSET)}, "
-                f"p.{quote_ident(QUANTILE)}, d._r\n"
-                f"FROM _panel p JOIN _dates d "
-                f"ON p.{quote_ident(TS)} = d.{quote_ident(TS)}",
+                f"SELECT {quote_ident(TS)}, {quote_ident(ASSET)}, "
+                f"{quote_ident(QUANTILE)},\n"
+                f"       dense_rank() OVER (ORDER BY {quote_ident(TS)}) AS _r\n"
+                f"FROM _panel",
             )
         )
         body = (
@@ -812,23 +808,18 @@ class FactorPanel:
         """Per-date correlation of factor ranks with their ranks ``period`` bars ago."""
         if period < 1:
             raise ValueError("period must be >= 1")
+        # Same single-pass ranking as turnover(): equal timestamps share a
+        # dense_rank, so the date ordinal falls out without a second read of
+        # the panel.
         ctes = [("_panel", self._sql)]
         ctes.append(
             (
-                "_dates",
-                f"SELECT {quote_ident(TS)}, dense_rank() OVER "
-                f"(ORDER BY {quote_ident(TS)}) AS _r\n"
-                f"FROM (SELECT DISTINCT {quote_ident(TS)} FROM _panel)",
-            )
-        )
-        ctes.append(
-            (
                 "_ranked",
-                f"SELECT p.{quote_ident(TS)}, p.{quote_ident(ASSET)}, d._r,\n"
-                f"       cs_rank(p.{quote_ident(FACTOR)}) OVER "
-                f"(PARTITION BY p.{quote_ident(TS)}) AS _rank\n"
-                f"FROM _panel p JOIN _dates d "
-                f"ON p.{quote_ident(TS)} = d.{quote_ident(TS)}",
+                f"SELECT {quote_ident(TS)}, {quote_ident(ASSET)},\n"
+                f"       dense_rank() OVER (ORDER BY {quote_ident(TS)}) AS _r,\n"
+                f"       cs_rank({quote_ident(FACTOR)}) OVER "
+                f"(PARTITION BY {quote_ident(TS)}) AS _rank\n"
+                f"FROM _panel",
             )
         )
         body = (

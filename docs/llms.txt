@@ -15,6 +15,7 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [Agents & automation](https://db.h5i.dev/manual/agents/): The machine contract: structured output and errors, stable exit codes, resource limits as flags, and policy-gated review for AI agents and pipelines.
 - [Quant workflows](https://db.h5i.dev/manual/quant/): Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.
 - [Operations guide](https://db.h5i.dev/manual/operations/): Running h5i-db in production: backup and restore, vacuum and compaction cadence, disk-usage math, and the torn-HEAD recovery runbook.
+- [Backtesting](https://db.h5i.dev/manual/backtest/): Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.
 
 ## Python API
 - [Overview](https://db.h5i.dev/api/): The h5i_db Python library: install, the five-minute tour, data interchange, and error handling.

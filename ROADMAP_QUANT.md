@@ -280,19 +280,24 @@ CLI: `h5i quant factor --db <path> --factor signals --prices prices
   checked).
 - `.ic_decay()` plans a single horizon-join query (verified via `EXPLAIN`,
   per VII-D3).
-- The engine path beats `alphalens-reloaded` end to end on the same machine
-  *in parallel mode*, and the benchmark script is committed under
-  `benchmarks/`. **Measured (2026-07-29, `benchmarks/compare_alphalens.py`,
-  300 assets × 4 years = 302k rows, this machine): 2.81× with
-  `deterministic=False`; 0.91× — a little slower than alphalens — with the
-  reproducible default.** The gap is entirely the single-partition execution
-  that buys bit-reproducibility (§2 P2/P8): IC alone is 4× faster either
-  way, while the join-heavy statistics (turnover, rank autocorrelation) cost
-  ~3.5× more single-partition. This is the honest trade and both numbers are
-  published rather than the flattering one. Closing it without giving up
-  reproducibility means removing the repeated recomputation of the panel
-  CTE (materialize once, then join), which is tracked as an optimization,
-  not a correctness item.
+- The engine path beats `alphalens-reloaded` end to end on the same machine,
+  and the benchmark script is committed under `benchmarks/`. **Measured
+  (2026-07-29, `benchmarks/compare_alphalens.py`, 300 assets × 4 years =
+  302k rows, this machine): 2.93× with `deterministic=False`, 1.28× with the
+  reproducible default.**
+
+  The first measurement was 0.91× — *slower* than alphalens — under the
+  reproducible default, and that is worth keeping in the record. The cause
+  was not single-partition execution as first assumed but the SQL above it:
+  `turnover` and `rank_autocorrelation` ranked distinct dates in a separate
+  CTE and joined it back, which read the panel twice, and the panel is the
+  expensive part. Ranking with `dense_rank()` over the panel's own rows
+  gives each date its ordinal directly, because equal timestamps share a
+  rank. One pass instead of two took turnover from 790 ms to 465 ms and
+  rank autocorrelation from 722 ms to 448 ms, with the 30 golden tests
+  unchanged. Reproducibility still costs about 2.3× against parallel
+  execution; it no longer costs anything against the reference
+  implementation.
 
 ### 4.4 Marketing deliverables
 
