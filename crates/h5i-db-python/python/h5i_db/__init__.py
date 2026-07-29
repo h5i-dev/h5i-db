@@ -330,6 +330,7 @@ class Database:
         memory_limit: Optional[int] = None,
         timeout: Optional[float] = None,
         max_rows: Optional[int] = None,
+        target_partitions: Optional[int] = None,
     ) -> QueryResult:
         """Run SQL.
 
@@ -337,9 +338,20 @@ class Database:
         and cancels execution). ``max_rows`` raises :class:`LimitError` as
         soon as the result exceeds it — execution stops early rather than
         silently truncating.
+
+        ``target_partitions`` caps execution parallelism (default: one per
+        core). Setting it to 1 makes floating-point aggregation
+        *reproducible*: partial sums are combined in a fixed order, so the
+        same query over the same data returns bit-identical numbers. Parallel
+        plans may combine them in any order, which moves results by a few
+        units in the last place.
         """
         return QueryResult(
-            _from_ipc(self._native.sql(query, memory_limit, timeout, max_rows))
+            _from_ipc(
+                self._native.sql(
+                    query, memory_limit, timeout, max_rows, target_partitions
+                )
+            )
         )
 
     def table(

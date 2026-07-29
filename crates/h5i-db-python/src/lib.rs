@@ -561,7 +561,7 @@ impl NativeDatabase {
     /// raised and execution is cancelled. `max_rows` raises `LimitError` as
     /// soon as the result exceeds it — the stream stops being pulled, so
     /// execution halts early instead of truncating silently.
-    #[pyo3(signature = (query, memory_limit = None, timeout = None, max_rows = None))]
+    #[pyo3(signature = (query, memory_limit = None, timeout = None, max_rows = None, target_partitions = None))]
     fn sql<'py>(
         &self,
         py: Python<'py>,
@@ -569,6 +569,7 @@ impl NativeDatabase {
         memory_limit: Option<usize>,
         timeout: Option<f64>,
         max_rows: Option<usize>,
+        target_partitions: Option<usize>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         check_timeout(timeout)?;
         let inner = self.inner()?;
@@ -580,6 +581,7 @@ impl NativeDatabase {
                         inner.db.clone(),
                         SessionOptions {
                             memory_limit,
+                            target_partitions,
                             ..Default::default()
                         },
                     )
