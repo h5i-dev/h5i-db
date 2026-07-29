@@ -175,6 +175,15 @@ pub trait FillModel: std::fmt::Debug {
         None
     }
 
+    /// Whether matching preserves the recorded book's prices.
+    ///
+    /// This lets the engine reject non-crossing resting orders from the
+    /// top of book without invoking the model. The conservative default is
+    /// `false` because a custom model may synthesize different prices.
+    fn preserves_book_prices(&self) -> bool {
+        false
+    }
+
     /// Whether a resting order at the touch fills when a trade prints
     /// through its price. Conservative by default: a print at your price
     /// does not prove your order was ahead in the queue.
@@ -210,7 +219,11 @@ pub trait FillModel: std::fmt::Debug {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BookFills;
 
-impl FillModel for BookFills {}
+impl FillModel for BookFills {
+    fn preserves_book_prices(&self) -> bool {
+        true
+    }
+}
 
 /// Move the book adverse to the taker by a fixed number of ticks.
 ///
@@ -286,6 +299,10 @@ impl QueuePositionFills {
 }
 
 impl FillModel for QueuePositionFills {
+    fn preserves_book_prices(&self) -> bool {
+        true
+    }
+
     fn uses_queue_position(&self) -> bool {
         true
     }

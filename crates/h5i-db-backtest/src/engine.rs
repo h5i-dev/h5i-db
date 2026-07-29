@@ -480,7 +480,7 @@ impl Engine {
         }
 
         // 4. Resting orders the new book crosses.
-        self.match_resting(ts, strategy)?;
+        self.match_resting(record, strategy)?;
 
         // 4b. A mark that moved may have made the account insolvent. The
         //     venue acts before the strategy gets another turn, which is
@@ -1055,8 +1055,45 @@ impl Engine {
         Ok(())
     }
 
-    fn match_resting(&mut self, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
-        let candidates: Vec<OrderId> = self.resting.clone();
+    fn match_resting(&mut self, record: &Record, strategy: &mut dyn Strategy) -> Result<()> {
+        let key = (record.instrument.clone(), record.outcome);
+        let Some(book) = self.books.get(&key) else {
+            return Ok(());
+        };
+        let best_bid = book.best_bid().map(|(price, _)| price);
+        let best_ask = book.best_ask().map(|(price, _)| price);
+        let is_corporate = matches!(&record.event, MarketEvent::Corporate(_));
+        let can_prefilter = self.fill_model.preserves_book_prices() && !is_corporate;
+
+        // Most resting orders are deliberately away from the market. Do
+        // not clone every open id and walk the whole book for each of them
+        // on every feed record: only an order for this market whose limit
+        // crosses the new top of book can fill here.
+        let candidates: Vec<OrderId> = self
+            .resting
+            .iter()
+            .filter_map(|id| {
+                let order = self.orders.get(id)?;
+                let affected_market = order.instrument == record.instrument
+                    && (order.outcome == record.outcome || is_corporate);
+                if !affected_market || !order.is_open() {
+                    return None;
+                }
+                if !can_prefilter {
+                    return Some(*id);
+                }
+                let limit = order.limit_price()?;
+                let crosses = match order.side {
+                    Side::Buy => best_ask.is_some_and(|ask| limit >= ask),
+                    Side::Sell => best_bid.is_some_and(|bid| limit <= bid),
+                };
+                crosses.then_some(*id)
+            })
+            .collect();
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let ts = record.stamps.ts_init;
         for id in candidates {
             self.try_fill(id, ts, strategy)?;
         }
