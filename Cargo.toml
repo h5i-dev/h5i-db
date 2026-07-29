@@ -12,6 +12,7 @@ members = [
     "crates/h5i-db-bench",
     "crates/h5i-db-python",
     "crates/h5i-db-ui",
+    "crates/h5i-db-backtest",
 ]
 default-members = [
     "crates/h5i-db-core",
