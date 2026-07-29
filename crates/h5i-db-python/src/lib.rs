@@ -583,6 +583,7 @@ impl NativeDatabase {
         fee_kind = None,
         fee_rate = None,
         maker_rebate = None,
+        maker_fee_rate = None,
         queue_position = false,
         optimistic_queue = false,
         latency_nanos = None,
@@ -603,6 +604,7 @@ impl NativeDatabase {
         fee_kind: Option<String>,
         fee_rate: Option<f64>,
         maker_rebate: Option<f64>,
+        maker_fee_rate: Option<f64>,
         queue_position: bool,
         optimistic_queue: bool,
         latency_nanos: Option<i64>,
@@ -616,8 +618,8 @@ impl NativeDatabase {
     ) -> PyResult<String> {
         use h5i_db_backtest::engine::SignalReplay;
         use h5i_db_backtest::models::{
-            ConstantLatency, PredictionMarketFees, ProportionalFees, QueuePositionFills,
-            TickSlippage,
+            ConstantLatency, KalshiFees, PredictionMarketFees, ProportionalFees,
+            QueuePositionFills, TickSlippage,
         };
         use h5i_db_backtest::run::{run_in_fork, RunSpec};
         use h5i_db_backtest::types::{Money, Price};
@@ -673,6 +675,13 @@ impl NativeDatabase {
                 let report = run_in_fork(&inner.db, spec, &mut strategy, move |mut builder| {
                     if let Some(rate) = fee_rate {
                         match fee_kind.as_deref() {
+                            Some("kalshi") => {
+                                if let Ok(model) =
+                                    KalshiFees::with_maker_rate(rate, maker_fee_rate)
+                                {
+                                    builder = builder.fee_model(Box::new(model));
+                                }
+                            }
                             Some("proportional") => {
                                 if let Ok(model) =
                                     ProportionalFees::new(maker_rebate.unwrap_or(0.0), rate)

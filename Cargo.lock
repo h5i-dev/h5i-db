@@ -1939,6 +1939,7 @@ name = "h5i-db-venues"
 version = "0.1.1"
 dependencies = [
  "blake3",
+ "chrono",
  "h5i-db-backtest",
  "h5i-db-core",
  "serde_json",

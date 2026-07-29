@@ -138,6 +138,44 @@ charge, `rate · quantity · p · (1 - p)`, which peaks at even odds and
 vanishes at certainty. A flat `notional × rate` is the wrong shape and
 overcharges the tails, which is where these markets trade most.
 
+## Kalshi data
+
+`h5i-db-venues::kalshi` converts Kalshi market metadata, REST order-book
+snapshots, websocket snapshots and deltas, trades, and candlesticks into the
+canonical tables above. It normalises NO bids into YES asks, so strategies see
+one binary-contract book. The stateful websocket decoder enforces sequence
+numbers, emits a `Gap` when one is missing, and refuses further deltas until a
+new snapshot arrives.
+
+An exact queue-aware Kalshi backtest requires data captured prospectively from
+the authenticated `orderbook_delta` websocket:
+
+1. use one decoder per market ticker;
+2. record local receipt time separately from exchange event time;
+3. persist the initial snapshot and every ordered delta;
+4. on a gap, persist the gap, resubscribe or request a snapshot, and do not
+   treat the stale interval as continuous coverage.
+
+Kalshi's historical API supplies trades and minute-or-coarser candlesticks, not
+historical L2 deltas. Those records support trade-driven or bar research, but
+cannot reconstruct queue position and must not be presented as exact L2
+replay. REST snapshots likewise describe only the instant at which they were
+requested.
+
+Use `KalshiFees` (or Python's `fee_kind="kalshi"`) with rates pinned from the
+applicable series fee schedule. It implements the quadratic curve, centicent
+trade-fee rounding, whole-cent cash movement, and per-order partial-fill
+rounding accumulator. The adapter accepts uniform tick schedules and rejects
+variable or tapered schedules rather than silently snapping them to the wrong
+grid.
+
+See Kalshi's
+[order-book websocket](https://docs.kalshi.com/websockets/orderbook-updates),
+[historical-data](https://docs.kalshi.com/getting_started/historical_data),
+[fixed-point](https://docs.kalshi.com/getting_started/fixed_point_migration),
+and [fee-rounding](https://docs.kalshi.com/getting_started/fee_rounding)
+documentation before operating a recorder.
+
 ## Strategies
 
 **Tier 1, signal replay** is the strategy as data: a list of timestamped

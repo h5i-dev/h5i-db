@@ -49,6 +49,7 @@ use h5i_db_backtest::window::TimeWindow;
 use h5i_db_core::Database;
 
 pub mod hyperliquid;
+pub mod kalshi;
 pub mod polymarket;
 
 /// Everything one venue load produced, ready to commit.

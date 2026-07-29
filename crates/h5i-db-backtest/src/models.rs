@@ -11,12 +11,13 @@
 use crate::book::OrderBook;
 use crate::error::Result;
 use crate::instrument::Instrument;
-use crate::order::Order;
-use crate::types::{notional, Money, Price, Qty, Side, UnixNanos};
+use crate::order::{Order, OrderId};
+use crate::types::{notional, Money, Price, Qty, Side, UnixNanos, SCALE};
 
 /// What a fee model needs to price a fill.
 #[derive(Clone, Copy, Debug)]
 pub struct FeeContext<'a> {
+    pub order_id: OrderId,
     pub instrument: &'a Instrument,
     pub side: Side,
     pub price: Price,
@@ -27,6 +28,9 @@ pub struct FeeContext<'a> {
 /// What a venue charges.
 pub trait FeeModel: std::fmt::Debug {
     fn commission(&self, ctx: FeeContext<'_>) -> Result<Money>;
+
+    /// Release any per-order state once an order can no longer fill.
+    fn order_closed(&self, _order_id: OrderId) {}
 }
 
 /// No fees.
@@ -112,6 +116,105 @@ impl FeeModel for PredictionMarketFees {
             // Negative commission: the venue pays the maker.
             let rebate = notional(self.maker_rebate, Qty::from_raw(fee.raw()))?;
             Ok(Money::from_raw(-rebate.raw()))
+        }
+    }
+}
+
+/// Kalshi's quadratic fees with exchange balance rounding.
+///
+/// The trade component is `rate * quantity * p * (1-p)`, rounded up to a
+/// centicent. The resulting cash movement is then floored to a whole cent.
+/// Rounding overpayment accumulates per order and is rebated in whole cents,
+/// matching Kalshi's documented partial-fill treatment.
+#[derive(Debug)]
+pub struct KalshiFees {
+    pub taker_rate: Price,
+    /// `None` for series without maker fees.
+    pub maker_rate: Option<Price>,
+    rounding: std::sync::Mutex<std::collections::BTreeMap<OrderId, i64>>,
+}
+
+impl KalshiFees {
+    pub fn new(taker_rate: f64) -> Result<Self> {
+        Self::with_maker_rate(taker_rate, None)
+    }
+
+    pub fn with_maker_rate(taker_rate: f64, maker_rate: Option<f64>) -> Result<Self> {
+        let taker_rate = Price::from_f64(taker_rate)?;
+        let maker_rate = maker_rate.map(Price::from_f64).transpose()?;
+        if taker_rate.raw() < 0 || maker_rate.is_some_and(|rate| rate.raw() < 0) {
+            return Err(crate::error::BacktestError::invalid(
+                "Kalshi fee rates must not be negative",
+            ));
+        }
+        Ok(Self {
+            taker_rate,
+            maker_rate,
+            rounding: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+        })
+    }
+
+    fn trade_fee(&self, rate: Price, price: Price, quantity: Qty) -> Result<Money> {
+        let complement = price.complement()?;
+        let pq = notional(price, Qty::from_raw(complement.raw()))?;
+        let scaled = notional(Price::from_raw(pq.raw()), quantity)?;
+        let raw = notional(rate, Qty::from_raw(scaled.raw()))?.raw();
+        const CENTICENT: i64 = SCALE / 10_000;
+        let rounded = raw
+            .checked_add(CENTICENT - 1)
+            .ok_or(crate::error::BacktestError::Overflow {
+                what: "rounding Kalshi trade fee",
+            })?
+            / CENTICENT
+            * CENTICENT;
+        Ok(Money::from_raw(rounded))
+    }
+}
+
+impl FeeModel for KalshiFees {
+    fn commission(&self, ctx: FeeContext<'_>) -> Result<Money> {
+        let rate = if ctx.is_taker {
+            Some(self.taker_rate)
+        } else {
+            self.maker_rate
+        };
+        let trade_fee = match rate {
+            Some(rate) => self.trade_fee(rate, ctx.price, ctx.quantity)?,
+            None => Money::ZERO,
+        };
+        let gross = notional(ctx.price, ctx.quantity)?;
+        let revenue = match ctx.side {
+            Side::Buy => -gross.raw(),
+            Side::Sell => gross.raw(),
+        };
+        let after_trade_fee = revenue.checked_sub(trade_fee.raw()).ok_or(
+            crate::error::BacktestError::Overflow {
+                what: "applying Kalshi trade fee",
+            },
+        )?;
+        const CENT: i64 = SCALE / 100;
+        let cent_aligned = after_trade_fee.div_euclid(CENT) * CENT;
+        let rounding_fee = after_trade_fee - cent_aligned;
+
+        let mut accumulators = self.rounding.lock().map_err(|_| {
+            crate::error::BacktestError::invalid("Kalshi fee accumulator lock poisoned")
+        })?;
+        let accumulated = accumulators.entry(ctx.order_id).or_default();
+        *accumulated = accumulated.checked_add(rounding_fee).ok_or(
+            crate::error::BacktestError::Overflow {
+                what: "accumulating Kalshi rounding fee",
+            },
+        )?;
+        let rebate = (*accumulated / CENT) * CENT;
+        *accumulated -= rebate;
+        Ok(Money::from_raw(
+            trade_fee.raw() + rounding_fee - rebate,
+        ))
+    }
+
+    fn order_closed(&self, order_id: OrderId) {
+        if let Ok(mut accumulated) = self.rounding.lock() {
+            accumulated.remove(&order_id);
         }
     }
 }
@@ -335,6 +438,7 @@ mod tests {
 
     fn ctx<'a>(instrument: &'a Instrument, price: f64, qty: f64, is_taker: bool) -> FeeContext<'a> {
         FeeContext {
+            order_id: OrderId(1),
             instrument,
             side: Side::Buy,
             price: Price::from_f64(price).unwrap(),
@@ -364,6 +468,50 @@ mod tests {
         let low = fees.commission(ctx(&instrument, 0.30, 10.0, true)).unwrap();
         let high = fees.commission(ctx(&instrument, 0.70, 10.0, true)).unwrap();
         assert_eq!(low, high, "p(1-p) is symmetric");
+    }
+
+    #[test]
+    fn kalshi_fees_apply_exchange_rounding() {
+        let instrument = market();
+        let fees = KalshiFees::new(0.07).unwrap();
+
+        // The raw fee is $0.0175. Kalshi first rounds it to a centicent, then
+        // rounds the cash movement to a cent.
+        assert_eq!(
+            fees.commission(ctx(&instrument, 0.50, 1.0, true)).unwrap(),
+            Money::from_f64(0.02).unwrap()
+        );
+    }
+
+    #[test]
+    fn kalshi_fees_rebate_accumulated_partial_fill_rounding() {
+        let instrument = market();
+        let fees = KalshiFees::new(0.07).unwrap();
+        let mut total_raw = 0;
+
+        for _ in 0..3 {
+            total_raw += fees
+                .commission(ctx(&instrument, 0.50, 0.3, true))
+                .unwrap()
+                .raw();
+        }
+
+        // Three independent cash movements would each round to one cent. The
+        // per-order accumulator returns the excess once it reaches a cent.
+        assert_eq!(Money::from_raw(total_raw), Money::from_f64(0.02).unwrap());
+
+        fees.order_closed(OrderId(1));
+        assert_eq!(
+            fees.commission(ctx(&instrument, 0.50, 0.3, true)).unwrap(),
+            Money::from_f64(0.01).unwrap()
+        );
+
+        let mut other_order = ctx(&instrument, 0.50, 0.3, true);
+        other_order.order_id = OrderId(2);
+        assert_eq!(
+            fees.commission(other_order).unwrap(),
+            Money::from_f64(0.01).unwrap()
+        );
     }
 
     #[test]

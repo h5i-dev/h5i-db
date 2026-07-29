@@ -131,6 +131,7 @@ def run(
     fee_kind: Optional[str] = None,
     fee_rate: Optional[float] = None,
     maker_rebate: Optional[float] = None,
+    maker_fee_rate: Optional[float] = None,
     queue_position: bool = False,
     optimistic_queue: bool = False,
     latency_nanos: Optional[int] = None,
@@ -151,6 +152,9 @@ def run(
 
     ``queue_position`` puts resting orders behind the size already displayed
     at their price, which is the honest reading of an L2 feed.
+    ``fee_kind="kalshi"`` applies Kalshi's centicent and per-order cash
+    rounding. Set ``fee_rate`` from the applicable series fee schedule and,
+    when the series charges makers, set ``maker_fee_rate`` as well.
     ``minimum_coverage`` refuses to run at all when the data covers less of
     the requested window than that.
     """
@@ -165,6 +169,7 @@ def run(
         fee_kind,
         fee_rate,
         maker_rebate,
+        maker_fee_rate,
         queue_position,
         optimistic_queue,
         latency_nanos,

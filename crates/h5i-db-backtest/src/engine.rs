@@ -1468,6 +1468,9 @@ impl Engine {
             order.status = status;
         }
         self.remove_resting(id);
+        if status.is_terminal() {
+            self.fee_model.order_closed(id);
+        }
     }
 
     fn execute(
@@ -1482,6 +1485,7 @@ impl Engine {
         let order = self.orders.get(&id).cloned().expect("order exists");
         let instrument = self.instruments.get(&order.instrument)?.clone();
         let commission = self.fee_model.commission(FeeContext {
+            order_id: id,
             instrument: &instrument,
             side: order.side,
             price,
@@ -1535,6 +1539,7 @@ impl Engine {
         }
         if self.orders.get(&id).map(|order| order.is_open()) != Some(true) {
             self.remove_resting(id);
+            self.fee_model.order_closed(id);
         }
         if is_taker {
             self.metrics.fills_taker += 1;
