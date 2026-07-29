@@ -41,6 +41,118 @@ use crate::types::{notional, Money, Price, Qty, Side, UnixNanos};
 /// A key identifying one tradable book.
 type BookKey = (InstrumentId, OutcomeId);
 
+#[derive(Default)]
+struct QueueLevels {
+    buys: BTreeMap<i64, Vec<OrderId>>,
+    sells: BTreeMap<i64, Vec<OrderId>>,
+}
+
+#[derive(Default)]
+struct RestingIndex {
+    markets: BTreeMap<BookKey, QueueLevels>,
+}
+
+impl RestingIndex {
+    fn insert(&mut self, order: &Order) {
+        let Some(limit) = order.limit_price() else {
+            return;
+        };
+        let market = self
+            .markets
+            .entry((order.instrument.clone(), order.outcome))
+            .or_default();
+        let levels = match order.side {
+            Side::Buy => &mut market.buys,
+            Side::Sell => &mut market.sells,
+        };
+        let ids = levels.entry(limit.raw()).or_default();
+        if let Err(at) = ids.binary_search(&order.id) {
+            ids.insert(at, order.id);
+        }
+    }
+
+    fn remove(&mut self, order: &Order) {
+        let Some(limit) = order.limit_price() else {
+            return;
+        };
+        let key = (order.instrument.clone(), order.outcome);
+        let mut remove_market = false;
+        if let Some(market) = self.markets.get_mut(&key) {
+            let levels = match order.side {
+                Side::Buy => &mut market.buys,
+                Side::Sell => &mut market.sells,
+            };
+            if let Some(ids) = levels.get_mut(&limit.raw()) {
+                if let Ok(at) = ids.binary_search(&order.id) {
+                    ids.remove(at);
+                }
+                if ids.is_empty() {
+                    levels.remove(&limit.raw());
+                }
+            }
+            remove_market = market.buys.is_empty() && market.sells.is_empty();
+        }
+        if remove_market {
+            self.markets.remove(&key);
+        }
+    }
+
+    fn reached_by_trade(
+        &self,
+        key: &BookKey,
+        passive: Side,
+        trade_price: Price,
+        out: &mut Vec<(Price, OrderId)>,
+    ) {
+        let Some(market) = self.markets.get(key) else {
+            return;
+        };
+        match passive {
+            Side::Buy => {
+                for (price, ids) in market.buys.range(trade_price.raw()..).rev() {
+                    out.extend(ids.iter().map(|id| (Price::from_raw(*price), *id)));
+                }
+            }
+            Side::Sell => {
+                for (price, ids) in market.sells.range(..=trade_price.raw()) {
+                    out.extend(ids.iter().map(|id| (Price::from_raw(*price), *id)));
+                }
+            }
+        }
+    }
+
+    fn crossing_top(
+        &self,
+        key: &BookKey,
+        best_bid: Option<Price>,
+        best_ask: Option<Price>,
+        out: &mut Vec<OrderId>,
+    ) {
+        let Some(market) = self.markets.get(key) else {
+            return;
+        };
+        if let Some(ask) = best_ask {
+            for ids in market.buys.range(ask.raw()..).map(|(_, ids)| ids) {
+                out.extend(ids.iter().copied());
+            }
+        }
+        if let Some(bid) = best_bid {
+            for ids in market.sells.range(..=bid.raw()).map(|(_, ids)| ids) {
+                out.extend(ids.iter().copied());
+            }
+        }
+    }
+
+    fn all_for_market(&self, key: &BookKey, out: &mut Vec<OrderId>) {
+        let Some(market) = self.markets.get(key) else {
+            return;
+        };
+        for ids in market.buys.values().chain(market.sells.values()) {
+            out.extend(ids.iter().copied());
+        }
+    }
+}
+
 /// Default equity sampling interval: one second of simulated time.
 pub const DEFAULT_EQUITY_INTERVAL_NANOS: i64 = 1_000_000_000;
 
@@ -388,6 +500,8 @@ pub struct Engine {
     starting_cash: Money,
     orders: BTreeMap<OrderId, Order>,
     resting: Vec<OrderId>,
+    resting_index: RestingIndex,
+    matching_candidates: Vec<OrderId>,
     inflight: BinaryHeap<InFlight>,
     commands: VecDeque<Command>,
     clock_requests: Vec<(String, UnixNanos)>,
@@ -792,9 +906,13 @@ impl Engine {
                     };
                     let (quantity, price) =
                         CorporateAction::split_position(ratio, order.quantity, limit)?;
+                    self.resting_index.remove(&order);
                     if let Some(order) = self.orders.get_mut(&id) {
                         order.quantity = quantity;
                         order.kind = OrderKind::Limit { limit: price };
+                    }
+                    if let Some(order) = self.orders.get(&id) {
+                        self.resting_index.insert(order);
                     }
                 }
                 // Marks are quoted prices, and the quote is now post-split.
@@ -870,13 +988,17 @@ impl Engine {
             match command {
                 Command::Submit(request) => self.accept(request)?,
                 Command::Cancel(id) => {
-                    if let Some(order) = self.orders.get_mut(&id)
+                    let cancelled = if let Some(order) = self.orders.get_mut(&id)
                         && order.is_open()
                     {
                         order.status = OrderStatus::Cancelled;
+                        true
+                    } else {
+                        false
+                    };
+                    if cancelled {
                         let at = self.clock.now();
-                        self.resting.retain(|open| *open != id);
-                        self.queue_ahead.remove(&id);
+                        self.remove_resting(id);
                         self.execution.send(ExecutionCommand::Cancel(id), at)?;
                     }
                 }
@@ -935,6 +1057,10 @@ impl Engine {
             updated.quantity = new_quantity;
         }
 
+        let was_resting = self.resting.contains(&id);
+        if loses_priority && was_resting {
+            self.resting_index.remove(&order);
+        }
         self.orders.insert(id, updated);
         self.metrics.orders_amended += 1;
         self.execution.send(
@@ -949,6 +1075,9 @@ impl Engine {
             self.queue_ahead.remove(&id);
             if let Some(order) = self.orders.get(&id).cloned() {
                 self.join_queue(&order);
+                if was_resting {
+                    self.resting_index.insert(&order);
+                }
             }
         }
         Ok(())
@@ -1065,46 +1194,40 @@ impl Engine {
         let best_bid = book.best_bid().map(|(price, _)| price);
         let best_ask = book.best_ask().map(|(price, _)| price);
         let is_corporate = matches!(&record.event, MarketEvent::Corporate(_));
-        let can_prefilter = self.fill_model.preserves_book_prices() && !is_corporate;
+        let mut candidates = std::mem::take(&mut self.matching_candidates);
+        candidates.clear();
 
-        // Most resting orders are deliberately away from the market. Do
-        // not clone every open id and walk the whole book for each of them
-        // on every feed record: only an order for this market whose limit
-        // crosses the new top of book can fill here.
-        let candidates: Vec<OrderId> = self
-            .resting
-            .iter()
-            .filter_map(|id| {
+        if is_corporate {
+            // A split can reprice every outcome for the instrument. This is
+            // rare and correctness matters more than indexing the unusual
+            // cross-outcome case.
+            candidates.extend(self.resting.iter().filter_map(|id| {
                 let order = self.orders.get(id)?;
-                let affected_market = order.instrument == record.instrument
-                    && (order.outcome == record.outcome || is_corporate);
-                if !affected_market || !order.is_open() {
-                    return None;
-                }
-                if !can_prefilter {
-                    return Some(*id);
-                }
-                let limit = order.limit_price()?;
-                let crosses = match order.side {
-                    Side::Buy => best_ask.is_some_and(|ask| limit >= ask),
-                    Side::Sell => best_bid.is_some_and(|bid| limit <= bid),
-                };
-                crosses.then_some(*id)
-            })
-            .collect();
+                (order.instrument == record.instrument && order.is_open()).then_some(*id)
+            }));
+        } else if self.fill_model.preserves_book_prices() {
+            self.resting_index
+                .crossing_top(&key, best_bid, best_ask, &mut candidates);
+            // The old matcher used submission order. Keep that observable
+            // liquidity-consumption order even though the index is priced.
+            candidates.sort_unstable();
+        } else {
+            // A custom model may synthesize prices, so every order in this
+            // market must still be offered to it.
+            self.resting_index.all_for_market(&key, &mut candidates);
+            candidates.sort_unstable();
+        }
         if candidates.is_empty() {
+            self.matching_candidates = candidates;
             return Ok(());
         }
         let ts = record.stamps.ts_init;
-        for id in candidates {
+        for &id in &candidates {
             self.try_fill(id, ts, strategy)?;
         }
-        self.resting.retain(|id| {
-            self.orders
-                .get(id)
-                .map(|order| order.is_open())
-                .unwrap_or(false)
-        });
+        candidates.clear();
+        self.matching_candidates = candidates;
+        self.prune_resting();
         Ok(())
     }
 
@@ -1177,8 +1300,7 @@ impl Engine {
                     if matches!(order.kind, OrderKind::Limit { .. })
                         && !self.resting.contains(&id)
                     {
-                        self.join_queue(&order);
-                        self.resting.push(id);
+                        self.add_resting(&order);
                     }
                 }
             }
@@ -1208,6 +1330,35 @@ impl Engine {
             .unwrap_or(0);
         self.queue_ahead.insert(order.id, ahead);
         self.metrics.queue_joins += 1;
+    }
+
+    fn add_resting(&mut self, order: &Order) {
+        if self.resting.contains(&order.id) {
+            return;
+        }
+        self.join_queue(order);
+        self.resting_index.insert(order);
+        self.resting.push(order.id);
+    }
+
+    fn remove_resting(&mut self, id: OrderId) {
+        if let Some(order) = self.orders.get(&id).cloned() {
+            self.resting_index.remove(&order);
+        }
+        self.resting.retain(|open| *open != id);
+        self.queue_ahead.remove(&id);
+    }
+
+    fn prune_resting(&mut self) {
+        let closed: Vec<OrderId> = self
+            .resting
+            .iter()
+            .copied()
+            .filter(|id| self.orders.get(id).map(|order| order.is_open()) != Some(true))
+            .collect();
+        for id in closed {
+            self.remove_resting(id);
+        }
     }
 
     /// Let a print consume the queue, and fill what it reaches.
@@ -1248,31 +1399,14 @@ impl Engine {
         passive: Side,
         strategy: &mut dyn Strategy,
     ) -> Result<()> {
-        // Eligible orders, best price first, then submission order.
+        // The maintained index is already in best-price/submission order.
+        // This makes each print proportional to orders it can actually
+        // reach, rather than to every resting order in the engine.
         let mut eligible = std::mem::take(&mut self.queue_candidates);
         eligible.clear();
-        eligible.extend(self.resting.iter().filter_map(|id| {
-            let order = self.orders.get(id)?;
-            if order.instrument != record.instrument
-                || order.outcome != record.outcome
-                || order.side != passive
-                || !order.is_open()
-            {
-                return None;
-            }
-            let limit = order.limit_price()?;
-            // A resting buy is reachable by a print at or below it; a
-            // resting sell by a print at or above it.
-            let reachable = match passive {
-                Side::Buy => price <= limit,
-                Side::Sell => price >= limit,
-            };
-            reachable.then_some((limit, *id))
-        }));
-        eligible.sort_unstable_by(|a, b| match passive {
-            Side::Buy => b.0.cmp(&a.0).then(a.1.cmp(&b.1)),
-            Side::Sell => a.0.cmp(&b.0).then(a.1.cmp(&b.1)),
-        });
+        let key = (record.instrument.clone(), record.outcome);
+        self.resting_index
+            .reached_by_trade(&key, passive, price, &mut eligible);
 
         let mut remaining = size.raw();
         for &(limit, id) in &eligible {
@@ -1306,12 +1440,7 @@ impl Engine {
         }
         eligible.clear();
         self.queue_candidates = eligible;
-        self.resting.retain(|id| {
-            self.orders
-                .get(id)
-                .map(|order| order.is_open())
-                .unwrap_or(false)
-        });
+        self.prune_resting();
         Ok(())
     }
 
@@ -1326,7 +1455,7 @@ impl Engine {
             }
             TimeInForce::GoodTilCancel => {
                 if matches!(order.kind, OrderKind::Limit { .. }) && !self.resting.contains(&id) {
-                    self.resting.push(id);
+                    self.add_resting(&order);
                 }
             }
         }
@@ -1338,7 +1467,7 @@ impl Engine {
         {
             order.status = status;
         }
-        self.resting.retain(|open| *open != id);
+        self.remove_resting(id);
     }
 
     fn execute(
@@ -1403,6 +1532,9 @@ impl Engine {
         }
         if let Some(order) = self.orders.get_mut(&id) {
             order.record_fill(quantity)?;
+        }
+        if self.orders.get(&id).map(|order| order.is_open()) != Some(true) {
+            self.remove_resting(id);
         }
         if is_taker {
             self.metrics.fills_taker += 1;
@@ -1568,6 +1700,8 @@ impl EngineBuilder {
             starting_cash: self.starting_cash,
             orders: BTreeMap::new(),
             resting: Vec::new(),
+            resting_index: RestingIndex::default(),
+            matching_candidates: Vec::new(),
             inflight: BinaryHeap::new(),
             commands: VecDeque::new(),
             clock_requests: Vec::new(),

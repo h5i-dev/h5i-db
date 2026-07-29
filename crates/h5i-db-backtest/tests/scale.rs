@@ -326,10 +326,16 @@ fn queue_matching_scales_across_many_prints_and_orders() {
         id.clone(),
         OutcomeId::FIRST,
         MarketEvent::BookSnapshot {
-            bids: vec![(
-                Price::from_f64(100.0).unwrap(),
-                Qty::from_f64(1_000_000.0).unwrap(),
-            )],
+            bids: vec![
+                (
+                    Price::from_f64(100.0).unwrap(),
+                    Qty::from_f64(1_000_000.0).unwrap(),
+                ),
+                (
+                    Price::from_f64(1.0).unwrap(),
+                    Qty::from_f64(1_000_000.0).unwrap(),
+                ),
+            ],
             asks: vec![(
                 Price::from_f64(101.0).unwrap(),
                 Qty::from_f64(1_000_000.0).unwrap(),
@@ -351,14 +357,14 @@ fn queue_matching_scales_across_many_prints_and_orders() {
         .build()
         .unwrap();
     let intents = (0..500)
-        .map(|_| {
+        .map(|index| {
             (
                 UnixNanos::new(0),
                 OrderRequest::limit(
                     id.clone(),
                     OutcomeId::FIRST,
                     Side::Buy,
-                    Price::from_f64(100.0).unwrap(),
+                    Price::from_f64(if index < 10 { 100.0 } else { 1.0 }).unwrap(),
                     Qty::from_f64(1.0).unwrap(),
                 ),
             )
