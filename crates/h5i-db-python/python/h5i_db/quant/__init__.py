@@ -17,7 +17,7 @@ checked rather than trusted.
 
 from __future__ import annotations
 
-from . import perf, report
+from . import costs, overfitting, perf, report, validation
 from ._common import Pin, Provenance
 from .factor import FactorPanel, MaxLossExceededError, build_panel
 from .perf import (
@@ -29,7 +29,16 @@ from .perf import (
     from_levels,
     returns,
 )
+from .costs import CostFit, SlippageSample, fit_impact
+from .overfitting import (
+    DeflatedSharpe,
+    PBOResult,
+    deflated_sharpe,
+    minimum_track_record_length,
+    probability_of_backtest_overfitting,
+)
 from .report import factor_report, report_payload, tearsheet
+from .validation import Split, combinatorial_purged, purged_kfold, walk_forward
 from .sweep import (
     SweepResult,
     VerificationError,
@@ -61,4 +70,19 @@ __all__ = [
     "factor_report",
     "tearsheet",
     "report_payload",
+    "overfitting",
+    "deflated_sharpe",
+    "minimum_track_record_length",
+    "probability_of_backtest_overfitting",
+    "DeflatedSharpe",
+    "PBOResult",
+    "validation",
+    "purged_kfold",
+    "combinatorial_purged",
+    "walk_forward",
+    "Split",
+    "costs",
+    "fit_impact",
+    "CostFit",
+    "SlippageSample",
 ]
