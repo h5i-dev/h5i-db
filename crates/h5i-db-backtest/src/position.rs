@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use crate::error::Result;
 use crate::instrument::{InstrumentId, OutcomeId};
 use crate::order::Fill;
-use crate::types::{notional, Money, Price, Qty, Side};
+use crate::types::{notional, Money, Price, Qty};
 
 /// The key a position is held under: an instrument *and* an outcome.
 pub type PositionKey = (InstrumentId, OutcomeId);
@@ -230,7 +230,7 @@ impl Portfolio {
 mod tests {
     use super::*;
     use crate::order::OrderId;
-    use crate::types::UnixNanos;
+    use crate::types::{Side, UnixNanos};
 
     fn fill(side: Side, price: f64, quantity: f64, commission: f64) -> Fill {
         Fill {

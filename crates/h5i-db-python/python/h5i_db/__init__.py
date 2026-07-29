@@ -655,6 +655,8 @@ class Database:
         self._native.clear_data_policy(table)
 
 
+from . import backtest as backtest  # noqa: E402  (optional subpackage)
+
 __all__ = [
     "Database",
     "QueryResult",

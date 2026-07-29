@@ -98,6 +98,39 @@ fn opt_i64(array: &Int64Array, row: usize) -> Option<i64> {
     array.is_valid(row).then(|| array.value(row))
 }
 
+/// Scan a table that may legitimately not exist at this read point.
+///
+/// Two absences are facts rather than failures. A venue that publishes no
+/// prints has no `trades` table, and a spot dataset has no `funding`; and a
+/// table that exists today may have had no version at the pinned instant,
+/// which is simply what "there was no funding data yet" looks like when
+/// read from the past.
+///
+/// Only those two are tolerated. A corrupt segment or a schema mismatch
+/// still propagates, because swallowing those is how a run silently trades
+/// on half its data.
+async fn scan_optional(
+    db: &Database,
+    table: &str,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<Vec<RecordBatch>> {
+    let options = ScanOptions {
+        time_start: window.map(|w| w.start().get()),
+        time_end: window.map(|w| w.end().get()),
+        ..Default::default()
+    };
+    match db.scan(table, at, options).await {
+        Ok((batches, _report)) => Ok(batches),
+        Err(error)
+            if matches!(error.code(), "table_not_found" | "version_not_found") =>
+        {
+            Ok(Vec::new())
+        }
+        Err(error) => Err(core_err(error)),
+    }
+}
+
 async fn scan(db: &Database, table: &str, at: ReadAt, window: Option<TimeWindow>) -> Result<Vec<RecordBatch>> {
     let options = ScanOptions {
         time_start: window.map(|w| w.start().get()),
@@ -380,7 +413,7 @@ pub async fn read_book_events(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<Vec<Record>> {
-    let batches = scan(db, schema::BOOK_DELTAS, at, window).await?;
+    let batches = scan_optional(db, schema::BOOK_DELTAS, at, window).await?;
     let mut out: Vec<Record> = Vec::new();
     // Snapshot levels accumulate here until their `is_last` row arrives.
     let mut pending: Option<(i64, Stamps, InstrumentId, OutcomeId, Vec<(Price, Qty)>, Vec<(Price, Qty)>)> =
@@ -540,7 +573,7 @@ pub async fn read_trades(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<Vec<Record>> {
-    let batches = scan(db, schema::TRADES, at, window).await?;
+    let batches = scan_optional(db, schema::TRADES, at, window).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
@@ -607,7 +640,7 @@ pub async fn read_funding(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<Vec<Record>> {
-    let batches = scan(db, schema::FUNDING, at, window).await?;
+    let batches = scan_optional(db, schema::FUNDING, at, window).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
@@ -657,7 +690,7 @@ pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Res
 /// path reaches this function, which is the structural half of "a strategy
 /// cannot see the answer".
 pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolution>> {
-    let batches = scan(db, schema::RESOLUTIONS, at, None).await?;
+    let batches = scan_optional(db, schema::RESOLUTIONS, at, None).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts = column::<TimestampNanosecondArray>(batch, "ts_init")?;
@@ -684,13 +717,14 @@ pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolutio
 /// fee and latency path.
 pub async fn read_signals(
     db: &Database,
+    table: &str,
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<Vec<(UnixNanos, crate::engine::OrderRequest)>> {
     use crate::engine::OrderRequest;
     use crate::order::TimeInForce;
 
-    let batches = scan(db, schema::SIGNALS, at, window).await?;
+    let batches = scan(db, table, at, window).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts = column::<TimestampNanosecondArray>(batch, "ts")?;

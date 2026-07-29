@@ -37,6 +37,14 @@ pub struct RunSpec {
     pub starting_cash: Money,
     /// The read point for market data. A pinned run is reproducible; an
     /// unpinned one is recorded as such.
+    ///
+    /// Prefer `Snapshot` or `AsOf`: those name one instant across every
+    /// table, which is what a run needs. `Version(n)` is a *per-table*
+    /// concept -- table A's version 3 has nothing to do with table B's -- so
+    /// applying one integer to a whole run only means something when the
+    /// tables genuinely share a history. Tables with no version at the pin
+    /// read as empty rather than failing, which is what "that data did not
+    /// exist yet" looks like from the past.
     pub read_at: ReadAt,
     /// Equity curve resolution, in nanoseconds of simulated time.
     pub equity_interval_nanos: i64,
@@ -203,10 +211,9 @@ where
     }
     let book_events = store::read_book_events(db, spec.read_at.clone(), spec.window).await?;
     let trades = store::read_trades(db, spec.read_at.clone(), spec.window).await?;
-    // Funding only exists for perpetuals; an absent table is not an error.
-    let funding = store::read_funding(db, spec.read_at.clone(), spec.window)
-        .await
-        .unwrap_or_default();
+    // Funding only exists for perpetuals; the reader treats an absent
+    // table as no funding rather than as a failure.
+    let funding = store::read_funding(db, spec.read_at.clone(), spec.window).await?;
 
     let coverage = spec.window.map(|requested| {
         let observed: Vec<i64> = book_events
@@ -244,9 +251,7 @@ where
 
     // Only now, with the run finished and the strategy unable to influence
     // anything, does the answer get loaded.
-    let resolutions = store::read_resolutions(db, spec.read_at.clone())
-        .await
-        .unwrap_or_default();
+    let resolutions = store::read_resolutions(db, spec.read_at.clone()).await?;
     let portfolio = crate::position::Portfolio::replay(&result.fills)?;
     let marks: BTreeMap<_, _> = result.marks.clone();
     let settlement = settle(

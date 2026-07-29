@@ -11,7 +11,7 @@
 use crate::book::OrderBook;
 use crate::error::Result;
 use crate::instrument::Instrument;
-use crate::order::{Order, OrderKind};
+use crate::order::Order;
 use crate::types::{notional, Money, Price, Qty, Side, UnixNanos};
 
 /// What a fee model needs to price a fill.
@@ -303,11 +303,6 @@ pub trait VenueModule: std::fmt::Debug {
     /// Interval between runs, in nanoseconds.
     fn interval_nanos(&self) -> i64;
     fn on_interval(&mut self, ts: UnixNanos) -> Result<Money>;
-}
-
-/// Whether an order can rest on a book at all.
-pub(crate) fn is_passive(order: &Order) -> bool {
-    matches!(order.kind, OrderKind::Limit { .. })
 }
 
 #[cfg(test)]
