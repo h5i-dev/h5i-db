@@ -96,6 +96,7 @@ class DataConfig:
 
     signals: Optional[str] = "signals"
     commands: Optional[str] = None
+    strategy_id: Optional[str] = None
     snapshot: Optional[str] = None
     version: Optional[int] = None
     as_of: Optional[str] = None
@@ -103,7 +104,16 @@ class DataConfig:
     minimum_coverage: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if self.commands is not None:
+        selected = sum(value is not None for value in (self.commands, self.strategy_id))
+        if selected > 1:
+            raise ValueError("set only one of commands or strategy_id")
+        if self.strategy_id is not None:
+            if not isinstance(self.strategy_id, str) or not self.strategy_id:
+                raise ValueError("strategy_id must be a non-empty string")
+            if self.signals not in (None, "signals"):
+                raise ValueError("set either signals or strategy_id, not both")
+            object.__setattr__(self, "signals", None)
+        elif self.commands is not None:
             if not isinstance(self.commands, str) or not self.commands:
                 raise ValueError("commands must be a non-empty table name")
             if self.signals not in (None, "signals"):
@@ -143,10 +153,14 @@ class DataConfig:
 
     @property
     def strategy_kind(self) -> str:
+        if self.strategy_id is not None:
+            return "callback"
         return "commands" if self.commands is not None else "signals"
 
     @property
     def strategy_table(self) -> str:
+        if self.strategy_id is not None:
+            raise ValueError("callback strategies do not have a strategy table")
         table = self.commands if self.commands is not None else self.signals
         assert table is not None
         return table
@@ -455,11 +469,15 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
             )
         )
 
-    strategy_table = config.data.strategy_table
-    requested = {"instruments", strategy_table, *_MARKET_TABLES}
+    strategy_table = (
+        None if config.data.strategy_kind == "callback" else config.data.strategy_table
+    )
+    requested = {"instruments", *_MARKET_TABLES}
+    if strategy_table is not None:
+        requested.add(strategy_table)
     for name in sorted(requested):
         if name not in available:
-            if name in ("instruments", strategy_table):
+            if name == "instruments" or name == strategy_table:
                 issues.append(
                     InspectionIssue(
                         "error",
@@ -469,7 +487,7 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
                 )
             continue
         try:
-            is_strategy = name == strategy_table
+            is_strategy = strategy_table is not None and name == strategy_table
             read_kwargs = {} if is_strategy else config.data.read_kwargs()
             schema = db.read(name, limit=1, **read_kwargs).schema
         except (
@@ -484,7 +502,7 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
             )
             continue
         columns = set(schema.names)
-        standard = config.data.strategy_kind if name == strategy_table else name
+        standard = config.data.strategy_kind if is_strategy else name
         missing = _REQUIRED_COLUMNS.get(standard, set()) - columns
         if missing:
             issues.append(
@@ -495,7 +513,7 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
                 )
             )
             continue
-        time_column = "ts" if name == strategy_table else "ts_init"
+        time_column = "ts" if is_strategy else "ts_init"
         table_stats = _scalar_stats(
             db,
             name,
@@ -505,9 +523,8 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
         )
         table_stats["columns"] = tuple(schema.names)
         stats[name] = table_stats
-        if table_stats["row_count"] == 0 and name in (
-            "instruments",
-            strategy_table,
+        if table_stats["row_count"] == 0 and (
+            name == "instruments" or name == strategy_table
         ):
             severity = "error" if name == "instruments" else "warning"
             issues.append(

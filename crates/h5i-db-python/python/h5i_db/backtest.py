@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
+import inspect as _inspect
 import json
 import sys
 from pathlib import Path
@@ -55,6 +57,7 @@ __all__ = [
     "BacktestConfig",
     "BacktestResult",
     "BacktestStudy",
+    "EventStrategy",
     "DataConfig",
     "ExecutionConfig",
     "OutputConfig",
@@ -65,6 +68,7 @@ __all__ = [
     "StudyResult",
     "ValidationWindows",
     "run",
+    "run_strategy",
     "execute",
     "from_signals",
     "inspect",
@@ -255,6 +259,49 @@ def create_command_table(db: Any, name: str = "commands") -> None:
         db.create_table(name, COMMAND_SCHEMA, time_column="ts")
 
 
+class EventStrategy:
+    """Optional base class for path-dependent Python strategies.
+
+    Callbacks receive plain dictionaries and return one command mapping, an
+    iterable of command mappings, or ``None``. Supported actions are
+    ``submit``, ``amend``, ``cancel``, and ``timer``. Declarative signals or
+    command tables remain preferable when callbacks are unnecessary because
+    they avoid crossing the Python boundary for every event.
+    """
+
+    def on_start(self, context: dict) -> Any:
+        return None
+
+    def on_event(self, context: dict, event: dict) -> Any:
+        return None
+
+    def on_timer(self, context: dict, event: dict) -> Any:
+        return None
+
+    def on_fill(self, context: dict, event: dict) -> Any:
+        return None
+
+    def on_stop(self, context: dict) -> Any:
+        return None
+
+
+def _strategy_identity(strategy: Any, explicit: Optional[str]) -> str:
+    if explicit is not None:
+        if not isinstance(explicit, str) or not explicit:
+            raise ValueError("strategy_id must be a non-empty string")
+        return explicit
+    cls = type(strategy)
+    try:
+        source = _inspect.getsource(cls)
+    except (OSError, TypeError) as exc:
+        raise ValueError(
+            "cannot derive a stable identity for this strategy; pass strategy_id"
+        ) from exc
+    qualified = f"{cls.__module__}.{cls.__qualname__}"
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
+    return f"{qualified}:{digest}"
+
+
 def run(
     db: Any,
     run_id: str,
@@ -262,6 +309,8 @@ def run(
     starting_cash: float,
     signals: Optional[str] = "signals",
     commands: Optional[str] = None,
+    strategy_id: Optional[str] = None,
+    _python_strategy: Any = None,
     fee_kind: Optional[str] = None,
     fee_rate: Optional[float] = None,
     maker_rebate: Optional[float] = None,
@@ -295,6 +344,10 @@ def run(
     ``minimum_coverage`` refuses to run at all when the data covers less of
     the requested window than that.
     """
+    if (strategy_id is None) != (_python_strategy is None):
+        raise ValueError(
+            "strategy_id and the Python strategy object must be provided together"
+        )
     if window is not None:
         if len(window) != 2:
             raise ValueError("window must be (start, end)")
@@ -302,6 +355,7 @@ def run(
     data_config = DataConfig(
         signals=signals,
         commands=commands,
+        strategy_id=strategy_id,
         snapshot=snapshot,
         version=version,
         as_of=as_of,
@@ -311,7 +365,11 @@ def run(
     native_args = (
         run_id,
         float(starting_cash),
-        data_config.strategy_table,
+        (
+            data_config.strategy_id
+            if data_config.strategy_kind == "callback"
+            else data_config.strategy_table
+        ),
         fee_kind,
         fee_rate,
         maker_rebate,
@@ -333,13 +391,22 @@ def run(
         maker_fee_rate is None
         and all(value is None for value in risk_args)
         and commands is None
+        and _python_strategy is None
     ):
         payload = db._native.run_backtest(*native_args)
-    elif all(value is None for value in risk_args) and commands is None:
+    elif (
+        all(value is None for value in risk_args)
+        and commands is None
+        and _python_strategy is None
+    ):
         payload = db._native.run_backtest(*native_args, maker_fee_rate)
     else:
         payload = db._native.run_backtest(
-            *native_args, maker_fee_rate, *risk_args, commands
+            *native_args,
+            maker_fee_rate,
+            *risk_args,
+            commands,
+            _python_strategy,
         )
     config = BacktestConfig(
         run_id=run_id,
@@ -378,6 +445,7 @@ def execute(
     config: BacktestConfig,
     *,
     preflight: bool = True,
+    strategy: Any = None,
 ) -> BacktestResult:
     """Execute a complete typed configuration through the native kernel."""
     if not isinstance(config, BacktestConfig):
@@ -385,6 +453,12 @@ def execute(
     inspection = inspect(db, config)
     if preflight:
         inspection.raise_for_errors()
+    if config.data.strategy_kind == "callback" and strategy is None:
+        raise ValueError(
+            "callback BacktestConfig requires strategy= when it is executed"
+        )
+    if config.data.strategy_kind != "callback" and strategy is not None:
+        raise ValueError("strategy= is only valid for callback BacktestConfig")
     data = config.data
     execution = config.execution
     output = config.output
@@ -394,6 +468,8 @@ def execute(
         starting_cash=config.portfolio.starting_cash,
         signals=data.signals,
         commands=data.commands,
+        strategy_id=data.strategy_id,
+        _python_strategy=strategy,
         fee_kind=execution.fee_kind,
         fee_rate=execution.fee_rate,
         maker_rebate=execution.maker_rebate,
@@ -414,6 +490,48 @@ def execute(
     )
     result.inspection = inspection
     return result
+
+
+def run_strategy(
+    db: Any,
+    run_id: str,
+    strategy: Any,
+    *,
+    starting_cash: float,
+    strategy_id: Optional[str] = None,
+    data: Optional[DataConfig] = None,
+    execution: Optional[ExecutionConfig] = None,
+    risk: Optional[RiskConfig] = None,
+    output: Optional[OutputConfig] = None,
+    metadata: Optional[dict[str, Any]] = None,
+    preflight: bool = True,
+) -> BacktestResult:
+    """Run a path-dependent Python strategy through the native event engine."""
+    identity = _strategy_identity(strategy, strategy_id)
+    base_data = data or DataConfig()
+    if base_data.strategy_kind != "signals" or base_data.signals != "signals":
+        raise ValueError(
+            "run_strategy data config may set pins, coverage, and window only"
+        )
+    callback_data = DataConfig(
+        signals=None,
+        strategy_id=identity,
+        snapshot=base_data.snapshot,
+        version=base_data.version,
+        as_of=base_data.as_of,
+        window=base_data.window,
+        minimum_coverage=base_data.minimum_coverage,
+    )
+    config = BacktestConfig(
+        run_id=run_id,
+        portfolio=PortfolioConfig(starting_cash=starting_cash),
+        data=callback_data,
+        execution=execution or ExecutionConfig(),
+        risk=risk or RiskConfig(),
+        output=output or OutputConfig(),
+        metadata=dict(metadata or {}),
+    )
+    return execute(db, config, preflight=preflight, strategy=strategy)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

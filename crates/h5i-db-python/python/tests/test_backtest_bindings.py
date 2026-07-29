@@ -600,3 +600,56 @@ def test_declarative_commands_support_order_lifecycle():
         assert result.config.data.strategy_kind == "commands"
         assert result.config.data.signals is None
         db.close()
+
+
+def test_python_event_strategy_is_explicit_and_receives_fills():
+    class BuyOnThirdSecond(backtest.EventStrategy):
+        def __init__(self):
+            self.scheduled = False
+            self.fills = []
+
+        def on_event(self, context, event):
+            assert event["ts_init"] == context["now"]
+            if not self.scheduled:
+                self.scheduled = True
+                return {
+                    "action": "timer",
+                    "name": "enter",
+                    "ts": event["ts_init"] + 2 * SECOND,
+                }
+            return None
+
+        def on_timer(self, context, event):
+            assert event["name"] == "enter"
+            return {
+                "action": "submit",
+                "client_order_id": "entry",
+                "instrument_id": MARKET,
+                "side": "buy",
+                "quantity": 10.0,
+                "tag": "callback-entry",
+            }
+
+        def on_fill(self, context, event):
+            self.fills.append(event)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        strategy = BuyOnThirdSecond()
+        result = backtest.run_strategy(
+            db,
+            "callback",
+            strategy,
+            strategy_id="tests.BuyOnThirdSecond:v1",
+            starting_cash=500.0,
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+
+        assert result["fills"] == 1
+        assert len(strategy.fills) == 1
+        assert strategy.fills[0]["tag"] == "callback-entry"
+        assert result.config.data.strategy_kind == "callback"
+        assert result.config.data.strategy_id == "tests.BuyOnThirdSecond:v1"
+        verified = result.verify(strategy=BuyOnThirdSecond())
+        assert verified["verified"]
+        db.close()

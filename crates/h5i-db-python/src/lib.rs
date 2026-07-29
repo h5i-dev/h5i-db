@@ -27,6 +27,8 @@ use h5i_db_core::{DataPolicy, Database, Error, ReadAt, ScanOptions, TableOptions
 use h5i_db_query::datafusion::error::DataFusionError;
 use h5i_db_query::{DEFAULT_TOLERANCE, H5iSession, SessionOptions, arrival_delta};
 
+mod python_strategy;
+
 // -- exceptions -------------------------------------------------------------
 //
 // One Python exception class per family of the core `{code, message,
@@ -598,6 +600,7 @@ impl NativeDatabase {
         max_abs_position = None,
         max_open_orders = None,
         commands_table = None,
+        python_strategy = None,
     ))]
     fn run_backtest(
         &self,
@@ -623,6 +626,7 @@ impl NativeDatabase {
         max_abs_position: Option<f64>,
         max_open_orders: Option<usize>,
         commands_table: Option<String>,
+        python_strategy: Option<Py<PyAny>>,
     ) -> PyResult<String> {
         use h5i_db_backtest::RiskLimits;
         use h5i_db_backtest::engine::{CommandReplay, SignalReplay, Strategy};
@@ -671,7 +675,9 @@ impl NativeDatabase {
                 // Reproducibility is not lost: the run's fork pins every
                 // table at creation, so `Latest` inside the fork is a fixed
                 // version for the life of the run.
-                let mut strategy: Box<dyn Strategy> = if let Some(table) = commands_table {
+                let mut strategy: Box<dyn Strategy> = if let Some(object) = python_strategy {
+                    Box::new(python_strategy::PythonStrategy::new(object))
+                } else if let Some(table) = commands_table {
                     let commands = h5i_db_backtest::store::read_commands(
                         &inner.db,
                         &table,

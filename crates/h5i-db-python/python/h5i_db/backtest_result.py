@@ -275,7 +275,7 @@ class BacktestResult(dict):
             "metrics": changes,
         }
 
-    def verify(self) -> dict[str, Any]:
+    def verify(self, *, strategy: Any = None) -> dict[str, Any]:
         """Re-execute from persisted configuration and compare deterministic output."""
         if self.config is None:
             raise ValueError("this result has no persisted BacktestConfig")
@@ -287,7 +287,7 @@ class BacktestResult(dict):
         )
         candidate: Optional[BacktestResult] = None
         try:
-            candidate = execute(self._db, verify_config)
+            candidate = execute(self._db, verify_config, strategy=strategy)
             compared = self.compare(candidate)
             compared["tables_equal"] = {
                 name: self.table(name).equals(candidate.table(name))

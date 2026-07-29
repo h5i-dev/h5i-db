@@ -19,6 +19,7 @@ _CONFIG_SECTIONS = {"data", "execution", "portfolio", "risk", "output"}
 _NON_TUNABLE = {
     "data.signals",
     "data.commands",
+    "data.strategy_id",
     "data.snapshot",
     "data.version",
     "data.as_of",
@@ -173,6 +174,11 @@ class BacktestStudy:
     def __post_init__(self) -> None:
         if not self.study_id:
             raise ValueError("study_id must be non-empty")
+        if self.base.data.strategy_kind == "callback":
+            raise ValueError(
+                "BacktestStudy requires a signals or commands strategy; "
+                "callback objects are not serializable trial inputs"
+            )
         if isinstance(self.max_workers, bool) or self.max_workers < 1:
             raise ValueError("max_workers must be a positive integer")
         object.__setattr__(
