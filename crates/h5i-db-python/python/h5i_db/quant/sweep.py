@@ -220,15 +220,24 @@ def verify(
         "warnings": list(provenance.warnings()),
         "verified": False,
     }
+    # An unpinned computation cannot be verified even if a recomputation
+    # agrees with it. The digest covers the pin, the parameters and the SQL,
+    # not the bytes those read; two runs against "latest" agreeing proves
+    # only that nothing changed in the seconds between them.
+    if not provenance.pin.is_pinned:
+        report["reason"] = "unpinned computation"
+        if strict:
+            raise VerificationError(
+                "cannot verify an unpinned computation: it read the latest "
+                "version, which may already have moved. Re-run it against a "
+                "snapshot, an as-of time, or an explicit version."
+            )
+        return report
+
     if rerun is None:
         rerun = getattr(subject, "_default_verification", None)
     if rerun is None:
         report["reason"] = "no recomputation supplied"
-        if strict and not provenance.pin.is_pinned:
-            raise VerificationError(
-                "cannot verify an unpinned computation: it read the latest "
-                "version, which may already have moved"
-            )
         return report
 
     again = rerun()
