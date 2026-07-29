@@ -180,6 +180,15 @@ pub async fn run_in_fork<F>(
 where
     F: FnOnce(EngineBuilder) -> EngineBuilder,
 {
+    // Note for anyone optimising this: creating the `bt_*` tables on the base
+    // before forking would let the fork inherit them, saving five metadata
+    // commits per run (~65 ms, measured in `benches/replay_path.rs`). Do not.
+    // `a_run_lives_on_a_fork_and_leaves_the_base_untouched` is the guarantee
+    // that a run touches nothing outside its branch, and an empty `bt_fills`
+    // appearing in the base catalog because someone once ran a backtest is
+    // exactly the kind of leak that guarantee exists to forbid. The saving is
+    // real and belongs in core, as a batched create that takes the metadata
+    // lock once, not in a fork's isolation.
     let fork_name = spec.fork_name();
     let mut meta = serde_json::Map::new();
     meta.insert(

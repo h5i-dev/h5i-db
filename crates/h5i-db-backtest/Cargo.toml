@@ -20,3 +20,10 @@ blake3 = { workspace = true }
 rand = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true }
+
+# Phase-split measurement of the storage -> decode -> kernel path. Lives here
+# rather than in h5i-db-bench so P6 holds trivially: deleting the quant layer
+# deletes its benchmark with it.
+[[bench]]
+name = "replay_path"
+harness = false

@@ -13,7 +13,7 @@ use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId};
 use h5i_db_backtest::models::PredictionMarketFees;
 use h5i_db_backtest::position::Portfolio;
-use h5i_db_backtest::run::{run_in_fork, RunSpec};
+use h5i_db_backtest::run::{run_in_fork, run_in_place, RunSpec};
 use h5i_db_backtest::settlement::Resolution;
 use h5i_db_backtest::store;
 use h5i_db_backtest::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
@@ -329,6 +329,68 @@ async fn positions_rebuild_from_the_stored_fill_log() {
     assert_eq!(
         from_storage.realized_pnl().unwrap(),
         from_run.realized_pnl().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_second_run_on_one_fork_merges_instead_of_appending_backwards() {
+    // `write_run` commits the five `bt_*` tables as one transaction, which is
+    // an append and therefore refuses rows that land before what is already
+    // stored. Two runs sharing a fork is exactly that case: the second run
+    // starts earlier than the first ended. The transaction must fall back to
+    // the merging backfill rather than failing, and the merged tables must
+    // hold both runs in time order.
+    let dir = tempfile::tempdir().unwrap();
+    let db = seeded_db(&dir).await;
+
+    let later = TimeWindow::new(ts(5 * SECOND), ts(11 * SECOND)).unwrap();
+    let earlier = TimeWindow::new(ts(SECOND), ts(11 * SECOND)).unwrap();
+
+    let mut first = SignalReplay::new(vec![(
+        ts(6 * SECOND),
+        OrderRequest::market(id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
+    )])
+    .unwrap();
+    let first_report = run_in_place(
+        &db,
+        RunSpec::new("shared-later", money(1_000.0)).window(later),
+        &mut first,
+        |b| b,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first_report.result.fills.len(), 1);
+
+    // Earlier window, so every table's rows precede the ones already written.
+    let mut second = SignalReplay::new(vec![(
+        ts(2 * SECOND),
+        OrderRequest::market(id(), OutcomeId::FIRST, Side::Buy, qty(20.0)),
+    )])
+    .unwrap();
+    let second_report = run_in_place(
+        &db,
+        RunSpec::new("shared-earlier", money(1_000.0)).window(earlier),
+        &mut second,
+        |b| b,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second_report.result.fills.len(), 1);
+
+    let stored = store::read_fills(&db, ReadAt::Latest).await.unwrap();
+    assert_eq!(
+        stored.len(),
+        2,
+        "both runs' fills must survive the merge: {stored:?}"
+    );
+    let stamps: Vec<i64> = stored.iter().map(|fill| fill.ts.get()).collect();
+    let mut sorted = stamps.clone();
+    sorted.sort_unstable();
+    assert_eq!(stamps, sorted, "the merged fill log must be time ordered");
+    assert_eq!(
+        stored.iter().map(|f| f.quantity).collect::<Vec<_>>(),
+        vec![qty(20.0), qty(10.0)],
+        "the earlier run's fill must sort before the later one's"
     );
 }
 

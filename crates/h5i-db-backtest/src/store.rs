@@ -1144,7 +1144,20 @@ pub async fn read_ingest_log(db: &Database) -> Result<Vec<IngestEntry>> {
 
 // -- run outputs ------------------------------------------------------------
 
-/// Write a finished run's `bt_*` tables.
+/// Write a finished run's `bt_*` tables, atomically.
+///
+/// The five tables are one fact -- a run -- so they are committed as one
+/// journaled transaction rather than five appends. That is a correctness fix
+/// before it is a speed one: five sequential commits means a crash between
+/// two of them leaves `bt_orders` written and `bt_fills` missing, which is a
+/// run that reads as "submitted 400 orders, filled none". A transaction
+/// leaves either all five or none.
+///
+/// It is also where a run's wall time was going. Each commit takes the
+/// database-wide metadata lock, writes a manifest and fsyncs, so the cost is
+/// per *commit*, not per row; five of them to store a few hundred rows was
+/// measurably more expensive than replaying the market data that produced
+/// them (`benches/replay_path.rs`).
 pub async fn write_run(
     db: &Database,
     run_id: &str,
@@ -1154,22 +1167,71 @@ pub async fn write_run(
     started_at: UnixNanos,
 ) -> Result<()> {
     create_run_tables(db).await?;
-    write_run_manifest(db, run_id, config_digest, result, settlement, started_at).await?;
-    write_orders(db, result).await?;
-    write_fills(db, result).await?;
-    write_positions(db, result, settlement).await?;
-    write_equity(db, result).await?;
-    Ok(())
+    let batches = vec![
+        (
+            schema::RUN,
+            run_manifest_batch(run_id, config_digest, result, settlement, started_at)?,
+        ),
+        (schema::ORDERS, orders_batch(result)?),
+        (schema::FILLS, fills_batch(result)?),
+        (schema::POSITIONS, positions_batch(result, settlement)?),
+        (schema::EQUITY, equity_batch(result)?),
+    ];
+    commit_run_batches(db, batches).await
 }
 
-async fn write_run_manifest(
+/// Commit every non-empty run table in one transaction.
+///
+/// Falls back to the per-table path when the rows land in the past, because
+/// that is the one case a transaction cannot express: a backfill has to read
+/// the affected range back and replace it, which is a different operation per
+/// table. Re-running a run id into a database that already holds it is the
+/// way to get there.
+async fn commit_run_batches(
     db: &Database,
+    batches: Vec<(&'static str, Option<RecordBatch>)>,
+) -> Result<()> {
+    let present: Vec<(&'static str, RecordBatch)> = batches
+        .into_iter()
+        .filter_map(|(table, batch)| batch.map(|batch| (table, batch)))
+        .collect();
+    if present.is_empty() {
+        return Ok(());
+    }
+
+    let mut transaction = db.transaction();
+    for (table, batch) in &present {
+        transaction
+            .append(table, vec![batch.clone()])
+            .map_err(core_err)?;
+    }
+    match transaction.commit().await {
+        Ok(_) => Ok(()),
+        Err(error) if error.code() == "sort_order_violation" => {
+            for (table, batch) in present {
+                let schema = batch.schema();
+                append_with(
+                    db,
+                    table,
+                    schema,
+                    batch.columns().to_vec(),
+                    time_column_of(table),
+                )
+                .await?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(core_err(error)),
+    }
+}
+
+fn run_manifest_batch(
     run_id: &str,
     config_digest: &str,
     result: &RunResult,
     settlement: &SettlementReport,
     started_at: UnixNanos,
-) -> Result<()> {
+) -> Result<Option<RecordBatch>> {
     let warnings = settlement.warnings();
     let columns: Vec<ArrayRef> = vec![
         Arc::new(TimestampNanosecondArray::from(vec![started_at.get()])),
@@ -1190,10 +1252,10 @@ async fn write_run_manifest(
             Some(warnings.join("; "))
         }])),
     ];
-    append(db, schema::RUN, schema::run(), columns).await
+    build(schema::RUN, schema::run(), columns)
 }
 
-async fn write_orders(db: &Database, result: &RunResult) -> Result<()> {
+fn orders_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
     let mut ts = TimestampNanosecondBuilder::new();
     let mut id = Int64Builder::new();
     let mut instrument = StringBuilder::new();
@@ -1260,10 +1322,10 @@ async fn write_orders(db: &Database, result: &RunResult) -> Result<()> {
         Arc::new(tag.finish()),
         Arc::new(reduce_only.finish()),
     ];
-    append(db, schema::ORDERS, schema::orders(), columns).await
+    build(schema::ORDERS, schema::orders(), columns)
 }
 
-async fn write_fills(db: &Database, result: &RunResult) -> Result<()> {
+fn fills_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
     let mut ts = TimestampNanosecondBuilder::new();
     let mut order_id = Int64Builder::new();
     let mut instrument = StringBuilder::new();
@@ -1303,7 +1365,7 @@ async fn write_fills(db: &Database, result: &RunResult) -> Result<()> {
         Arc::new(is_taker.finish()),
         Arc::new(tag.finish()),
     ];
-    append(db, schema::FILLS, schema::fills(), columns).await
+    build(schema::FILLS, schema::fills(), columns)
 }
 
 /// Read `bt_fills` back as [`Fill`]s, so a stored run can be re-folded into
@@ -1341,11 +1403,10 @@ pub async fn read_fills(db: &Database, at: ReadAt) -> Result<Vec<crate::order::F
     Ok(out)
 }
 
-async fn write_positions(
-    db: &Database,
+fn positions_batch(
     result: &RunResult,
     settlement: &SettlementReport,
-) -> Result<()> {
+) -> Result<Option<RecordBatch>> {
     let portfolio = Portfolio::replay(&result.fills)?;
     let settled: BTreeMap<(String, u16), &crate::settlement::PositionSettlement> = settlement
         .settled
@@ -1402,10 +1463,10 @@ async fn write_positions(
         Arc::new(settlement_pnl.finish()),
         Arc::new(market_exit.finish()),
     ];
-    append(db, schema::POSITIONS, schema::positions(), columns).await
+    build(schema::POSITIONS, schema::positions(), columns)
 }
 
-async fn write_equity(db: &Database, result: &RunResult) -> Result<()> {
+fn equity_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
     let mut ts = TimestampNanosecondBuilder::new();
     let mut cash = Float64Builder::new();
     let mut position_value = Float64Builder::new();
@@ -1430,7 +1491,28 @@ async fn write_equity(db: &Database, result: &RunResult) -> Result<()> {
         Arc::new(realized.finish()),
         Arc::new(unrealized.finish()),
     ];
-    append(db, schema::EQUITY, schema::equity(), columns).await
+    build(schema::EQUITY, schema::equity(), columns)
+}
+
+/// Assemble a batch, or `None` when there is nothing to write.
+///
+/// An empty run table is a legitimate outcome -- a strategy that never traded
+/// has no fills -- so it is an absent batch rather than an error or a
+/// zero-row commit.
+fn build(
+    table: &'static str,
+    schema: arrow::datatypes::SchemaRef,
+    columns: Vec<ArrayRef>,
+) -> Result<Option<RecordBatch>> {
+    if columns.first().map(|c| c.len()).unwrap_or(0) == 0 {
+        return Ok(None);
+    }
+    RecordBatch::try_new(schema, columns)
+        .map(Some)
+        .map_err(|error| BacktestError::Schema {
+            table,
+            detail: error.to_string(),
+        })
 }
 
 async fn append(
