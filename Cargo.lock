@@ -1772,6 +1772,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "h5i-db-backtest"
+version = "0.1.1"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "blake3",
+ "h5i-db-core",
+ "rand 0.9.5",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "h5i-db-bench"
 version = "0.1.1"
 dependencies = [
