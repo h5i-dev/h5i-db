@@ -28,8 +28,32 @@ from typing import Any, Optional, Sequence, Union
 
 import pyarrow as pa
 
+from .backtest_config import (
+    BacktestConfig,
+    DataConfig,
+    ExecutionConfig,
+    OutputConfig,
+    PortfolioConfig,
+    PreflightInspection,
+    ReplayFidelity,
+    inspect,
+)
+from .backtest_result import BacktestResult, _persist_config, list_runs, open_result
+
 __all__ = [
+    "BacktestConfig",
+    "BacktestResult",
+    "DataConfig",
+    "ExecutionConfig",
+    "OutputConfig",
+    "PortfolioConfig",
+    "PreflightInspection",
+    "ReplayFidelity",
     "run",
+    "execute",
+    "inspect",
+    "list_runs",
+    "open_result",
     "SIGNAL_SCHEMA",
     "signal_table",
     "create_signal_table",
@@ -186,4 +210,74 @@ def run(
         payload = db._native.run_backtest(*native_args)
     else:
         payload = db._native.run_backtest(*native_args, maker_fee_rate)
-    return json.loads(payload)
+    config = BacktestConfig(
+        run_id=run_id,
+        portfolio=PortfolioConfig(starting_cash=starting_cash),
+        data=DataConfig(
+            signals=signals,
+            snapshot=snapshot,
+            version=version,
+            as_of=as_of,
+            window=window,
+            minimum_coverage=minimum_coverage,
+        ),
+        execution=ExecutionConfig(
+            fee_kind=fee_kind,
+            fee_rate=fee_rate,
+            maker_rebate=maker_rebate,
+            maker_fee_rate=maker_fee_rate,
+            queue_position=queue_position,
+            optimistic_queue=optimistic_queue,
+            latency_nanos=latency_nanos,
+            slippage_ticks=slippage_ticks,
+        ),
+        output=OutputConfig(equity_interval_nanos=equity_interval_nanos),
+    )
+    inspection = inspect(db, config)
+    result = BacktestResult(
+        json.loads(payload),
+        db=db,
+        config=config,
+        inspection=inspection,
+    )
+    _persist_config(db, result.fork_name, config, inspection)
+    return result
+
+
+def execute(
+    db: Any,
+    config: BacktestConfig,
+    *,
+    preflight: bool = True,
+) -> BacktestResult:
+    """Execute a complete typed configuration through the native kernel."""
+    if not isinstance(config, BacktestConfig):
+        raise TypeError("config must be a BacktestConfig")
+    inspection = inspect(db, config)
+    if preflight:
+        inspection.raise_for_errors()
+    data = config.data
+    execution = config.execution
+    output = config.output
+    result = run(
+        db,
+        config.run_id,
+        starting_cash=config.portfolio.starting_cash,
+        signals=data.signals,
+        fee_kind=execution.fee_kind,
+        fee_rate=execution.fee_rate,
+        maker_rebate=execution.maker_rebate,
+        maker_fee_rate=execution.maker_fee_rate,
+        queue_position=execution.queue_position,
+        optimistic_queue=execution.optimistic_queue,
+        latency_nanos=execution.latency_nanos,
+        slippage_ticks=execution.slippage_ticks,
+        window=data.window,
+        version=data.version,
+        as_of=data.as_of,
+        snapshot=data.snapshot,
+        equity_interval_nanos=output.equity_interval_nanos,
+        minimum_coverage=data.minimum_coverage,
+    )
+    result.inspection = inspection
+    return result

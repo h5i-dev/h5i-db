@@ -314,3 +314,105 @@ def test_queue_position_changes_nothing_for_a_taker():
         assert plain["fills"] == queued["fills"] == 1
         assert plain["final_cash"] == queued["final_cash"]
         db.close()
+
+
+def test_typed_config_round_trips_and_preflights():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        config = backtest.BacktestConfig(
+            run_id="typed",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+            execution=backtest.ExecutionConfig(
+                fee_kind="prediction_market",
+                fee_rate=0.07,
+            ),
+            output=backtest.OutputConfig(equity_interval_nanos=SECOND),
+            metadata={"owner": "research"},
+        )
+        restored = backtest.BacktestConfig.from_json(config.to_json())
+        assert restored == config
+        assert restored.digest == config.digest
+
+        inspection = backtest.inspect(db, config)
+        assert inspection.ok
+        assert inspection.fidelity == backtest.ReplayFidelity.SNAPSHOT_L2
+        assert inspection.tables["book_deltas"]["row_count"] == 20
+        assert inspection.warnings
+        db.close()
+
+
+def test_typed_execution_returns_a_lazy_result_object():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                    "tag": "entry",
+                }
+            ],
+        )
+        config = backtest.BacktestConfig(
+            run_id="result",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+            output=backtest.OutputConfig(equity_interval_nanos=SECOND),
+        )
+        result = backtest.execute(db, config)
+        assert isinstance(result, dict)
+        assert result.fills.num_rows == 1
+        assert result.orders.num_rows == 1
+        assert result.summary()["fills"] == 1
+        assert result.explain()["status_counts"]["filled"] == 1
+        assert result.stats()["n_periods"] >= 1
+        assert "Run manifest" in result.html_summary()
+
+        reopened = backtest.open_result(db, "result")
+        assert reopened.config == config
+        assert reopened.inspection.fidelity == backtest.ReplayFidelity.SNAPSHOT_L2
+        assert backtest.list_runs(db)[0]["fork"] == "bt-result"
+        assert result.verify()["verified"]
+        db.close()
+
+
+def test_preflight_refuses_queue_claims_from_periodic_snapshots():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(db, [])
+        config = backtest.BacktestConfig(
+            run_id="bad-queue",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+            execution=backtest.ExecutionConfig(queue_position=True),
+        )
+        inspection = backtest.inspect(db, config)
+        assert not inspection.ok
+        assert {issue.code for issue in inspection.errors} == {
+            "unsupported_queue_claim"
+        }
+        with pytest.raises(ValueError, match="unsupported_queue_claim"):
+            backtest.execute(db, config)
+        db.close()
+
+
+def test_configuration_rejects_silently_overridden_execution_models():
+    with pytest.raises(ValueError, match="separate scenarios"):
+        backtest.ExecutionConfig(queue_position=True, slippage_ticks=1)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        backtest.ExecutionConfig(maker_rebate=-0.001, maker_fee_rate=0.001)
