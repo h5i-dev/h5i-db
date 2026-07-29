@@ -26,6 +26,7 @@
 
 pub mod book;
 pub mod clock;
+pub mod engine;
 pub mod error;
 pub mod event;
 pub mod instrument;
@@ -39,6 +40,7 @@ pub mod window;
 
 pub use book::{BookAction, BookDelta, BookStatus, BookWalk, OrderBook};
 pub use clock::{Clock, TimeEvent};
+pub use engine::{Context, Engine, EngineBuilder, OrderRequest, RunResult, SignalReplay, Strategy};
 pub use error::{BacktestError, Result};
 pub use event::{MarketEvent, Record};
 pub use instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
