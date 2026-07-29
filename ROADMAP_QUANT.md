@@ -769,7 +769,15 @@ Part B is under way in `crates/h5i-db-backtest` (117 tests):
 | Vendor ingestion (Polymarket) | not started | B0's last piece: a loader that turns vendor archives into `book_deltas` |
 | Differential oracle vs nautilus | not started | §9.4 |
 | Python bindings for the kernel | not started | a run is driven from Rust today; Python consumes its output tables |
-| B3 / B4 (perps, equities, sweeps at scale) | not started | |
+| Perpetuals (funding, margin, liquidation) | **done** | `account.rs`, funding as a market event |
+| Queue-position fills, amendment, self-trade prevention | **done** | L3/MBO still absent -- no L3 data to model against |
+| Idempotent ingestion | **done** | content digest + `ingest_log`; backfill via `replace_range` remains a gap |
+| Streaming replay | **done** | lazy sources, 5.5M events/s measured in `tests/scale.rs` |
+| Execution seam | **done** | `ExecutionClient`, shared by simulator and any live adapter |
+| Run metrics | **done** | `explain_silence()` |
+| Overfitting / validation / cost calibration | **done** | `quant.overfitting`, `quant.validation`, `quant.costs` |
+| Corporate actions, equities | **not started** | gated on VII-A1/A3 |
+| Differential oracle vs nautilus | **not started** | §9.4 |
 
 The kernel is connected to the database: a run reads pinned market data,
 replays deterministically, and writes its results back as tables on its own
