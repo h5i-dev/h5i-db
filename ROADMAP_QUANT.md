@@ -280,9 +280,19 @@ CLI: `h5i quant factor --db <path> --factor signals --prices prices
   checked).
 - `.ic_decay()` plans a single horizon-join query (verified via `EXPLAIN`,
   per VII-D3).
-- A panel of 2,500 assets × 15 years of daily bars builds and evaluates
-  faster than `alphalens-reloaded` end to end on the same machine, and the
-  benchmark script is committed under `benchmarks/`.
+- The engine path beats `alphalens-reloaded` end to end on the same machine
+  *in parallel mode*, and the benchmark script is committed under
+  `benchmarks/`. **Measured (2026-07-29, `benchmarks/compare_alphalens.py`,
+  300 assets × 4 years = 302k rows, this machine): 2.81× with
+  `deterministic=False`; 0.91× — a little slower than alphalens — with the
+  reproducible default.** The gap is entirely the single-partition execution
+  that buys bit-reproducibility (§2 P2/P8): IC alone is 4× faster either
+  way, while the join-heavy statistics (turnover, rank autocorrelation) cost
+  ~3.5× more single-partition. This is the honest trade and both numbers are
+  published rather than the flattering one. Closing it without giving up
+  reproducibility means removing the repeated recomputation of the panel
+  CTE (materialize once, then join), which is tracked as an optimization,
+  not a correctness item.
 
 ### 4.4 Marketing deliverables
 
@@ -714,6 +724,43 @@ M1 and B1 are deliberately the two largest single milestones: everything
 after each has a demoable surface.
 
 ---
+
+## 10a. Implementation status (2026-07-29, branch `qpian`)
+
+Part A is built and tested; Part B has not been started. What exists:
+
+| Milestone | State | Where |
+|---|---|---|
+| M1 factor evaluation | **done** | `h5i_db.quant.factor`; 30 tests, 20 of them golden comparisons against `alphalens-reloaded` 0.4.6 |
+| M2 renderer | **done** | `h5i_db.quant.report`; self-containment, provenance-first, both themes and the table view are asserted; rendered and inspected in a headless browser |
+| M3 performance statistics | **done** | `h5i_db.quant.perf`; 21 tests against `empyrical-reloaded` 0.5.12 including the edge fixtures |
+| M4 sweeps / verify / restatement | **done** | `h5i_db.quant.sweep`; 12 tests |
+| CLI | **done, relocated** | `python -m h5i_db.quant`; see the deviation below |
+| M5 benchmarks | **done, and the claim was wrong** | `benchmarks/compare_alphalens.py`; see §4.3 |
+| Docs | **done** | `docs-src/manual/quant.md`, examples executed in CI, divergence ledger D1–D8 |
+| UI `/report` route | not started | `crates/h5i-db-ui` |
+| Cookbook pages, README hero | not started | |
+| Event-study family (§4.2) | blocked | needs the window join, a tracked engine gap |
+| Part B (B0–B4) | **not started** | a separate program; §8 stands as written |
+
+Three deviations from this document, each recorded where it lives:
+
+1. **CLI surface.** §3 puts `quant` verbs in `crates/h5i-db-cli`. Building
+   them there would mean a second implementation of every statistic's SQL,
+   which is what P4 exists to prevent, so the CLI is
+   `python -m h5i_db.quant` instead. The native verb becomes possible once
+   the SQL builders move to Rust with Python binding to them; until then one
+   implementation beats two agreeing surfaces.
+2. **`deterministic=True` is a new default** that §2 implied but did not
+   name. Parallel plans combine partial float aggregates in a
+   nondeterministic order, so "byte-identical from the same pin" is false
+   under default DataFusion settings. `Database.sql(target_partitions=…)`
+   was added to the engine surface (general-purpose, not quant-specific) and
+   the quant layer defaults to single-partition.
+3. **Version pins are per table.** A bare `version=2` cannot pin two tables
+   with independent histories; `Pin.version` also accepts a
+   `{table: version}` mapping, and snapshots remain the idiomatic
+   multi-table pin.
 
 ## 11. Non-goals
 
