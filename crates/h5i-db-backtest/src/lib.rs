@@ -25,13 +25,19 @@
 //! deleted.
 
 pub mod book;
+pub mod clock;
 pub mod error;
+pub mod event;
 pub mod instrument;
+pub mod replay;
 pub mod types;
 pub mod window;
 
 pub use book::{BookAction, BookDelta, BookStatus, BookWalk, OrderBook};
+pub use clock::{Clock, TimeEvent};
 pub use error::{BacktestError, Result};
+pub use event::{MarketEvent, Record};
 pub use instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
+pub use replay::{Replay, ReplayBuilder};
 pub use types::{notional, Money, Price, Qty, Side, Stamps, UnixNanos, SCALE};
 pub use window::{Coverage, TimeWindow};
