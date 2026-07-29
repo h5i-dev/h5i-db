@@ -583,7 +583,6 @@ impl NativeDatabase {
         fee_kind = None,
         fee_rate = None,
         maker_rebate = None,
-        maker_fee_rate = None,
         queue_position = false,
         optimistic_queue = false,
         latency_nanos = None,
@@ -594,6 +593,7 @@ impl NativeDatabase {
         snapshot = None,
         equity_interval_nanos = None,
         minimum_coverage = None,
+        maker_fee_rate = None,
     ))]
     fn run_backtest(
         &self,
@@ -604,7 +604,6 @@ impl NativeDatabase {
         fee_kind: Option<String>,
         fee_rate: Option<f64>,
         maker_rebate: Option<f64>,
-        maker_fee_rate: Option<f64>,
         queue_position: bool,
         optimistic_queue: bool,
         latency_nanos: Option<i64>,
@@ -615,6 +614,7 @@ impl NativeDatabase {
         snapshot: Option<String>,
         equity_interval_nanos: Option<i64>,
         minimum_coverage: Option<f64>,
+        maker_fee_rate: Option<f64>,
     ) -> PyResult<String> {
         use h5i_db_backtest::engine::SignalReplay;
         use h5i_db_backtest::models::{

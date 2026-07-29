@@ -162,14 +162,13 @@ def run(
         if len(window) != 2:
             raise ValueError("window must be (start, end)")
         window = (_to_nanos(window[0]), _to_nanos(window[1]))
-    payload = db._native.run_backtest(
+    native_args = (
         run_id,
         float(starting_cash),
         signals,
         fee_kind,
         fee_rate,
         maker_rebate,
-        maker_fee_rate,
         queue_position,
         optimistic_queue,
         latency_nanos,
@@ -181,4 +180,10 @@ def run(
         equity_interval_nanos,
         minimum_coverage,
     )
+    # `maker_fee_rate` was appended to the native ABI. Omitting it preserves
+    # compatibility with an older installed extension for non-Kalshi runs.
+    if maker_fee_rate is None:
+        payload = db._native.run_backtest(*native_args)
+    else:
+        payload = db._native.run_backtest(*native_args, maker_fee_rate)
     return json.loads(payload)
