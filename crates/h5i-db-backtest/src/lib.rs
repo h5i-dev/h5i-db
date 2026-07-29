@@ -34,7 +34,10 @@ pub mod models;
 pub mod order;
 pub mod position;
 pub mod replay;
+pub mod run;
+pub mod schema;
 pub mod settlement;
+pub mod store;
 pub mod types;
 pub mod window;
 
@@ -51,6 +54,7 @@ pub use models::{
 pub use order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 pub use position::{Portfolio, Position};
 pub use replay::{Replay, ReplayBuilder};
+pub use run::{run_in_fork, run_in_place, RunReport, RunSpec};
 pub use settlement::{Resolution, SettlementReport};
 pub use types::{notional, Money, Price, Qty, Side, Stamps, UnixNanos, SCALE};
 pub use window::{Coverage, TimeWindow};

@@ -35,6 +35,9 @@ use crate::types::{notional, Money, Price, Qty, Side, UnixNanos};
 /// A key identifying one tradable book.
 type BookKey = (InstrumentId, OutcomeId);
 
+/// Default equity sampling interval: one second of simulated time.
+pub const DEFAULT_EQUITY_INTERVAL_NANOS: i64 = 1_000_000_000;
+
 /// An order a strategy wants to place. Turned into an [`Order`] by the
 /// engine, which assigns the id, so ids stay monotonic in submission order.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -221,6 +224,19 @@ impl PartialOrd for InFlight {
     }
 }
 
+/// One sample of the equity curve.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EquityPoint {
+    pub ts: UnixNanos,
+    pub cash: Money,
+    /// Marked value of open positions.
+    pub position_value: Money,
+    /// `cash + position_value`.
+    pub equity: Money,
+    pub realized_pnl: Money,
+    pub unrealized_pnl: Money,
+}
+
 /// How a run ended.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RunResult {
@@ -236,6 +252,8 @@ pub struct RunResult {
     pub records_processed: u64,
     /// The last mark seen per book, for valuing what stayed open.
     pub marks: BTreeMap<BookKey, Price>,
+    /// The equity curve, sampled on a fixed interval of simulated time.
+    pub equity: Vec<EquityPoint>,
 }
 
 /// The engine.
@@ -260,6 +278,9 @@ pub struct Engine {
     sequence: u64,
     records: u64,
     simulated_through: Option<UnixNanos>,
+    equity_interval: i64,
+    next_equity_sample: Option<i64>,
+    equity: Vec<EquityPoint>,
 }
 
 impl Engine {
@@ -271,6 +292,7 @@ impl Engine {
             fee_model: Box::new(NoFees),
             fill_model: Box::new(BookFills),
             latency_model: Box::new(NoLatency),
+            equity_interval: DEFAULT_EQUITY_INTERVAL_NANOS,
         }
     }
 
@@ -318,6 +340,46 @@ impl Engine {
 
         self.records += 1;
         self.simulated_through = Some(ts);
+        self.sample_equity(ts)?;
+        Ok(())
+    }
+
+    /// Record an equity point when the sampling interval has elapsed.
+    ///
+    /// The first record always produces one, so a curve never starts after
+    /// the strategy has already traded.
+    fn sample_equity(&mut self, ts: UnixNanos) -> Result<()> {
+        let due = match self.next_equity_sample {
+            None => true,
+            Some(next) => ts.get() >= next,
+        };
+        if !due {
+            return Ok(());
+        }
+        self.push_equity(ts)?;
+        self.next_equity_sample = Some(ts.get().saturating_add(self.equity_interval));
+        Ok(())
+    }
+
+    fn push_equity(&mut self, ts: UnixNanos) -> Result<()> {
+        let mut position_value = Money::ZERO;
+        let mut unrealized = Money::ZERO;
+        for position in self.portfolio.open_positions() {
+            let key = (position.instrument.clone(), position.outcome);
+            let Some(mark) = self.marks.get(&key) else {
+                continue;
+            };
+            position_value = position_value.checked_add(position.exposure(*mark)?)?;
+            unrealized = unrealized.checked_add(position.unrealized_pnl(*mark)?)?;
+        }
+        self.equity.push(EquityPoint {
+            ts,
+            cash: self.cash,
+            position_value,
+            equity: self.cash.checked_add(position_value)?,
+            realized_pnl: self.portfolio.realized_pnl()?,
+            unrealized_pnl: unrealized,
+        });
         Ok(())
     }
 
@@ -605,6 +667,14 @@ impl Engine {
     }
 
     fn finish(&mut self) -> Result<RunResult> {
+        // Always close the curve on the last instant actually simulated, so
+        // the final equity is a point rather than something a reader has to
+        // infer from the summary.
+        if let Some(ts) = self.simulated_through
+            && self.equity.last().map(|p| p.ts) != Some(ts)
+        {
+            self.push_equity(ts)?;
+        }
         Ok(RunResult {
             fills: self.fills.clone(),
             orders: self.orders.values().cloned().collect(),
@@ -615,6 +685,7 @@ impl Engine {
             simulated_through: self.simulated_through,
             records_processed: self.records,
             marks: self.marks.clone(),
+            equity: self.equity.clone(),
         })
     }
 
@@ -634,6 +705,7 @@ pub struct EngineBuilder {
     fee_model: Box<dyn FeeModel>,
     fill_model: Box<dyn FillModel>,
     latency_model: Box<dyn LatencyModel>,
+    equity_interval: i64,
 }
 
 impl EngineBuilder {
@@ -662,6 +734,20 @@ impl EngineBuilder {
         self
     }
 
+    /// How often to sample the equity curve, in nanoseconds of simulated
+    /// time. Sampling on an interval rather than per record keeps the curve
+    /// a usable size on tick data, where a per-record curve would have as
+    /// many points as there were quotes.
+    pub fn equity_interval_nanos(mut self, nanos: i64) -> Result<Self> {
+        if nanos <= 0 {
+            return Err(BacktestError::invalid(
+                "the equity sampling interval must be positive",
+            ));
+        }
+        self.equity_interval = nanos;
+        Ok(self)
+    }
+
     pub fn build(self) -> Engine {
         Engine {
             clock: Clock::new(self.start),
@@ -684,6 +770,9 @@ impl EngineBuilder {
             sequence: 0,
             records: 0,
             simulated_through: None,
+            equity_interval: self.equity_interval,
+            next_equity_sample: None,
+            equity: Vec::new(),
         }
     }
 }
