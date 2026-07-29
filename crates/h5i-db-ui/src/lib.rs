@@ -12,6 +12,7 @@
 //! the plan's base version — a moved HEAD is a `version_conflict`, never a
 //! silent re-plan).
 
+use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +45,10 @@ const UI_QUERY_CONCURRENCY: usize = 2;
 /// Header required on every mutating request. Cross-origin pages cannot set
 /// custom headers without a CORS preflight, and we never answer preflights.
 const CSRF_HEADER: &str = "x-h5i-csrf";
+/// Where rendered reports are read from, relative to the database
+/// directory. Reports are written there by `python -m h5i_db.quant` or by a
+/// backtest run; the UI only serves them, and only ones already on disk.
+const REPORTS_SUBDIR: &str = "reports";
 /// How often the `/api/events` stream re-derives the live frame. Frames are
 /// only *sent* when the frame actually changed, so an idle database costs a
 /// metadata poll per tick and no traffic.
@@ -62,6 +67,8 @@ pub struct UiState {
     /// construction and not exposed by the server CLI.
     #[doc(hidden)]
     pub query_start_delay: Duration,
+    /// Directory holding rendered reports, when there is one.
+    pub reports_dir: Option<PathBuf>,
 }
 
 impl UiState {
@@ -75,7 +82,14 @@ impl UiState {
             query_timeout: UI_QUERY_TIMEOUT,
             query_memory_limit: UI_QUERY_MEMORY_LIMIT,
             query_start_delay: Duration::ZERO,
+            reports_dir: None,
         }
+    }
+
+    /// Serve rendered reports out of `dir`.
+    pub fn with_reports_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.reports_dir = Some(dir.into());
+        self
     }
 }
 
@@ -86,7 +100,8 @@ pub async fn serve(
     port: u16,
     allow_mutations: bool,
 ) -> Result<(), Error> {
-    let state = UiState::new(db, db_label, allow_mutations);
+    let reports = StdPath::new(&db_label).join(REPORTS_SUBDIR);
+    let state = UiState::new(db, db_label, allow_mutations).with_reports_dir(reports);
     let token = state.token.clone();
     let app = build_router(state);
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -122,6 +137,9 @@ pub async fn serve(
 pub fn build_router(state: UiState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/reports", get(reports_index))
+        .route("/report/{name}", get(report))
+        .route("/api/reports", get(reports_list))
         .route("/api/overview", get(overview))
         .route("/api/forks", get(forks))
         .route("/api/fork/{name}", get(fork_detail))
@@ -143,6 +161,108 @@ pub fn build_router(state: UiState) -> Router {
 
 async fn index() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+// ---------------------------------------------------------------------------
+// reports: static HTML written by the quant layer, served read-only
+// ---------------------------------------------------------------------------
+
+/// Accept only a plain file name ending in `.html`.
+///
+/// Not a sanitiser -- a rejecter. Anything with a separator, a parent
+/// reference, or an unexpected character is refused rather than cleaned up,
+/// because "clean the path then trust it" is how directory traversal keeps
+/// getting shipped.
+fn safe_report_name(name: &str) -> Option<&str> {
+    if name.is_empty() || name.len() > 128 || !name.ends_with(".html") {
+        return None;
+    }
+    let ok = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !ok || name.contains("..") {
+        return None;
+    }
+    Some(name)
+}
+
+async fn list_reports(dir: &StdPath) -> Vec<String> {
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if safe_report_name(&name).is_some() {
+            names.push(name);
+        }
+    }
+    // Sorted, so the listing does not depend on directory order.
+    names.sort();
+    names
+}
+
+async fn reports_list(State(st): State<UiState>) -> Response {
+    let Some(dir) = st.reports_dir.clone() else {
+        return Json(json!({ "reports": [] })).into_response();
+    };
+    Json(json!({ "reports": list_reports(&dir).await })).into_response()
+}
+
+async fn reports_index(State(st): State<UiState>) -> Response {
+    let names = match st.reports_dir.clone() {
+        Some(dir) => list_reports(&dir).await,
+        None => Vec::new(),
+    };
+    let body = if names.is_empty() {
+        "<p>No reports yet. Render one with <code>python -m h5i_db.quant \
+         tearsheet --db &lt;db&gt; --returns &lt;table&gt; --out \
+         &lt;db&gt;/reports/run.html</code>.</p>"
+            .to_string()
+    } else {
+        let items: String = names
+            .iter()
+            .map(|name| {
+                format!(
+                    "<li><a href=\"/report/{n}\">{n}</a></li>",
+                    n = html_escape(name)
+                )
+            })
+            .collect();
+        format!("<ul>{items}</ul>")
+    };
+    Html(format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+         <title>Reports</title><style>body{{font:15px/1.6 system-ui,sans-serif;\
+         margin:40px auto;max-width:680px;padding:0 20px}}\
+         a{{color:#2a78d6}}li{{margin:4px 0}}</style></head><body>\
+         <h1>Reports</h1>{body}</body></html>"
+    ))
+    .into_response()
+}
+
+fn html_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+async fn report(State(st): State<UiState>, AxPath(name): AxPath<String>) -> Response {
+    let Some(dir) = st.reports_dir.clone() else {
+        return (StatusCode::NOT_FOUND, "no reports directory").into_response();
+    };
+    let Some(safe) = safe_report_name(&name) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "report names are plain .html file names",
+        )
+            .into_response();
+    };
+    match tokio::fs::read_to_string(dir.join(safe)).await {
+        Ok(body) => Html(body).into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "no such report").into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------

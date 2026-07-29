@@ -596,3 +596,112 @@ async fn events_stream_sends_initial_frame() {
     assert!(text.contains("\"forks\""), "frame carries forks: {text}");
     assert!(text.contains("exp-a"), "frame names the fork: {text}");
 }
+
+// ---------------------------------------------------------------------------
+// reports
+// ---------------------------------------------------------------------------
+
+/// A router whose reports directory holds the given files.
+fn router_with_reports(
+    db: &Arc<Database>,
+    dir: &std::path::Path,
+    files: &[(&str, &str)],
+) -> axum::Router {
+    let reports = dir.join("reports");
+    std::fs::create_dir_all(&reports).unwrap();
+    for (name, body) in files {
+        std::fs::write(reports.join(name), body).unwrap();
+    }
+    let mut state = UiState::new(db.clone(), "test.db".into(), false).with_reports_dir(reports);
+    state.token = TEST_TOKEN.into();
+    build_router(state)
+}
+
+async fn get_html(router: &axum::Router, path: &str) -> (StatusCode, String) {
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("host", "localhost:7777")
+                .header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[tokio::test]
+async fn reports_are_listed_and_served() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(
+        &db,
+        dir.path(),
+        &[
+            ("tearsheet.html", "<!doctype html><p>equity</p>"),
+            ("factor.html", "<!doctype html><p>ic</p>"),
+        ],
+    );
+
+    let (status, json) = get_json(&router, "/api/reports").await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = json["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["factor.html", "tearsheet.html"], "sorted");
+
+    let (status, body) = get_html(&router, "/report/tearsheet.html").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("equity"));
+
+    let (status, index) = get_html(&router, "/reports").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(index.contains("/report/factor.html"));
+}
+
+#[tokio::test]
+async fn a_missing_report_is_a_404_not_a_500() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(&db, dir.path(), &[]);
+    let (status, _) = get_html(&router, "/report/nothing.html").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn report_names_that_could_escape_the_directory_are_refused() {
+    let (dir, _router, db) = setup(false).await;
+    // A file the traversal attempts would reach if the check were weak.
+    std::fs::write(dir.path().join("secret.html"), "<p>secret</p>").unwrap();
+    let router = router_with_reports(&db, dir.path(), &[("ok.html", "<p>ok</p>")]);
+
+    for attempt in [
+        "/report/..%2Fsecret.html",
+        "/report/%2e%2e%2fsecret.html",
+        "/report/..",
+        "/report/notes.txt",
+        "/report/sub%2Fok.html",
+    ] {
+        let (status, body) = get_html(&router, attempt).await;
+        assert_ne!(status, StatusCode::OK, "{attempt} was served: {body}");
+        assert!(!body.contains("secret"), "{attempt} leaked a file");
+    }
+
+    // The legitimate name still works.
+    let (status, _) = get_html(&router, "/report/ok.html").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_database_without_reports_says_so_rather_than_failing() {
+    let (_dir, router, _db) = setup(false).await;
+    let (status, json) = get_json(&router, "/api/reports").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json["reports"].as_array().unwrap().is_empty());
+}
