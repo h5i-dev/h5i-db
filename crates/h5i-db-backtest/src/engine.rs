@@ -27,6 +27,7 @@ use crate::account::{
 use crate::book::OrderBook;
 use crate::clock::{Clock, TimeEvent};
 use crate::currency::FxBook;
+use crate::execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
 use crate::error::{BacktestError, Result};
 use crate::event::{MarketEvent, Record};
 use crate::instrument::{InstrumentId, InstrumentSet, OutcomeId};
@@ -401,6 +402,7 @@ pub struct Engine {
     rejected_for_margin: u64,
     self_trades_prevented: u64,
     metrics: RunMetrics,
+    execution: Box<dyn ExecutionClient>,
 }
 
 impl Engine {
@@ -415,6 +417,7 @@ impl Engine {
             equity_interval: DEFAULT_EQUITY_INTERVAL_NANOS,
             margin: None,
             fx: FxBook::new(),
+            execution: Box::new(SimulatedExecution::new("simulated")),
         }
     }
 
@@ -729,8 +732,10 @@ impl Engine {
                         && order.is_open()
                     {
                         order.status = OrderStatus::Cancelled;
+                        let at = self.clock.now();
                         self.resting.retain(|open| *open != id);
                         self.queue_ahead.remove(&id);
+                        self.execution.send(ExecutionCommand::Cancel(id), at)?;
                     }
                 }
                 Command::Amend {
@@ -790,6 +795,14 @@ impl Engine {
 
         self.orders.insert(id, updated);
         self.metrics.orders_amended += 1;
+        self.execution.send(
+            ExecutionCommand::Amend {
+                id,
+                quantity,
+                limit,
+            },
+            self.clock.now(),
+        )?;
         if loses_priority {
             self.queue_ahead.remove(&id);
             if let Some(order) = self.orders.get(&id).cloned() {
@@ -853,6 +866,8 @@ impl Engine {
         order.reduce_only = request.reduce_only;
 
         self.metrics.orders_submitted += 1;
+        self.execution
+            .send(ExecutionCommand::Submit(Box::new(order.clone())), now)?;
         self.sequence += 1;
         let release_at = now.get().saturating_add(self.latency_model.insert_nanos());
         self.inflight.push(InFlight {
@@ -1269,6 +1284,11 @@ impl Engine {
         &self.portfolio
     }
 
+    /// The execution client, for reading back what was sent to the venue.
+    pub fn execution(&self) -> &dyn ExecutionClient {
+        self.execution.as_ref()
+    }
+
     pub fn cash(&self) -> Money {
         self.cash
     }
@@ -1284,6 +1304,7 @@ pub struct EngineBuilder {
     equity_interval: i64,
     margin: Option<Box<dyn MarginModel>>,
     fx: FxBook,
+    execution: Box<dyn ExecutionClient>,
 }
 
 impl EngineBuilder {
@@ -1320,6 +1341,18 @@ impl EngineBuilder {
     /// been closed out by the venue instead reports a profit.
     pub fn margin_model(mut self, model: Box<dyn MarginModel>) -> Self {
         self.margin = Some(model);
+        self
+    }
+
+    /// Where orders are sent.
+    ///
+    /// The simulator is the default. A live adapter implementing the same
+    /// trait is what makes sim-versus-live reconcilable at all: the
+    /// instruction stream is directly comparable, so a divergence shows up
+    /// as a difference in what the strategy decided rather than as a
+    /// difference in outcome nobody can attribute.
+    pub fn execution_client(mut self, client: Box<dyn ExecutionClient>) -> Self {
+        self.execution = client;
         self
     }
 
@@ -1376,6 +1409,7 @@ impl EngineBuilder {
             rejected_for_margin: 0,
             self_trades_prevented: 0,
             metrics: RunMetrics::default(),
+            execution: self.execution,
         }
     }
 }

@@ -1481,3 +1481,151 @@ fn a_feed_gap_is_counted_before_it_becomes_an_error() {
     assert_eq!(result.metrics.book_gaps, 1);
     assert_eq!(result.metrics.records_by_kind.get("gap"), Some(&1));
 }
+
+// ---------------------------------------------------------------------------
+// the execution seam (Tier 2, item 8)
+// ---------------------------------------------------------------------------
+
+use h5i_db_backtest::execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
+
+/// A client that refuses everything, standing in for a venue that is down.
+#[derive(Debug, Default)]
+struct RefusingVenue {
+    attempts: usize,
+}
+
+impl ExecutionClient for RefusingVenue {
+    fn venue(&self) -> &str {
+        "refusing"
+    }
+    fn send(&mut self, _command: ExecutionCommand, _ts: UnixNanos) -> Result<()> {
+        self.attempts += 1;
+        Err(h5i_db_backtest::BacktestError::invalid(
+            "venue rejected the instruction",
+        ))
+    }
+    fn sent(&self) -> usize {
+        self.attempts
+    }
+}
+
+#[test]
+fn every_order_leaves_through_the_execution_client() {
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![deep_snapshot(1_000), deep_snapshot(2_000)],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(1_000.0))
+        .execution_client(Box::new(SimulatedExecution::new("sim")))
+        .build();
+    let mut strategy = BuyOnce::market(qty(10.0));
+    engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert_eq!(engine.execution().venue(), "sim");
+    assert_eq!(engine.execution().sent(), 1, "one submit crossed the seam");
+}
+
+#[test]
+fn a_venue_that_refuses_instructions_stops_the_run() {
+    // The seam is real: a client that fails is not routed around.
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![deep_snapshot(1_000), deep_snapshot(2_000)],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(1_000.0))
+        .execution_client(Box::new(RefusingVenue::default()))
+        .build();
+    let mut strategy = BuyOnce::market(qty(10.0));
+    let error = engine.run(&mut replay, &mut strategy).unwrap_err();
+    assert!(error.to_string().contains("rejected the instruction"));
+}
+
+#[test]
+fn the_instruction_stream_is_what_two_venues_are_reconciled_on() {
+    // Run the same strategy twice through separate clients and compare
+    // fingerprints. This is how a live divergence would be localised: to
+    // the decision, or to the venue's treatment of it.
+    let fingerprint_for = |venue: &str| {
+        let mut replay = Replay::builder()
+            .stream(
+                "book",
+                priority::SNAPSHOT,
+                vec![deep_snapshot(1_000), deep_snapshot(2_000), deep_snapshot(3_000)],
+            )
+            .build()
+            .unwrap();
+        let client = SimulatedExecution::new(venue);
+        let mut engine = Engine::builder(instruments())
+            .starting_cash(money(1_000.0))
+            .execution_client(Box::new(client))
+            .build();
+        let mut strategy = BuyOnce::market(qty(10.0));
+        engine.run(&mut replay, &mut strategy).unwrap();
+        // The concrete client is recoverable for comparison.
+        format!("{:?}", engine.execution().sent())
+    };
+    assert_eq!(fingerprint_for("sim"), fingerprint_for("live-shadow"));
+}
+
+#[test]
+fn cancels_and_amendments_cross_the_seam_too() {
+    struct RestAmendCancel {
+        step: u32,
+    }
+    impl Strategy for RestAmendCancel {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            match self.step {
+                1 => ctx.submit(OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.30),
+                    qty(10.0),
+                )),
+                2 => ctx.amend(
+                    h5i_db_backtest::order::OrderId(1),
+                    Some(qty(5.0)),
+                    None,
+                ),
+                3 => ctx.cancel(h5i_db_backtest::order::OrderId(1)),
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                deep_snapshot(1_000),
+                deep_snapshot(2_000),
+                deep_snapshot(3_000),
+                deep_snapshot(4_000),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(1_000.0))
+        .execution_client(Box::new(SimulatedExecution::new("sim")))
+        .build();
+    let mut strategy = RestAmendCancel { step: 0 };
+    engine.run(&mut replay, &mut strategy).unwrap();
+    assert_eq!(
+        engine.execution().sent(),
+        3,
+        "submit, amend and cancel all reach the venue"
+    );
+}

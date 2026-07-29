@@ -31,6 +31,7 @@ pub mod currency;
 pub mod engine;
 pub mod error;
 pub mod event;
+pub mod execution;
 pub mod instrument;
 pub mod models;
 pub mod order;
@@ -51,6 +52,7 @@ pub use currency::{Currency, FxBook, Haircuts};
 pub use clock::{Clock, TimeEvent};
 pub use engine::{Context, Engine, EngineBuilder, OrderRequest, RunResult, SignalReplay, Strategy};
 pub use error::{BacktestError, Result};
+pub use execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
 pub use event::{MarketEvent, Record};
 pub use instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
 pub use models::{
