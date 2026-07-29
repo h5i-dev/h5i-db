@@ -21,22 +21,18 @@
 
 use std::collections::{BTreeMap, BinaryHeap, VecDeque};
 
-use crate::account::{
-    margin_requirement, margin_state, Liquidation, MarginModel, MarginState,
-};
+use crate::account::{Liquidation, MarginModel, MarginState, margin_requirement, margin_state};
 use crate::book::OrderBook;
 use crate::clock::{Clock, TimeEvent};
 use crate::currency::FxBook;
-use crate::execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
 use crate::error::{BacktestError, Result};
 use crate::event::{MarketEvent, Record};
+use crate::execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
 use crate::instrument::{InstrumentId, InstrumentSet, OutcomeId};
-use crate::models::{
-    BookFills, FeeContext, FeeModel, FillModel, LatencyModel, NoFees, NoLatency,
-};
+use crate::models::{BookFills, FeeContext, FeeModel, FillModel, LatencyModel, NoFees, NoLatency};
 use crate::order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 use crate::position::Portfolio;
-use crate::types::{notional, Money, Price, Qty, Side, UnixNanos};
+use crate::types::{Money, Price, Qty, Side, UnixNanos, notional};
 
 /// A key identifying one tradable book.
 type BookKey = (InstrumentId, OutcomeId);
@@ -171,12 +167,7 @@ pub struct OrderRequest {
 }
 
 impl OrderRequest {
-    pub fn market(
-        instrument: InstrumentId,
-        outcome: OutcomeId,
-        side: Side,
-        quantity: Qty,
-    ) -> Self {
+    pub fn market(instrument: InstrumentId, outcome: OutcomeId, side: Side, quantity: Qty) -> Self {
         Self {
             instrument,
             outcome,
@@ -228,7 +219,7 @@ impl OrderRequest {
 /// produced it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum Command {
-    Submit(OrderRequest),
+    Submit(OrderId, OrderRequest),
     Cancel(OrderId),
     Amend {
         id: OrderId,
@@ -249,6 +240,7 @@ pub struct Context<'a> {
     cash: Money,
     commands: &'a mut VecDeque<Command>,
     clock_requests: &'a mut Vec<(String, UnixNanos)>,
+    next_order_id: &'a mut u64,
 }
 
 impl<'a> Context<'a> {
@@ -291,7 +283,16 @@ impl<'a> Context<'a> {
 
     /// Queue an order. It reaches the venue after the latency model's delay.
     pub fn submit(&mut self, request: OrderRequest) {
-        self.commands.push_back(Command::Submit(request));
+        self.submit_tracked(request);
+    }
+
+    /// Queue an order and return the stable identifier used by later amend or
+    /// cancel commands.
+    pub fn submit_tracked(&mut self, request: OrderRequest) -> OrderId {
+        *self.next_order_id += 1;
+        let id = OrderId(*self.next_order_id);
+        self.commands.push_back(Command::Submit(id, request));
+        id
     }
 
     pub fn cancel(&mut self, id: OrderId) {
@@ -386,6 +387,7 @@ pub struct RunMetrics {
     /// Cancelled with nothing filled: no book, or a limit never reached.
     pub orders_cancelled_unfilled: u64,
     pub orders_rejected_margin: u64,
+    pub orders_rejected_risk: u64,
     pub orders_rejected_self_trade: u64,
     pub orders_amended: u64,
     pub fills_taker: u64,
@@ -415,7 +417,16 @@ impl RunMetrics {
         if self.orders_filled == 0 && self.orders_partially_filled == 0 {
             let mut reasons = Vec::new();
             if self.orders_rejected_margin > 0 {
-                reasons.push(format!("{} refused for margin", self.orders_rejected_margin));
+                reasons.push(format!(
+                    "{} refused for margin",
+                    self.orders_rejected_margin
+                ));
+            }
+            if self.orders_rejected_risk > 0 {
+                reasons.push(format!(
+                    "{} refused by configured risk limits",
+                    self.orders_rejected_risk
+                ));
             }
             if self.orders_rejected_self_trade > 0 {
                 reasons.push(format!(
@@ -437,9 +448,45 @@ impl RunMetrics {
             } else {
                 reasons.join("; ")
             };
-            return Some(format!("{} orders, no fills: {detail}", self.orders_submitted));
+            return Some(format!(
+                "{} orders, no fills: {detail}",
+                self.orders_submitted
+            ));
         }
         None
+    }
+}
+
+/// Account-level order limits enforced before venue latency begins.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RiskLimits {
+    pub max_order_quantity: Option<Qty>,
+    pub max_abs_position: Option<Qty>,
+    pub max_open_orders: Option<usize>,
+}
+
+impl RiskLimits {
+    pub fn new(
+        max_order_quantity: Option<Qty>,
+        max_abs_position: Option<Qty>,
+        max_open_orders: Option<usize>,
+    ) -> Result<Self> {
+        if max_order_quantity.is_some_and(|value| value.raw() <= 0) {
+            return Err(BacktestError::invalid(
+                "max_order_quantity must be positive",
+            ));
+        }
+        if max_abs_position.is_some_and(|value| value.raw() <= 0) {
+            return Err(BacktestError::invalid("max_abs_position must be positive"));
+        }
+        if max_open_orders == Some(0) {
+            return Err(BacktestError::invalid("max_open_orders must be positive"));
+        }
+        Ok(Self {
+            max_order_quantity,
+            max_abs_position,
+            max_open_orders,
+        })
     }
 }
 
@@ -532,6 +579,7 @@ pub struct Engine {
     delisted: std::collections::BTreeSet<InstrumentId>,
     metrics: RunMetrics,
     execution: Box<dyn ExecutionClient>,
+    risk_limits: RiskLimits,
 }
 
 impl Engine {
@@ -551,6 +599,7 @@ impl Engine {
             // Instruments settling elsewhere need a rate to join it.
             reporting_currency: crate::currency::Currency::new("USDC")
                 .expect("USDC is a valid code"),
+            risk_limits: RiskLimits::default(),
         }
     }
 
@@ -645,7 +694,10 @@ impl Engine {
                 continue;
             };
             let pnl = position.unrealized_pnl(*mark)?;
-            let settlement = &self.instruments.get(&position.instrument)?.settlement_currency;
+            let settlement = &self
+                .instruments
+                .get(&position.instrument)?
+                .settlement_currency;
             if settlement == &self.reporting_currency {
                 unrealized = unrealized.checked_add(pnl)?;
             } else {
@@ -795,6 +847,7 @@ impl Engine {
             cash: self.cash,
             commands: &mut self.commands,
             clock_requests: &mut self.clock_requests,
+            next_order_id: &mut self.next_order_id,
         };
         let out = f(&mut ctx)?;
         let requests = std::mem::take(&mut self.clock_requests);
@@ -947,7 +1000,11 @@ impl Engine {
                     .open_positions()
                     .filter(|position| &position.instrument == instrument)
                     .map(|position| {
-                        (position.instrument.clone(), position.outcome, position.quantity)
+                        (
+                            position.instrument.clone(),
+                            position.outcome,
+                            position.quantity,
+                        )
                     })
                     .collect();
                 for (id, outcome, quantity) in open {
@@ -974,7 +1031,14 @@ impl Engine {
                     self.orders.insert(order_id, order);
                     // Settled at the stated price, not against a book that
                     // may no longer exist.
-                    self.execute(order_id, final_price, Qty::from_raw(quantity.raw().abs()), false, ts, &mut NoStrategy)?;
+                    self.execute(
+                        order_id,
+                        final_price,
+                        Qty::from_raw(quantity.raw().abs()),
+                        false,
+                        ts,
+                        &mut NoStrategy,
+                    )?;
                 }
                 self.delisted.insert(instrument.clone());
                 self.metrics.corporate_actions += 1;
@@ -986,7 +1050,7 @@ impl Engine {
     fn drain_commands(&mut self) -> Result<()> {
         while let Some(command) = self.commands.pop_front() {
             match command {
-                Command::Submit(request) => self.accept(request)?,
+                Command::Submit(id, request) => self.accept(id, request)?,
                 Command::Cancel(id) => {
                     let cancelled = if let Some(order) = self.orders.get_mut(&id)
                         && order.is_open()
@@ -1014,12 +1078,7 @@ impl Engine {
 
     /// Apply an amendment, moving the order to the back of the queue when
     /// the change deserves it.
-    fn amend(
-        &mut self,
-        id: OrderId,
-        quantity: Option<Qty>,
-        limit: Option<Price>,
-    ) -> Result<()> {
+    fn amend(&mut self, id: OrderId, quantity: Option<Qty>, limit: Option<Price>) -> Result<()> {
         let Some(order) = self.orders.get(&id).cloned() else {
             return Ok(());
         };
@@ -1114,14 +1173,12 @@ impl Engine {
         })
     }
 
-    fn accept(&mut self, request: OrderRequest) -> Result<()> {
+    fn accept(&mut self, id: OrderId, request: OrderRequest) -> Result<()> {
         let instrument = self.instruments.get(&request.instrument)?;
         instrument.check_outcome(request.outcome)?;
         if let OrderKind::Limit { limit } = request.kind {
             instrument.check_price(limit)?;
         }
-        self.next_order_id += 1;
-        let id = OrderId(self.next_order_id);
         let now = self.clock.now();
         let mut order = Order::new(
             id,
@@ -1137,6 +1194,13 @@ impl Engine {
         order.reduce_only = request.reduce_only;
 
         self.metrics.orders_submitted += 1;
+        if let Some(reason) = self.risk_rejection(&order) {
+            order.status = OrderStatus::Rejected;
+            order.reject_reason = Some(reason);
+            self.orders.insert(id, order);
+            self.metrics.orders_rejected_risk += 1;
+            return Ok(());
+        }
         self.execution
             .send(ExecutionCommand::Submit(Box::new(order.clone())), now)?;
         self.sequence += 1;
@@ -1148,6 +1212,66 @@ impl Engine {
         });
         self.orders.insert(id, order);
         Ok(())
+    }
+
+    fn risk_rejection(&self, order: &Order) -> Option<String> {
+        if let Some(maximum) = self.risk_limits.max_order_quantity
+            && order.quantity > maximum
+        {
+            return Some(format!(
+                "quantity {} exceeds max_order_quantity {}",
+                order.quantity, maximum
+            ));
+        }
+        if let Some(maximum) = self.risk_limits.max_open_orders {
+            let open = self
+                .orders
+                .values()
+                .filter(|candidate| candidate.is_open())
+                .count();
+            if open >= maximum {
+                return Some(format!(
+                    "open order count {open} reached max_open_orders {maximum}"
+                ));
+            }
+        }
+        if let Some(maximum) = self.risk_limits.max_abs_position {
+            let current = self
+                .portfolio
+                .position(&order.instrument, order.outcome)
+                .map(|position| position.quantity.raw())
+                .unwrap_or(0);
+            let mut pending_buys = 0_i64;
+            let mut pending_sells = 0_i64;
+            for candidate in self.orders.values().filter(|candidate| {
+                candidate.is_open()
+                    && candidate.instrument == order.instrument
+                    && candidate.outcome == order.outcome
+            }) {
+                let target = match candidate.side {
+                    Side::Buy => &mut pending_buys,
+                    Side::Sell => &mut pending_sells,
+                };
+                *target = target.saturating_add(candidate.remaining().raw());
+            }
+            match order.side {
+                Side::Buy => pending_buys = pending_buys.saturating_add(order.quantity.raw()),
+                Side::Sell => pending_sells = pending_sells.saturating_add(order.quantity.raw()),
+            }
+            // Opposing live orders are not assumed to offset: either side may
+            // fill independently. Check both possible exposure extremes.
+            let projected_long = current.saturating_add(pending_buys).unsigned_abs();
+            let projected_short = current.saturating_sub(pending_sells).unsigned_abs();
+            let projected = projected_long.max(projected_short);
+            if projected > maximum.raw() as u64 {
+                return Some(format!(
+                    "worst-case absolute position {} across live orders exceeds max_abs_position {}",
+                    Qty::from_raw(projected.min(i64::MAX as u64) as i64),
+                    maximum
+                ));
+            }
+        }
+        None
     }
 
     fn release_inflight(&mut self, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
@@ -1171,8 +1295,7 @@ impl Engine {
             }
             if !self.can_fund(&order)? {
                 order.status = OrderStatus::Rejected;
-                order.reject_reason =
-                    Some("insufficient margin for this order".to_string());
+                order.reject_reason = Some("insufficient margin for this order".to_string());
                 self.orders.insert(order.id, order);
                 self.rejected_for_margin += 1;
                 self.metrics.orders_rejected_margin += 1;
@@ -1232,12 +1355,7 @@ impl Engine {
     }
 
     /// Match one order against the current book.
-    fn try_fill(
-        &mut self,
-        id: OrderId,
-        ts: UnixNanos,
-        strategy: &mut dyn Strategy,
-    ) -> Result<()> {
+    fn try_fill(&mut self, id: OrderId, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
         let Some(order) = self.orders.get(&id).cloned() else {
             return Ok(());
         };
@@ -1297,8 +1415,7 @@ impl Engine {
                     self.close(id, OrderStatus::Cancelled);
                 }
                 TimeInForce::GoodTilCancel => {
-                    if matches!(order.kind, OrderKind::Limit { .. })
-                        && !self.resting.contains(&id)
+                    if matches!(order.kind, OrderKind::Limit { .. }) && !self.resting.contains(&id)
                     {
                         self.add_resting(&order);
                     }
@@ -1618,6 +1735,7 @@ pub struct EngineBuilder {
     fx: FxBook,
     execution: Box<dyn ExecutionClient>,
     reporting_currency: crate::currency::Currency,
+    risk_limits: RiskLimits,
 }
 
 impl EngineBuilder {
@@ -1666,6 +1784,11 @@ impl EngineBuilder {
     /// difference in outcome nobody can attribute.
     pub fn execution_client(mut self, client: Box<dyn ExecutionClient>) -> Self {
         self.execution = client;
+        self
+    }
+
+    pub fn risk_limits(mut self, limits: RiskLimits) -> Self {
+        self.risk_limits = limits;
         self
     }
 
@@ -1735,6 +1858,7 @@ impl EngineBuilder {
             delisted: Default::default(),
             metrics: RunMetrics::default(),
             execution: self.execution,
+            risk_limits: self.risk_limits,
         }
     }
 }
@@ -1781,6 +1905,109 @@ impl Strategy for SignalReplay {
             }
             let (_, request) = self.intents.pop_front().expect("peeked");
             ctx.submit(request);
+        }
+        Ok(())
+    }
+}
+
+/// A lifecycle command addressed by a stable, strategy-defined order ID.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ReplayCommand {
+    Submit {
+        client_order_id: String,
+        request: OrderRequest,
+    },
+    Cancel {
+        client_order_id: String,
+    },
+    Amend {
+        client_order_id: String,
+        quantity: Option<Qty>,
+        limit: Option<Price>,
+    },
+}
+
+/// Declarative submit/amend/cancel replay with no language callback in the
+/// hot loop.
+pub struct CommandReplay {
+    commands: VecDeque<(UnixNanos, ReplayCommand)>,
+    order_ids: BTreeMap<String, OrderId>,
+}
+
+impl CommandReplay {
+    pub fn new(mut commands: Vec<(UnixNanos, ReplayCommand)>) -> Result<Self> {
+        let mut previous: Option<UnixNanos> = None;
+        for (ts, command) in &commands {
+            if let Some(prev) = previous
+                && *ts < prev
+            {
+                return Err(BacktestError::OutOfOrder {
+                    stream: "commands".to_string(),
+                    ts: ts.get(),
+                    previous: prev.get(),
+                });
+            }
+            if let ReplayCommand::Amend {
+                quantity: None,
+                limit: None,
+                ..
+            } = command
+            {
+                return Err(BacktestError::invalid(
+                    "amend command must change quantity or limit_price",
+                ));
+            }
+            previous = Some(*ts);
+        }
+        commands.shrink_to_fit();
+        Ok(Self {
+            commands: commands.into(),
+            order_ids: BTreeMap::new(),
+        })
+    }
+
+    fn order_id(&self, client_order_id: &str, action: &str) -> Result<OrderId> {
+        self.order_ids.get(client_order_id).copied().ok_or_else(|| {
+            BacktestError::invalid(format!(
+                "{action} references unknown client_order_id {client_order_id:?}"
+            ))
+        })
+    }
+}
+
+impl Strategy for CommandReplay {
+    fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+        let now = ctx.now();
+        while self
+            .commands
+            .front()
+            .is_some_and(|(timestamp, _)| *timestamp <= now)
+        {
+            let (_, command) = self.commands.pop_front().expect("peeked");
+            match command {
+                ReplayCommand::Submit {
+                    client_order_id,
+                    request,
+                } => {
+                    if self.order_ids.contains_key(&client_order_id) {
+                        return Err(BacktestError::invalid(format!(
+                            "duplicate client_order_id {client_order_id:?}"
+                        )));
+                    }
+                    let order_id = ctx.submit_tracked(request);
+                    self.order_ids.insert(client_order_id, order_id);
+                }
+                ReplayCommand::Cancel { client_order_id } => {
+                    ctx.cancel(self.order_id(&client_order_id, "cancel")?);
+                }
+                ReplayCommand::Amend {
+                    client_order_id,
+                    quantity,
+                    limit,
+                } => {
+                    ctx.amend(self.order_id(&client_order_id, "amend")?, quantity, limit);
+                }
+            }
         }
         Ok(())
     }

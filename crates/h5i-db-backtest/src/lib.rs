@@ -50,24 +50,26 @@ pub use account::{
     Account, CashMargin, LinearMargin, MarginModel, MarginRequirement, MarginState, Valuation,
 };
 pub use book::{BookAction, BookDelta, BookStatus, BookWalk, OrderBook};
+pub use clock::{Clock, TimeEvent};
 pub use corporate::{CorporateAction, SymbolRegistry, Universe};
 pub use currency::{Currency, FxBook, Haircuts};
-pub use clock::{Clock, TimeEvent};
-pub use engine::{Context, Engine, EngineBuilder, OrderRequest, RunResult, SignalReplay, Strategy};
+pub use engine::{
+    CommandReplay, Context, Engine, EngineBuilder, OrderRequest, ReplayCommand, RiskLimits,
+    RunResult, SignalReplay, Strategy,
+};
 pub use error::{BacktestError, Result};
-pub use execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
 pub use event::{MarketEvent, Record};
+pub use execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
 pub use instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
 pub use l3::{L3Book, MboMessage};
 pub use models::{
     BookFills, ConstantLatency, FeeModel, FillModel, LatencyModel, NoFees, NoLatency,
-    PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage,
-    VenueModule,
+    PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage, VenueModule,
 };
 pub use order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 pub use position::{Portfolio, Position};
 pub use replay::{Replay, ReplayBuilder};
-pub use run::{run_in_fork, run_in_place, RunReport, RunSpec};
+pub use run::{RunReport, RunSpec, run_in_fork, run_in_place};
 pub use settlement::{Resolution, SettlementReport};
-pub use types::{notional, Money, Price, Qty, Side, Stamps, UnixNanos, SCALE};
+pub use types::{Money, Price, Qty, SCALE, Side, Stamps, UnixNanos, notional};
 pub use window::{Coverage, TimeWindow};

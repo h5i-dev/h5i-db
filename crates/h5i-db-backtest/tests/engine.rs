@@ -8,13 +8,16 @@
 use std::collections::BTreeMap;
 
 use h5i_db_backtest::book::BookDelta;
-use h5i_db_backtest::engine::{Context, Engine, OrderRequest, RunResult, SignalReplay, Strategy};
+use h5i_db_backtest::engine::{
+    CommandReplay, Context, Engine, OrderRequest, ReplayCommand, RiskLimits, RunResult,
+    SignalReplay, Strategy,
+};
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, InstrumentSet, OutcomeId};
 use h5i_db_backtest::models::{ConstantLatency, PredictionMarketFees, TickSlippage};
 use h5i_db_backtest::order::{OrderStatus, TimeInForce};
-use h5i_db_backtest::replay::{priority, Replay};
-use h5i_db_backtest::settlement::{settle, Resolution};
+use h5i_db_backtest::replay::{Replay, priority};
+use h5i_db_backtest::settlement::{Resolution, settle};
 use h5i_db_backtest::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
 use h5i_db_backtest::{BacktestError, Result};
 
@@ -108,12 +111,9 @@ impl Strategy for BuyOnce {
                 limit,
                 self.quantity,
             ),
-            None => OrderRequest::market(
-                instrument_id(),
-                OutcomeId::FIRST,
-                Side::Buy,
-                self.quantity,
-            ),
+            None => {
+                OrderRequest::market(instrument_id(), OutcomeId::FIRST, Side::Buy, self.quantity)
+            }
         }
         .with_time_in_force(self.tif);
         ctx.submit(request);
@@ -129,6 +129,108 @@ fn run_with(strategy: &mut dyn Strategy, records: Vec<Record>, cash: f64) -> Res
         .starting_cash(money(cash))
         .build();
     engine.run(&mut replay, strategy)
+}
+
+#[test]
+fn account_risk_limits_reject_before_the_order_reaches_the_venue() {
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, vec![deep_snapshot(1)])
+        .build()
+        .unwrap();
+    let limits = RiskLimits::new(Some(qty(5.0)), Some(qty(20.0)), Some(2)).unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(10_000.0))
+        .risk_limits(limits)
+        .build();
+    let mut strategy = BuyOnce::market(qty(10.0));
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert!(result.fills.is_empty());
+    assert_eq!(result.metrics.orders_rejected_risk, 1);
+    assert_eq!(result.orders[0].status, OrderStatus::Rejected);
+    assert!(
+        result.orders[0]
+            .reject_reason
+            .as_deref()
+            .unwrap()
+            .contains("max_order_quantity")
+    );
+}
+
+#[test]
+fn position_risk_includes_all_live_orders() {
+    struct SubmitTwice;
+    impl Strategy for SubmitTwice {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            for _ in 0..2 {
+                ctx.submit(OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.40),
+                    qty(4.0),
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, vec![deep_snapshot(1)])
+        .build()
+        .unwrap();
+    let limits = RiskLimits::new(None, Some(qty(5.0)), None).unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(10_000.0))
+        .risk_limits(limits)
+        .build();
+    let result = engine.run(&mut replay, &mut SubmitTwice).unwrap();
+
+    assert_eq!(result.metrics.orders_submitted, 2);
+    assert_eq!(result.metrics.orders_rejected_risk, 1);
+    assert_eq!(
+        result
+            .orders
+            .iter()
+            .filter(|order| order.status == OrderStatus::Rejected)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn command_replay_addresses_orders_by_client_id() {
+    let commands = vec![
+        (
+            ts(1),
+            ReplayCommand::Submit {
+                client_order_id: "quote-yes".to_string(),
+                request: OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.40),
+                    qty(4.0),
+                ),
+            },
+        ),
+        (
+            ts(2),
+            ReplayCommand::Cancel {
+                client_order_id: "quote-yes".to_string(),
+            },
+        ),
+    ];
+    let mut strategy = CommandReplay::new(commands).unwrap();
+    let result = run_with(
+        &mut strategy,
+        vec![deep_snapshot(1), deep_snapshot(2)],
+        1_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(result.orders.len(), 1);
+    assert_eq!(result.orders[0].status, OrderStatus::Cancelled);
 }
 
 #[test]
@@ -167,7 +269,12 @@ fn the_strategy_sees_a_book_the_venue_has_already_processed() {
         }
     }
     let mut strategy = Observer { seen_ask: None };
-    run_with(&mut strategy, vec![snapshot(1_000, 0.40, 10.0, 0.42, 10.0)], 100.0).unwrap();
+    run_with(
+        &mut strategy,
+        vec![snapshot(1_000, 0.40, 10.0, 0.42, 10.0)],
+        100.0,
+    )
+    .unwrap();
     assert_eq!(
         strategy.seen_ask,
         Some(price(0.42)),
@@ -277,7 +384,11 @@ fn a_resting_limit_order_fills_when_the_book_comes_to_it() {
 
     assert_eq!(result.fills.len(), 1);
     assert_eq!(result.fills[0].ts, ts(3_000));
-    assert_eq!(result.fills[0].price, price(0.34), "fills at the book, not the limit");
+    assert_eq!(
+        result.fills[0].price,
+        price(0.34),
+        "fills at the book, not the limit"
+    );
 }
 
 #[test]
@@ -305,7 +416,10 @@ fn fill_or_kill_is_all_or_nothing() {
         1_000.0,
     )
     .unwrap();
-    assert!(result.fills.is_empty(), "a partial fill must kill the order");
+    assert!(
+        result.fills.is_empty(),
+        "a partial fill must kill the order"
+    );
     assert_eq!(result.orders[0].status, OrderStatus::Cancelled);
     assert_eq!(result.final_cash, money(1_000.0));
 }
@@ -320,13 +434,8 @@ fn reduce_only_never_opens_or_flips_a_position() {
             if !self.submitted {
                 self.submitted = true;
                 ctx.submit(
-                    OrderRequest::market(
-                        instrument_id(),
-                        OutcomeId::FIRST,
-                        Side::Sell,
-                        qty(10.0),
-                    )
-                    .reduce_only(),
+                    OrderRequest::market(instrument_id(), OutcomeId::FIRST, Side::Sell, qty(10.0))
+                        .reduce_only(),
                 );
             }
             Ok(())
@@ -370,8 +479,10 @@ fn fees_are_charged_and_reduce_cash() {
     assert_eq!(
         result.final_cash,
         money(1_000.0)
-            .checked_sub(money(50.0 * 0.42)).unwrap()
-            .checked_sub(fill.commission).unwrap()
+            .checked_sub(money(50.0 * 0.42))
+            .unwrap()
+            .checked_sub(fill.commission)
+            .unwrap()
     );
 }
 
@@ -436,10 +547,7 @@ fn a_gap_in_the_feed_stops_the_run_rather_than_inventing_a_book() {
     ];
     let mut strategy = BuyOnce::market(qty(1.0));
     let err = run_with(&mut strategy, records, 100.0).unwrap_err();
-    assert!(
-        matches!(err, BacktestError::BookGap { .. }),
-        "got {err:?}"
-    );
+    assert!(matches!(err, BacktestError::BookGap { .. }), "got {err:?}");
 }
 
 #[test]
@@ -616,7 +724,11 @@ fn timers_fire_before_the_data_at_their_instant() {
     };
     run_with(
         &mut strategy,
-        vec![deep_snapshot(1_000), deep_snapshot(2_000), deep_snapshot(3_000)],
+        vec![
+            deep_snapshot(1_000),
+            deep_snapshot(2_000),
+            deep_snapshot(3_000),
+        ],
         100.0,
     )
     .unwrap();
@@ -699,12 +811,23 @@ fn run_queued(
     model: QueuePositionFills,
 ) -> Result<RunResult> {
     let mut replay = Replay::builder()
-        .stream("book", priority::SNAPSHOT, records.clone().into_iter()
-            .filter(|r| !matches!(r.event, MarketEvent::Trade { .. }))
-            .collect())
-        .stream("trades", priority::TRADE, records.into_iter()
-            .filter(|r| matches!(r.event, MarketEvent::Trade { .. }))
-            .collect())
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            records
+                .clone()
+                .into_iter()
+                .filter(|r| !matches!(r.event, MarketEvent::Trade { .. }))
+                .collect(),
+        )
+        .stream(
+            "trades",
+            priority::TRADE,
+            records
+                .into_iter()
+                .filter(|r| matches!(r.event, MarketEvent::Trade { .. }))
+                .collect(),
+        )
         .build()?;
     let mut engine = Engine::builder(instruments())
         .starting_cash(money(1_000.0))
@@ -801,12 +924,8 @@ fn an_unknown_aggressor_does_not_fill_by_default() {
         print_at(2_000, 0.40, 5_000.0, None),
         deep_snapshot(3_000),
     ];
-    let conservative = run_queued(
-        &mut strategy,
-        records.clone(),
-        QueuePositionFills::new(),
-    )
-    .unwrap();
+    let conservative =
+        run_queued(&mut strategy, records.clone(), QueuePositionFills::new()).unwrap();
     assert!(conservative.fills.is_empty());
 
     // The permissive reading fills, and the gap between the two is the
@@ -816,12 +935,7 @@ fn an_unknown_aggressor_does_not_fill_by_default() {
         quantity: qty(10.0),
         submitted: false,
     };
-    let permissive = run_queued(
-        &mut strategy,
-        records,
-        QueuePositionFills::optimistic(),
-    )
-    .unwrap();
+    let permissive = run_queued(&mut strategy, records, QueuePositionFills::optimistic()).unwrap();
     assert_eq!(permissive.fills.len(), 1);
 }
 
@@ -834,8 +948,16 @@ fn without_the_queue_model_a_resting_order_only_fills_on_the_book() {
         submitted: false,
     };
     let mut replay = Replay::builder()
-        .stream("book", priority::SNAPSHOT, vec![deep_snapshot(1_000), deep_snapshot(3_000)])
-        .stream("trades", priority::TRADE, vec![print_at(2_000, 0.40, 10_000.0, Some(Side::Sell))])
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![deep_snapshot(1_000), deep_snapshot(3_000)],
+        )
+        .stream(
+            "trades",
+            priority::TRADE,
+            vec![print_at(2_000, 0.40, 10_000.0, Some(Side::Sell))],
+        )
         .build()
         .unwrap();
     let mut engine = Engine::builder(instruments())
@@ -992,11 +1114,13 @@ fn a_margin_model_refuses_an_order_the_account_cannot_fund() {
     assert!(result.fills.is_empty());
     assert_eq!(result.rejected_for_margin, 1);
     assert_eq!(result.orders[0].status, OrderStatus::Rejected);
-    assert!(result.orders[0]
-        .reject_reason
-        .as_deref()
-        .unwrap()
-        .contains("margin"));
+    assert!(
+        result.orders[0]
+            .reject_reason
+            .as_deref()
+            .unwrap()
+            .contains("margin")
+    );
 }
 
 #[test]
@@ -1276,11 +1400,7 @@ fn an_amendment_below_the_filled_quantity_is_refused() {
                     qty(100.0),
                 ));
             } else if self.step == 3 {
-                ctx.amend(
-                    h5i_db_backtest::order::OrderId(1),
-                    Some(qty(1.0)),
-                    None,
-                );
+                ctx.amend(h5i_db_backtest::order::OrderId(1), Some(qty(1.0)), None);
             }
             Ok(())
         }
@@ -1351,11 +1471,13 @@ fn an_order_that_would_cross_this_accounts_own_book_is_refused() {
         .iter()
         .find(|order| order.status == OrderStatus::Rejected)
         .expect("the crossing order is rejected");
-    assert!(rejected
-        .reject_reason
-        .as_deref()
-        .unwrap()
-        .contains("own resting order"));
+    assert!(
+        rejected
+            .reject_reason
+            .as_deref()
+            .unwrap()
+            .contains("own resting order")
+    );
 }
 
 #[test]
@@ -1381,7 +1503,11 @@ fn orders_on_the_same_side_never_self_trade() {
     let mut strategy = TwoBuys { step: 0 };
     let result = run_with(
         &mut strategy,
-        vec![deep_snapshot(1_000), deep_snapshot(2_000), deep_snapshot(3_000)],
+        vec![
+            deep_snapshot(1_000),
+            deep_snapshot(2_000),
+            deep_snapshot(3_000),
+        ],
         1_000.0,
     )
     .unwrap();
@@ -1560,7 +1686,11 @@ fn the_instruction_stream_is_what_two_venues_are_reconciled_on() {
             .stream(
                 "book",
                 priority::SNAPSHOT,
-                vec![deep_snapshot(1_000), deep_snapshot(2_000), deep_snapshot(3_000)],
+                vec![
+                    deep_snapshot(1_000),
+                    deep_snapshot(2_000),
+                    deep_snapshot(3_000),
+                ],
             )
             .build()
             .unwrap();
@@ -1593,11 +1723,7 @@ fn cancels_and_amendments_cross_the_seam_too() {
                     price(0.30),
                     qty(10.0),
                 )),
-                2 => ctx.amend(
-                    h5i_db_backtest::order::OrderId(1),
-                    Some(qty(5.0)),
-                    None,
-                ),
+                2 => ctx.amend(h5i_db_backtest::order::OrderId(1), Some(qty(5.0)), None),
                 3 => ctx.cancel(h5i_db_backtest::order::OrderId(1)),
                 _ => {}
             }
@@ -1675,7 +1801,10 @@ fn a_position_in_an_unconvertible_currency_suppresses_liquidation() {
         result.liquidations.is_empty(),
         "an unvaluable position must not be closed out"
     );
-    let state = engine.margin_state().unwrap().expect("a margin model is set");
+    let state = engine
+        .margin_state()
+        .unwrap()
+        .expect("a margin model is set");
     assert!(state.incomplete, "and the state says why");
 }
 

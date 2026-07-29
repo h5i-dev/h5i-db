@@ -34,6 +34,8 @@ pub const INSTRUMENTS: &str = "instruments";
 pub const RESOLUTIONS: &str = "resolutions";
 /// Order intents for a Tier 1 signal replay.
 pub const SIGNALS: &str = "signals";
+/// Submit, amend, and cancel commands for a lifecycle-aware replay.
+pub const COMMANDS: &str = "commands";
 /// Perpetual funding rates.
 pub const FUNDING: &str = "funding";
 /// What has already been ingested, so a reload is a no-op.
@@ -238,6 +240,38 @@ pub fn signals_options() -> TableOptions {
     }
 }
 
+/// `commands`: a complete declarative order lifecycle.
+///
+/// Submit rows populate the order fields. Cancel rows only require
+/// `client_order_id`; amend rows require at least one of `quantity` or
+/// `limit_price`. Client IDs are strategy-local strings and are mapped to
+/// engine order IDs without exposing implementation-dependent counters.
+pub fn commands() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        ts("ts"),
+        // "submit" | "cancel" | "amend"
+        text("action"),
+        text("client_order_id"),
+        opt_text("instrument_id"),
+        Field::new("outcome", DataType::UInt16, true),
+        opt_text("side"),
+        opt_float("quantity"),
+        opt_text("kind"),
+        opt_float("limit_price"),
+        opt_text("time_in_force"),
+        opt_text("tag"),
+        Field::new("reduce_only", DataType::Boolean, true),
+    ]))
+}
+
+pub fn commands_options() -> TableOptions {
+    TableOptions {
+        time_column: Some("ts".to_string()),
+        sort_key: vec!["ts".to_string()],
+        ..Default::default()
+    }
+}
+
 /// `bt_run`: the run manifest.
 pub fn run() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -269,6 +303,7 @@ pub fn orders() -> SchemaRef {
         float("filled"),
         text("time_in_force"),
         text("status"),
+        opt_text("reject_reason"),
         opt_text("tag"),
         Field::new("reduce_only", DataType::Boolean, false),
     ]))
@@ -361,6 +396,11 @@ pub fn signals_table() -> (&'static str, SchemaRef, TableOptions) {
     (SIGNALS, signals(), signals_options())
 }
 
+/// The optional lifecycle-aware strategy command table.
+pub fn commands_table() -> (&'static str, SchemaRef, TableOptions) {
+    (COMMANDS, commands(), commands_options())
+}
+
 /// Every run-output table.
 pub fn run_output_tables() -> Vec<(&'static str, SchemaRef, TableOptions)> {
     vec![
@@ -446,7 +486,10 @@ mod tests {
             "quantity",
             "commission",
         ] {
-            assert!(fills.field_with_name(column).is_ok(), "fills needs {column}");
+            assert!(
+                fills.field_with_name(column).is_ok(),
+                "fills needs {column}"
+            );
         }
     }
 

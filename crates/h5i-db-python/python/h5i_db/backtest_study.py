@@ -15,9 +15,10 @@ from .backtest_result import BacktestResult
 
 __all__ = ["BacktestStudy", "StudyResult", "ValidationWindows", "study"]
 
-_CONFIG_SECTIONS = {"data", "execution", "portfolio", "output"}
+_CONFIG_SECTIONS = {"data", "execution", "portfolio", "risk", "output"}
 _NON_TUNABLE = {
     "data.signals",
+    "data.commands",
     "data.snapshot",
     "data.version",
     "data.as_of",

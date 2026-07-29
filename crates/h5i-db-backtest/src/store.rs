@@ -15,12 +15,12 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Array, Float64Builder, Int64Array,
-    Int64Builder, StringArray, StringBuilder, TimestampNanosecondArray,
-    TimestampNanosecondBuilder, UInt16Array, UInt16Builder,
+    Int64Builder, StringArray, StringBuilder, TimestampNanosecondArray, TimestampNanosecondBuilder,
+    UInt16Array, UInt16Builder,
 };
 use arrow::record_batch::RecordBatch;
-use h5i_db_core::database::{ReadAt, ScanOptions, WriteOptions};
 use h5i_db_core::Database;
+use h5i_db_core::database::{ReadAt, ScanOptions, WriteOptions};
 
 use crate::book::{BookDelta, OrderBook};
 use crate::engine::RunResult;
@@ -52,7 +52,11 @@ pub async fn create_run_tables(db: &Database) -> Result<()> {
 
 async fn create_tables(
     db: &Database,
-    tables: Vec<(&'static str, arrow::datatypes::SchemaRef, h5i_db_core::spec::TableOptions)>,
+    tables: Vec<(
+        &'static str,
+        arrow::datatypes::SchemaRef,
+        h5i_db_core::spec::TableOptions,
+    )>,
 ) -> Result<()> {
     let existing: Vec<String> = db
         .list_tables()
@@ -75,10 +79,13 @@ async fn create_tables(
 // -- column helpers ---------------------------------------------------------
 
 fn column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T> {
-    let index = batch.schema().index_of(name).map_err(|_| BacktestError::Schema {
-        table: "read",
-        detail: format!("missing column {name}"),
-    })?;
+    let index = batch
+        .schema()
+        .index_of(name)
+        .map_err(|_| BacktestError::Schema {
+            table: "read",
+            detail: format!("missing column {name}"),
+        })?;
     batch
         .column(index)
         .as_any()
@@ -125,16 +132,19 @@ async fn scan_optional(
     };
     match db.scan(table, at, options).await {
         Ok((batches, _report)) => Ok(batches),
-        Err(error)
-            if matches!(error.code(), "table_not_found" | "version_not_found") =>
-        {
+        Err(error) if matches!(error.code(), "table_not_found" | "version_not_found") => {
             Ok(Vec::new())
         }
         Err(error) => Err(core_err(error)),
     }
 }
 
-async fn scan(db: &Database, table: &str, at: ReadAt, window: Option<TimeWindow>) -> Result<Vec<RecordBatch>> {
+async fn scan(
+    db: &Database,
+    table: &str,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<Vec<RecordBatch>> {
     let options = ScanOptions {
         time_start: window.map(|w| w.start().get()),
         // ScanOptions::time_end is exclusive, which is exactly what a
@@ -271,9 +281,7 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
             InstrumentKind::PredictionMarket => {
                 Instrument::prediction_market(id.clone(), draft.venue.clone(), outcomes)?
             }
-            InstrumentKind::Perpetual => {
-                Instrument::perpetual(id.clone(), draft.venue.clone())?
-            }
+            InstrumentKind::Perpetual => Instrument::perpetual(id.clone(), draft.venue.clone())?,
             InstrumentKind::Spot => {
                 let mut spot = Instrument::perpetual(id.clone(), draft.venue.clone())?;
                 spot.kind = InstrumentKind::Spot;
@@ -360,11 +368,23 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
                     let mut seen = 0;
                     for (p, q) in bids {
                         seen += 1;
-                        push("snapshot", Some(Side::Buy), Some(*p), Some(*q), seen == total);
+                        push(
+                            "snapshot",
+                            Some(Side::Buy),
+                            Some(*p),
+                            Some(*q),
+                            seen == total,
+                        );
                     }
                     for (p, q) in asks {
                         seen += 1;
-                        push("snapshot", Some(Side::Sell), Some(*p), Some(*q), seen == total);
+                        push(
+                            "snapshot",
+                            Some(Side::Sell),
+                            Some(*p),
+                            Some(*q),
+                            seen == total,
+                        );
                     }
                 }
             }
@@ -420,8 +440,14 @@ pub async fn read_book_events(
     let batches = scan_optional(db, schema::BOOK_DELTAS, at, window).await?;
     let mut out: Vec<Record> = Vec::new();
     // Snapshot levels accumulate here until their `is_last` row arrives.
-    let mut pending: Option<(i64, Stamps, InstrumentId, OutcomeId, Vec<(Price, Qty)>, Vec<(Price, Qty)>)> =
-        None;
+    let mut pending: Option<(
+        i64,
+        Stamps,
+        InstrumentId,
+        OutcomeId,
+        Vec<(Price, Qty)>,
+        Vec<(Price, Qty)>,
+    )> = None;
 
     for batch in &batches {
         let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
@@ -482,29 +508,35 @@ pub async fn read_book_events(
                         BacktestError::invalid(format!("{other} row has no side"))
                     })?;
                     let parsed = Side::parse(side_text)?;
-                    let delta = match other {
-                        "set" => BookDelta::set(
-                            parsed,
-                            Price::from_f64(opt_f64(price, row).ok_or_else(|| {
-                                BacktestError::invalid("set row has no price")
-                            })?)?,
-                            Qty::from_f64(opt_f64(size, row).unwrap_or(0.0))?,
-                        ),
-                        "delete" => BookDelta::delete(
-                            parsed,
-                            Price::from_f64(opt_f64(price, row).ok_or_else(|| {
-                                BacktestError::invalid("delete row has no price")
-                            })?)?,
-                        ),
-                        "clear" => BookDelta::clear(parsed),
-                        unknown => {
-                            return Err(BacktestError::Parse {
-                                what: "book action",
-                                value: unknown.to_string(),
-                            });
-                        }
-                    };
-                    out.push(Record::new(stamps, id, out_id, MarketEvent::BookDelta(delta)));
+                    let delta =
+                        match other {
+                            "set" => BookDelta::set(
+                                parsed,
+                                Price::from_f64(opt_f64(price, row).ok_or_else(|| {
+                                    BacktestError::invalid("set row has no price")
+                                })?)?,
+                                Qty::from_f64(opt_f64(size, row).unwrap_or(0.0))?,
+                            ),
+                            "delete" => BookDelta::delete(
+                                parsed,
+                                Price::from_f64(opt_f64(price, row).ok_or_else(|| {
+                                    BacktestError::invalid("delete row has no price")
+                                })?)?,
+                            ),
+                            "clear" => BookDelta::clear(parsed),
+                            unknown => {
+                                return Err(BacktestError::Parse {
+                                    what: "book action",
+                                    value: unknown.to_string(),
+                                });
+                            }
+                        };
+                    out.push(Record::new(
+                        stamps,
+                        id,
+                        out_id,
+                        MarketEvent::BookDelta(delta),
+                    ));
                 }
             }
         }
@@ -797,6 +829,138 @@ pub async fn read_signals(
     Ok(out)
 }
 
+/// Read a lifecycle command table.
+///
+/// Unlike signals, commands retain a caller-defined identifier so later
+/// rows can amend or cancel the exact order created by a submit row.
+pub async fn read_commands(
+    db: &Database,
+    table: &str,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<Vec<(UnixNanos, crate::engine::ReplayCommand)>> {
+    use crate::engine::{OrderRequest, ReplayCommand};
+    use crate::order::TimeInForce;
+
+    let batches = scan(db, table, at, window).await?;
+    let mut out = Vec::new();
+    for batch in &batches {
+        let ts = column::<TimestampNanosecondArray>(batch, "ts")?;
+        let action = column::<StringArray>(batch, "action")?;
+        let client_id = column::<StringArray>(batch, "client_order_id")?;
+        let instrument = column::<StringArray>(batch, "instrument_id")?;
+        let outcome = column::<UInt16Array>(batch, "outcome")?;
+        let side = column::<StringArray>(batch, "side")?;
+        let quantity = column::<Float64Array>(batch, "quantity")?;
+        let kind = column::<StringArray>(batch, "kind")?;
+        let limit = column::<Float64Array>(batch, "limit_price")?;
+        let tif = column::<StringArray>(batch, "time_in_force")?;
+        let tag = column::<StringArray>(batch, "tag")?;
+        let reduce_only = column::<BooleanArray>(batch, "reduce_only")?;
+
+        for row in 0..batch.num_rows() {
+            let client_order_id = client_id.value(row).to_string();
+            let command = match action.value(row) {
+                "cancel" => ReplayCommand::Cancel { client_order_id },
+                "amend" => {
+                    let quantity = opt_f64(quantity, row).map(Qty::from_f64).transpose()?;
+                    let limit = opt_f64(limit, row).map(Price::from_f64).transpose()?;
+                    if quantity.is_none() && limit.is_none() {
+                        return Err(BacktestError::invalid(format!(
+                            "amend command for {:?} at {} changes neither quantity nor limit_price",
+                            client_id.value(row),
+                            ts.value(row)
+                        )));
+                    }
+                    ReplayCommand::Amend {
+                        client_order_id,
+                        quantity,
+                        limit,
+                    }
+                }
+                "submit" => {
+                    let required = |present: bool, field: &str| {
+                        present.then_some(()).ok_or_else(|| {
+                            BacktestError::invalid(format!(
+                                "submit command for {:?} at {} is missing {field}",
+                                client_id.value(row),
+                                ts.value(row)
+                            ))
+                        })
+                    };
+                    required(instrument.is_valid(row), "instrument_id")?;
+                    required(outcome.is_valid(row), "outcome")?;
+                    required(side.is_valid(row), "side")?;
+                    required(quantity.is_valid(row), "quantity")?;
+                    required(kind.is_valid(row), "kind")?;
+
+                    let id = InstrumentId::new(instrument.value(row))?;
+                    let outcome_id = OutcomeId(outcome.value(row));
+                    let parsed_side = Side::parse(side.value(row))?;
+                    let size = Qty::from_f64(quantity.value(row))?;
+                    let mut request = match kind.value(row) {
+                        "market" => OrderRequest::market(id, outcome_id, parsed_side, size),
+                        "limit" => {
+                            let value = opt_f64(limit, row).ok_or_else(|| {
+                                BacktestError::invalid(format!(
+                                    "limit submit for {:?} at {} has no limit_price",
+                                    client_id.value(row),
+                                    ts.value(row)
+                                ))
+                            })?;
+                            OrderRequest::limit(
+                                id,
+                                outcome_id,
+                                parsed_side,
+                                Price::from_f64(value)?,
+                                size,
+                            )
+                        }
+                        other => {
+                            return Err(BacktestError::Parse {
+                                what: "command kind",
+                                value: other.to_string(),
+                            });
+                        }
+                    };
+                    if let Some(text) = opt_str(tif, row) {
+                        request = request.with_time_in_force(match text {
+                            "gtc" => TimeInForce::GoodTilCancel,
+                            "ioc" => TimeInForce::ImmediateOrCancel,
+                            "fok" => TimeInForce::FillOrKill,
+                            other => {
+                                return Err(BacktestError::Parse {
+                                    what: "time in force",
+                                    value: other.to_string(),
+                                });
+                            }
+                        });
+                    }
+                    if let Some(text) = opt_str(tag, row) {
+                        request = request.with_tag(text);
+                    }
+                    if reduce_only.is_valid(row) && reduce_only.value(row) {
+                        request = request.reduce_only();
+                    }
+                    ReplayCommand::Submit {
+                        client_order_id,
+                        request,
+                    }
+                }
+                other => {
+                    return Err(BacktestError::Parse {
+                        what: "command action",
+                        value: other.to_string(),
+                    });
+                }
+            };
+            out.push((UnixNanos::new(ts.value(row)), command));
+        }
+    }
+    out.sort_by_key(|(ts, _)| ts.get());
+    Ok(out)
+}
+
 // -- lazy sources -----------------------------------------------------------
 
 /// Decode Arrow batches into records one batch at a time.
@@ -848,10 +1012,7 @@ pub async fn trade_source(
     }))
 }
 
-fn decode_trades(
-    batch: &RecordBatch,
-    out: &mut std::collections::VecDeque<Record>,
-) -> Result<()> {
+fn decode_trades(batch: &RecordBatch, out: &mut std::collections::VecDeque<Record>) -> Result<()> {
     let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
     let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
     let instrument = column::<StringArray>(batch, "instrument_id")?;
@@ -881,11 +1042,7 @@ fn decode_trades(
 ///
 /// Counting rows off the Arrow batches costs nothing, and lets a caller
 /// report volume without draining the stream it is about to replay.
-pub async fn count_trades(
-    db: &Database,
-    at: ReadAt,
-    window: Option<TimeWindow>,
-) -> Result<usize> {
+pub async fn count_trades(db: &Database, at: ReadAt, window: Option<TimeWindow>) -> Result<usize> {
     let batches = scan_optional(db, schema::TRADES, at, window).await?;
     Ok(batches.iter().map(|batch| batch.num_rows()).sum())
 }
@@ -904,10 +1061,7 @@ pub async fn funding_source(
     }))
 }
 
-fn decode_funding(
-    batch: &RecordBatch,
-    out: &mut std::collections::VecDeque<Record>,
-) -> Result<()> {
+fn decode_funding(batch: &RecordBatch, out: &mut std::collections::VecDeque<Record>) -> Result<()> {
     let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
     let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
     let instrument = column::<StringArray>(batch, "instrument_id")?;
@@ -1025,9 +1179,9 @@ async fn write_run_manifest(
         Arc::new(Float64Array::from(vec![result.final_cash.to_f64()])),
         Arc::new(Float64Array::from(vec![result.realized_pnl.to_f64()])),
         Arc::new(Float64Array::from(vec![result.commissions.to_f64()])),
-        Arc::new(Int64Array::from(vec![result
-            .simulated_through
-            .map(|t| t.get())])),
+        Arc::new(Int64Array::from(vec![
+            result.simulated_through.map(|t| t.get()),
+        ])),
         Arc::new(Int64Array::from(vec![result.records_processed as i64])),
         Arc::new(BooleanArray::from(vec![settlement.was_applied()])),
         Arc::new(StringArray::from(vec![if warnings.is_empty() {
@@ -1051,6 +1205,7 @@ async fn write_orders(db: &Database, result: &RunResult) -> Result<()> {
     let mut filled = Float64Builder::new();
     let mut tif = StringBuilder::new();
     let mut status = StringBuilder::new();
+    let mut reject_reason = StringBuilder::new();
     let mut tag = StringBuilder::new();
     let mut reduce_only = BooleanBuilder::new();
 
@@ -1078,6 +1233,10 @@ async fn write_orders(db: &Database, result: &RunResult) -> Result<()> {
             crate::order::TimeInForce::FillOrKill => "fok",
         });
         status.append_value(order.status.as_str());
+        match &order.reject_reason {
+            Some(value) => reject_reason.append_value(value),
+            None => reject_reason.append_null(),
+        }
         match &order.tag {
             Some(value) => tag.append_value(value),
             None => tag.append_null(),
@@ -1097,6 +1256,7 @@ async fn write_orders(db: &Database, result: &RunResult) -> Result<()> {
         Arc::new(filled.finish()),
         Arc::new(tif.finish()),
         Arc::new(status.finish()),
+        Arc::new(reject_reason.finish()),
         Arc::new(tag.finish()),
         Arc::new(reduce_only.finish()),
     ];
@@ -1284,7 +1444,11 @@ async fn append(
 
 /// Which column a table is time-indexed on.
 fn time_column_of(table: &str) -> &'static str {
-    if table.starts_with("bt_") || table == schema::INGEST_LOG || table == schema::SIGNALS {
+    if table.starts_with("bt_")
+        || table == schema::INGEST_LOG
+        || table == schema::SIGNALS
+        || table == schema::COMMANDS
+    {
         "ts"
     } else {
         "ts_init"
@@ -1381,9 +1545,8 @@ fn sort_by_time(batch: &RecordBatch, time_column: &str) -> Result<RecordBatch> {
     let times = column::<TimestampNanosecondArray>(batch, time_column)?;
     let mut order: Vec<usize> = (0..batch.num_rows()).collect();
     order.sort_by_key(|row| times.value(*row));
-    let indices = arrow::array::UInt32Array::from(
-        order.iter().map(|row| *row as u32).collect::<Vec<_>>(),
-    );
+    let indices =
+        arrow::array::UInt32Array::from(order.iter().map(|row| *row as u32).collect::<Vec<_>>());
     let columns = batch
         .columns()
         .iter()
@@ -1425,17 +1588,23 @@ mod tests {
         // The claim the schema doc makes: every value the fixed-point type
         // can represent survives a trip through f64 storage unchanged.
         let cases = [
-            0.0, 1.0, 0.5, 0.42, 0.0001, 0.999999999, 123.456789, 1e6, -0.37,
-            0.123456789, 9_999_999.999999999,
+            0.0,
+            1.0,
+            0.5,
+            0.42,
+            0.0001,
+            0.999999999,
+            123.456789,
+            1e6,
+            -0.37,
+            0.123456789,
+            9_999_999.999999999,
         ];
         for value in cases {
             let original = Price::from_f64(value).unwrap();
             let stored = original.to_f64();
             let restored = Price::from_f64(stored).unwrap();
-            assert_eq!(
-                original, restored,
-                "{value} did not survive the round trip"
-            );
+            assert_eq!(original, restored, "{value} did not survive the round trip");
         }
     }
 

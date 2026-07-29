@@ -594,6 +594,10 @@ impl NativeDatabase {
         equity_interval_nanos = None,
         minimum_coverage = None,
         maker_fee_rate = None,
+        max_order_quantity = None,
+        max_abs_position = None,
+        max_open_orders = None,
+        commands_table = None,
     ))]
     fn run_backtest(
         &self,
@@ -615,14 +619,19 @@ impl NativeDatabase {
         equity_interval_nanos: Option<i64>,
         minimum_coverage: Option<f64>,
         maker_fee_rate: Option<f64>,
+        max_order_quantity: Option<f64>,
+        max_abs_position: Option<f64>,
+        max_open_orders: Option<usize>,
+        commands_table: Option<String>,
     ) -> PyResult<String> {
-        use h5i_db_backtest::engine::SignalReplay;
+        use h5i_db_backtest::RiskLimits;
+        use h5i_db_backtest::engine::{CommandReplay, SignalReplay, Strategy};
         use h5i_db_backtest::models::{
             ConstantLatency, KalshiFees, PredictionMarketFees, ProportionalFees,
             QueuePositionFills, TickSlippage,
         };
-        use h5i_db_backtest::run::{run_in_fork, RunSpec};
-        use h5i_db_backtest::types::{Money, Price};
+        use h5i_db_backtest::run::{RunSpec, run_in_fork};
+        use h5i_db_backtest::types::{Money, Price, Qty};
         use h5i_db_backtest::window::TimeWindow;
 
         let inner = self.inner()?;
@@ -662,22 +671,54 @@ impl NativeDatabase {
                 // Reproducibility is not lost: the run's fork pins every
                 // table at creation, so `Latest` inside the fork is a fixed
                 // version for the life of the run.
-                let intents = h5i_db_backtest::store::read_signals(
-                    &inner.db,
-                    &signals_table,
-                    h5i_db_core::ReadAt::Latest,
-                    spec.window,
-                )
-                .await
-                .map_err(backtest_err)?;
-                let mut strategy = SignalReplay::new(intents).map_err(backtest_err)?;
+                let mut strategy: Box<dyn Strategy> = if let Some(table) = commands_table {
+                    let commands = h5i_db_backtest::store::read_commands(
+                        &inner.db,
+                        &table,
+                        h5i_db_core::ReadAt::Latest,
+                        spec.window,
+                    )
+                    .await
+                    .map_err(backtest_err)?;
+                    Box::new(CommandReplay::new(commands).map_err(backtest_err)?)
+                } else {
+                    let intents = h5i_db_backtest::store::read_signals(
+                        &inner.db,
+                        &signals_table,
+                        h5i_db_core::ReadAt::Latest,
+                        spec.window,
+                    )
+                    .await
+                    .map_err(backtest_err)?;
+                    Box::new(SignalReplay::new(intents).map_err(backtest_err)?)
+                };
+                let risk_limits = if max_order_quantity.is_some()
+                    || max_abs_position.is_some()
+                    || max_open_orders.is_some()
+                {
+                    Some(
+                        RiskLimits::new(
+                            max_order_quantity
+                                .map(Qty::from_f64)
+                                .transpose()
+                                .map_err(backtest_err)?,
+                            max_abs_position
+                                .map(Qty::from_f64)
+                                .transpose()
+                                .map_err(backtest_err)?,
+                            max_open_orders,
+                        )
+                        .map_err(backtest_err)?,
+                    )
+                } else {
+                    None
+                };
 
-                let report = run_in_fork(&inner.db, spec, &mut strategy, move |mut builder| {
+                let report = run_in_fork(&inner.db, spec, strategy.as_mut(), move |mut builder| {
                     if let Some(rate) = fee_rate {
                         match fee_kind.as_deref() {
                             Some("kalshi") => {
-                                if let Ok(model) =
-                                    KalshiFees::with_maker_rate(rate, maker_fee_rate)
+                                if let Ok(model) = KalshiFees::with_maker_rate(rate, maker_fee_rate)
                                 {
                                     builder = builder.fee_model(Box::new(model));
                                 }
@@ -720,6 +761,9 @@ impl NativeDatabase {
                             cancel: nanos,
                         }));
                     }
+                    if let Some(limits) = risk_limits {
+                        builder = builder.risk_limits(limits);
+                    }
                     builder
                 })
                 .await
@@ -751,6 +795,8 @@ impl NativeDatabase {
                             report.result.metrics.orders_cancelled_unfilled,
                         "orders_rejected_margin":
                             report.result.metrics.orders_rejected_margin,
+                        "orders_rejected_risk":
+                            report.result.metrics.orders_rejected_risk,
                         "orders_rejected_self_trade":
                             report.result.metrics.orders_rejected_self_trade,
                         "fills_taker": report.result.metrics.fills_taker,

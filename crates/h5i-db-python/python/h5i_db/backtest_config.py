@@ -20,6 +20,7 @@ __all__ = [
     "PortfolioConfig",
     "PreflightInspection",
     "ReplayFidelity",
+    "RiskConfig",
     "inspect",
 ]
 
@@ -65,6 +66,7 @@ _REQUIRED_COLUMNS = {
         "close",
     },
     "signals": {"ts", "instrument_id", "outcome", "side", "quantity", "kind"},
+    "commands": {"ts", "action", "client_order_id"},
 }
 
 
@@ -92,7 +94,8 @@ def _coerce_window(value: Any) -> Optional[tuple[Any, Any]]:
 class DataConfig:
     """Pinned canonical inputs for one replay."""
 
-    signals: str = "signals"
+    signals: Optional[str] = "signals"
+    commands: Optional[str] = None
     snapshot: Optional[str] = None
     version: Optional[int] = None
     as_of: Optional[str] = None
@@ -100,7 +103,13 @@ class DataConfig:
     minimum_coverage: Optional[float] = None
 
     def __post_init__(self) -> None:
-        if not self.signals or not isinstance(self.signals, str):
+        if self.commands is not None:
+            if not isinstance(self.commands, str) or not self.commands:
+                raise ValueError("commands must be a non-empty table name")
+            if self.signals not in (None, "signals"):
+                raise ValueError("set either signals or commands, not both")
+            object.__setattr__(self, "signals", None)
+        elif not self.signals or not isinstance(self.signals, str):
             raise ValueError("signals must be a non-empty table name")
         pins = [
             self.snapshot is not None,
@@ -131,6 +140,16 @@ class DataConfig:
             or self.version is not None
             or self.as_of is not None
         )
+
+    @property
+    def strategy_kind(self) -> str:
+        return "commands" if self.commands is not None else "signals"
+
+    @property
+    def strategy_table(self) -> str:
+        table = self.commands if self.commands is not None else self.signals
+        assert table is not None
+        return table
 
     def read_kwargs(self) -> dict[str, Any]:
         return {
@@ -208,6 +227,31 @@ class OutputConfig:
 
 
 @dataclass(frozen=True)
+class RiskConfig:
+    """Hard account-level limits enforced by the native engine."""
+
+    max_order_quantity: Optional[float] = None
+    max_abs_position: Optional[float] = None
+    max_open_orders: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        for name in ("max_order_quantity", "max_abs_position"):
+            value = getattr(self, name)
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not 0 < float(value) < float("inf")
+            ):
+                raise ValueError(f"{name} must be finite and positive")
+        if self.max_open_orders is not None and (
+            isinstance(self.max_open_orders, bool)
+            or not isinstance(self.max_open_orders, int)
+            or self.max_open_orders <= 0
+        ):
+            raise ValueError("max_open_orders must be a positive integer")
+
+
+@dataclass(frozen=True)
 class BacktestConfig:
     """Complete immutable specification for one backtest."""
 
@@ -215,6 +259,7 @@ class BacktestConfig:
     portfolio: PortfolioConfig
     data: DataConfig = field(default_factory=DataConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
+    risk: RiskConfig = field(default_factory=RiskConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     schema_version: int = _SCHEMA_VERSION
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -259,6 +304,7 @@ class BacktestConfig:
             "portfolio",
             "data",
             "execution",
+            "risk",
             "output",
             "schema_version",
             "metadata",
@@ -273,6 +319,7 @@ class BacktestConfig:
             portfolio=PortfolioConfig(**dict(payload["portfolio"])),
             data=DataConfig(**data_payload),
             execution=ExecutionConfig(**dict(payload.get("execution", {}))),
+            risk=RiskConfig(**dict(payload.get("risk", {}))),
             output=OutputConfig(**dict(payload.get("output", {}))),
             schema_version=int(payload.get("schema_version", _SCHEMA_VERSION)),
             metadata=dict(payload.get("metadata", {})),
@@ -408,10 +455,11 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
             )
         )
 
-    requested = {"instruments", config.data.signals, *_MARKET_TABLES}
+    strategy_table = config.data.strategy_table
+    requested = {"instruments", strategy_table, *_MARKET_TABLES}
     for name in sorted(requested):
         if name not in available:
-            if name in ("instruments", config.data.signals):
+            if name in ("instruments", strategy_table):
                 issues.append(
                     InspectionIssue(
                         "error",
@@ -421,8 +469,8 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
                 )
             continue
         try:
-            is_signals = name == config.data.signals
-            read_kwargs = {} if is_signals else config.data.read_kwargs()
+            is_strategy = name == strategy_table
+            read_kwargs = {} if is_strategy else config.data.read_kwargs()
             schema = db.read(name, limit=1, **read_kwargs).schema
         except (
             Exception
@@ -436,7 +484,7 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
             )
             continue
         columns = set(schema.names)
-        standard = "signals" if name == config.data.signals else name
+        standard = config.data.strategy_kind if name == strategy_table else name
         missing = _REQUIRED_COLUMNS.get(standard, set()) - columns
         if missing:
             issues.append(
@@ -447,19 +495,19 @@ def inspect(db: Any, config: BacktestConfig) -> PreflightInspection:
                 )
             )
             continue
-        time_column = "ts" if name == config.data.signals else "ts_init"
+        time_column = "ts" if name == strategy_table else "ts_init"
         table_stats = _scalar_stats(
             db,
             name,
             time_column,
             config.data,
-            market_pin=not is_signals,
+            market_pin=not is_strategy,
         )
         table_stats["columns"] = tuple(schema.names)
         stats[name] = table_stats
         if table_stats["row_count"] == 0 and name in (
             "instruments",
-            config.data.signals,
+            strategy_table,
         ):
             severity = "error" if name == "instruments" else "warning"
             issues.append(

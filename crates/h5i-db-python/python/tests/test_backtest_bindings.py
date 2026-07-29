@@ -8,13 +8,12 @@ whole path from Python, and end where it should end -- at a tearsheet.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import tempfile
 
-import numpy as np
+import h5i_db
 import pyarrow as pa
 import pytest
-
-import h5i_db
 from h5i_db import backtest, quant
 
 SECOND = 1_000_000_000
@@ -118,9 +117,7 @@ def test_a_run_from_python_produces_fills_and_a_fork():
                 }
             ],
         )
-        report = backtest.run(
-            db, "py-001", starting_cash=1_000.0, snapshot="seed"
-        )
+        report = backtest.run(db, "py-001", starting_cash=1_000.0, snapshot="seed")
         assert report["fork"] == "bt-py-001"
         assert report["fills"] == 1
         assert report["records_processed"] > 0
@@ -494,4 +491,112 @@ def test_backtest_study_uses_isolated_forks_and_returns_a_leaderboard():
             "bt-fees-0001-run",
         }
         result.drop()
+        db.close()
+
+
+def test_backtest_cli_uses_the_same_typed_contract(capsys):
+    with tempfile.TemporaryDirectory() as tmp:
+        database = f"{tmp}/bt.db"
+        config_path = f"{tmp}/config.json"
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        db.close()
+        config = backtest.BacktestConfig(
+            run_id="cli",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+        config.to_json(config_path)
+
+        assert backtest.main(["inspect", database, config_path]) == 0
+        assert json.loads(capsys.readouterr().out)["fidelity"] == "snapshot_l2"
+        assert backtest.main(["run", database, config_path]) == 0
+        assert json.loads(capsys.readouterr().out)["fills"] == 1
+        assert backtest.main(["list", database]) == 0
+        assert json.loads(capsys.readouterr().out)[0]["fork"] == "bt-cli"
+
+
+def test_native_risk_limits_are_persisted_and_explained():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        config = backtest.BacktestConfig(
+            run_id="risk",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+            risk=backtest.RiskConfig(max_order_quantity=5.0),
+        )
+        result = backtest.execute(db, config)
+        assert result["fills"] == 0
+        assert result["metrics"]["orders_rejected_risk"] == 1
+        explanation = result.explain()
+        assert explanation["status_counts"]["rejected"] == 1
+        assert any(
+            "max_order_quantity" in reason
+            for reason in explanation["rejection_reasons"]
+        )
+        assert backtest.open_result(db, "risk").config.risk == config.risk
+        db.close()
+
+
+def test_declarative_commands_support_order_lifecycle():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        backtest.create_command_table(db)
+        db.append(
+            "commands",
+            backtest.command_table(
+                [
+                    {
+                        "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                        "action": "submit",
+                        "client_order_id": "quote-yes",
+                        "instrument_id": MARKET,
+                        "side": "buy",
+                        "quantity": 10.0,
+                        "kind": "limit",
+                        "limit_price": 0.40,
+                    },
+                    {
+                        "ts": dt.datetime(2024, 1, 1, 0, 0, 5),
+                        "action": "cancel",
+                        "client_order_id": "quote-yes",
+                    },
+                ]
+            ),
+        )
+        config = backtest.BacktestConfig(
+            run_id="commands",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(commands="commands", snapshot="seed"),
+        )
+
+        inspection = backtest.inspect(db, config)
+        assert not inspection.errors
+        result = backtest.execute(db, config)
+        orders = result.orders.to_pylist()
+        assert len(orders) == 1
+        assert orders[0]["status"] == "cancelled"
+        assert result.config.data.strategy_kind == "commands"
+        assert result.config.data.signals is None
         db.close()
