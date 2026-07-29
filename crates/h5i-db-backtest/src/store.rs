@@ -1278,34 +1278,124 @@ async fn append(
     schema: arrow::datatypes::SchemaRef,
     columns: Vec<ArrayRef>,
 ) -> Result<()> {
+    append_with(db, table, schema, columns, time_column_of(table)).await
+}
+
+/// Which column a table is time-indexed on.
+fn time_column_of(table: &str) -> &'static str {
+    if table.starts_with("bt_") || table == schema::INGEST_LOG || table == schema::SIGNALS {
+        "ts"
+    } else {
+        "ts_init"
+    }
+}
+
+/// Append, falling back to a merging replace when the rows land in the past.
+///
+/// Appends move forward in time. A load whose earliest record precedes what
+/// is already stored is a **backfill**, and it must not be appended
+/// blindly: a book reconstructed from interleaved appends is neither the
+/// old one nor the new one. Instead the affected window is read back,
+/// merged with the new rows, sorted, and written atomically over the same
+/// range. The window is exactly the span the new rows cover, so untouched
+/// history is never rewritten.
+async fn append_with(
+    db: &Database,
+    table: &str,
+    schema: arrow::datatypes::SchemaRef,
+    columns: Vec<ArrayRef>,
+    time_column: &str,
+) -> Result<()> {
     if columns.first().map(|c| c.len()).unwrap_or(0) == 0 {
         return Ok(());
     }
-    let batch = RecordBatch::try_new(schema, columns).map_err(|error| BacktestError::Schema {
-        table: "write",
-        detail: error.to_string(),
-    })?;
-    db.append(table, vec![batch], WriteOptions::default())
-        .await
-        .map_err(|error| {
-            // Appends move forward in time. A load whose earliest record
-            // precedes what is already stored is a *backfill*, and the
-            // engine will not silently interleave it, because a book
-            // reconstructed from interleaved appends is neither the old
-            // one nor the new one.
-            if error.code() == "sort_order_violation" {
-                BacktestError::invalid(format!(
-                    "{table} already holds rows later than this load's \
-                     earliest record. Loads append forward in time; to add \
-                     data covering an earlier window, merge the plans \
-                     before writing (IngestPlan::merge) or load them in \
-                     time order. Underlying: {error}"
-                ))
-            } else {
-                core_err(error)
-            }
+    let batch =
+        RecordBatch::try_new(schema.clone(), columns).map_err(|error| BacktestError::Schema {
+            table: "write",
+            detail: error.to_string(),
         })?;
+
+    match db
+        .append(table, vec![batch.clone()], WriteOptions::default())
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(error) if error.code() == "sort_order_violation" => {
+            backfill(db, table, schema, batch, time_column).await
+        }
+        Err(error) => Err(core_err(error)),
+    }
+}
+
+/// Merge new rows into an already-written range.
+async fn backfill(
+    db: &Database,
+    table: &str,
+    schema: arrow::datatypes::SchemaRef,
+    incoming: RecordBatch,
+    time_column: &str,
+) -> Result<()> {
+    let (start, end) = time_bounds(&incoming, time_column)?;
+    let window = TimeWindow::new(UnixNanos::new(start), UnixNanos::new(end))?;
+    let existing = scan_optional(db, table, ReadAt::Latest, Some(window)).await?;
+
+    let mut batches = existing;
+    batches.push(incoming);
+    let merged = arrow::compute::concat_batches(&schema, &batches).map_err(|error| {
+        BacktestError::Schema {
+            table: "backfill",
+            detail: error.to_string(),
+        }
+    })?;
+    let sorted = sort_by_time(&merged, time_column)?;
+
+    db.replace_range(table, start, end, vec![sorted], WriteOptions::default())
+        .await
+        .map_err(core_err)?;
     Ok(())
+}
+
+/// The half-open span a batch covers on its time column.
+fn time_bounds(batch: &RecordBatch, time_column: &str) -> Result<(i64, i64)> {
+    let times = column::<TimestampNanosecondArray>(batch, time_column)?;
+    let mut min = i64::MAX;
+    let mut max = i64::MIN;
+    for row in 0..batch.num_rows() {
+        let value = times.value(row);
+        min = min.min(value);
+        max = max.max(value);
+    }
+    if min > max {
+        return Err(BacktestError::invalid("cannot bound an empty batch"));
+    }
+    Ok((min, max + 1))
+}
+
+/// Stable sort of a batch by its time column.
+///
+/// Stable on purpose: rows sharing a timestamp keep the order they were
+/// written in, so a backfill cannot silently reorder simultaneous events
+/// that a replay's tie-break depends on.
+fn sort_by_time(batch: &RecordBatch, time_column: &str) -> Result<RecordBatch> {
+    let times = column::<TimestampNanosecondArray>(batch, time_column)?;
+    let mut order: Vec<usize> = (0..batch.num_rows()).collect();
+    order.sort_by_key(|row| times.value(*row));
+    let indices = arrow::array::UInt32Array::from(
+        order.iter().map(|row| *row as u32).collect::<Vec<_>>(),
+    );
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| arrow::compute::take(column.as_ref(), &indices, None))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| BacktestError::Schema {
+            table: "backfill",
+            detail: error.to_string(),
+        })?;
+    RecordBatch::try_new(batch.schema(), columns).map_err(|error| BacktestError::Schema {
+        table: "backfill",
+        detail: error.to_string(),
+    })
 }
 
 /// Reconstruct a book from stored events, for checking a stored feed.

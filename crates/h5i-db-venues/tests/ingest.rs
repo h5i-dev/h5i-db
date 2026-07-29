@@ -338,21 +338,77 @@ async fn two_plans_over_the_same_window_are_merged_before_writing() {
 }
 
 #[tokio::test]
-async fn loading_an_earlier_window_afterwards_says_what_to_do_instead() {
-    // A backfill is refused rather than interleaved: a book rebuilt from
-    // interleaved appends is neither the old one nor the new one.
+async fn a_later_load_covering_an_earlier_window_is_merged_in() {
+    // Backfill: the affected span is read back, merged with the new rows,
+    // sorted and rewritten atomically, so history stays in time order
+    // without the caller having to know the load order in advance.
     let dir = tempfile::tempdir().unwrap();
     let db = Database::create(&dir.path().join("backfill.db")).await.unwrap();
+
     write_plan(&db, &hyperliquid_plan(), UnixNanos::new(0))
         .await
         .unwrap();
-
-    let error = write_plan(&db, &polymarket_plan(), UnixNanos::new(0))
+    let after_first = store::read_book_events(&db, ReadAt::Latest, None)
         .await
-        .unwrap_err()
-        .to_string();
-    assert!(error.contains("append forward in time"), "{error}");
-    assert!(error.contains("merge"), "the message must say what to do");
+        .unwrap();
+
+    // Polymarket's window starts at the same instant but is a separate
+    // load, so appending it would go backwards.
+    let outcome = write_plan(&db, &polymarket_plan(), UnixNanos::new(0))
+        .await
+        .unwrap();
+    assert!(outcome.was_written());
+
+    let after_both = store::read_book_events(&db, ReadAt::Latest, None)
+        .await
+        .unwrap();
+    assert!(after_both.len() > after_first.len(), "the backfill landed");
+
+    // And the stored stream is still ordered, which is what replay needs.
+    let stamps: Vec<i64> = after_both.iter().map(|r| r.ts().get()).collect();
+    let mut sorted = stamps.clone();
+    sorted.sort_unstable();
+    assert_eq!(stamps, sorted, "a backfilled table must stay time-ordered");
+
+    // Nothing from the first load was lost.
+    for record in &after_first {
+        assert!(
+            after_both.contains(record),
+            "backfill dropped a record from the earlier load"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_backfilled_table_still_replays() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("bf-run.db")).await.unwrap();
+    write_plan(&db, &hyperliquid_plan(), UnixNanos::new(0))
+        .await
+        .unwrap();
+    write_plan(&db, &polymarket_plan(), UnixNanos::new(0))
+        .await
+        .unwrap();
+
+    let mut strategy = SignalReplay::new(vec![(
+        UnixNanos::new(HOUR_MS * 1_000_000),
+        OrderRequest::market(
+            InstrumentId::new("0xelection").unwrap(),
+            OutcomeId::FIRST,
+            Side::Buy,
+            Qty::from_f64(10.0).unwrap(),
+        ),
+    )])
+    .unwrap();
+    let report = run_in_fork(
+        &db,
+        RunSpec::new("after-backfill", Money::from_units(1_000).unwrap()),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.result.fills.len(), 1);
 }
 
 #[tokio::test]
