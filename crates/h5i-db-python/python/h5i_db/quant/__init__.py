@@ -17,10 +17,18 @@ checked rather than trusted.
 
 from __future__ import annotations
 
-from . import perf
+from . import perf, report
 from ._common import Pin, Provenance
 from .factor import FactorPanel, MaxLossExceededError, build_panel
 from .perf import DAILY, MONTHLY, WEEKLY, YEARLY, ReturnSeries, returns
+from .report import factor_report, report_payload, tearsheet
+from .sweep import (
+    SweepResult,
+    VerificationError,
+    restatement_impact,
+    sweep,
+    verify,
+)
 
 __all__ = [
     "Pin",
@@ -35,4 +43,13 @@ __all__ = [
     "WEEKLY",
     "MONTHLY",
     "YEARLY",
+    "sweep",
+    "SweepResult",
+    "verify",
+    "VerificationError",
+    "restatement_impact",
+    "report",
+    "factor_report",
+    "tearsheet",
+    "report_payload",
 ]

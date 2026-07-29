@@ -234,6 +234,36 @@ def test_drawdown_table_on_a_monotone_series_is_empty():
 # -- rolling statistics -----------------------------------------------------
 
 
+@pytest.mark.parametrize("stat", ["rolling_sharpe", "rolling_volatility"])
+def test_rolling_statistics_are_null_until_the_window_fills(stat):
+    """A 63-bar Sharpe from two observations is not a 63-bar Sharpe."""
+    values = _random_returns(n=200, seed=77)
+    window = 30
+    with open_returns(values) as (series, ref, _b, _br):
+        got = getattr(series, stat)(window).to_pandas()
+    column = got.columns[-1]
+    assert got[column].iloc[: window - 1].isna().all(), "partial windows must be null"
+    assert got[column].iloc[window - 1 :].notna().all()
+    expected = getattr(ref.rolling(window), "std" if "vol" in stat else "mean")()
+    assert got[column].isna().sum() == expected.isna().sum()
+
+
+def test_rolling_beta_is_null_until_the_window_fills():
+    bench = _random_returns(n=200, seed=78)
+    values = 0.5 * bench + 0.5 * _random_returns(n=200, seed=79)
+    window = 40
+    with open_returns(values, benchmark_values=bench) as (series, _r, bs, _br):
+        got = series.rolling_beta(bs, window).to_pandas()
+    assert got["rolling_beta"].iloc[: window - 1].isna().all()
+    assert got["rolling_beta"].iloc[window - 1 :].notna().all()
+
+
+def test_rolling_window_must_be_sensible():
+    with open_returns(_random_returns(n=50)) as (series, _r, _b, _br):
+        with pytest.raises(ValueError, match="window must be"):
+            series.rolling_sharpe(1)
+
+
 def test_rolling_sharpe_matches_pandas_reference():
     values = _random_returns(n=300, seed=71)
     window = 63

@@ -331,11 +331,12 @@ class ReturnSeries:
 
     def rolling_volatility(self, window: int = 63):
         ann = sql_number(float(self.annualization))
+        frame = _frame(window)
         ctes = [("_r", self._sql)]
         body = (
             f"SELECT {quote_ident(TS)},\n"
-            f"       stddev({quote_ident(RET)}) OVER (ORDER BY {quote_ident(TS)} "
-            f"ROWS BETWEEN {window - 1} PRECEDING AND CURRENT ROW) * sqrt({ann}) "
+            f"       {_full_window(window, frame)}\n"
+            f"       stddev({quote_ident(RET)}) {frame} * sqrt({ann}) END "
             f"AS rolling_volatility\n"
             f"FROM _r ORDER BY {quote_ident(TS)}"
         )
@@ -343,15 +344,13 @@ class ReturnSeries:
 
     def rolling_sharpe(self, window: int = 63):
         ann = sql_number(float(self.annualization))
-        frame = (
-            f"OVER (ORDER BY {quote_ident(TS)} ROWS BETWEEN {window - 1} "
-            f"PRECEDING AND CURRENT ROW)"
-        )
+        frame = _frame(window)
         ctes = [("_r", self._sql)]
         body = (
             f"SELECT {quote_ident(TS)},\n"
+            f"       {_full_window(window, frame)}\n"
             f"       avg({quote_ident(RET)}) {frame} / "
-            f"NULLIF(stddev({quote_ident(RET)}) {frame}, 0) * sqrt({ann}) "
+            f"NULLIF(stddev({quote_ident(RET)}) {frame}, 0) * sqrt({ann}) END "
             f"AS rolling_sharpe\n"
             f"FROM _r ORDER BY {quote_ident(TS)}"
         )
@@ -365,10 +364,7 @@ class ReturnSeries:
         covariance aggregate, which is exactly why the engine ships
         ``ts_cov``.
         """
-        frame = (
-            f"OVER (ORDER BY {quote_ident(TS)} ROWS BETWEEN {window - 1} "
-            f"PRECEDING AND CURRENT ROW)"
-        )
+        frame = _frame(window)
         ctes = [
             ("_r", self._sql),
             ("_b", benchmark._sql),
@@ -381,11 +377,33 @@ class ReturnSeries:
         ]
         body = (
             f"SELECT {quote_ident(TS)},\n"
-            f"       ts_cov(_r, _b) {frame} / NULLIF(var_samp(_b) {frame}, 0) "
+            f"       CASE WHEN count(_r) {frame} < {window} THEN NULL ELSE\n"
+            f"       ts_cov(_r, _b) {frame} / NULLIF(var_samp(_b) {frame}, 0) END "
             f"AS rolling_beta\n"
             f"FROM _j ORDER BY {quote_ident(TS)}"
         )
         return self._run(_with(ctes, body))
+
+
+def _frame(window: int) -> str:
+    if not isinstance(window, int) or isinstance(window, bool) or window < 2:
+        raise ValueError(f"window must be an integer >= 2, got {window!r}")
+    return (
+        f"OVER (ORDER BY {quote_ident(TS)} ROWS BETWEEN {window - 1} "
+        f"PRECEDING AND CURRENT ROW)"
+    )
+
+
+def _full_window(window: int, frame: str) -> str:
+    """Suppress a rolling statistic until its window is actually full.
+
+    A SQL frame happily returns a value on row two; a "63-bar Sharpe"
+    computed from two observations is not one, and plotting it puts a
+    meaningless spike at the left edge of every chart. pandas defaults to
+    ``min_periods=window`` for the same reason, so this also keeps the two
+    comparable.
+    """
+    return f"CASE WHEN count({quote_ident(RET)}) {frame} < {window} THEN NULL ELSE"
 
 
 def _percentile_ctes(fractions: dict) -> list:
