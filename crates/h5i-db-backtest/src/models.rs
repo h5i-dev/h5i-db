@@ -181,6 +181,29 @@ pub trait FillModel: std::fmt::Debug {
     fn passive_fills_on_trade_at_price(&self) -> bool {
         false
     }
+
+    /// Whether the engine should track queue position for resting orders.
+    ///
+    /// With this on, an order accepted at a price is placed *behind* the
+    /// size already displayed there, and only fills once trades have
+    /// consumed that much. It is the honest L2 approximation: a level 2
+    /// feed shows how much is at a price but not who is where in the queue,
+    /// so assuming you are last is the conservative reading, and assuming
+    /// you are first is how backtests invent maker fills.
+    fn uses_queue_position(&self) -> bool {
+        false
+    }
+
+    /// Whether a trade with no stated aggressor may fill a passive order.
+    ///
+    /// Many venues publish prints without a side. Treating those as filling
+    /// both sides prevents queues stalling forever, but it overstates fill
+    /// probability -- every print counts twice. The default refuses, because
+    /// a maker fill that did not happen flatters a backtest and a missed one
+    /// merely understates it.
+    fn fills_on_unknown_aggressor(&self) -> bool {
+        false
+    }
 }
 
 /// Match against the book as recorded, with no embellishment.
@@ -232,6 +255,43 @@ impl FillModel for TickSlippage {
             .apply_snapshot(&bids, &asks, book.last_update().unwrap_or(UnixNanos::new(0)))
             .ok()?;
         Some(synthetic)
+    }
+}
+
+/// Match passively, respecting queue position.
+///
+/// An order joining a price level starts behind everything already
+/// displayed there and advances only as trades consume the level. Nothing
+/// about an L2 feed says where in the queue an order actually sits, so this
+/// takes the pessimistic reading; `optimistic()` takes the other one, and
+/// the gap between two runs is a useful measure of how much a strategy
+/// depends on queue luck.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct QueuePositionFills {
+    /// Let prints with no stated aggressor consume the queue.
+    pub fill_on_unknown_aggressor: bool,
+}
+
+impl QueuePositionFills {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Also consume the queue on prints that name no aggressor.
+    pub fn optimistic() -> Self {
+        Self {
+            fill_on_unknown_aggressor: true,
+        }
+    }
+}
+
+impl FillModel for QueuePositionFills {
+    fn uses_queue_position(&self) -> bool {
+        true
+    }
+
+    fn fills_on_unknown_aggressor(&self) -> bool {
+        self.fill_on_unknown_aggressor
     }
 }
 

@@ -4,10 +4,11 @@
 //!
 //! 1. advance the clock to the record's `ts_init`, firing due timers;
 //! 2. let the **venue** see the data and update its books;
-//! 3. match any resting orders the new book crosses;
-//! 4. let the **strategy** see the data;
-//! 5. drain the commands the strategy queued;
-//! 6. release orders whose latency has elapsed and match them.
+//! 3. let a print work through the passive queue;
+//! 4. match any resting orders the new book crosses;
+//! 5. let the **strategy** see the data;
+//! 6. drain the commands the strategy queued;
+//! 7. release orders whose latency has elapsed and match them.
 //!
 //! Two orderings in there are load-bearing. The venue sees data before the
 //! strategy, so a strategy cannot act on a price the matching engine has
@@ -285,6 +286,8 @@ pub struct Engine {
     next_equity_sample: Option<i64>,
     equity: Vec<EquityPoint>,
     funding_paid: Money,
+    /// Displayed size still ahead of each resting order at its price.
+    queue_ahead: BTreeMap<OrderId, i64>,
 }
 
 impl Engine {
@@ -330,16 +333,27 @@ impl Engine {
         // 2. The venue sees the data before anyone else.
         self.apply_to_books(record)?;
 
-        // 3. Resting orders the new book crosses.
+        // 3. A print works through the passive queue before anything else
+        //    gets to react to it.
+        if let MarketEvent::Trade {
+            price,
+            size,
+            aggressor,
+        } = &record.event
+        {
+            self.consume_queue(record, *price, *size, *aggressor, strategy)?;
+        }
+
+        // 4. Resting orders the new book crosses.
         self.match_resting(ts, strategy)?;
 
-        // 4. Now the strategy.
+        // 5. Now the strategy.
         self.with_context(|ctx| strategy.on_event(ctx, record))?;
 
-        // 5. Whatever it asked for.
+        // 6. Whatever it asked for.
         self.drain_commands()?;
 
-        // 6. Orders whose latency has elapsed reach the venue.
+        // 7. Orders whose latency has elapsed reach the venue.
         self.release_inflight(ts, strategy)?;
 
         self.records += 1;
@@ -619,11 +633,145 @@ impl Engine {
                     if matches!(order.kind, OrderKind::Limit { .. })
                         && !self.resting.contains(&id)
                     {
+                        self.join_queue(&order);
                         self.resting.push(id);
                     }
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Record how much size is already displayed at an order's price.
+    ///
+    /// The order joins the back of that queue. An L2 feed cannot say where
+    /// in a level an order actually sits, so the pessimistic reading is the
+    /// only one it supports; assuming the front is how backtests invent
+    /// maker fills that never happened.
+    fn join_queue(&mut self, order: &Order) {
+        if !self.fill_model.uses_queue_position() || self.queue_ahead.contains_key(&order.id) {
+            return;
+        }
+        let Some(limit) = order.limit_price() else {
+            return;
+        };
+        let key = (order.instrument.clone(), order.outcome);
+        let ahead = self
+            .books
+            .get(&key)
+            .map(|book| {
+                book.levels(order.side)
+                    .into_iter()
+                    .find(|(price, _)| *price == limit)
+                    .map(|(_, size)| size.raw())
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        self.queue_ahead.insert(order.id, ahead);
+    }
+
+    /// Let a print consume the queue, and fill what it reaches.
+    ///
+    /// A buy aggressor consumes offers, so it works through resting sells;
+    /// a sell aggressor works through resting buys. Volume is applied to
+    /// each eligible order in price priority, best first, and within a
+    /// price by order id, which is submission order.
+    fn consume_queue(
+        &mut self,
+        record: &Record,
+        price: Price,
+        size: Qty,
+        aggressor: Option<Side>,
+        strategy: &mut dyn Strategy,
+    ) -> Result<()> {
+        if !self.fill_model.uses_queue_position() {
+            return Ok(());
+        }
+        let passive = match aggressor {
+            Some(side) => side.opposite(),
+            None if self.fill_model.fills_on_unknown_aggressor() => {
+                // Without a side the print is ambiguous; the permissive
+                // reading lets it work both queues.
+                self.consume_queue_side(record, price, size, Side::Buy, strategy)?;
+                return self.consume_queue_side(record, price, size, Side::Sell, strategy);
+            }
+            None => return Ok(()),
+        };
+        self.consume_queue_side(record, price, size, passive, strategy)
+    }
+
+    fn consume_queue_side(
+        &mut self,
+        record: &Record,
+        price: Price,
+        size: Qty,
+        passive: Side,
+        strategy: &mut dyn Strategy,
+    ) -> Result<()> {
+        // Eligible orders, best price first, then submission order.
+        let mut eligible: Vec<(Price, OrderId)> = self
+            .resting
+            .iter()
+            .filter_map(|id| {
+                let order = self.orders.get(id)?;
+                if order.instrument != record.instrument
+                    || order.outcome != record.outcome
+                    || order.side != passive
+                    || !order.is_open()
+                {
+                    return None;
+                }
+                let limit = order.limit_price()?;
+                // A resting buy is reachable by a print at or below it; a
+                // resting sell by a print at or above it.
+                let reachable = match passive {
+                    Side::Buy => price <= limit,
+                    Side::Sell => price >= limit,
+                };
+                reachable.then_some((limit, *id))
+            })
+            .collect();
+        eligible.sort_by(|a, b| match passive {
+            Side::Buy => b.0.cmp(&a.0).then(a.1.cmp(&b.1)),
+            Side::Sell => a.0.cmp(&b.0).then(a.1.cmp(&b.1)),
+        });
+
+        let mut remaining = size.raw();
+        for (limit, id) in eligible {
+            if remaining <= 0 {
+                break;
+            }
+            let ahead = self.queue_ahead.entry(id).or_insert(0);
+            if *ahead > 0 {
+                let consumed = remaining.min(*ahead);
+                *ahead -= consumed;
+                remaining -= consumed;
+                if remaining <= 0 {
+                    break;
+                }
+            }
+            let wanted = self
+                .orders
+                .get(&id)
+                .map(|order| order.remaining().raw())
+                .unwrap_or(0);
+            let fill = remaining.min(wanted);
+            if fill > 0 {
+                // A passive fill happens at the resting price, not the
+                // print's: the maker's own limit is what they agreed to.
+                self.execute(id, limit, Qty::from_raw(fill), false, record.ts(), strategy)?;
+                remaining -= fill;
+            }
+            if self.orders.get(&id).map(|o| o.is_open()) != Some(true) {
+                self.queue_ahead.remove(&id);
+            }
+        }
+        self.resting.retain(|id| {
+            self.orders
+                .get(id)
+                .map(|order| order.is_open())
+                .unwrap_or(false)
+        });
         Ok(())
     }
 
@@ -811,6 +959,7 @@ impl EngineBuilder {
             next_equity_sample: None,
             equity: Vec::new(),
             funding_paid: Money::ZERO,
+            queue_ahead: BTreeMap::new(),
         }
     }
 }

@@ -650,3 +650,225 @@ fn an_outcome_outside_the_market_is_refused() {
     let err = run_with(&mut strategy, vec![stray], 100.0).unwrap_err();
     assert!(matches!(err, BacktestError::UnknownOutcome { .. }));
 }
+
+// ---------------------------------------------------------------------------
+// queue position (B2)
+// ---------------------------------------------------------------------------
+
+use h5i_db_backtest::models::QueuePositionFills;
+
+/// Rests a buy limit at `limit` on the first record, then waits.
+struct RestBuy {
+    limit: Price,
+    quantity: Qty,
+    submitted: bool,
+}
+
+impl Strategy for RestBuy {
+    fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+        if !self.submitted {
+            self.submitted = true;
+            ctx.submit(OrderRequest::limit(
+                instrument_id(),
+                OutcomeId::FIRST,
+                Side::Buy,
+                self.limit,
+                self.quantity,
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn print_at(at: i64, price_value: f64, size: f64, aggressor: Option<Side>) -> Record {
+    Record::new(
+        Stamps::immediate(ts(at)),
+        instrument_id(),
+        OutcomeId::FIRST,
+        MarketEvent::Trade {
+            price: price(price_value),
+            size: qty(size),
+            aggressor,
+        },
+    )
+}
+
+fn run_queued(
+    strategy: &mut dyn Strategy,
+    records: Vec<Record>,
+    model: QueuePositionFills,
+) -> Result<RunResult> {
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, records.clone().into_iter()
+            .filter(|r| !matches!(r.event, MarketEvent::Trade { .. }))
+            .collect())
+        .stream("trades", priority::TRADE, records.into_iter()
+            .filter(|r| matches!(r.event, MarketEvent::Trade { .. }))
+            .collect())
+        .build()?;
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(1_000.0))
+        .fill_model(Box::new(model))
+        .build();
+    engine.run(&mut replay, strategy)
+}
+
+#[test]
+fn a_resting_order_waits_behind_the_size_already_at_its_price() {
+    // 100 already displayed at 0.40; a 60-lot print does not reach us.
+    let mut strategy = RestBuy {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let result = run_queued(
+        &mut strategy,
+        vec![
+            deep_snapshot(1_000),
+            print_at(2_000, 0.40, 60.0, Some(Side::Sell)),
+            deep_snapshot(3_000),
+        ],
+        QueuePositionFills::new(),
+    )
+    .unwrap();
+    assert!(
+        result.fills.is_empty(),
+        "60 of 100 ahead consumed is not our turn yet"
+    );
+}
+
+#[test]
+fn the_queue_clears_and_then_we_fill() {
+    let mut strategy = RestBuy {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let result = run_queued(
+        &mut strategy,
+        vec![
+            deep_snapshot(1_000),
+            // 100 ahead, then 30 more: 30 reaches us but we want 10.
+            print_at(2_000, 0.40, 100.0, Some(Side::Sell)),
+            print_at(3_000, 0.40, 30.0, Some(Side::Sell)),
+            deep_snapshot(4_000),
+        ],
+        QueuePositionFills::new(),
+    )
+    .unwrap();
+    assert_eq!(result.fills.len(), 1);
+    assert_eq!(result.fills[0].quantity, qty(10.0));
+    assert_eq!(
+        result.fills[0].price,
+        price(0.40),
+        "a maker fills at their own limit, not at the print"
+    );
+    assert!(!result.fills[0].is_taker, "this is a maker fill");
+}
+
+#[test]
+fn a_print_below_our_bid_does_not_reach_a_higher_resting_buy() {
+    let mut strategy = RestBuy {
+        limit: price(0.39),
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let result = run_queued(
+        &mut strategy,
+        vec![
+            deep_snapshot(1_000),
+            // Prints above our bid never trade against it.
+            print_at(2_000, 0.41, 10_000.0, Some(Side::Sell)),
+            deep_snapshot(3_000),
+        ],
+        QueuePositionFills::new(),
+    )
+    .unwrap();
+    assert!(result.fills.is_empty());
+}
+
+#[test]
+fn an_unknown_aggressor_does_not_fill_by_default() {
+    // The conservative reading: a print with no side does not prove anyone
+    // traded against our queue.
+    let mut strategy = RestBuy {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let records = vec![
+        deep_snapshot(1_000),
+        print_at(2_000, 0.40, 5_000.0, None),
+        deep_snapshot(3_000),
+    ];
+    let conservative = run_queued(
+        &mut strategy,
+        records.clone(),
+        QueuePositionFills::new(),
+    )
+    .unwrap();
+    assert!(conservative.fills.is_empty());
+
+    // The permissive reading fills, and the gap between the two is the
+    // measure of how much a strategy leans on queue luck.
+    let mut strategy = RestBuy {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let permissive = run_queued(
+        &mut strategy,
+        records,
+        QueuePositionFills::optimistic(),
+    )
+    .unwrap();
+    assert_eq!(permissive.fills.len(), 1);
+}
+
+#[test]
+fn without_the_queue_model_a_resting_order_only_fills_on_the_book() {
+    // The default model ignores prints entirely for passive orders.
+    let mut strategy = RestBuy {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, vec![deep_snapshot(1_000), deep_snapshot(3_000)])
+        .stream("trades", priority::TRADE, vec![print_at(2_000, 0.40, 10_000.0, Some(Side::Sell))])
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(1_000.0))
+        .build();
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+    assert!(result.fills.is_empty(), "no crossing book, no fill");
+}
+
+#[test]
+fn queue_fills_are_reproducible() {
+    let run = || {
+        let mut strategy = RestBuy {
+            limit: price(0.40),
+            quantity: qty(25.0),
+            submitted: false,
+        };
+        run_queued(
+            &mut strategy,
+            vec![
+                deep_snapshot(1_000),
+                print_at(2_000, 0.40, 100.0, Some(Side::Sell)),
+                print_at(3_000, 0.40, 15.0, Some(Side::Sell)),
+                print_at(4_000, 0.39, 40.0, Some(Side::Sell)),
+                deep_snapshot(5_000),
+            ],
+            QueuePositionFills::new(),
+        )
+        .unwrap()
+    };
+    let first = run();
+    for _ in 0..4 {
+        assert_eq!(run(), first);
+    }
+    assert!(!first.fills.is_empty());
+}

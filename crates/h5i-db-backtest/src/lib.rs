@@ -30,6 +30,7 @@ pub mod engine;
 pub mod error;
 pub mod event;
 pub mod instrument;
+pub mod loaders;
 pub mod models;
 pub mod order;
 pub mod position;
@@ -49,7 +50,8 @@ pub use event::{MarketEvent, Record};
 pub use instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
 pub use models::{
     BookFills, ConstantLatency, FeeModel, FillModel, LatencyModel, NoFees, NoLatency,
-    PredictionMarketFees, ProportionalFees, TickSlippage, VenueModule,
+    PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage,
+    VenueModule,
 };
 pub use order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 pub use position::{Portfolio, Position};
