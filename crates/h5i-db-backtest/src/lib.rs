@@ -29,9 +29,11 @@ pub mod clock;
 pub mod error;
 pub mod event;
 pub mod instrument;
+pub mod models;
 pub mod order;
 pub mod position;
 pub mod replay;
+pub mod settlement;
 pub mod types;
 pub mod window;
 
@@ -40,8 +42,13 @@ pub use clock::{Clock, TimeEvent};
 pub use error::{BacktestError, Result};
 pub use event::{MarketEvent, Record};
 pub use instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
+pub use models::{
+    BookFills, ConstantLatency, FeeModel, FillModel, LatencyModel, NoFees, NoLatency,
+    PredictionMarketFees, ProportionalFees, TickSlippage, VenueModule,
+};
 pub use order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 pub use position::{Portfolio, Position};
 pub use replay::{Replay, ReplayBuilder};
+pub use settlement::{Resolution, SettlementReport};
 pub use types::{notional, Money, Price, Qty, Side, Stamps, UnixNanos, SCALE};
 pub use window::{Coverage, TimeWindow};
