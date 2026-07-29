@@ -233,16 +233,22 @@ where
             "no instruments are registered; write the instruments table before running",
         ));
     }
+    // Book events are still collected: reconstructing snapshots needs
+    // state that spans rows, and the grouping is what makes a truncated
+    // snapshot detectable. Trades and funding stream, which is where the
+    // volume is on a tick day.
     let book_events = store::read_book_events(db, spec.read_at.clone(), spec.window).await?;
-    let trades = store::read_trades(db, spec.read_at.clone(), spec.window).await?;
+    let trades = store::trade_source(db, spec.read_at.clone(), spec.window).await?;
     // Funding only exists for perpetuals; the reader treats an absent
     // table as no funding rather than as a failure.
-    let funding = store::read_funding(db, spec.read_at.clone(), spec.window).await?;
+    let funding = store::funding_source(db, spec.read_at.clone(), spec.window).await?;
 
     let coverage = spec.window.map(|requested| {
+        // Coverage is measured on the book stream, which is the one that
+        // is materialised; adding the streamed ones would mean draining
+        // them, which is exactly what streaming exists to avoid.
         let observed: Vec<i64> = book_events
             .iter()
-            .chain(trades.iter())
             .map(|record| record.ts().get())
             .collect();
         match (observed.iter().min(), observed.iter().max()) {
@@ -262,8 +268,8 @@ where
 
     let mut replay = Replay::builder()
         .stream("book", priority::SNAPSHOT, book_events)
-        .stream("trades", priority::TRADE, trades)
-        .stream("funding", priority::FUNDING, funding)
+        .source("trades", priority::TRADE, trades)
+        .source("funding", priority::FUNDING, funding)
         .build()?;
 
     let builder = Engine::builder(instruments.clone())

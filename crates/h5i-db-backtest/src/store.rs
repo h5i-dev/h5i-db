@@ -796,6 +796,137 @@ pub async fn read_signals(
     Ok(out)
 }
 
+// -- lazy sources -----------------------------------------------------------
+
+/// Decode Arrow batches into records one batch at a time.
+///
+/// The batches themselves are columnar and compact; a `Record` is not. This
+/// keeps at most one batch's worth of decoded records alive, so the peak
+/// cost of a replay is the stored batches plus a batch of records, rather
+/// than every record at once.
+///
+/// The remaining limit is honest and worth stating: the batches *are* held,
+/// because the scan collects them. A window larger than memory still needs
+/// chunking, which [`crate::window::TimeWindow::chunks`] exists for.
+struct BatchDecoder<F> {
+    batches: std::vec::IntoIter<RecordBatch>,
+    buffer: std::collections::VecDeque<Record>,
+    decode: F,
+}
+
+impl<F> Iterator for BatchDecoder<F>
+where
+    F: FnMut(&RecordBatch, &mut std::collections::VecDeque<Record>) -> Result<()>,
+{
+    type Item = Result<Record>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(record) = self.buffer.pop_front() {
+                return Some(Ok(record));
+            }
+            let batch = self.batches.next()?;
+            if let Err(error) = (self.decode)(&batch, &mut self.buffer) {
+                return Some(Err(error));
+            }
+        }
+    }
+}
+
+/// A lazy source of trade records.
+pub async fn trade_source(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<crate::replay::RecordSource> {
+    let batches = scan_optional(db, schema::TRADES, at, window).await?;
+    Ok(Box::new(BatchDecoder {
+        batches: batches.into_iter(),
+        buffer: Default::default(),
+        decode: decode_trades,
+    }))
+}
+
+fn decode_trades(
+    batch: &RecordBatch,
+    out: &mut std::collections::VecDeque<Record>,
+) -> Result<()> {
+    let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
+    let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
+    let instrument = column::<StringArray>(batch, "instrument_id")?;
+    let outcome = column::<UInt16Array>(batch, "outcome")?;
+    let price = column::<Float64Array>(batch, "price")?;
+    let size = column::<Float64Array>(batch, "size")?;
+    let aggressor = column::<StringArray>(batch, "aggressor")?;
+    for row in 0..batch.num_rows() {
+        out.push_back(Record::new(
+            Stamps::new(
+                UnixNanos::new(ts_event.value(row)),
+                UnixNanos::new(ts_init.value(row)),
+            )?,
+            InstrumentId::new(instrument.value(row))?,
+            OutcomeId(outcome.value(row)),
+            MarketEvent::Trade {
+                price: Price::from_f64(price.value(row))?,
+                size: Qty::from_f64(size.value(row))?,
+                aggressor: opt_str(aggressor, row).map(Side::parse).transpose()?,
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// How many trades a window holds, without decoding them.
+///
+/// Counting rows off the Arrow batches costs nothing, and lets a caller
+/// report volume without draining the stream it is about to replay.
+pub async fn count_trades(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<usize> {
+    let batches = scan_optional(db, schema::TRADES, at, window).await?;
+    Ok(batches.iter().map(|batch| batch.num_rows()).sum())
+}
+
+/// A lazy source of funding records.
+pub async fn funding_source(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<crate::replay::RecordSource> {
+    let batches = scan_optional(db, schema::FUNDING, at, window).await?;
+    Ok(Box::new(BatchDecoder {
+        batches: batches.into_iter(),
+        buffer: Default::default(),
+        decode: decode_funding,
+    }))
+}
+
+fn decode_funding(
+    batch: &RecordBatch,
+    out: &mut std::collections::VecDeque<Record>,
+) -> Result<()> {
+    let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
+    let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
+    let instrument = column::<StringArray>(batch, "instrument_id")?;
+    let rate = column::<Float64Array>(batch, "rate")?;
+    for row in 0..batch.num_rows() {
+        out.push_back(Record::new(
+            Stamps::new(
+                UnixNanos::new(ts_event.value(row)),
+                UnixNanos::new(ts_init.value(row)),
+            )?,
+            InstrumentId::new(instrument.value(row))?,
+            OutcomeId::FIRST,
+            MarketEvent::Funding {
+                rate: Price::from_f64(rate.value(row))?,
+            },
+        ));
+    }
+    Ok(())
+}
+
 // -- ingest log -------------------------------------------------------------
 
 /// One completed load, as recorded for idempotency.

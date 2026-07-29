@@ -401,6 +401,7 @@ pub struct Engine {
     liquidations: Vec<Liquidation>,
     rejected_for_margin: u64,
     self_trades_prevented: u64,
+    reporting_currency: crate::currency::Currency,
     metrics: RunMetrics,
     execution: Box<dyn ExecutionClient>,
 }
@@ -418,6 +419,10 @@ impl Engine {
             margin: None,
             fx: FxBook::new(),
             execution: Box::new(SimulatedExecution::new("simulated")),
+            // The currency cash is held and results are reported in.
+            // Instruments settling elsewhere need a rate to join it.
+            reporting_currency: crate::currency::Currency::new("USDC")
+                .expect("USDC is a valid code"),
         }
     }
 
@@ -430,7 +435,7 @@ impl Engine {
         self.with_context(|ctx| strategy.on_start(ctx))?;
         self.drain_commands()?;
 
-        while let Some(record) = replay.next_record() {
+        while let Some(record) = replay.next_record()? {
             self.step(&record, strategy)?;
         }
 
@@ -498,19 +503,35 @@ impl Engine {
             &self.instruments,
             &self.marks,
         )?;
-        // Collateral is cash; unrealized profit is the rest of equity.
-        let collateral = crate::account::Valuation {
-            total: self.cash,
-            currency: crate::currency::Currency::new("USD")?,
-            unconvertible: Vec::new(),
-        };
+        // Cash is held in the reporting currency. Positions settling in
+        // another one need a rate to join it, and a position whose currency
+        // has no rate is *not* folded in at par -- it is reported as
+        // unconvertible, which suppresses any liquidation call, because
+        // closing a book on a number known to be partial is worse than
+        // waiting for the rate.
+        let mut unconvertible = Vec::new();
         let mut unrealized = Money::ZERO;
         for position in self.portfolio.open_positions() {
             let key = (position.instrument.clone(), position.outcome);
-            if let Some(mark) = self.marks.get(&key) {
-                unrealized = unrealized.checked_add(position.unrealized_pnl(*mark)?)?;
+            let Some(mark) = self.marks.get(&key) else {
+                continue;
+            };
+            let pnl = position.unrealized_pnl(*mark)?;
+            let settlement = &self.instruments.get(&position.instrument)?.settlement_currency;
+            if settlement == &self.reporting_currency {
+                unrealized = unrealized.checked_add(pnl)?;
+            } else {
+                match self.fx.convert(pnl, settlement, &self.reporting_currency) {
+                    Ok(converted) => unrealized = unrealized.checked_add(converted)?,
+                    Err(_) => unconvertible.push((settlement.clone(), pnl)),
+                }
             }
         }
+        let collateral = crate::account::Valuation {
+            total: self.cash,
+            currency: self.reporting_currency.clone(),
+            unconvertible,
+        };
         Ok(Some(margin_state(&collateral, unrealized, &requirement)?))
     }
 
@@ -1305,6 +1326,7 @@ pub struct EngineBuilder {
     margin: Option<Box<dyn MarginModel>>,
     fx: FxBook,
     execution: Box<dyn ExecutionClient>,
+    reporting_currency: crate::currency::Currency,
 }
 
 impl EngineBuilder {
@@ -1362,6 +1384,12 @@ impl EngineBuilder {
         self
     }
 
+    /// The currency cash is held and equity reported in.
+    pub fn reporting_currency(mut self, currency: crate::currency::Currency) -> Self {
+        self.reporting_currency = currency;
+        self
+    }
+
     /// How often to sample the equity curve, in nanoseconds of simulated
     /// time. Sampling on an interval rather than per record keeps the curve
     /// a usable size on tick data, where a per-record curve would have as
@@ -1408,6 +1436,7 @@ impl EngineBuilder {
             liquidations: Vec::new(),
             rejected_for_margin: 0,
             self_trades_prevented: 0,
+            reporting_currency: self.reporting_currency,
             metrics: RunMetrics::default(),
             execution: self.execution,
         }

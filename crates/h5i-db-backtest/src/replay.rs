@@ -13,10 +13,16 @@
 //! is incidental, and the last two guarantee no two records ever compare
 //! equal.
 //!
-//! Streams must be sorted by `ts_init`. That is checked rather than assumed:
-//! an unsorted stream silently produces a replay that jumps backwards in
-//! time, which looks like a strategy bug for a long while before anyone
-//! suspects the data.
+//! Streams must be sorted by `ts_init`, and that is checked rather than
+//! assumed: an unsorted stream silently produces a replay that jumps
+//! backwards in time, which looks like a strategy bug for a long while
+//! before anyone suspects the data. The check is *incremental*, applied as
+//! each record is pulled, so a stream far too large to hold in memory is
+//! validated just as strictly as a vector.
+//!
+//! Sources are lazy for the same reason. A day of full-depth book data is
+//! hundreds of millions of events; materialising it as `Vec<Record>` is not
+//! slow, it is impossible. The merge holds one record per stream.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -55,13 +61,58 @@ struct Key {
     arrival: u64,
 }
 
-#[derive(Debug)]
+/// A lazy source of records, already sorted by `ts_init`.
+///
+/// Boxed rather than generic so a replay can merge sources of different
+/// kinds -- a vector in a test, a decoded Arrow batch in production --
+/// without the whole engine becoming generic over them.
+pub type RecordSource = Box<dyn Iterator<Item = Result<Record>>>;
+
 struct StreamState {
     name: String,
     priority: u32,
-    records: std::vec::IntoIter<Record>,
+    source: RecordSource,
     head: Option<Record>,
     arrival: u64,
+    /// The last timestamp seen, for incremental order validation.
+    last_ts: Option<i64>,
+}
+
+impl std::fmt::Debug for StreamState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StreamState")
+            .field("name", &self.name)
+            .field("priority", &self.priority)
+            .field("arrival", &self.arrival)
+            .finish_non_exhaustive()
+    }
+}
+
+impl StreamState {
+    /// Pull the next record, checking it does not go backwards.
+    ///
+    /// A lazy source cannot be scanned up front, so sortedness is checked
+    /// as records arrive. That is strictly better than the old whole-vector
+    /// pass: the error now names the exact record that broke the order,
+    /// and a stream too large to hold is still validated.
+    fn pull(&mut self) -> Result<Option<Record>> {
+        let Some(next) = self.source.next() else {
+            return Ok(None);
+        };
+        let record = next?;
+        let ts = record.ts().get();
+        if let Some(previous) = self.last_ts
+            && ts < previous
+        {
+            return Err(BacktestError::OutOfOrder {
+                stream: self.name.clone(),
+                ts,
+                previous,
+            });
+        }
+        self.last_ts = Some(ts);
+        Ok(Some(record))
+    }
 }
 
 /// A k-way merge over sorted record streams.
@@ -79,14 +130,16 @@ impl Replay {
     }
 
     /// The next record in replay order.
-    pub fn next_record(&mut self) -> Option<Record> {
-        let Reverse(key) = self.heap.pop()?;
+    pub fn next_record(&mut self) -> Result<Option<Record>> {
+        let Some(Reverse(key)) = self.heap.pop() else {
+            return Ok(None);
+        };
         let stream = &mut self.streams[key.stream];
         let record = stream
             .head
             .take()
             .expect("heap key without a head record is a merge bug");
-        if let Some(next) = stream.records.next() {
+        if let Some(next) = stream.pull()? {
             stream.arrival += 1;
             self.heap.push(Reverse(Key {
                 ts: next.ts().get(),
@@ -98,16 +151,19 @@ impl Replay {
         }
         self.last_emitted = Some(record.ts());
         self.emitted += 1;
-        Some(record)
+        Ok(Some(record))
     }
 
     /// Drain the whole replay.
-    pub fn collect_all(&mut self) -> Vec<Record> {
+    ///
+    /// Materialises every record, so it is for tests and small runs. The
+    /// engine pulls one at a time, which is the point of the lazy sources.
+    pub fn collect_all(&mut self) -> Result<Vec<Record>> {
         let mut out = Vec::new();
-        while let Some(record) = self.next_record() {
+        while let Some(record) = self.next_record()? {
             out.push(record);
         }
-        out
+        Ok(out)
     }
 
     /// The timestamp of the next record, without consuming it.
@@ -132,18 +188,33 @@ impl Replay {
 
 #[derive(Default)]
 pub struct ReplayBuilder {
-    streams: Vec<(String, u32, Vec<Record>)>,
+    streams: Vec<(String, u32, RecordSource)>,
 }
 
 impl ReplayBuilder {
-    /// Add a stream, which must already be sorted by `ts_init`.
+    /// Add a stream from a vector, which must already be sorted by `ts_init`.
     pub fn stream(
-        mut self,
+        self,
         name: impl Into<String>,
         priority: u32,
         records: Vec<Record>,
     ) -> Self {
-        self.streams.push((name.into(), priority, records));
+        self.source(name, priority, Box::new(records.into_iter().map(Ok)))
+    }
+
+    /// Add a lazy stream.
+    ///
+    /// The source is pulled one record at a time, so a day of full-depth
+    /// book data never exists as a `Vec<Record>`. Only one record per
+    /// stream is held at any moment, plus whatever the source itself
+    /// buffers.
+    pub fn source(
+        mut self,
+        name: impl Into<String>,
+        priority: u32,
+        source: RecordSource,
+    ) -> Self {
+        self.streams.push((name.into(), priority, source));
         self
     }
 
@@ -151,26 +222,16 @@ impl ReplayBuilder {
         let mut streams = Vec::with_capacity(self.streams.len());
         let mut heap = BinaryHeap::new();
 
-        for (index, (name, priority, records)) in self.streams.into_iter().enumerate() {
-            // Sortedness is a precondition of a merge; check it once here
-            // rather than discover it as a time-travelling replay later.
-            let mut previous: Option<i64> = None;
-            for record in &records {
-                let ts = record.ts().get();
-                if let Some(prev) = previous
-                    && ts < prev
-                {
-                    return Err(BacktestError::OutOfOrder {
-                        stream: name.clone(),
-                        ts,
-                        previous: prev,
-                    });
-                }
-                previous = Some(ts);
-            }
-
-            let mut iter = records.into_iter();
-            let head = iter.next();
+        for (index, (name, priority, source)) in self.streams.into_iter().enumerate() {
+            let mut state = StreamState {
+                name,
+                priority,
+                source,
+                head: None,
+                arrival: 0,
+                last_ts: None,
+            };
+            let head = state.pull()?;
             if let Some(record) = &head {
                 heap.push(Reverse(Key {
                     ts: record.ts().get(),
@@ -179,13 +240,8 @@ impl ReplayBuilder {
                     arrival: 0,
                 }));
             }
-            streams.push(StreamState {
-                name,
-                priority,
-                records: iter,
-                head,
-                arrival: 0,
-            });
+            state.head = head;
+            streams.push(state);
         }
 
         Ok(Replay {
@@ -234,7 +290,7 @@ mod tests {
             .stream("b", priority::TRADE, vec![record(20, "b"), record(40, "b")])
             .build()
             .unwrap();
-        let order: Vec<i64> = replay.collect_all().iter().map(|r| r.ts().get()).collect();
+        let order: Vec<i64> = replay.collect_all().unwrap().iter().map(|r| r.ts().get()).collect();
         assert_eq!(order, vec![10, 20, 30, 40]);
     }
 
@@ -259,6 +315,7 @@ mod tests {
             .unwrap();
         let kinds: Vec<&str> = replay
             .collect_all()
+            .unwrap()
             .iter()
             .map(|r| r.event.kind())
             .collect();
@@ -273,7 +330,7 @@ mod tests {
             .stream("bars", priority::BAR, vec![record(5, "m")])
             .build()
             .unwrap();
-        let first = replay.next_record().unwrap();
+        let first = replay.next_record().unwrap().unwrap();
         assert_eq!(first.event.kind(), "gap");
     }
 
@@ -288,6 +345,7 @@ mod tests {
             .unwrap();
         let tags: Vec<String> = first
             .collect_all()
+            .unwrap()
             .iter()
             .map(|r| r.instrument.to_string())
             .collect();
@@ -318,18 +376,29 @@ mod tests {
                 .build()
                 .unwrap()
         };
-        let first: Vec<_> = build().collect_all();
+        let first: Vec<_> = build().collect_all().unwrap();
         for _ in 0..5 {
-            assert_eq!(build().collect_all(), first, "merge order must not vary");
+            assert_eq!(
+                build().collect_all().unwrap(),
+                first,
+                "merge order must not vary"
+            );
         }
     }
 
     #[test]
-    fn an_unsorted_stream_is_refused() {
-        let err = Replay::builder()
+    fn an_unsorted_stream_is_refused_when_it_is_reached() {
+        // With lazy sources the check happens as records are pulled, not in
+        // one pass up front: a stream too large to hold is still validated,
+        // and the error names the record that broke the order rather than
+        // the stream as a whole.
+        let mut replay = Replay::builder()
             .stream("bad", priority::TRADE, vec![record(10, "m"), record(5, "m")])
             .build()
-            .unwrap_err();
+            .expect("the first record is fine");
+        // The offending record is pulled while emitting the one before it,
+        // so the error arrives on the call that would have needed it.
+        let err = replay.next_record().unwrap_err();
         match err {
             BacktestError::OutOfOrder { stream, ts, previous } => {
                 assert_eq!(stream, "bad");
@@ -365,6 +434,7 @@ mod tests {
             .unwrap();
         let tags: Vec<String> = replay
             .collect_all()
+            .unwrap()
             .iter()
             .map(|r| r.instrument.to_string())
             .collect();
@@ -383,7 +453,7 @@ mod tests {
             .unwrap();
         assert_eq!(replay.peek_ts(), Some(UnixNanos::new(7)));
         assert_eq!(replay.peek_ts(), Some(UnixNanos::new(7)));
-        assert!(replay.next_record().is_some());
+        assert!(replay.next_record().unwrap().is_some());
         assert_eq!(replay.peek_ts(), None);
         assert!(replay.is_empty());
         assert_eq!(replay.emitted(), 1);
@@ -396,7 +466,7 @@ mod tests {
             .stream("full", priority::TRADE, vec![record(1, "m")])
             .build()
             .unwrap();
-        assert_eq!(replay.collect_all().len(), 1);
+        assert_eq!(replay.collect_all().unwrap().len(), 1);
         assert_eq!(replay.stream_names(), vec!["empty", "full"]);
     }
 }

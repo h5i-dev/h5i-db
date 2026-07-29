@@ -1629,3 +1629,103 @@ fn cancels_and_amendments_cross_the_seam_too() {
         "submit, amend and cancel all reach the venue"
     );
 }
+
+#[test]
+fn a_position_in_an_unconvertible_currency_suppresses_liquidation() {
+    // The multi-currency half of the margin rule: a position whose
+    // settlement currency has no rate to the reporting currency cannot be
+    // valued, so the account cannot be judged insolvent on it.
+    use h5i_db_backtest::currency::Currency;
+
+    let mut set = InstrumentSet::new();
+    set.insert(
+        Inst::perpetual(PERP, "hyperliquid")
+            .unwrap()
+            .with_tick_size(price(0.5))
+            .with_settlement_currency(Currency::new("EUR").unwrap()),
+    )
+    .unwrap();
+
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                perp_snapshot(1_000, 100.0),
+                perp_snapshot(2_000, 100.0),
+                perp_snapshot(3_000, 50.0),
+                perp_snapshot(4_000, 50.0),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(set)
+        .starting_cash(money(120.0))
+        .reporting_currency(Currency::new("USDC").unwrap())
+        .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+        // No EUR/USDC rate is supplied.
+        .build();
+    let mut strategy = BuyPerp {
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert!(
+        result.liquidations.is_empty(),
+        "an unvaluable position must not be closed out"
+    );
+    let state = engine.margin_state().unwrap().expect("a margin model is set");
+    assert!(state.incomplete, "and the state says why");
+}
+
+#[test]
+fn a_rate_makes_the_same_position_valuable_again() {
+    use h5i_db_backtest::currency::{Currency, FxBook};
+
+    let mut set = InstrumentSet::new();
+    set.insert(
+        Inst::perpetual(PERP, "hyperliquid")
+            .unwrap()
+            .with_tick_size(price(0.5))
+            .with_settlement_currency(Currency::new("EUR").unwrap()),
+    )
+    .unwrap();
+
+    let mut fx = FxBook::new();
+    fx.set(
+        Currency::new("EUR").unwrap(),
+        Currency::new("USDC").unwrap(),
+        price(1.0),
+    )
+    .unwrap();
+
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                perp_snapshot(1_000, 100.0),
+                perp_snapshot(2_000, 100.0),
+                perp_snapshot(3_000, 50.0),
+                perp_snapshot(4_000, 50.0),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(set)
+        .starting_cash(money(120.0))
+        .reporting_currency(Currency::new("USDC").unwrap())
+        .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+        .fx(fx)
+        .build();
+    let mut strategy = BuyPerp {
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+    assert!(
+        !result.liquidations.is_empty(),
+        "with a rate, a 50% adverse move on 10x leverage is a liquidation"
+    );
+}

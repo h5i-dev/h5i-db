@@ -17,8 +17,14 @@ use crate::error::{BacktestError, Result};
 use crate::types::{Price, Qty, UnixNanos, SCALE};
 
 /// A venue-qualified instrument identifier.
+///
+/// Backed by `Arc<str>` rather than `String` because every replayed record
+/// carries one and cloning is on the hot path. A `String` id makes each
+/// clone a heap allocation and each record a hundred-odd bytes wider, which
+/// at a hundred million events is the difference between a replay that fits
+/// in memory and one that does not.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
-pub struct InstrumentId(String);
+pub struct InstrumentId(std::sync::Arc<str>);
 
 impl InstrumentId {
     pub fn new(id: impl Into<String>) -> Result<Self> {
@@ -26,7 +32,7 @@ impl InstrumentId {
         if id.trim().is_empty() {
             return Err(BacktestError::invalid("instrument id must not be empty"));
         }
-        Ok(Self(id))
+        Ok(Self(id.into()))
     }
 
     pub fn as_str(&self) -> &str {
