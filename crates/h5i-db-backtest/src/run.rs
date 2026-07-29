@@ -151,6 +151,9 @@ impl RunReport {
                  update, or a limit the book never reached"
             ));
         }
+        if let Some(reason) = self.result.metrics.explain_silence() {
+            out.push(reason);
+        }
         if let Some(coverage) = self.coverage
             && !coverage.is_complete()
         {

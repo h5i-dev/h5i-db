@@ -732,6 +732,23 @@ impl NativeDatabase {
                     "equity_points": report.result.equity.len(),
                     "settlement_applied": report.settlement.was_applied(),
                     "coverage": report.coverage.map(|c| c.ratio()),
+                    "liquidations": report.result.liquidations.len(),
+                    "rejected_for_margin": report.result.rejected_for_margin,
+                    "self_trades_prevented": report.result.self_trades_prevented,
+                    "metrics": {
+                        "orders_submitted": report.result.metrics.orders_submitted,
+                        "orders_filled": report.result.metrics.orders_filled,
+                        "orders_cancelled_unfilled":
+                            report.result.metrics.orders_cancelled_unfilled,
+                        "orders_rejected_margin":
+                            report.result.metrics.orders_rejected_margin,
+                        "orders_rejected_self_trade":
+                            report.result.metrics.orders_rejected_self_trade,
+                        "fills_taker": report.result.metrics.fills_taker,
+                        "fills_maker": report.result.metrics.fills_maker,
+                        "book_gaps": report.result.metrics.book_gaps,
+                        "liquidations": report.result.metrics.liquidations,
+                    },
                     "warnings": report.warnings(),
                 })
                 .to_string())

@@ -1387,3 +1387,97 @@ fn orders_on_the_same_side_never_self_trade() {
     .unwrap();
     assert_eq!(result.self_trades_prevented, 0);
 }
+
+// ---------------------------------------------------------------------------
+// observability (Tier 2, item 9)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn metrics_count_what_the_run_actually_did() {
+    let mut strategy = BuyOnce::market(qty(200.0));
+    let result = run_with(
+        &mut strategy,
+        vec![deep_snapshot(1_000), deep_snapshot(2_000)],
+        1_000.0,
+    )
+    .unwrap();
+    let metrics = &result.metrics;
+    assert_eq!(metrics.orders_submitted, 1);
+    assert_eq!(metrics.orders_filled, 1);
+    assert_eq!(metrics.fills_taker, 2, "the order walked two levels");
+    assert_eq!(metrics.fills_maker, 0);
+    assert_eq!(metrics.records_by_kind.get("book_snapshot"), Some(&2));
+    assert!(metrics.explain_silence().is_none(), "this run traded");
+}
+
+#[test]
+fn a_run_with_no_signals_explains_itself() {
+    let mut strategy = SignalReplay::new(vec![]).unwrap();
+    let result = run_with(&mut strategy, vec![deep_snapshot(1_000)], 100.0).unwrap();
+    let reason = result.metrics.explain_silence().expect("a silent run");
+    assert!(reason.contains("no orders"), "{reason}");
+}
+
+#[test]
+fn a_run_whose_orders_all_bounce_says_which_wall_they_hit() {
+    // Every order refused for margin: the summary is zero fills, and the
+    // metrics say why.
+    let mut strategy = BuyPerp {
+        quantity: qty(1_000.0),
+        submitted: false,
+    };
+    let result = run_perp(
+        &mut strategy,
+        vec![perp_snapshot(1_000, 100.0), perp_snapshot(2_000, 100.0)],
+        100.0,
+        Some(10.0),
+    )
+    .unwrap();
+    assert_eq!(result.metrics.orders_filled, 0);
+    let reason = result.metrics.explain_silence().expect("a silent run");
+    assert!(reason.contains("margin"), "{reason}");
+}
+
+#[test]
+fn gaps_and_maker_fills_are_counted_separately() {
+    let mut strategy = RestBuy {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let result = run_queued(
+        &mut strategy,
+        vec![
+            deep_snapshot(1_000),
+            deep_snapshot(2_000),
+            print_at(3_000, 0.40, 200.0, Some(Side::Sell)),
+            deep_snapshot(4_000),
+        ],
+        QueuePositionFills::new(),
+    )
+    .unwrap();
+    assert_eq!(result.metrics.fills_maker, 1, "a queue fill is passive");
+    assert_eq!(result.metrics.fills_taker, 0);
+    assert!(result.metrics.queue_joins >= 1);
+    assert_eq!(result.metrics.records_by_kind.get("trade"), Some(&1));
+}
+
+#[test]
+fn a_feed_gap_is_counted_before_it_becomes_an_error() {
+    // The gap itself is recorded; the error only comes if an incremental
+    // update follows without a snapshot.
+    let records = vec![
+        deep_snapshot(1_000),
+        Record::new(
+            Stamps::immediate(ts(2_000)),
+            instrument_id(),
+            OutcomeId::FIRST,
+            MarketEvent::Gap,
+        ),
+        deep_snapshot(3_000),
+    ];
+    let mut strategy = SignalReplay::new(vec![]).unwrap();
+    let result = run_with(&mut strategy, records, 100.0).unwrap();
+    assert_eq!(result.metrics.book_gaps, 1);
+    assert_eq!(result.metrics.records_by_kind.get("gap"), Some(&1));
+}

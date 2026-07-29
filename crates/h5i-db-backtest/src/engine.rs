@@ -249,6 +249,79 @@ impl PartialOrd for InFlight {
     }
 }
 
+/// What a run did, in counts.
+///
+/// A backtest that produces no trades is the commonest outcome and the
+/// least explicable one: the summary says zero and nothing says why. These
+/// counters are the answer -- an order that never met a book, one refused
+/// for margin, one that sat behind a queue that never cleared, and a feed
+/// that went stale are four different silences with four different fixes.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct RunMetrics {
+    /// Replayed records, by event kind.
+    pub records_by_kind: BTreeMap<&'static str, u64>,
+    pub orders_submitted: u64,
+    pub orders_filled: u64,
+    pub orders_partially_filled: u64,
+    /// Cancelled with nothing filled: no book, or a limit never reached.
+    pub orders_cancelled_unfilled: u64,
+    pub orders_rejected_margin: u64,
+    pub orders_rejected_self_trade: u64,
+    pub orders_amended: u64,
+    pub fills_taker: u64,
+    pub fills_maker: u64,
+    /// Feed gaps that invalidated a book.
+    pub book_gaps: u64,
+    /// Times a resting order sat behind queue volume it never cleared.
+    pub queue_joins: u64,
+    pub liquidations: u64,
+}
+
+impl RunMetrics {
+    fn record(&mut self, kind: &'static str) {
+        *self.records_by_kind.entry(kind).or_insert(0) += 1;
+    }
+
+    /// A one-line account of why a run may have done nothing.
+    pub fn explain_silence(&self) -> Option<String> {
+        if self.orders_submitted == 0 {
+            return Some(
+                "the strategy submitted no orders: check that its signals fall \
+                 inside the replayed window"
+                    .to_string(),
+            );
+        }
+        if self.orders_filled == 0 && self.orders_partially_filled == 0 {
+            let mut reasons = Vec::new();
+            if self.orders_rejected_margin > 0 {
+                reasons.push(format!("{} refused for margin", self.orders_rejected_margin));
+            }
+            if self.orders_rejected_self_trade > 0 {
+                reasons.push(format!(
+                    "{} would have crossed the account's own book",
+                    self.orders_rejected_self_trade
+                ));
+            }
+            if self.orders_cancelled_unfilled > 0 {
+                reasons.push(format!(
+                    "{} found no liquidity at their price",
+                    self.orders_cancelled_unfilled
+                ));
+            }
+            if self.book_gaps > 0 {
+                reasons.push(format!("{} feed gaps invalidated books", self.book_gaps));
+            }
+            let detail = if reasons.is_empty() {
+                "no order reached a matchable book".to_string()
+            } else {
+                reasons.join("; ")
+            };
+            return Some(format!("{} orders, no fills: {detail}", self.orders_submitted));
+        }
+        None
+    }
+}
+
 /// One sample of the equity curve.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EquityPoint {
@@ -290,6 +363,8 @@ pub struct RunResult {
     /// Orders refused because they would have crossed with this account's
     /// own resting book.
     pub self_trades_prevented: u64,
+    /// Counters explaining what the run did and did not do.
+    pub metrics: RunMetrics,
 }
 
 /// The engine.
@@ -325,6 +400,7 @@ pub struct Engine {
     liquidations: Vec<Liquidation>,
     rejected_for_margin: u64,
     self_trades_prevented: u64,
+    metrics: RunMetrics,
 }
 
 impl Engine {
@@ -401,6 +477,7 @@ impl Engine {
         self.release_inflight(ts, strategy)?;
 
         self.records += 1;
+        self.metrics.record(record.event.kind());
         self.simulated_through = Some(ts);
         self.sample_equity(ts)?;
         Ok(())
@@ -483,6 +560,7 @@ impl Engine {
             self.orders.insert(id, order);
             self.try_fill(id, ts, strategy)?;
 
+            self.metrics.liquidations += 1;
             self.liquidations.push(Liquidation {
                 instrument,
                 outcome,
@@ -593,7 +671,10 @@ impl Engine {
             MarketEvent::BookDelta(delta) => {
                 book.apply_delta(record.instrument.as_str(), *delta, ts)?;
             }
-            MarketEvent::Gap => book.mark_gap(ts),
+            MarketEvent::Gap => {
+                book.mark_gap(ts);
+                self.metrics.book_gaps += 1;
+            }
             MarketEvent::Trade { price, .. } => {
                 self.marks.insert(key.clone(), *price);
             }
@@ -708,6 +789,7 @@ impl Engine {
         }
 
         self.orders.insert(id, updated);
+        self.metrics.orders_amended += 1;
         if loses_priority {
             self.queue_ahead.remove(&id);
             if let Some(order) = self.orders.get(&id).cloned() {
@@ -770,6 +852,7 @@ impl Engine {
         order.tag = request.tag;
         order.reduce_only = request.reduce_only;
 
+        self.metrics.orders_submitted += 1;
         self.sequence += 1;
         let release_at = now.get().saturating_add(self.latency_model.insert_nanos());
         self.inflight.push(InFlight {
@@ -797,6 +880,7 @@ impl Engine {
                 ));
                 self.orders.insert(order.id, order);
                 self.self_trades_prevented += 1;
+                self.metrics.orders_rejected_self_trade += 1;
                 continue;
             }
             if !self.can_fund(&order)? {
@@ -805,6 +889,7 @@ impl Engine {
                     Some("insufficient margin for this order".to_string());
                 self.orders.insert(order.id, order);
                 self.rejected_for_margin += 1;
+                self.metrics.orders_rejected_margin += 1;
                 continue;
             }
             order.status = OrderStatus::Accepted;
@@ -933,6 +1018,7 @@ impl Engine {
             })
             .unwrap_or(0);
         self.queue_ahead.insert(order.id, ahead);
+        self.metrics.queue_joins += 1;
     }
 
     /// Let a print consume the queue, and fill what it reaches.
@@ -1129,6 +1215,11 @@ impl Engine {
         if let Some(order) = self.orders.get_mut(&id) {
             order.record_fill(quantity)?;
         }
+        if is_taker {
+            self.metrics.fills_taker += 1;
+        } else {
+            self.metrics.fills_maker += 1;
+        }
         self.fills.push(fill.clone());
         self.with_context(|ctx| strategy.on_fill(ctx, &fill))?;
         self.drain_commands()?;
@@ -1136,6 +1227,17 @@ impl Engine {
     }
 
     fn finish(&mut self) -> Result<RunResult> {
+        for order in self.orders.values() {
+            match order.status {
+                OrderStatus::Filled => self.metrics.orders_filled += 1,
+                OrderStatus::PartiallyFilled => self.metrics.orders_partially_filled += 1,
+                OrderStatus::Cancelled if order.filled.is_zero() => {
+                    self.metrics.orders_cancelled_unfilled += 1
+                }
+                OrderStatus::Cancelled => self.metrics.orders_partially_filled += 1,
+                _ => {}
+            }
+        }
         // Always close the curve on the last instant actually simulated, so
         // the final equity is a point rather than something a reader has to
         // infer from the summary.
@@ -1159,6 +1261,7 @@ impl Engine {
             liquidations: self.liquidations.clone(),
             rejected_for_margin: self.rejected_for_margin,
             self_trades_prevented: self.self_trades_prevented,
+            metrics: self.metrics.clone(),
         })
     }
 
@@ -1272,6 +1375,7 @@ impl EngineBuilder {
             liquidations: Vec::new(),
             rejected_for_margin: 0,
             self_trades_prevented: 0,
+            metrics: RunMetrics::default(),
         }
     }
 }
