@@ -128,6 +128,62 @@ Full methodology in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 ---
 
+## Quant workflows
+
+`h5i_db.quant` runs the standard research loop against the engine, and every
+result records the data version it was computed from.
+
+```python
+from h5i_db import quant
+
+panel = quant.build_panel(db, "signals", "prices",
+                          periods=(1, 5, 10), quantiles=5,
+                          snapshot="2024-q1")     # the pin
+
+panel.ic()                  # per-date rank IC, one column per horizon
+panel.quantile_returns()    # mean forward return per bucket
+quant.factor_report(panel, path="factor.html")
+```
+
+Factor statistics match `alphalens-reloaded` and portfolio statistics match
+`empyrical-reloaded`, so the numbers are the ones you already trust; what is
+new is that they are attributable. A report leads with the version SHA and
+the pin it ran under, an unpinned run says so, and `quant.verify()` refuses
+to certify a result that cannot be reproduced.
+
+Three things follow from the storage layer rather than the statistics:
+
+- **`event_time_cutoff=`** restricts every read to what was knowable at a
+  decision time, so a forward return that would need a later price is
+  dropped rather than computed.
+- **`quant.sweep()`** runs a parameter grid with one fork per trial, so
+  trials cannot contaminate each other and all of them compare in a single
+  cross-fork query.
+- **`quant.restatement_impact()`** re-runs one computation at two data
+  versions and reports what a vendor's revision moved.
+
+### Backtesting
+
+`h5i-db-backtest` is an event-driven backtester whose data plane is the
+database. A run executes inside a fork and writes `bt_orders`, `bt_fills`,
+`bt_positions` and `bt_equity` there, so results are queryable with the same
+SQL as market data and two runs diff at fill level with `fork_diff`.
+
+```python
+fork = db.fork("bt-momentum-001")
+quant.tearsheet(quant.from_levels(fork, "bt_equity"), path="run.html")
+```
+
+Prediction markets are the first venue, with N-outcome markets as the
+general case. Settlement is gated on observability: a three-day replay of a
+six-month market leaves its position unsettled and says why, rather than
+booking a profit nobody trading that window could have collected.
+
+See the [quant](https://db.h5i.dev/manual/quant/) and
+[backtesting](https://db.h5i.dev/manual/backtest/) manual pages.
+
+---
+
 ## Why for agents
 
 - **Reproducible inputs:** every read resolves to a version, so "which data did

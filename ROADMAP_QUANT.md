@@ -743,8 +743,9 @@ Part A is built and tested; Part B has not been started. What exists:
 | CLI | **done, relocated** | `python -m h5i_db.quant`; see the deviation below |
 | M5 benchmarks | **done, and the claim was wrong** | `benchmarks/compare_alphalens.py`; see §4.3 |
 | Docs | **done** | `docs-src/manual/quant.md`, examples executed in CI, divergence ledger D1–D8 |
-| UI `/report` route | not started | `crates/h5i-db-ui` |
-| Cookbook pages, README hero | not started | |
+| UI `/report` route | **done** | `GET /reports`, `/report/{name}`, `/api/reports`; traversal-refusing name check |
+| README quant section | **done** | |
+| Cookbook pages | **out of this repo** | the cookbook is the sibling `h5i-db-cookbook` repository |
 | Event-study family (§4.2) | blocked | needs the window join, a tracked engine gap |
 
 Part B is under way in `crates/h5i-db-backtest` (117 tests):
@@ -761,18 +762,22 @@ Part B is under way in `crates/h5i-db-backtest` (117 tests):
 | Fee / fill / latency / module traits | **done** | `models.rs`; curved prediction-market fees |
 | Observability-gated settlement | **done** | `settlement.rs` |
 | Kernel loop + Tier 1 signal replay | **done** | `engine.rs`; §8.2's invariant, tested |
-| **Reading canonical tables from h5i-db** | **not started** | the crate is standalone today: records are constructed in memory, not scanned from `book_deltas`/`trades` tables. This is the rest of B0. |
-| **Runs-as-forks (`bt_*` tables)** | **not started** | §8.4; needs the above first |
-| Tier 2 Rust strategy trait | partial | the `Strategy` trait exists and is used; queue-position passive fills (B2) do not |
-| Vendor ingestion (Polymarket) | not started | B0 |
+| Canonical tables + read/write | **done** | `schema.rs`, `store.rs`; round-trip tested including empty snapshots and truncated-snapshot refusal |
+| Runs-as-forks (`bt_*` tables) | **done** | `run.rs`; base stays clean, positions rebuild from stored `bt_fills` |
+| Equity curve → tearsheet | **done** | `quant.from_levels(fork, "bt_equity")` |
+| Tier 2 Rust strategy trait | partial | the trait exists and is used; queue-position passive fills (B2) do not |
+| Vendor ingestion (Polymarket) | not started | B0's last piece: a loader that turns vendor archives into `book_deltas` |
 | Differential oracle vs nautilus | not started | §9.4 |
+| Python bindings for the kernel | not started | a run is driven from Rust today; Python consumes its output tables |
 | B3 / B4 (perps, equities, sweeps at scale) | not started | |
 
-The honest summary: the **kernel is real and tested, but it is not yet
-connected to the database**. Everything above simulates correctly over
-records handed to it in memory; nothing yet scans an h5i table or writes a
-run back as a fork. That connection is the next milestone and is what makes
-the "on versioned data" half of the claim true.
+The kernel is connected to the database: a run reads pinned market data,
+replays deterministically, and writes its results back as tables on its own
+fork, where the existing tearsheet, `fork_diff` and cross-fork machinery
+picks them up unchanged. What remains for Part B is **data in and language
+out** — a vendor loader at one end, Python bindings at the other — plus the
+realism work (queue position, the nautilus differential suite) and the later
+venues.
 
 Three deviations from this document, each recorded where it lives:
 
