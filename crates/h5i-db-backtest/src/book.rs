@@ -249,27 +249,38 @@ impl OrderBook {
         }
     }
 
+    /// Displayed quantity at one exact price.
+    pub fn quantity_at(&self, side: Side, price: Price) -> Option<Qty> {
+        match side {
+            Side::Buy => self.bids.get(&price.raw()).copied(),
+            Side::Sell => self.asks.get(&price.raw()).copied(),
+        }
+    }
+
     /// Walk the book consuming up to `qty`, as a taker would.
     ///
     /// Returns the fills level by level rather than an average price,
     /// because the caller needs to know it ran out of liquidity, and an
     /// average silently hides a partial fill.
     pub fn walk(&self, taker_side: Side, qty: Qty, limit: Option<Price>) -> BookWalk {
-        // A buyer lifts offers; a seller hits bids.
-        let levels = self.levels(taker_side.opposite());
         let mut remaining = qty.raw();
         let mut fills = Vec::new();
-        for (price, size) in levels {
+
+        // Walk the maps directly. `levels()` materialises the entire side,
+        // which is especially wasteful for the common case where an order
+        // fills at the touch of a deep book.
+        let mut visit = |price_raw: &i64, size: &Qty| {
             if remaining <= 0 {
-                break;
+                return false;
             }
+            let price = Price::from_raw(*price_raw);
             if let Some(cap) = limit {
                 let acceptable = match taker_side {
                     Side::Buy => price <= cap,
                     Side::Sell => price >= cap,
                 };
                 if !acceptable {
-                    break;
+                    return false;
                 }
             }
             let take = remaining.min(size.raw());
@@ -277,7 +288,28 @@ impl OrderBook {
                 fills.push((price, Qty::from_raw(take)));
                 remaining -= take;
             }
+            remaining > 0
+        };
+
+        // A buyer lifts asks from low to high; a seller hits bids from high
+        // to low.
+        match taker_side {
+            Side::Buy => {
+                for (price, size) in &self.asks {
+                    if !visit(price, size) {
+                        break;
+                    }
+                }
+            }
+            Side::Sell => {
+                for (price, size) in self.bids.iter().rev() {
+                    if !visit(price, size) {
+                        break;
+                    }
+                }
+            }
         }
+
         BookWalk {
             fills,
             unfilled: Qty::from_raw(remaining),

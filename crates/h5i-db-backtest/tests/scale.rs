@@ -17,6 +17,7 @@ use std::time::Instant;
 use h5i_db_backtest::engine::{Engine, OrderRequest, SignalReplay};
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, InstrumentSet, OutcomeId};
+use h5i_db_backtest::models::QueuePositionFills;
 use h5i_db_backtest::replay::{priority, Replay};
 use h5i_db_backtest::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
 use h5i_db_backtest::Result;
@@ -314,5 +315,68 @@ fn a_resting_order_book_does_not_grow_without_bound() {
     assert!(
         elapsed.as_secs_f64() < 30.0,
         "500 resting orders over 50k records took {elapsed:?}"
+    );
+}
+
+#[test]
+fn queue_matching_scales_across_many_prints_and_orders() {
+    let id = InstrumentId::new(MARKET).unwrap();
+    let snapshot = Record::new(
+        Stamps::immediate(UnixNanos::new(0)),
+        id.clone(),
+        OutcomeId::FIRST,
+        MarketEvent::BookSnapshot {
+            bids: vec![(
+                Price::from_f64(100.0).unwrap(),
+                Qty::from_f64(1_000_000.0).unwrap(),
+            )],
+            asks: vec![(
+                Price::from_f64(101.0).unwrap(),
+                Qty::from_f64(1_000_000.0).unwrap(),
+            )],
+        },
+    );
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, vec![snapshot])
+        .source(
+            "trades",
+            priority::TRADE,
+            Box::new(TradeGenerator {
+                id: id.clone(),
+                emitted: 0,
+                total: 10_000,
+                interval_nanos: 1_000_000,
+            }),
+        )
+        .build()
+        .unwrap();
+    let intents = (0..500)
+        .map(|_| {
+            (
+                UnixNanos::new(0),
+                OrderRequest::limit(
+                    id.clone(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    Price::from_f64(100.0).unwrap(),
+                    Qty::from_f64(1.0).unwrap(),
+                ),
+            )
+        })
+        .collect();
+    let mut strategy = SignalReplay::new(intents).unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(Money::from_units(1_000_000).unwrap())
+        .fill_model(Box::new(QueuePositionFills::new()))
+        .build();
+
+    let started = Instant::now();
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(result.metrics.orders_submitted, 500);
+    assert!(result.fills.is_empty(), "displayed queue was never exhausted");
+    assert!(
+        elapsed.as_secs_f64() < 30.0,
+        "10k prints over 500 queued orders took {elapsed:?}"
     );
 }

@@ -406,6 +406,8 @@ pub struct Engine {
     funding_paid: Money,
     /// Displayed size still ahead of each resting order at its price.
     queue_ahead: BTreeMap<OrderId, i64>,
+    /// Reused scratch space for price-prioritising orders reached by a trade.
+    queue_candidates: Vec<(Price, OrderId)>,
     margin: Option<Box<dyn MarginModel>>,
     fx: FxBook,
     liquidations: Vec<Liquidation>,
@@ -1201,13 +1203,8 @@ impl Engine {
         let ahead = self
             .books
             .get(&key)
-            .map(|book| {
-                book.levels(order.side)
-                    .into_iter()
-                    .find(|(price, _)| *price == limit)
-                    .map(|(_, size)| size.raw())
-                    .unwrap_or(0)
-            })
+            .and_then(|book| book.quantity_at(order.side, limit))
+            .map(Qty::raw)
             .unwrap_or(0);
         self.queue_ahead.insert(order.id, ahead);
         self.metrics.queue_joins += 1;
@@ -1252,35 +1249,33 @@ impl Engine {
         strategy: &mut dyn Strategy,
     ) -> Result<()> {
         // Eligible orders, best price first, then submission order.
-        let mut eligible: Vec<(Price, OrderId)> = self
-            .resting
-            .iter()
-            .filter_map(|id| {
-                let order = self.orders.get(id)?;
-                if order.instrument != record.instrument
-                    || order.outcome != record.outcome
-                    || order.side != passive
-                    || !order.is_open()
-                {
-                    return None;
-                }
-                let limit = order.limit_price()?;
-                // A resting buy is reachable by a print at or below it; a
-                // resting sell by a print at or above it.
-                let reachable = match passive {
-                    Side::Buy => price <= limit,
-                    Side::Sell => price >= limit,
-                };
-                reachable.then_some((limit, *id))
-            })
-            .collect();
-        eligible.sort_by(|a, b| match passive {
+        let mut eligible = std::mem::take(&mut self.queue_candidates);
+        eligible.clear();
+        eligible.extend(self.resting.iter().filter_map(|id| {
+            let order = self.orders.get(id)?;
+            if order.instrument != record.instrument
+                || order.outcome != record.outcome
+                || order.side != passive
+                || !order.is_open()
+            {
+                return None;
+            }
+            let limit = order.limit_price()?;
+            // A resting buy is reachable by a print at or below it; a
+            // resting sell by a print at or above it.
+            let reachable = match passive {
+                Side::Buy => price <= limit,
+                Side::Sell => price >= limit,
+            };
+            reachable.then_some((limit, *id))
+        }));
+        eligible.sort_unstable_by(|a, b| match passive {
             Side::Buy => b.0.cmp(&a.0).then(a.1.cmp(&b.1)),
             Side::Sell => a.0.cmp(&b.0).then(a.1.cmp(&b.1)),
         });
 
         let mut remaining = size.raw();
-        for (limit, id) in eligible {
+        for &(limit, id) in &eligible {
             if remaining <= 0 {
                 break;
             }
@@ -1309,6 +1304,8 @@ impl Engine {
                 self.queue_ahead.remove(&id);
             }
         }
+        eligible.clear();
+        self.queue_candidates = eligible;
         self.resting.retain(|id| {
             self.orders
                 .get(id)
@@ -1588,6 +1585,7 @@ impl EngineBuilder {
             equity: Vec::new(),
             funding_paid: Money::ZERO,
             queue_ahead: BTreeMap::new(),
+            queue_candidates: Vec::new(),
             margin: self.margin,
             fx: self.fx,
             liquidations: Vec::new(),
