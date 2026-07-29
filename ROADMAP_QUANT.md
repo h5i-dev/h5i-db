@@ -741,7 +741,33 @@ Part A is built and tested; Part B has not been started. What exists:
 | UI `/report` route | not started | `crates/h5i-db-ui` |
 | Cookbook pages, README hero | not started | |
 | Event-study family (§4.2) | blocked | needs the window join, a tracked engine gap |
-| Part B (B0–B4) | **not started** | a separate program; §8 stands as written |
+
+Part B is under way in `crates/h5i-db-backtest` (117 tests):
+
+| Item | State | Notes |
+|---|---|---|
+| Fixed-point money, dual `ts_event`/`ts_init` | **done** | `types.rs`; causality violations rejected at construction |
+| Half-open windows + coverage | **done** | `window.rs`; one owner, per §8.6 |
+| N-outcome instruments | **done** | `instrument.rs`; binary is the 2-outcome case |
+| L2 book with gap invalidation | **done** | `book.rs`; a gap is an error, not a warning |
+| Deterministic k-way merge | **done** | `replay.rs`; total order on explicit fields |
+| Clock + timer queue | **done** | `clock.rs`; no UUIDs, no wall clock |
+| Orders, positions-as-fold, portfolio | **done** | `position.rs`; rebuildable from the fill log |
+| Fee / fill / latency / module traits | **done** | `models.rs`; curved prediction-market fees |
+| Observability-gated settlement | **done** | `settlement.rs` |
+| Kernel loop + Tier 1 signal replay | **done** | `engine.rs`; §8.2's invariant, tested |
+| **Reading canonical tables from h5i-db** | **not started** | the crate is standalone today: records are constructed in memory, not scanned from `book_deltas`/`trades` tables. This is the rest of B0. |
+| **Runs-as-forks (`bt_*` tables)** | **not started** | §8.4; needs the above first |
+| Tier 2 Rust strategy trait | partial | the `Strategy` trait exists and is used; queue-position passive fills (B2) do not |
+| Vendor ingestion (Polymarket) | not started | B0 |
+| Differential oracle vs nautilus | not started | §9.4 |
+| B3 / B4 (perps, equities, sweeps at scale) | not started | |
+
+The honest summary: the **kernel is real and tested, but it is not yet
+connected to the database**. Everything above simulates correctly over
+records handed to it in memory; nothing yet scans an h5i table or writes a
+run back as a fork. That connection is the next milestone and is what makes
+the "on versioned data" half of the claim true.
 
 Three deviations from this document, each recorded where it lives:
 
