@@ -17,8 +17,10 @@ checked rather than trusted.
 
 from __future__ import annotations
 
+from . import perf
 from ._common import Pin, Provenance
 from .factor import FactorPanel, MaxLossExceededError, build_panel
+from .perf import DAILY, MONTHLY, WEEKLY, YEARLY, ReturnSeries, returns
 
 __all__ = [
     "Pin",
@@ -26,4 +28,11 @@ __all__ = [
     "FactorPanel",
     "MaxLossExceededError",
     "build_panel",
+    "ReturnSeries",
+    "returns",
+    "perf",
+    "DAILY",
+    "WEEKLY",
+    "MONTHLY",
+    "YEARLY",
 ]
