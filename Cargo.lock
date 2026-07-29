@@ -1873,6 +1873,7 @@ dependencies = [
  "arrow",
  "chrono",
  "futures",
+ "h5i-db-backtest",
  "h5i-db-core",
  "h5i-db-query",
  "pyo3",
@@ -1931,6 +1932,17 @@ dependencies = [
  "tower-http",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "h5i-db-venues"
+version = "0.1.1"
+dependencies = [
+ "h5i-db-backtest",
+ "h5i-db-core",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

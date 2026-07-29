@@ -13,6 +13,7 @@ members = [
     "crates/h5i-db-python",
     "crates/h5i-db-ui",
     "crates/h5i-db-backtest",
+    "crates/h5i-db-venues",
 ]
 default-members = [
     "crates/h5i-db-core",
@@ -34,6 +35,7 @@ h5i-db-core = { path = "crates/h5i-db-core", version = "0.1.1" }
 h5i-db-query = { path = "crates/h5i-db-query", version = "0.1.1" }
 h5i-db-observability = { path = "crates/h5i-db-observability", version = "0.1.1" }
 h5i-db-backtest = { path = "crates/h5i-db-backtest", version = "0.1.1" }
+h5i-db-venues = { path = "crates/h5i-db-venues", version = "0.1.1" }
 
 # arrow/parquet must match the versions datafusion 54.1 links against (58.x).
 arrow = { version = "58.3", default-features = false, features = [

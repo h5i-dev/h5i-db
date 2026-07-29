@@ -127,9 +127,30 @@ pub struct RunReport {
 }
 
 impl RunReport {
-    /// Warnings a reader must see: unsettled positions, thin coverage.
+    /// Warnings a reader must see: unsettled positions, thin coverage,
+    /// orders that never met a book.
     pub fn warnings(&self) -> Vec<String> {
         let mut out = self.settlement.warnings();
+        // An order submitted before its instrument's first book has nothing
+        // to match against and cancels. That is correct, and silent, and
+        // exactly the shape of a strategy that looks like it did nothing
+        // for no visible reason -- so it is reported.
+        let unfilled = self
+            .result
+            .orders
+            .iter()
+            .filter(|order| {
+                order.status == crate::order::OrderStatus::Cancelled
+                    && order.filled.is_zero()
+            })
+            .count();
+        if unfilled > 0 {
+            out.push(format!(
+                "{unfilled} order(s) were cancelled without filling; the \
+                 usual cause is acting before the instrument's first book \
+                 update, or a limit the book never reached"
+            ));
+        }
         if let Some(coverage) = self.coverage
             && !coverage.is_complete()
         {

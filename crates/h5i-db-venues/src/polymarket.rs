@@ -29,12 +29,12 @@
 
 use serde_json::Value;
 
-use crate::book::BookDelta;
-use crate::error::{BacktestError, Result};
-use crate::event::{MarketEvent, Record};
-use crate::instrument::{Instrument, InstrumentId, OutcomeId};
-use crate::settlement::Resolution;
-use crate::types::{Price, Qty, Side, Stamps, UnixNanos};
+use h5i_db_backtest::book::BookDelta;
+use h5i_db_backtest::error::{BacktestError, Result};
+use h5i_db_backtest::event::{MarketEvent, Record};
+use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId};
+use h5i_db_backtest::settlement::Resolution;
+use h5i_db_backtest::types::{Price, Qty, Side, Stamps, UnixNanos};
 
 /// The public CLOB host.
 pub const CLOB_URL: &str = "https://clob.polymarket.com";
@@ -485,13 +485,13 @@ mod tests {
         let MarketEvent::BookDelta(set) = &records[0].event else {
             panic!()
         };
-        assert_eq!(set.action, crate::book::BookAction::Set);
+        assert_eq!(set.action, h5i_db_backtest::book::BookAction::Set);
         let MarketEvent::BookDelta(delete) = &records[1].event else {
             panic!()
         };
         assert_eq!(
             delete.action,
-            crate::book::BookAction::Delete,
+            h5i_db_backtest::book::BookAction::Delete,
             "size zero means the level is gone"
         );
     }
@@ -547,7 +547,7 @@ mod tests {
         .unwrap();
         let mut all = vec![snapshot];
         all.extend(changes);
-        let book = crate::store::replay_book(&all, "0xabc").unwrap();
+        let book = h5i_db_backtest::store::replay_book(&all, "0xabc").unwrap();
         assert_eq!(book.best_bid().unwrap().0, Price::from_f64(0.51).unwrap());
         assert_eq!(book.best_ask(), None, "the only ask was deleted");
     }

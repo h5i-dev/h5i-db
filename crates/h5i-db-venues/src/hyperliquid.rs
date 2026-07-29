@@ -24,10 +24,10 @@
 
 use serde_json::Value;
 
-use crate::error::{BacktestError, Result};
-use crate::event::{MarketEvent, Record};
-use crate::instrument::{Instrument, InstrumentId, OutcomeId};
-use crate::types::{Price, Qty, Stamps, UnixNanos};
+use h5i_db_backtest::error::{BacktestError, Result};
+use h5i_db_backtest::event::{MarketEvent, Record};
+use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId};
+use h5i_db_backtest::types::{Price, Qty, Stamps, UnixNanos};
 
 /// Mainnet info endpoint.
 pub const MAINNET_INFO_URL: &str = "https://api.hyperliquid.xyz/info";
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn the_parsed_book_reconstructs() {
         let record = parse_l2_book(BOOK, "BTC-PERP").unwrap();
-        let book = crate::store::replay_book(std::slice::from_ref(&record), "BTC-PERP").unwrap();
+        let book = h5i_db_backtest::store::replay_book(std::slice::from_ref(&record), "BTC-PERP").unwrap();
         assert_eq!(book.best_bid().unwrap().0, Price::from_f64(46000.0).unwrap());
         assert_eq!(book.best_ask().unwrap().0, Price::from_f64(46001.0).unwrap());
     }
