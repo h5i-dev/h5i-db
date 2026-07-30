@@ -304,7 +304,13 @@ def basket_payload(
                 "realized_pnl": summary.get("realized_pnl"),
                 "commissions": summary.get("commissions"),
                 "settlement_pnl": settled,
-                "net": settled - float(summary.get("commissions") or 0.0),
+                # `realized_pnl` is already net of commissions, so the total is
+                # realized + settlement. Subtracting commissions again would
+                # double-count them, and settlement alone would drop every
+                # closed round trip, which is most of what a crossover rule does.
+                # The two agree only when nothing closed, which is why a
+                # hold-to-resolution book hides the difference.
+                "net": float(summary.get("realized_pnl") or 0.0) + settled,
                 "equity_samples": len(rows),
                 "settlement_applied": bool(
                     result.run.to_pandas().settlement_applied.iloc[0]
