@@ -132,6 +132,18 @@ board = backtest.study(
 npx skills add h5i-dev/h5i-db        # instala la skill de h5i-db desde skills/h5i-db/
 ```
 
+**Verlo funcionar**
+
+```bash
+python examples/agent_swarm_demo.py   # tres agentes, once pruebas, luego la interfaz
+```
+
+Lanza una flota sobre un único conjunto de datos fijado: un barrido de umbrales,
+una escalera de costes de ejecución y una validación marcada para que la firme una
+persona. Cada prueba aterriza en su propio fork, una se sirve del registro de
+pruebas en lugar de recalcularse, y la superficie de revisión abre ordenada por lo
+que necesita a un humano a continuación.
+
 ---
 
 ## Por qué es rápida

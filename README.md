@@ -127,6 +127,17 @@ board = backtest.study(
 npx skills add h5i-dev/h5i-db        # installs the h5i-db skill from skills/h5i-db/
 ```
 
+**See it work**
+
+```bash
+python examples/agent_swarm_demo.py   # three agents, eleven trials, then the UI
+```
+
+Runs a fleet against one pinned dataset: a threshold sweep, an execution-cost
+ladder, and a validation flagged for human sign-off. Every trial lands in its own
+fork, one is served from the trial ledger instead of recomputed, and the review
+surface opens sorted by what needs a human next.
+
 ---
 
 ## Why it's fast

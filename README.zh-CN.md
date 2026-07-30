@@ -120,6 +120,16 @@ board = backtest.study(
 npx skills add h5i-dev/h5i-db        # 从 skills/h5i-db/ 安装 h5i-db skill
 ```
 
+**跑起来看看**
+
+```bash
+python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然后打开界面
+```
+
+让一支小队在同一份固定的数据上跑：一次阈值扫描、一组执行成本的阶梯对比，以及一次
+标记为需要人工签字的验证。每次试验都落在自己的 fork 里，其中一次不重算、直接由试验
+台账返回，而审阅界面打开时就按“接下来需要人看什么”排好了序。
+
 ---
 
 ## 为什么快
