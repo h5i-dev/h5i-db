@@ -516,7 +516,8 @@ which we keep the mid.</p>
 <span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">LimitError</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;100ms grid refused -&gt; </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">e</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2"> [</span><span class="si">{</span><span class="n">e</span><span class="o">.</span><span class="n">code</span><span class="si">}</span><span class="s2">]: </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">1s grid: 259,199 rows from 216,000 irregular ticks</pre><pre class="">100ms grid refused -&gt; LimitError [limit_exceeded]: [limit_exceeded] Resources exhausted: gapfill would generate 2591989 rows (limit 1000000)</pre></div></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">1s grid: 259,199 rows from 216,000 irregular ticks
+100ms grid refused -&gt; LimitError [limit_exceeded]: [limit_exceeded] Resources exhausted: gapfill would generate 2591989 rows (limit 1000000)</pre></div></div>
 <h2 id="6-phantom-returns-why-the-fill-mode-is-a-modelling-decision">6. Phantom returns: why the fill mode is a modelling decision<a class="headerlink" href="#6-phantom-returns-why-the-fill-mode-is-a-modelling-decision" title="Permanent link">#</a></h2>
 <p>Mark the illiquid book off the locf grid and your minute returns are mostly
 zero. Stale prices masquerade as "no move".</p>

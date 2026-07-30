@@ -583,7 +583,7 @@ the blast radius before anything changes.</p>
  &#x27;segments_total&#x27;: 2,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 1,
- &#x27;committed_at_ns&#x27;: 1785437896264884278}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785448827922420090}</pre></div></div>
 <h2 id="4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2: replace the polluted window with repaired data<a class="headerlink" href="#4-fix-2-replace-the-polluted-window-with-repaired-data" title="Permanent link">#</a></h2>
 <p>For the 15:00-15:15 window we do not want a delete. We want the <em>corrected</em>
 prints: fat fingers scaled back by 10, zero prices dropped, duplicates
@@ -885,7 +885,7 @@ never applied. Vacuum will not collect segments a live plan references.</p>
 <span class="n">pending</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;after discard:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">list_plans</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">[(&#x27;f4f64cef-6a64-409a-822c-c404e1658bf4&#x27;, &#x27;for review: is 14:00-14:10 real?&#x27;)]
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">[(&#x27;eda0c44b-f2ac-44c5-9427-7f3103e323d5&#x27;, &#x27;for review: is 14:00-14:10 real?&#x27;)]
 after discard: []</pre></div></div>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>

@@ -289,6 +289,18 @@
     <priority>0.7</priority>
   </url>
   <url>
+    <loc>https://db.h5i.dev/cookbook/02_alpha_research/12_trend_following/</loc>
+    <lastmod>2026-07-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://db.h5i.dev/cookbook/02_alpha_research/13_mean_reversion/</loc>
+    <lastmod>2026-07-30</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/</loc>
     <lastmod>2026-07-30</lastmod>
     <changefreq>weekly</changefreq>

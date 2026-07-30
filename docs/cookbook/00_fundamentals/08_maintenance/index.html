@@ -316,7 +316,7 @@ to run whenever ingestion leaves debris.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">{&#x27;sequence&#x27;: 151, &#x27;op&#x27;: &#x27;compact&#x27;, &#x27;segments_total&#x27;: 1, &#x27;segments_added&#x27;: 1}
 
-5m-bar rollup: 28.4 ms on 150 segments -&gt; 17.3 ms on 1 segment  (1.6x)</pre></div></div>
+5m-bar rollup: 22.1 ms on 150 segments -&gt; 29.7 ms on 1 segment  (0.7x)</pre></div></div>
 <p>Two honest observations.</p>
 <p>The speedup here is real but modest. Per-segment overhead scales with segment
 count, so a day of per-tick commits, meaning tens of thousands of segments,
@@ -362,7 +362,7 @@ staged segment is now referenced by nothing.</p>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;dry run, grace_seconds=0   :&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">grace_seconds</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">apply</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">dry run, default grace (1h): {&#x27;scanned_objects&#x27;: 307, &#x27;candidates&#x27;: [], &#x27;candidate_bytes&#x27;: 0, &#x27;deleted&#x27;: 0, &#x27;dry_run&#x27;: True}
-dry run, grace_seconds=0   : {&#x27;scanned_objects&#x27;: 307, &#x27;candidates&#x27;: [&#x27;tables/f8040f2e-5a6d-4672-ac37-227b444af28c/segments/4370710f-cd1f-4169-9ca5-5a8b0ca9f89c.parquet&#x27;], &#x27;candidate_bytes&#x27;: 1973203, &#x27;deleted&#x27;: 0, &#x27;dry_run&#x27;: True}</pre></div></div>
+dry run, grace_seconds=0   : {&#x27;scanned_objects&#x27;: 307, &#x27;candidates&#x27;: [&#x27;tables/21e909bd-2345-4b63-8f54-b10052acd496/segments/0060cc82-2c5b-410c-938c-000819894def.parquet&#x27;], &#x27;candidate_bytes&#x27;: 1973203, &#x27;deleted&#x27;: 0, &#x27;dry_run&#x27;: True}</pre></div></div>
 <p>The default one-hour grace period hides the orphan. Vacuum will not touch
 young files, because a file that looks unreferenced right now might belong to
 a commit another process is seconds away from publishing.</p>
@@ -373,7 +373,7 @@ and it is safe here because nothing else is writing. Reclaim it for real:</p>
 <span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;db dir: </span><span class="si">{</span><span class="n">size_before</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> MiB -&gt; </span><span class="si">{</span><span class="n">du_mb</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">path</span><span class="p">)</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> MiB&quot;</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">{&#x27;scanned_objects&#x27;: 307, &#x27;candidates&#x27;: [&#x27;tables/f8040f2e-5a6d-4672-ac37-227b444af28c/segments/4370710f-cd1f-4169-9ca5-5a8b0ca9f89c.parquet&#x27;], &#x27;candidate_bytes&#x27;: 1973203, &#x27;deleted&#x27;: 1, &#x27;dry_run&#x27;: False}
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">{&#x27;scanned_objects&#x27;: 307, &#x27;candidates&#x27;: [&#x27;tables/21e909bd-2345-4b63-8f54-b10052acd496/segments/0060cc82-2c5b-410c-938c-000819894def.parquet&#x27;], &#x27;candidate_bytes&#x27;: 1973203, &#x27;deleted&#x27;: 1, &#x27;dry_run&#x27;: False}
 db dir: 15.01 MiB -&gt; 13.13 MiB</pre></div></div>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="c1"># The load-bearing claim, checked: vacuum deleted the orphan and nothing else.</span>
 <span class="n">versions</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
@@ -401,7 +401,7 @@ protected from vacuum until they are applied, discarded or expired, on a
 <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;eod-2026-06-05&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">count_star</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;rows&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">snapshot &#x27;eod-2026-06-05&#x27; pins trades @ v151
-manifest checksum: 66b1f3733c843d3d…</pre><div class="nb-html"><div>
+manifest checksum: 00c01815aad36051…</pre><div class="nb-html"><div>
 
 <table border="1" class="dataframe">
   <thead>

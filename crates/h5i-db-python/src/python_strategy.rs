@@ -127,6 +127,9 @@ impl PythonStrategy {
                 if optional::<bool>(command, "reduce_only")?.unwrap_or(false) {
                     request = request.reduce_only();
                 }
+                if optional::<bool>(command, "post_only")?.unwrap_or(false) {
+                    request = request.post_only();
+                }
                 let id = ctx.submit_tracked(request);
                 self.order_ids.insert(client_order_id, id);
             }

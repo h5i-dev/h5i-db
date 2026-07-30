@@ -949,6 +949,10 @@ pub async fn read_signals(
         let tif = column::<StringArray>(batch, "time_in_force")?;
         let tag = column::<StringArray>(batch, "tag")?;
         let reduce_only = column::<BooleanArray>(batch, "reduce_only")?;
+        // Tolerated as absent so a table written before the column existed
+        // still reads; false is the reading that cannot turn a taker into a
+        // maker by accident.
+        let post_only = column::<BooleanArray>(batch, "post_only").ok();
 
         for row in 0..batch.num_rows() {
             let id = InstrumentId::new(instrument.value(row))?;
@@ -996,6 +1000,9 @@ pub async fn read_signals(
             if reduce_only.is_valid(row) && reduce_only.value(row) {
                 request = request.reduce_only();
             }
+            if post_only.is_some_and(|column| column.is_valid(row) && column.value(row)) {
+                request = request.post_only();
+            }
             out.push((UnixNanos::new(ts.value(row)), request));
         }
     }
@@ -1033,6 +1040,10 @@ pub async fn read_commands(
         let tif = column::<StringArray>(batch, "time_in_force")?;
         let tag = column::<StringArray>(batch, "tag")?;
         let reduce_only = column::<BooleanArray>(batch, "reduce_only")?;
+        // Tolerated as absent so a table written before the column existed
+        // still reads; false is the reading that cannot turn a taker into a
+        // maker by accident.
+        let post_only = column::<BooleanArray>(batch, "post_only").ok();
 
         for row in 0..batch.num_rows() {
             let client_order_id = client_id.value(row).to_string();
@@ -1117,6 +1128,9 @@ pub async fn read_commands(
                     }
                     if reduce_only.is_valid(row) && reduce_only.value(row) {
                         request = request.reduce_only();
+                    }
+                    if post_only.is_some_and(|column| column.is_valid(row) && column.value(row)) {
+                        request = request.post_only();
                     }
                     ReplayCommand::Submit {
                         client_order_id,

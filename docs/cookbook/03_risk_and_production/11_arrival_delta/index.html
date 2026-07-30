@@ -311,8 +311,8 @@ the window, patches it, and hands the full window back.</p>
 <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">):</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  v</span><span class="si">{</span><span class="n">v</span><span class="p">[</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&gt;2</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">v</span><span class="p">[</span><span class="s1">&#39;op&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&lt;13</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">v</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;note&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">v2: missed 2:1 split on 2024-10-07 (STK003)</pre><pre class="">v3: fat-finger print, vendor corrected on 2024-10-28 (STK011)
-v4: late dividend adjustment on 2024-11-14 (STK007)
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">v2: missed 2:1 split on 2024-10-07 (STK003)
+v3: fat-finger print, vendor corrected on 2024-10-28 (STK011)</pre><pre class="">v4: late dividend adjustment on 2024-11-14 (STK007)
   v 0 create        
   v 1 append        vendor delivery, first publication
   v 2 replace_range missed 2:1 split

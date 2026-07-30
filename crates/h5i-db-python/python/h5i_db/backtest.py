@@ -167,6 +167,7 @@ SIGNAL_SCHEMA = pa.schema(
         pa.field("time_in_force", pa.string()),
         pa.field("tag", pa.string()),
         pa.field("reduce_only", pa.bool_()),
+        pa.field("post_only", pa.bool_()),
     ]
 )
 
@@ -185,6 +186,7 @@ COMMAND_SCHEMA = pa.schema(
         pa.field("time_in_force", pa.string()),
         pa.field("tag", pa.string()),
         pa.field("reduce_only", pa.bool_()),
+        pa.field("post_only", pa.bool_()),
     ]
 )
 
@@ -246,6 +248,7 @@ def signal_table(rows: Sequence[dict]) -> pa.Table:
         columns["time_in_force"].append(row.get("time_in_force"))
         columns["tag"].append(row.get("tag"))
         columns["reduce_only"].append(bool(row.get("reduce_only", False)))
+        columns["post_only"].append(bool(row.get("post_only", False)))
 
     columns["ts"] = pa.array(columns["ts"], type=pa.timestamp("ns"))
     return pa.table(columns, schema=SIGNAL_SCHEMA)
@@ -314,6 +317,9 @@ def command_table(rows: Sequence[dict]) -> pa.Table:
         columns["tag"].append(row.get("tag") if action == "submit" else None)
         columns["reduce_only"].append(
             bool(row.get("reduce_only", False)) if action == "submit" else None
+        )
+        columns["post_only"].append(
+            bool(row.get("post_only", False)) if action == "submit" else None
         )
 
     columns["ts"] = pa.array(columns["ts"], type=pa.timestamp("ns"))

@@ -346,12 +346,12 @@ checksums. This is what lands in the log.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">last_snap</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;name&#x27;: &#x27;eod-2026-06-03&#x27;,
- &#x27;created_at_ns&#x27;: 1785437965942427825,
+ &#x27;created_at_ns&#x27;: 1785448908533584003,
  &#x27;note&#x27;: &#x27;EOD risk cut 2026-06-03&#x27;,
- &#x27;entries&#x27;: {&#x27;7b3870fd-c978-44b3-a937-e767e1f8be97&#x27;: {&#x27;table_name&#x27;: &#x27;trades&#x27;,
+ &#x27;entries&#x27;: {&#x27;fb0a1f9a-8cb1-470d-8695-8bd25bd879c7&#x27;: {&#x27;table_name&#x27;: &#x27;trades&#x27;,
    &#x27;sequence&#x27;: 3,
-   &#x27;manifest_checksum&#x27;: &#x27;0ee35656e1af06141e9ce514ca17a1d5d090c6a596535185a1ca6759ccc3e540&#x27;}},
- &#x27;checksum&#x27;: &#x27;a9ca968d9660bb706aa10f6218e6cf142d5dc5bddfea8c5a8d3e5b7bfc3ff76c&#x27;}</pre></div></div>
+   &#x27;manifest_checksum&#x27;: &#x27;d3df11b49500e01306baf927b3ce729d7082b755fbab0f69b30bcc706ef5bef1&#x27;}},
+ &#x27;checksum&#x27;: &#x27;ef12f665ecfe785d50dc6fbdb067246c49fa3acdac3414a513220e57f3fe4641&#x27;}</pre></div></div>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="p">(</span>
     <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;snapshot_log&quot;</span><span class="p">)</span>
     <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;snapshot_name&quot;</span><span class="p">,</span> <span class="s2">&quot;pinned_sequence&quot;</span><span class="p">,</span>
@@ -375,24 +375,24 @@ checksums. This is what lands in the log.</p>
   <tbody>
     <tr>
       <th>0</th>
-      <td>2026-07-30 18:59:25.712986+00:00</td>
+      <td>2026-07-30 22:01:48.281888+00:00</td>
       <td>eod-2026-06-01</td>
       <td>1</td>
-      <td>2842021a8ba0</td>
+      <td>75e767d23a68</td>
     </tr>
     <tr>
       <th>1</th>
-      <td>2026-07-30 18:59:25.821898+00:00</td>
+      <td>2026-07-30 22:01:48.404014+00:00</td>
       <td>eod-2026-06-02</td>
       <td>2</td>
-      <td>8cb1914410ce</td>
+      <td>990bc28f4513</td>
     </tr>
     <tr>
       <th>2</th>
-      <td>2026-07-30 18:59:25.942427+00:00</td>
+      <td>2026-07-30 22:01:48.533584+00:00</td>
       <td>eod-2026-06-03</td>
       <td>3</td>
-      <td>0ee35656e1af</td>
+      <td>d3df11b49500</td>
     </tr>
   </tbody>
 </table>
@@ -459,7 +459,7 @@ checksums. This is what lands in the log.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">by snapshot name: 126,563 rows
 by version 2:     126,563 rows
-by as_of 2026-07-30T18:59:25.789163156+00:00: 126,563 rows</pre></div></div>
+by as_of 2026-07-30T22:01:48.367197804+00:00: 126,563 rows</pre></div></div>
 <h2 id="5-diff-two-eod-cuts-in-one-sql-statement">5. Diff two EOD cuts in one SQL statement<a class="headerlink" href="#5-diff-two-eod-cuts-in-one-sql-statement" title="Permanent link">#</a></h2>
 <p>Because snapshots are relations, "what changed between the 2nd and the 3rd"
 is a join rather than an ETL job. Per symbol, it gives rows added and where

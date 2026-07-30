@@ -862,6 +862,8 @@ impl NativeDatabase {
                             report.result.metrics.orders_rejected_naked_short,
                         "orders_rejected_expired":
                             report.result.metrics.orders_rejected_expired,
+                        "orders_rejected_post_only":
+                            report.result.metrics.orders_rejected_post_only,
                         "fills_taker": report.result.metrics.fills_taker,
                         "fills_maker": report.result.metrics.fills_maker,
                         "book_gaps": report.result.metrics.book_gaps,

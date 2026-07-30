@@ -433,6 +433,84 @@ synthetic depth all reuse one matching path.</p>
 charge, <code>rate · quantity · p · (1 - p)</code>, which peaks at even odds and
 vanishes at certainty. A flat <code>notional × rate</code> is the wrong shape and
 overcharges the tails, which is where these markets trade most.</p>
+<h2 id="perpetuals">Perpetuals<a class="headerlink" href="#perpetuals" title="Permanent link">#</a></h2>
+<p>A derivatives venue does not value your position at the mid, and modelling
+it as if it did produces losses that look like strategy results.</p>
+<h3 id="three-prices-not-one">Three prices, not one<a class="headerlink" href="#three-prices-not-one" title="Permanent link">#</a></h3>
+<p>Hyperliquid publishes an <strong>oracle</strong> built from spot exchanges and a <strong>mark</strong>
+derived from it and the book. Margin, unrealised PnL and liquidation read
+the mark; funding is charged on the oracle; the book's mid is neither.</p>
+<p><code>MarketEvent::Reference</code> carries both, in a <code>references</code> table alongside
+<code>trades</code> and <code>funding</code>. The engine keeps the book-derived, venue-mark and
+oracle prices apart and exposes one effective mark, so <code>MarkSource</code> is a
+policy rather than a rewrite. It defaults to using the venue's mark where
+one exists, which is a no-op on data that carries none.</p>
+<p>Two consequences worth stating:</p>
+<ul>
+<li>A thin book or a one-print wick moves the mid far enough to liquidate a
+  position the venue was still valuing calmly. On the mark it does not.</li>
+<li>Funding on the mid reintroduces exactly the manipulation the oracle
+  exists to prevent, and at hourly settlement that compounds over a carry.</li>
+</ul>
+<p>Reference records replay at priority 7, ahead of the book, for the same
+reason corporate actions do: every per-record check that prices against the
+mark must already have it.</p>
+<h3 id="prices-the-venue-will-actually-accept">Prices the venue will actually accept<a class="headerlink" href="#prices-the-venue-will-actually-accept" title="Permanent link">#</a></h3>
+<p>Hyperliquid caps a price at five significant figures <strong>and</strong> at
+<code>6 - szDecimals</code> decimal places, per coin. A flat tick cannot say that: it
+accepts prices the venue refuses at the top of a range and refuses ones it
+accepts at the bottom. <code>PriceRule::SignificantFigures</code> says it, and
+<code>hyperliquid::parse_meta</code> derives it per coin along with <code>maxLeverage</code>,
+<code>onlyIsolated</code> and the lot size.</p>
+<p>Delisted coins are kept, not dropped. Dropping them is survivorship bias
+applied at ingestion, where it is hardest to notice.</p>
+<h3 id="data">Data<a class="headerlink" href="#data" title="Permanent link">#</a></h3>
+<p><code>candleSnapshot</code> returns bars and the REST <code>l2Book</code> returns only the book as
+it is right now, so the archive is the only source of book history the venue
+offers. <code>read_archive_lz4</code> reads the hourly files; <code>parse_ws_message</code>
+handles a live capture, dispatching <code>l2Book</code> and <code>trades</code> by the coin in the
+payload so one call covers a capture spanning many markets.</p>
+<p><code>ArchiveRead</code> counts what produced nothing and <code>require_yield</code> refuses a
+file that is mostly junk -- usually the wrong channel or the wrong
+decompression, and worse to replay as a thin book than to refuse outright.</p>
+<p>Trades matter more than they look: without prints the queue model has
+nothing to consume the size ahead of a resting order, so every touched
+limit fills immediately.</p>
+<h3 id="post-only">Post-only<a class="headerlink" href="#post-only" title="Permanent link">#</a></h3>
+<p><code>OrderRequest::post_only()</code> is Hyperliquid's ALO. It is checked on arrival,
+not on submission, because what matters is the book the venue sees when the
+order gets there -- an order sent into a wide market and delivered into a
+crossed one is rejected, which is the risk a maker takes. A post-only order
+that later fills does so as a maker, since by construction it could never
+have taken.</p>
+<h3 id="fees-that-fall-with-volume">Fees that fall with volume<a class="headerlink" href="#fees-that-fall-with-volume" title="Permanent link">#</a></h3>
+<p><code>TieredFees</code> prices on rolling traded notional. Every serious venue does
+this and most simulators do not, which decides whether a market-making
+strategy has a positive expectancy at all: at the top of a real schedule the
+maker fee is <em>negative</em>.</p>
+<p>A fill is priced at the tier reached before it, and volume ages out of a
+trailing window (<code>hyperliquid::FEE_VOLUME_WINDOW_NANOS</code> is fourteen days).
+The schedule is supplied rather than baked in -- venues republish theirs, and
+a stale table compiled into a backtester is worse than none because it looks
+authoritative.</p>
+<h3 id="margin">Margin<a class="headerlink" href="#margin" title="Permanent link">#</a></h3>
+<p><code>PerInstrumentMargin</code> grants leverage per coin, which is how the venue
+grants it: forty times on the majors and three on the long tail.
+<code>hyperliquid::margin_from_meta</code> builds one from the universe, falling back
+for an unlisted coin to the <em>tightest</em> leverage in it rather than the
+loosest.</p>
+<p>Two policies that both default to the previous behaviour:</p>
+<ul>
+<li><code>LiquidationPolicy::Partial</code> closes positions, largest maintenance
+  requirement first, only until the account is above maintenance again. A
+  venue closes what it must, not what it can, and the two produce materially
+  different results from the same data.</li>
+<li><code>EngineBuilder::isolate(instrument)</code> margins one instrument on its own
+  collateral. The bucket is sized at the position's entry and stays there,
+  so it does not top itself up from cross cash as the trade moves against
+  you -- an isolated position can lose exactly its bucket, and a cross
+  account in profit will not rescue it.</li>
+</ul>
 <h2 id="kalshi-data">Kalshi data<a class="headerlink" href="#kalshi-data" title="Permanent link">#</a></h2>
 <p><code>h5i-db-venues::kalshi</code> converts Kalshi market metadata, REST order-book
 snapshots, websocket snapshots and deltas, trades, and candlesticks into the
@@ -677,7 +755,7 @@ pass/fail, because <em>where</em> the book refused is the finding.</p>
     <nav class="page-nav"><a class="prev" href="/manual/operations/"><span class="dir">← Previous</span><span class="pn-title">Operations guide</span></a><a class="next" href="/api/"><span class="dir">Next →</span><span class="pn-title">Overview</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-tearsheet">From a run to a tearsheet</a></li><li><a href="#from-the-shell">From the shell</a></li><li><a href="#settlement">Settlement</a><ul><li><a href="#not-every-market-picks-a-winner">Not every market picks a winner</a></li></ul></li><li><a href="#trading-stops-before-resolving">Trading stops before resolving</a></li><li><a href="#outcomes-cannot-be-borrowed">Outcomes cannot be borrowed</a></li><li><a href="#complete-sets">Complete sets</a><ul><li><a href="#negative-risk-conversion">Negative-risk conversion</a></li></ul></li><li><a href="#scoring-a-forecast">Scoring a forecast</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#kalshi-data">Kalshi data</a></li><li><a href="#strategies">Strategies</a><ul><li><a href="#stamp-a-signal-after-the-quote-it-came-from">Stamp a signal after the quote it came from</a></li></ul></li><li><a href="#agent-trial-ledger">Agent trial ledger</a></li><li><a href="#what-is-not-here">What is not here</a></li><li><a href="#bringing-your-own-data">Bringing your own data</a></li><li><a href="#searching-without-fooling-yourself">Searching without fooling yourself</a></li><li><a href="#comparing-many-runs-at-once">Comparing many runs at once</a></li><li><a href="#a-pack-of-strategies-as-data">A pack of strategies, as data</a></li><li><a href="#replaying-an-accounts-ledger">Replaying an account's ledger</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-tearsheet">From a run to a tearsheet</a></li><li><a href="#from-the-shell">From the shell</a></li><li><a href="#settlement">Settlement</a><ul><li><a href="#not-every-market-picks-a-winner">Not every market picks a winner</a></li></ul></li><li><a href="#trading-stops-before-resolving">Trading stops before resolving</a></li><li><a href="#outcomes-cannot-be-borrowed">Outcomes cannot be borrowed</a></li><li><a href="#complete-sets">Complete sets</a><ul><li><a href="#negative-risk-conversion">Negative-risk conversion</a></li></ul></li><li><a href="#scoring-a-forecast">Scoring a forecast</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#perpetuals">Perpetuals</a><ul><li><a href="#three-prices-not-one">Three prices, not one</a></li><li><a href="#prices-the-venue-will-actually-accept">Prices the venue will actually accept</a></li><li><a href="#data">Data</a></li><li><a href="#post-only">Post-only</a></li><li><a href="#fees-that-fall-with-volume">Fees that fall with volume</a></li><li><a href="#margin">Margin</a></li></ul></li><li><a href="#kalshi-data">Kalshi data</a></li><li><a href="#strategies">Strategies</a><ul><li><a href="#stamp-a-signal-after-the-quote-it-came-from">Stamp a signal after the quote it came from</a></li></ul></li><li><a href="#agent-trial-ledger">Agent trial ledger</a></li><li><a href="#what-is-not-here">What is not here</a></li><li><a href="#bringing-your-own-data">Bringing your own data</a></li><li><a href="#searching-without-fooling-yourself">Searching without fooling yourself</a></li><li><a href="#comparing-many-runs-at-once">Comparing many runs at once</a></li><li><a href="#a-pack-of-strategies-as-data">A pack of strategies, as data</a></li><li><a href="#replaying-an-accounts-ledger">Replaying an account's ledger</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

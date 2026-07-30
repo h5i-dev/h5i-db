@@ -2466,6 +2466,104 @@ charge, `rate · quantity · p · (1 - p)`, which peaks at even odds and
 vanishes at certainty. A flat `notional × rate` is the wrong shape and
 overcharges the tails, which is where these markets trade most.
 
+## Perpetuals
+
+A derivatives venue does not value your position at the mid, and modelling
+it as if it did produces losses that look like strategy results.
+
+### Three prices, not one
+
+Hyperliquid publishes an **oracle** built from spot exchanges and a **mark**
+derived from it and the book. Margin, unrealised PnL and liquidation read
+the mark; funding is charged on the oracle; the book's mid is neither.
+
+`MarketEvent::Reference` carries both, in a `references` table alongside
+`trades` and `funding`. The engine keeps the book-derived, venue-mark and
+oracle prices apart and exposes one effective mark, so `MarkSource` is a
+policy rather than a rewrite. It defaults to using the venue's mark where
+one exists, which is a no-op on data that carries none.
+
+Two consequences worth stating:
+
+- A thin book or a one-print wick moves the mid far enough to liquidate a
+  position the venue was still valuing calmly. On the mark it does not.
+- Funding on the mid reintroduces exactly the manipulation the oracle
+  exists to prevent, and at hourly settlement that compounds over a carry.
+
+Reference records replay at priority 7, ahead of the book, for the same
+reason corporate actions do: every per-record check that prices against the
+mark must already have it.
+
+### Prices the venue will actually accept
+
+Hyperliquid caps a price at five significant figures **and** at
+`6 - szDecimals` decimal places, per coin. A flat tick cannot say that: it
+accepts prices the venue refuses at the top of a range and refuses ones it
+accepts at the bottom. `PriceRule::SignificantFigures` says it, and
+`hyperliquid::parse_meta` derives it per coin along with `maxLeverage`,
+`onlyIsolated` and the lot size.
+
+Delisted coins are kept, not dropped. Dropping them is survivorship bias
+applied at ingestion, where it is hardest to notice.
+
+### Data
+
+`candleSnapshot` returns bars and the REST `l2Book` returns only the book as
+it is right now, so the archive is the only source of book history the venue
+offers. `read_archive_lz4` reads the hourly files; `parse_ws_message`
+handles a live capture, dispatching `l2Book` and `trades` by the coin in the
+payload so one call covers a capture spanning many markets.
+
+`ArchiveRead` counts what produced nothing and `require_yield` refuses a
+file that is mostly junk -- usually the wrong channel or the wrong
+decompression, and worse to replay as a thin book than to refuse outright.
+
+Trades matter more than they look: without prints the queue model has
+nothing to consume the size ahead of a resting order, so every touched
+limit fills immediately.
+
+### Post-only
+
+`OrderRequest::post_only()` is Hyperliquid's ALO. It is checked on arrival,
+not on submission, because what matters is the book the venue sees when the
+order gets there -- an order sent into a wide market and delivered into a
+crossed one is rejected, which is the risk a maker takes. A post-only order
+that later fills does so as a maker, since by construction it could never
+have taken.
+
+### Fees that fall with volume
+
+`TieredFees` prices on rolling traded notional. Every serious venue does
+this and most simulators do not, which decides whether a market-making
+strategy has a positive expectancy at all: at the top of a real schedule the
+maker fee is *negative*.
+
+A fill is priced at the tier reached before it, and volume ages out of a
+trailing window (`hyperliquid::FEE_VOLUME_WINDOW_NANOS` is fourteen days).
+The schedule is supplied rather than baked in -- venues republish theirs, and
+a stale table compiled into a backtester is worse than none because it looks
+authoritative.
+
+### Margin
+
+`PerInstrumentMargin` grants leverage per coin, which is how the venue
+grants it: forty times on the majors and three on the long tail.
+`hyperliquid::margin_from_meta` builds one from the universe, falling back
+for an unlisted coin to the *tightest* leverage in it rather than the
+loosest.
+
+Two policies that both default to the previous behaviour:
+
+- `LiquidationPolicy::Partial` closes positions, largest maintenance
+  requirement first, only until the account is above maintenance again. A
+  venue closes what it must, not what it can, and the two produce materially
+  different results from the same data.
+- `EngineBuilder::isolate(instrument)` margins one instrument on its own
+  collateral. The bucket is sized at the position's entry and stays there,
+  so it does not top itself up from cross cash as the trade moves against
+  you -- an isolated position can lose exactly its bucket, and a cross
+  account in profit will not rescue it.
+
 ## Kalshi data
 
 `h5i-db-venues::kalshi` converts Kalshi market metadata, REST order-book

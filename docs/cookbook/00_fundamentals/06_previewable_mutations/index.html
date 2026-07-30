@@ -438,7 +438,8 @@ healthy \$200-ish prints mixed in with the 10x garbage.</p>
 <span class="n">commit</span> <span class="o">=</span> <span class="n">tight</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;applied as version&quot;</span><span class="p">,</span> <span class="n">commit</span><span class="p">[</span><span class="s2">&quot;sequence&quot;</span><span class="p">],</span> <span class="s2">&quot;op:&quot;</span><span class="p">,</span> <span class="n">commit</span><span class="p">[</span><span class="s2">&quot;op&quot;</span><span class="p">])</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rows_affected: 18  (bad prints: 18 )</pre><pre class="">applied as version 2 op: delete_range</pre></div></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rows_affected: 18  (bad prints: 18 )
+applied as version 2 op: delete_range</pre></div></div>
 <p><code>apply()</code> re-checks the table head first. If anyone committed after the plan
 was staged, it raises <code>ConflictError</code> rather than publishing a mutation
 computed against a stale base. That is the same optimistic concurrency as
@@ -638,7 +639,7 @@ Plans expire after a 7-day TTL, and their staged segments are protected from
 <span class="n">pending</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
 <span class="n">db</span><span class="o">.</span><span class="n">set_policy</span><span class="p">(</span><span class="n">direct_write</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">direct_delete</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">direct_restore</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">plan 75ca9a91…  note=&#x27;staged under restrictive policy&#x27;  rows_affected=30  ttl=7d</pre><pre>{&#x27;direct_append&#x27;: True,
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">plan 839bdbae…  note=&#x27;staged under restrictive policy&#x27;  rows_affected=30  ttl=7d</pre><pre>{&#x27;direct_append&#x27;: True,
  &#x27;direct_write&#x27;: True,
  &#x27;direct_replace&#x27;: True,
  &#x27;direct_delete&#x27;: True,

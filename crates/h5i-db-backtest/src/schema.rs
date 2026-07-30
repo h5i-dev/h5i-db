@@ -274,6 +274,9 @@ pub fn signals() -> SchemaRef {
         opt_text("time_in_force"),
         opt_text("tag"),
         Field::new("reduce_only", DataType::Boolean, true),
+        // Add-liquidity-only. Absent reads as false, which is the
+        // reading that cannot silently turn a taker into a maker.
+        Field::new("post_only", DataType::Boolean, true),
     ]))
 }
 
@@ -307,6 +310,9 @@ pub fn commands() -> SchemaRef {
         opt_text("time_in_force"),
         opt_text("tag"),
         Field::new("reduce_only", DataType::Boolean, true),
+        // Add-liquidity-only. Absent reads as false, which is the
+        // reading that cannot silently turn a taker into a maker.
+        Field::new("post_only", DataType::Boolean, true),
     ]))
 }
 

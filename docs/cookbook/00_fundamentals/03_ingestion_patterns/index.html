@@ -287,7 +287,7 @@ directory under <code>data/dbs</code> stands in for the vendor drop zone.</p>
  &#x27;segments_total&#x27;: 0,
  &#x27;segments_added&#x27;: 0,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785437847664037582}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785448784091961523}</pre></div></div>
 <h2 id="1-from-a-pyarrow-table">1. From a pyarrow Table<a class="headerlink" href="#1-from-a-pyarrow-table" title="Permanent link">#</a></h2>
 <p>The native path, with zero conversion. Every <code>append</code> returns the <strong>commit
 dict</strong>: the new version number (<code>sequence</code>), plus row and segment totals after
@@ -303,7 +303,7 @@ a version.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785437847701719408}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785448784119236728}</pre></div></div>
 <h2 id="2-from-a-pandas-dataframe">2. From a pandas DataFrame<a class="headerlink" href="#2-from-a-pandas-dataframe" title="Permanent link">#</a></h2>
 <p><code>pa.Table.from_pandas</code> does the heavy lifting. Always pass <code>schema=</code> as well:
 depending on your pandas version, datetimes round-trip as nanoseconds rather
@@ -429,7 +429,8 @@ the full history retained.</p>
           <span class="sa">f</span><span class="s2">&quot;-&gt; </span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;segments_total&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&gt;2</span><span class="si">}</span><span class="s2"> segments total&quot;</span><span class="p">)</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">v7: +13,806 rows -&gt;  7 segments total
-v8: +12,169 rows -&gt;  8 segments total</pre><pre class="">v9: +11,128 rows -&gt;  9 segments total
+v8: +12,169 rows -&gt;  8 segments total
+v9: +11,128 rows -&gt;  9 segments total
 v10: +13,093 rows -&gt; 10 segments total
 v11: +14,464 rows -&gt; 11 segments total</pre></div></div>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">before</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
