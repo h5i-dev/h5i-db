@@ -33,7 +33,7 @@ escritos en Rust.**
   y bloquean las operaciones destructivas, y un registro de auditoría de qué
   cambió y por qué.
 
-📖 **[Documentación](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [API de Python](https://db.h5i.dev/api/) ·
+📖 **[Documentación](https://db.h5i.dev/manual/)** · [Backtesting](https://db.h5i.dev/manual/backtest/) · [Cuantitativa](https://db.h5i.dev/manual/quant/) · [API de Python](https://db.h5i.dev/api/) ·
 [Recetario](https://github.com/h5i-dev/h5i-db-cookbook) · [Skill para agentes](skills/h5i-db/SKILL.md)
 
 ---
@@ -271,6 +271,15 @@ Metodología y resultados completos en [benchmarks/RESULTS.md](benchmarks/RESULT
 | **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 331 ms | 605 k eventos/s |
 | NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
 | LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
+
+Medianas de tres ejecuciones en procesos nuevos tras un calentamiento, y cada
+adaptador verifica que vio los 200 k eventos y envió las 200 órdenes. Las fronteras
+medidas difieren, como dice la columna: el benchmark comprueba recuentos de eventos
+y de órdenes, no equivalencia de PnL, y Nautilus invoca un callback de estrategia en
+Python por cada cotización mientras los otros dos ejecutan código nativo. Es una
+carga estrecha orientada a eventos, no una clasificación de sistemas de backtesting;
+límites de interpretación completos en
+[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
 
 ---
 

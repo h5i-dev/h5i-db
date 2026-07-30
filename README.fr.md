@@ -34,7 +34,7 @@ et pensés pour les agents, au service de la recherche quantitative. Embarqués,
   position fermée et bloquent les opérations destructrices, et une piste d'audit
   indiquant ce qui a changé et pourquoi.
 
-📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manuel](https://db.h5i.dev/manual/) · [API Python](https://db.h5i.dev/api/) ·
+📖 **[Documentation](https://db.h5i.dev/manual/)** · [Backtesting](https://db.h5i.dev/manual/backtest/) · [Quantitatif](https://db.h5i.dev/manual/quant/) · [API Python](https://db.h5i.dev/api/) ·
 [Livre de recettes](https://github.com/h5i-dev/h5i-db-cookbook) · [Skill pour agents](skills/h5i-db/SKILL.md)
 
 ---
@@ -275,6 +275,15 @@ Méthodologie et résultats complets dans [benchmarks/RESULTS.md](benchmarks/RES
 | **h5i-db** | exécution persistée complète : balayage, décodage, fork, rejeu, écriture | 331 ms | 605 k évén./s |
 | NautilusTrader 1.230.0 | objets en mémoire à travers `BacktestEngine.run()` | 767 ms | 261 k évén./s |
 | LEAN `11ba019f6` | du premier callback `Slice` à `OnEndOfAlgorithm`, alimenté par disque | 2033 ms | 98,4 k évén./s |
+
+Médianes de trois exécutions en processus neufs après un échauffement, chaque
+adaptateur vérifiant qu'il a vu les 200 k événements et soumis les 200 ordres. Les
+frontières mesurées diffèrent, comme l'indique la colonne : le benchmark vérifie des
+comptages d'événements et d'ordres, pas une équivalence de PnL, et Nautilus appelle
+un callback de stratégie Python à chaque cotation là où les deux autres exécutent du
+code natif. Il s'agit d'une seule charge événementielle étroite, pas d'un classement
+des systèmes de backtesting ; limites d'interprétation complètes dans
+[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
 
 ---
 

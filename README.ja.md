@@ -27,7 +27,7 @@
   ポリシーによるゲート、破壊的な操作を止めるフェイルクローズの制約、そして
   何がなぜ変わったかを残す監査証跡。
 
-📖 **[ドキュメント](https://db.h5i.dev/manual/)** · [マニュアル](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
+📖 **[ドキュメント](https://db.h5i.dev/manual/)** · [バックテスト](https://db.h5i.dev/manual/backtest/) · [クオンツ](https://db.h5i.dev/manual/quant/) · [Python API](https://db.h5i.dev/api/) ·
 [クックブック](https://github.com/h5i-dev/h5i-db-cookbook) · [エージェント向けskill](skills/h5i-db/SKILL.md)
 
 ---
@@ -249,6 +249,15 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 | **h5i-db** | 永続化を含む実行全体: スキャン、デコード、fork、リプレイ、書き込み | 331 ms | 60.5万 events/s |
 | NautilusTrader 1.230.0 | メモリ上のオブジェクトが `BacktestEngine.run()` を通る区間 | 767 ms | 26.1万 events/s |
 | LEAN `11ba019f6` | 最初の `Slice` コールバックから `OnEndOfAlgorithm` まで、ディスク供給 | 2,033 ms | 9.84万 events/s |
+
+1回のウォームアップの後、プロセスを新しくして3回計測した中央値。どのアダプタも
+20万件のイベントを全部見て200件の注文を全部出したことを検証している。計測した境界は
+列に書いたとおり同じではない。このベンチマークが照合するのはイベント数と注文数で、
+PnLの一致ではないし、Nautilusは気配ごとにPythonの戦略コールバックを呼ぶが、残りの
+2つはネイティブコードを走らせている。これはイベント駆動の狭い1ワークロードの結果で、
+バックテストシステムの順位付けではない。解釈の限界は
+[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md)
+に全部書いてある。
 
 ---
 

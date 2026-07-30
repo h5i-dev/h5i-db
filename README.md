@@ -29,7 +29,7 @@ Embedded, written in Rust.**
   fail-closed constraints that block destructive operations, and an audit
   trail of what changed and why.
 
-📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
+📖 **[Documentation](https://db.h5i.dev/manual/)** · [Backtesting](https://db.h5i.dev/manual/backtest/) · [Quant](https://db.h5i.dev/manual/quant/) · [Python API](https://db.h5i.dev/api/) ·
 [Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) · [Agent skill](skills/h5i-db/SKILL.md)
 
 ---
@@ -254,6 +254,14 @@ Full methodology and results in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 | **h5i-db** | full persisted run: scan, decode, fork, replay, write | 331 ms | 605 k events/s |
 | NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
 | LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
+
+Medians of three fresh-process runs after one warm-up, each adapter verifying it
+saw all 200k events and submitted all 200 orders. The measured boundaries differ,
+as the column says: the benchmark checks event and order counts rather than PnL
+equivalence, and Nautilus invokes a Python strategy callback per quote where the
+other two run native code. This is one narrow event-driven workload, not a
+ranking of backtest systems; full interpretation limits in
+[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
 
 ---
 

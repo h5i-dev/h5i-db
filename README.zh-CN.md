@@ -23,7 +23,7 @@
 - (AI) **面向智能体写入的安全策略：** 可预览的变更、策略闸门、以失败即关闭的方式
   拦截破坏性操作的约束，以及记录“改了什么、为什么改”的审计轨迹。
 
-📖 **[文档](https://db.h5i.dev/manual/)** · [手册](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
+📖 **[文档](https://db.h5i.dev/manual/)** · [回测](https://db.h5i.dev/manual/backtest/) · [量化](https://db.h5i.dev/manual/quant/) · [Python API](https://db.h5i.dev/api/) ·
 [实例集](https://github.com/h5i-dev/h5i-db-cookbook) · [智能体 skill](skills/h5i-db/SKILL.md)
 
 ---
@@ -234,6 +234,13 @@ npx skills add h5i-dev/h5i-db        # 从 skills/h5i-db/ 安装 h5i-db skill
 | **h5i-db** | 含持久化的完整运行：扫描、解码、fork、重放、写回 | 331 ms | 60.5 万 事件/秒 |
 | NautilusTrader 1.230.0 | 内存中的对象穿过 `BacktestEngine.run()` | 767 ms | 26.1 万 事件/秒 |
 | LEAN `11ba019f6` | 从首个 `Slice` 回调到 `OnEndOfAlgorithm`，数据来自磁盘 | 2033 ms | 9.84 万 事件/秒 |
+
+先热身一次，之后每次都用全新进程测三遍取中位数；每个适配器都会验证自己确实看到了
+20 万个事件、发出了 200 笔订单。各家测量的边界并不相同，就是表中那一列写的意思：
+这份基准校验的是事件数和订单数，不是 PnL 的等价性；而且 Nautilus 每来一个报价就要调
+一次 Python 策略回调，另外两者跑的是原生代码。这是一份窄口径的事件驱动工作负载，
+不是对回测系统的排名；完整的解释限度见
+[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md)。
 
 ---
 
