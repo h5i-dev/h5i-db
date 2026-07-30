@@ -674,22 +674,10 @@
         data instead of copying it, so a wide sweep costs close to nothing and discards cleanly.</div>
       </div>
       <div class="feat-card">
-        <div class="feat-name">Settlement gated on observability</div>
-        <div class="feat-desc">A market settles only once the run has simulated past the instant its
-        result became knowable. Otherwise the position is reported unsettled, rather than booked as
-        profit nobody trading that window could have collected.</div>
-      </div>
-      <div class="feat-card">
         <div class="feat-name">Statistics that report their own reliability</div>
         <div class="feat-desc">Factor and performance metrics at <code>alphalens</code> and
         <code>empyrical</code> parity, plus deflated Sharpe, probability of backtest overfitting, and
         purged cross-validation, so a number found by searching is discounted for the search.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-name">A trial ledger, not a rerun</div>
-        <div class="feat-desc">Configurations are content-addressed, so an identical trial is served
-        from the ledger instead of recomputed. The review surface ranks runs by what still needs a
-        human and shows gross, costs, and net side by side.</div>
       </div>
     </div>
   </div>
