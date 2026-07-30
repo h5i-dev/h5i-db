@@ -46,6 +46,19 @@ pub struct ResolvedTable {
     pub head_sequence: u64,
 }
 
+/// A copy-on-write shadow built in memory, before any object is written.
+///
+/// Separating preparation from writing is what lets a batch of shadows share
+/// one metadata lock and one durability barrier per stage; see
+/// [`Database::materialize_shadows`].
+struct PreparedShadow {
+    name: String,
+    table_id: Uuid,
+    spec: TableSpec,
+    manifest: VersionManifest,
+    entry: crate::fork::ForkTableEntry,
+}
+
 /// Options for a direct (engine-free) scan.
 #[derive(Debug, Clone, Default)]
 pub struct ScanOptions {
@@ -1475,6 +1488,79 @@ impl Database {
         if let Some(existing) = crate::fork::load_entry(&self.backend, &fork.name, name).await? {
             return existing.to_catalog_entry();
         }
+        let prepared = self.prepare_shadow(fork, name, base).await?;
+        let entry = prepared.entry.clone();
+        self.write_shadows(fork, vec![prepared]).await?;
+        entry.to_catalog_entry()
+    }
+
+    /// Materialize the shadows for `names` under **one** metadata lock.
+    ///
+    /// A fork's first write to a table it inherited is not free: the name still
+    /// resolves to the base, so the write path has to mint a fork-owned table
+    /// over the pinned base manifest first. Done one name at a time, that takes
+    /// the database-wide metadata lock once per table and spreads the shadows
+    /// over one durability barrier each, which is why a multi-table transaction
+    /// into a fresh fork measured *slower* than the same tables written
+    /// serially: it paid the same per-table materialization and the journal on
+    /// top of it.
+    ///
+    /// Batching changes only how the work is grouped. Each shadow is prepared
+    /// exactly as [`Self::materialize_shadow`] prepares it, including the
+    /// checksum check against the pin and the refinement assertion; the specs
+    /// then share one barrier and the fork catalog entries share another.
+    ///
+    /// Names that are absent, or already fork-owned, are skipped rather than
+    /// refused. Absent ones are left for the caller's own resolution to report,
+    /// so batching this ahead of a write does not change which error a caller
+    /// sees or when.
+    pub(crate) async fn materialize_shadows(&self, names: &[String]) -> Result<()> {
+        let Some(fork) = &self.fork else {
+            return Ok(());
+        };
+        // Cheap pass without the lock: most calls have nothing to do, and
+        // taking the database-wide lock to discover that would put every write
+        // in a fork behind every other one.
+        let mut candidates = Vec::new();
+        for name in names {
+            let Some(entry) = self.entry_opt(name).await? else {
+                continue;
+            };
+            if fork.pin(entry.table_id).is_some() {
+                candidates.push((name.clone(), entry));
+            }
+        }
+        if candidates.is_empty() {
+            return Ok(());
+        }
+
+        let _meta = self.backend.meta_lock().await?;
+        let mut prepared = Vec::with_capacity(candidates.len());
+        for (name, base) in &candidates {
+            // Re-check under the lock, for the same reason the single-name
+            // path does: a concurrent writer in this fork may have got here
+            // first, and two shadows for one name would split its history.
+            if crate::fork::load_entry(&self.backend, &fork.name, name)
+                .await?
+                .is_some()
+            {
+                continue;
+            }
+            prepared.push(self.prepare_shadow(fork, name, base).await?);
+        }
+        self.write_shadows(fork, prepared).await
+    }
+
+    /// Build a shadow's spec, manifest and catalog entry. Writes nothing.
+    ///
+    /// The caller must hold the metadata lock and must have established that
+    /// `name` is not already fork-owned.
+    async fn prepare_shadow(
+        &self,
+        fork: &crate::fork::Fork,
+        name: &str,
+        base: &CatalogEntry,
+    ) -> Result<PreparedShadow> {
         let pin = fork.pin(base.table_id).ok_or_else(|| {
             Error::internal(format!("fork {:?} does not pin table {name:?}", fork.name))
         })?;
@@ -1511,11 +1597,6 @@ impl Database {
         spec.table_id = table_id;
         spec.checksum = String::new();
         spec.checksum = spec.compute_checksum()?;
-        let spec_path = layout::spec_path(table_id, spec.schema_revision);
-        self.backend
-            .put(&spec_path, serde_json::to_vec_pretty(&spec)?.into())
-            .await?;
-        self.backend.sync_objects(&[spec_path]).await?;
 
         // Version 0 of the shadow *is* the pinned base version's content.
         let mut manifest = base_manifest.clone();
@@ -1557,18 +1638,6 @@ impl Database {
         )?;
 
         manifest.recompute_rollups();
-        self.commit_manifest_locked(
-            name,
-            table_id,
-            None,
-            &mut manifest,
-            0,
-            CommitInputs {
-                segment_limit: Some(spec.max_segments_per_manifest),
-                parent_committed_at_ns: None,
-            },
-        )
-        .await?;
 
         let entry = crate::fork::ForkTableEntry {
             name: name.to_string(),
@@ -1583,10 +1652,67 @@ impl Database {
             checksum: String::new(),
         }
         .seal()?;
-        // Catalog entry last: a crash before this leaves an unreachable table
-        // directory (collectible), never a half-registered shadow.
-        crate::fork::create_entry(&self.backend, &fork.name, &entry).await?;
-        entry.to_catalog_entry()
+
+        Ok(PreparedShadow {
+            name: name.to_string(),
+            table_id,
+            spec,
+            manifest,
+            entry,
+        })
+    }
+
+    /// Write prepared shadows: specs, then manifests and HEADs, then catalog
+    /// entries. The caller must hold the metadata lock.
+    ///
+    /// Per shadow the order is the same one [`Self::create_tables`] keeps, and
+    /// for the same reason: a crash mid-way leaves an unreachable table
+    /// directory, which vacuum collects, never a half-registered shadow that
+    /// resolution can see. Batching moves only where the barriers sit, and the
+    /// entries stay last.
+    async fn write_shadows(
+        &self,
+        fork: &crate::fork::Fork,
+        mut prepared: Vec<PreparedShadow>,
+    ) -> Result<()> {
+        if prepared.is_empty() {
+            return Ok(());
+        }
+
+        let mut spec_paths = Vec::with_capacity(prepared.len());
+        for shadow in &prepared {
+            let spec_path = layout::spec_path(shadow.table_id, shadow.spec.schema_revision);
+            self.backend
+                .put(&spec_path, serde_json::to_vec_pretty(&shadow.spec)?.into())
+                .await?;
+            spec_paths.push(spec_path);
+        }
+        self.backend.sync_objects(&spec_paths).await?;
+
+        for shadow in &mut prepared {
+            self.commit_manifest_locked(
+                &shadow.name,
+                shadow.table_id,
+                None,
+                &mut shadow.manifest,
+                0,
+                CommitInputs {
+                    segment_limit: Some(shadow.spec.max_segments_per_manifest),
+                    parent_committed_at_ns: None,
+                },
+            )
+            .await?;
+        }
+
+        let mut entry_paths = Vec::with_capacity(prepared.len());
+        for shadow in &prepared {
+            entry_paths.push(
+                crate::fork::create_entry_unsynced(&self.backend, &fork.name, &shadow.entry)
+                    .await?,
+            );
+        }
+        self.backend.sync_objects(&entry_paths).await?;
+        Ok(())
     }
 
     async fn write_prologue(

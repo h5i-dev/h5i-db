@@ -60,6 +60,9 @@ struct Args {
     /// Steps in the branch-mutate-evaluate-prune loop.
     #[arg(long, default_value_t = 32)]
     steps: usize,
+    /// Inherited tables a fork writes to in the first-touch measurement.
+    #[arg(long, default_value_t = 5)]
+    shadow_tables: usize,
     /// Where to build the scratch database (a temp dir by default).
     #[arg(long)]
     dir: Option<PathBuf>,
@@ -133,6 +136,7 @@ struct Report {
     reclamation: ReclamationReport,
     loop_workload: LoopReport,
     cross_fork: CrossForkReport,
+    first_touch: FirstTouchReport,
 }
 
 #[derive(Debug, Serialize)]
@@ -142,6 +146,33 @@ struct ConfigReport {
     rows: usize,
     segments: usize,
     steps: usize,
+    shadow_tables: usize,
+}
+
+/// The cost of a fork's **first** write to each of N tables it inherited.
+///
+/// A fork is cheap to create and cheap to read from. Writing is where it first
+/// pays: the name still resolves to the base, so the write path materializes a
+/// copy-on-write shadow — a fresh table id over the pinned base manifest, no
+/// Parquet byte moved. That is once per table per fork, and it is the cost an
+/// agentic workload actually meets, because such a workload forks in order to
+/// write.
+///
+/// `serial_ms` writes the tables one append at a time; `transaction_ms` writes
+/// them in one multi-table transaction. The two differ only in how many times
+/// the database-wide metadata lock is taken and how many durability barriers
+/// the shadows are spread across, so the gap between them is exactly what
+/// batching the materialization is worth. `second_write_ms` is the same
+/// transaction against the same fork once the shadows exist, which is the floor
+/// this can approach but not go below.
+#[derive(Debug, Serialize)]
+struct FirstTouchReport {
+    tables: usize,
+    serial_ms: u64,
+    transaction_ms: u64,
+    second_write_ms: u64,
+    /// Materialization cost alone, as a multiple of an ordinary write.
+    first_touch_overhead: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -243,6 +274,30 @@ fn dir_bytes(root: &Path) -> u64 {
         }
     }
     total
+}
+
+fn shadow_table(index: usize) -> String {
+    format!("shadow-{index:03}")
+}
+
+/// Tables a fork can inherit and then write to, for the first-touch phase.
+///
+/// Each gets real content, because materializing a shadow copies the pinned
+/// base *manifest*: an empty table would make the copy trivially cheap and the
+/// measurement meaningless.
+async fn seed_shadow_tables(db: &Database, count: usize, rows: usize) {
+    if count == 0 {
+        return;
+    }
+    let specs: Vec<_> = (0..count)
+        .map(|i| (shadow_table(i), schema(), options()))
+        .collect();
+    db.create_tables(specs).await.unwrap();
+    for i in 0..count {
+        db.write(&shadow_table(i), vec![batch(0, rows)], WriteOptions::default())
+            .await
+            .unwrap();
+    }
 }
 
 /// A base database with `rows` rows spread over `segments` commits.
@@ -445,6 +500,60 @@ async fn main() {
     }
     let per_fork_loop_ms = t.elapsed().as_millis() as u64;
 
+    // -- first touch: a fork's first write to each inherited table --------
+    //
+    // Deliberately last, so the forks it creates do not perturb the counts the
+    // phases above measure against.
+    let shadow_rows = (args.rows / 10).max(100);
+    seed_shadow_tables(&db, args.shadow_tables, shadow_rows).await;
+
+    let touch = |fork_name: String| {
+        let db = &db;
+        async move {
+            db.create_fork(&fork_name, None, None, serde_json::Map::new())
+                .await
+                .unwrap();
+            db.open_fork(&fork_name).await.unwrap()
+        }
+    };
+
+    let serial_fork = touch("first-touch-serial".to_string()).await;
+    let t = Instant::now();
+    for i in 0..args.shadow_tables {
+        serial_fork
+            .append(
+                &shadow_table(i),
+                vec![batch(shadow_rows as i64, 100)],
+                WriteOptions::default(),
+            )
+            .await
+            .unwrap();
+    }
+    let serial_ms = t.elapsed().as_millis() as u64;
+
+    let txn_fork = touch("first-touch-txn".to_string()).await;
+    let t = Instant::now();
+    let mut txn = txn_fork.transaction();
+    for i in 0..args.shadow_tables {
+        txn.append(&shadow_table(i), vec![batch(shadow_rows as i64, 100)])
+            .unwrap();
+    }
+    txn.commit().await.unwrap();
+    let transaction_ms = t.elapsed().as_millis() as u64;
+
+    // Same fork, same shape, shadows already materialized: the floor.
+    let t = Instant::now();
+    let mut txn = txn_fork.transaction();
+    for i in 0..args.shadow_tables {
+        txn.append(
+            &shadow_table(i),
+            vec![batch(shadow_rows as i64 + 1_000, 100)],
+        )
+        .unwrap();
+    }
+    txn.commit().await.unwrap();
+    let second_write_ms = t.elapsed().as_millis() as u64;
+
     let report = Report {
         config: ConfigReport {
             forks: args.forks,
@@ -452,6 +561,7 @@ async fn main() {
             rows: args.rows,
             segments: args.segments,
             steps: args.steps,
+            shadow_tables: args.shadow_tables,
         },
         star_create_scaling: Scaling::of(&star_samples),
         star_create: Percentiles::of(star_samples),
@@ -490,6 +600,13 @@ async fn main() {
             wall_clock_ratio: per_fork_loop_ms as f64 / cross_fork_ms.max(1) as f64,
             rows,
         },
+        first_touch: FirstTouchReport {
+            tables: args.shadow_tables,
+            serial_ms,
+            transaction_ms,
+            second_write_ms,
+            first_touch_overhead: transaction_ms as f64 / second_write_ms.max(1) as f64,
+        },
     };
 
     eprintln!("\n--- fork lifecycle ---");
@@ -510,6 +627,14 @@ async fn main() {
     eprintln!(
         "resolve       {:.2}x over {} live forks, {:.2}x over {} levels of depth",
         report.resolve_vs_fork_count.ratio, args.forks, report.resolve_vs_depth.ratio, args.depth
+    );
+    eprintln!("\n--- first touch ({} inherited tables) ---", args.shadow_tables);
+    eprintln!(
+        "serial appends {:>5} ms   one transaction {:>5} ms   already shadowed {:>5} ms  ({:.2}x)",
+        report.first_touch.serial_ms,
+        report.first_touch.transaction_ms,
+        report.first_touch.second_write_ms,
+        report.first_touch.first_touch_overhead
     );
     eprintln!("\n--- storage ---");
     eprintln!(
