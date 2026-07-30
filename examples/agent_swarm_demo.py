@@ -465,10 +465,16 @@ def find_binary() -> Optional[Path]:
     source version writes, and it fails with `format_too_new` rather than
     anything a reader would connect to their PATH.
     """
-    for profile in ("release", "debug"):
-        candidate = REPO / "target" / profile / "h5i-db"
-        if candidate.exists():
-            return candidate
+    builds = [
+        candidate
+        for profile in ("release", "debug")
+        if (candidate := REPO / "target" / profile / "h5i-db").exists()
+    ]
+    if builds:
+        # Newest wins, not release-over-debug. A stale release build from last
+        # week would otherwise shadow the debug build you made a minute ago,
+        # and the version skew is invisible until something refuses to open.
+        return max(builds, key=lambda path: path.stat().st_mtime)
     found = shutil.which("h5i-db")
     return Path(found) if found else None
 
