@@ -228,3 +228,82 @@ def test_skill_flags_for_the_venues_cli_exist():
             with pytest.raises(SystemExit):
                 venues_cli.main([verb, "--help"])
         assert flag in buffer.getvalue(), f"venues {verb} has no {flag}"
+
+
+def test_error_tree_named_in_python_md_exists_with_its_attributes():
+    """python.md lists the exception subclasses and three attributes."""
+    import builtins
+
+    text = (SKILLS / "references" / "python.md").read_text(encoding="utf-8")
+    # Digits are allowed: the base class is `H5iError`. Builtins are excluded,
+    # because the prose legitimately names `AttributeError` when describing what
+    # a bad import raises.
+    named = {
+        name
+        for name in re.findall(r"\b([A-Z][A-Za-z0-9]*Error)\b", text)
+        if not hasattr(builtins, name)
+    }
+    assert "H5iError" in named, "python.md should name the base error"
+    for name in sorted(named):
+        assert hasattr(h5i_db, name), f"python.md names {name}, which does not exist"
+        assert issubclass(getattr(h5i_db, name), Exception)
+
+    # `.code`, `.retryable` and `.hint` resolve on instances, not on the class,
+    # so a class-level check would pass while the documented usage failed.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = h5i_db.Database(f"{tmp}/probe.db", create=True)
+        try:
+            with pytest.raises(h5i_db.H5iError) as caught:
+                db.sql("SELECT * FROM table_that_does_not_exist")
+            for attribute in ("code", "retryable", "hint"):
+                assert hasattr(caught.value, attribute), (
+                    f"python.md documents .{attribute} on H5iError instances"
+                )
+        finally:
+            db.close()
+
+
+def test_the_import_nuance_python_md_warns_about_is_still_true():
+    """`backtest`/`venues` bind on import; `quant` needs naming explicitly.
+
+    Documented because an agent writing `import h5i_db` then
+    `h5i_db.quant.tearsheet(...)` gets an AttributeError. If the package ever
+    starts importing `quant` eagerly, the warning becomes wrong and this fails.
+    """
+    import subprocess
+    import sys
+
+    package_root = str(Path(h5i_db.__file__).resolve().parents[1])
+    probe = (
+        "import h5i_db;"
+        "print(hasattr(h5i_db,'backtest'), hasattr(h5i_db,'venues'),"
+        " hasattr(h5i_db,'quant'))"
+    )
+    # A subprocess, because any earlier `from h5i_db import quant` in this
+    # session would have bound the attribute and hidden the behaviour.
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env={"PYTHONPATH": package_root, "PATH": "/usr/bin:/bin"},
+        check=True,
+    ).stdout.split()
+    assert out == ["True", "True", "False"], (
+        f"python.md's import note no longer matches reality: {out}"
+    )
+
+
+def test_console_scripts_python_md_mentions_match_the_packaging():
+    """The two entry points named in python.md must be declared in pyproject."""
+    pyproject = Path(h5i_db.__file__).resolve().parents[2] / "pyproject.toml"
+    if not pyproject.exists():  # installed wheel rather than a source checkout
+        pytest.skip("not a source checkout")
+    declared = pyproject.read_text(encoding="utf-8")
+    text = (SKILLS / "references" / "python.md").read_text(encoding="utf-8")
+    for script in re.findall(r"`(h5i-[a-z]+)`", text):
+        assert f"{script} =" in declared, (
+            f"python.md mentions the {script} console script; pyproject does not "
+            "declare it"
+        )
