@@ -19,12 +19,10 @@ et pensés pour les agents, au service de la recherche quantitative. Embarqués,
   portant sur le haut du carnet.
 - (BT) **Prise en charge native des marchés courants :** les payloads Kalshi,
   Polymarket et Hyperliquid se décodent en un unique jeu de tables canoniques,
-  chacun avec la vraie courbe de frais et le funding du venue plutôt qu'un
-  `notionnel × taux` générique.
-- (BT) **Les statistiques habituelles, et ce qu'elles valent :** les chiffres de
-  facteurs et de performance correspondent à `alphalens` et `empyrical` ; le Sharpe
-  dégonflé et la probabilité de surapprentissage disent quelle part d'un résultat
-  n'était que la recherche qui l'a trouvé.
+  chacun avec la vraie courbe de frais et le funding du venue.
+- (BT) **Analyse statistique professionnelle :** métriques de facteurs et de
+  performance à parité `alphalens` et `empyrical`, plus le Sharpe dégonflé et la
+  détection de la probabilité de surapprentissage.
 - (AI) **Forkez une base en quelques millisecondes :** les forks partagent les
   données au lieu de les copier. Un agent peut enchaîner de larges boucles
   d'essai et d'erreur (forker, muter, évaluer, jeter) pour un coût quasi nul.

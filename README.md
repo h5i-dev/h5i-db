@@ -16,11 +16,10 @@ Embedded, written in Rust.**
   top-of-book workload.
 - (BT) **Native support for popular markets:** Kalshi, Polymarket and Hyperliquid
   payloads decode into one canonical set of tables, each with the venue's real fee
-  curve and funding rather than a generic `notional × rate`.
-- (BT) **The usual statistics, plus how much to trust them:** factor and
-  performance numbers match `alphalens` and `empyrical`; deflated Sharpe and
-  overfitting probability say how much of a result was just the search that
-  found it.
+  curve and funding.
+- (BT) **Professional statistical analysis:** factor and performance metrics at
+  `alphalens` and `empyrical` parity, plus deflated Sharpe and
+  overfitting-probability detection.
 - (AI) **Fork a database in milliseconds:** forks share data instead of copying it. 
   Agents can run wide trial-and-error loops (fork, mutate, evaluate, discard) 
   at almost zero cost.

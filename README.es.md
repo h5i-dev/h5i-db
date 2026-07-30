@@ -18,12 +18,10 @@ escritos en Rust.**
   sobre el tope del libro.
 - (BT) **Soporte nativo de los mercados más usados:** los payloads de Kalshi,
   Polymarket e Hyperliquid se decodifican en un único conjunto canónico de tablas,
-  cada uno con la curva de comisiones y el funding reales del venue en lugar de un
-  `nocional × tasa` genérico.
-- (BT) **Las estadísticas de siempre, y cuánto fiarse de ellas:** las cifras de
-  factores y de rendimiento coinciden con `alphalens` y `empyrical`; el Sharpe
-  deflactado y la probabilidad de sobreajuste dicen cuánto de un resultado fue
-  solo la búsqueda que lo encontró.
+  cada uno con la curva de comisiones y el funding reales del venue.
+- (BT) **Análisis estadístico profesional:** métricas de factores y de rendimiento
+  con paridad `alphalens` y `empyrical`, además de Sharpe deflactado y detección de
+  la probabilidad de sobreajuste.
 - (AI) **Bifurca una base de datos en milisegundos:** los forks comparten los datos
   en lugar de copiarlos. Un agente puede recorrer ciclos amplios de ensayo y
   error (bifurcar, mutar, evaluar, descartar) a un coste casi nulo.
