@@ -42,7 +42,7 @@ use h5i_db_backtest::error::{BacktestError, Result};
 use h5i_db_backtest::event::MarketEvent;
 use h5i_db_backtest::event::Record;
 use h5i_db_backtest::instrument::Instrument;
-use h5i_db_backtest::settlement::Resolution;
+use h5i_db_backtest::settlement::{Payout, Resolution};
 use h5i_db_backtest::store;
 use h5i_db_backtest::types::UnixNanos;
 use h5i_db_backtest::window::TimeWindow;
@@ -134,6 +134,7 @@ impl IngestPlan {
             hasher.update(instrument.id.as_str().as_bytes());
             hasher.update(&instrument.outcome_count().to_le_bytes());
             hasher.update(&instrument.tick_size.raw().to_le_bytes());
+            hasher.update(&[instrument.neg_risk as u8]);
         }
         for (label, stream) in [
             (b"b".as_slice(), &self.book_events),
@@ -152,7 +153,24 @@ impl IngestPlan {
         }
         for resolution in &self.resolutions {
             hasher.update(resolution.instrument.as_str().as_bytes());
-            hasher.update(&resolution.winner.0.to_le_bytes());
+            // The whole payout, not just a winner: a void and a one-sided
+            // result are different loads and must not share a digest.
+            match &resolution.payout {
+                Payout::Winner(outcome) => {
+                    hasher.update(b"w");
+                    hasher.update(&outcome.0.to_le_bytes());
+                }
+                Payout::Void { outcomes } => {
+                    hasher.update(b"v");
+                    hasher.update(&outcomes.to_le_bytes());
+                }
+                Payout::Split(payouts) => {
+                    hasher.update(b"s");
+                    for price in payouts {
+                        hasher.update(&price.raw().to_le_bytes());
+                    }
+                }
+            }
             hasher.update(&resolution.observable_at.get().to_le_bytes());
         }
         hasher.finalize().to_hex().to_string()

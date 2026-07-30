@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(parsed.instrument.tick_size, Price::from_f64(0.001).unwrap());
         assert_eq!(parsed.instrument.lot_size, Qty::from_f64(0.01).unwrap());
         assert_eq!(parsed.instrument.settlement_currency.as_str(), "USD");
-        assert_eq!(parsed.resolution.unwrap().winner, OutcomeId(0));
+        assert_eq!(parsed.resolution.unwrap().winner(), Some(OutcomeId(0)));
     }
 
     #[test]

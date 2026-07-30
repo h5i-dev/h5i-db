@@ -29,7 +29,7 @@ use crate::event::{MarketEvent, Record};
 use crate::instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
 use crate::position::Portfolio;
 use crate::schema;
-use crate::settlement::{Resolution, SettlementReport};
+use crate::settlement::{Payout, Resolution, SettlementReport};
 use crate::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
 use crate::window::TimeWindow;
 
@@ -182,6 +182,7 @@ pub async fn write_instruments(
     let mut lot = Float64Builder::new();
     let mut expiration = Int64Builder::new();
     let mut observable = Int64Builder::new();
+    let mut neg_risk = BooleanBuilder::new();
 
     for instrument in instruments {
         for (index, name) in instrument.outcomes.iter().enumerate() {
@@ -201,6 +202,7 @@ pub async fn write_instruments(
                 Some(at) => observable.append_value(at.get()),
                 None => observable.append_null(),
             }
+            neg_risk.append_value(instrument.neg_risk);
         }
     }
 
@@ -215,6 +217,7 @@ pub async fn write_instruments(
         Arc::new(lot.finish()),
         Arc::new(expiration.finish()),
         Arc::new(observable.finish()),
+        Arc::new(neg_risk.finish()),
     ];
     append(db, schema::INSTRUMENTS, schema::instruments(), columns).await
 }
@@ -255,6 +258,9 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
         let lot = column::<Float64Array>(batch, "lot_size")?;
         let expiration = column::<Int64Array>(batch, "expiration_ns")?;
         let observable = column::<Int64Array>(batch, "settlement_observable_ns")?;
+        // Absent for rows written before the column existed; false is the
+        // reading that cannot invent a mintable set.
+        let neg_risk = column::<BooleanArray>(batch, "neg_risk").ok();
 
         for row in 0..batch.num_rows() {
             let draft = collected
@@ -267,6 +273,9 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
                     lot: lot.value(row),
                     expiration: opt_i64(expiration, row),
                     observable: opt_i64(observable, row),
+                    neg_risk: neg_risk
+                        .map(|column| column.is_valid(row) && column.value(row))
+                        .unwrap_or(false),
                 });
             draft
                 .outcomes
@@ -300,6 +309,7 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
         instrument.lot_size = Qty::from_f64(draft.lot)?;
         instrument.expiration = draft.expiration.map(UnixNanos::new);
         instrument.settlement_observable = draft.observable.map(UnixNanos::new);
+        instrument.neg_risk = draft.neg_risk;
         set.insert(instrument)?;
     }
     Ok(set)
@@ -313,6 +323,7 @@ struct InstrumentDraft {
     lot: f64,
     expiration: Option<i64>,
     observable: Option<i64>,
+    neg_risk: bool,
 }
 
 // -- book events ------------------------------------------------------------
@@ -728,16 +739,50 @@ pub async fn read_funding(
 pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Result<()> {
     let mut ts = TimestampNanosecondBuilder::new();
     let mut instrument = StringBuilder::new();
-    let mut winner = UInt16Builder::new();
+    let mut kind = StringBuilder::new();
+    let mut outcome = UInt16Builder::new();
+    let mut payout = Float64Builder::new();
+    let mut outcome_count = UInt16Builder::new();
+
     for resolution in resolutions {
-        ts.append_value(resolution.observable_at.get());
-        instrument.append_value(resolution.instrument.as_str());
-        winner.append_value(resolution.winner.0);
+        let mut push = |kind_name: &str,
+                        outcome_value: Option<u16>,
+                        payout_value: Option<Price>,
+                        count: Option<u16>| {
+            ts.append_value(resolution.observable_at.get());
+            instrument.append_value(resolution.instrument.as_str());
+            kind.append_value(kind_name);
+            match outcome_value {
+                Some(value) => outcome.append_value(value),
+                None => outcome.append_null(),
+            }
+            match payout_value {
+                Some(value) => payout.append_value(value.to_f64()),
+                None => payout.append_null(),
+            }
+            match count {
+                Some(value) => outcome_count.append_value(value),
+                None => outcome_count.append_null(),
+            }
+        };
+        match &resolution.payout {
+            Payout::Winner(winner) => push("winner", Some(winner.0), None, None),
+            Payout::Void { outcomes } => push("void", None, None, Some(*outcomes)),
+            Payout::Split(payouts) => {
+                for (index, price) in payouts.iter().enumerate() {
+                    push("split", Some(index as u16), Some(*price), None);
+                }
+            }
+        }
     }
+
     let columns: Vec<ArrayRef> = vec![
         Arc::new(ts.finish()),
         Arc::new(instrument.finish()),
-        Arc::new(winner.finish()),
+        Arc::new(kind.finish()),
+        Arc::new(outcome.finish()),
+        Arc::new(payout.finish()),
+        Arc::new(outcome_count.finish()),
     ];
     append(db, schema::RESOLUTIONS, schema::resolutions(), columns).await
 }
@@ -747,20 +792,87 @@ pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Res
 /// Called only by the post-run settlement policy. Nothing on the strategy
 /// path reaches this function, which is the structural half of "a strategy
 /// cannot see the answer".
+///
+/// A split arrives as one row per outcome and is reassembled by instrument,
+/// with the payouts placed by their outcome index rather than by arrival
+/// order, because segments hold rows in whatever order they were written.
 pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolution>> {
     let batches = scan_optional(db, schema::RESOLUTIONS, at, None).await?;
     let mut out = Vec::new();
+    // Split rows, gathered by instrument until every outcome has arrived.
+    let mut splits: BTreeMap<String, (i64, BTreeMap<u16, Price>)> = BTreeMap::new();
+
     for batch in &batches {
         let ts = column::<TimestampNanosecondArray>(batch, "ts_init")?;
         let instrument = column::<StringArray>(batch, "instrument_id")?;
-        let winner = column::<UInt16Array>(batch, "winner_outcome")?;
+        let kind = column::<StringArray>(batch, "kind")?;
+        let outcome = column::<UInt16Array>(batch, "outcome")?;
+        let payout = column::<Float64Array>(batch, "payout")?;
+        let outcome_count = column::<UInt16Array>(batch, "outcome_count")?;
         for row in 0..batch.num_rows() {
-            out.push(Resolution::new(
-                InstrumentId::new(instrument.value(row))?,
-                OutcomeId(winner.value(row)),
-                UnixNanos::new(ts.value(row)),
-            ));
+            let id = instrument.value(row);
+            let at = UnixNanos::new(ts.value(row));
+            match kind.value(row) {
+                "winner" => {
+                    if !outcome.is_valid(row) {
+                        return Err(BacktestError::invalid(format!(
+                            "resolution for {id} names a winner but no outcome"
+                        )));
+                    }
+                    out.push(Resolution::new(
+                        InstrumentId::new(id)?,
+                        OutcomeId(outcome.value(row)),
+                        at,
+                    ));
+                }
+                "void" => {
+                    if !outcome_count.is_valid(row) {
+                        return Err(BacktestError::invalid(format!(
+                            "voided resolution for {id} does not say how many \
+                             outcomes it refunds across"
+                        )));
+                    }
+                    out.push(Resolution::void(
+                        InstrumentId::new(id)?,
+                        outcome_count.value(row),
+                        at,
+                    )?);
+                }
+                "split" => {
+                    if !outcome.is_valid(row) || !payout.is_valid(row) {
+                        return Err(BacktestError::invalid(format!(
+                            "split resolution row for {id} is missing its \
+                             outcome or payout"
+                        )));
+                    }
+                    let entry = splits.entry(id.to_string()).or_insert((at.get(), BTreeMap::new()));
+                    entry
+                        .1
+                        .insert(outcome.value(row), Price::from_f64(payout.value(row))?);
+                }
+                other => {
+                    return Err(BacktestError::Parse {
+                        what: "resolution kind",
+                        value: other.to_string(),
+                    });
+                }
+            }
         }
+    }
+
+    for (id, (at, payouts)) in splits {
+        let expected = payouts.keys().copied().max().map(|last| last as usize + 1);
+        if expected != Some(payouts.len()) {
+            return Err(BacktestError::invalid(format!(
+                "split resolution for {id} has gaps in its outcome indices: {:?}",
+                payouts.keys().collect::<Vec<_>>()
+            )));
+        }
+        out.push(Resolution::split(
+            InstrumentId::new(id)?,
+            payouts.into_values().collect(),
+            UnixNanos::new(at),
+        )?);
     }
     Ok(out)
 }

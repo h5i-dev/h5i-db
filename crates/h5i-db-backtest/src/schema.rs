@@ -157,17 +157,37 @@ pub fn instruments() -> SchemaRef {
         float("lot_size"),
         opt_int("expiration_ns"),
         opt_int("settlement_observable_ns"),
+        // Whether the venue exchanges a complete set of these outcomes for
+        // one unit of cash. Nullable because most instruments predate the
+        // column and false is the safe reading of its absence: a market
+        // that cannot be minted is only a missing capability, whereas a
+        // market wrongly believed mintable creates cash.
+        Field::new("neg_risk", DataType::Boolean, true),
     ]))
 }
 
 /// `resolutions`: how a market ended.
+///
+/// Shaped for the payouts a market can actually produce, not just the
+/// common one. A single winner is one row; a scalar or partial settlement
+/// is one row per outcome carrying its payout; a void is one row naming the
+/// arity it refunds across. `kind` says which, so no row has to be read in
+/// the light of another's absence.
 pub fn resolutions() -> SchemaRef {
     Arc::new(Schema::new(vec![
         // The instant the result became observable, which is what gates
         // settlement -- not the instant the underlying event occurred.
         ts("ts_init"),
         text("instrument_id"),
-        Field::new("winner_outcome", DataType::UInt16, false),
+        // "winner" | "split" | "void"
+        text("kind"),
+        // The winning outcome on a `winner` row, the outcome this payout
+        // belongs to on a `split` row, and absent on a `void`.
+        Field::new("outcome", DataType::UInt16, true),
+        // What one contract on `outcome` pays. Only a `split` carries it.
+        Field::new("payout", DataType::Float64, true),
+        // How many outcomes a `void` refunds across.
+        Field::new("outcome_count", DataType::UInt16, true),
     ]))
 }
 

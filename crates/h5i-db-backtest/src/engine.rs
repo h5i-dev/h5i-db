@@ -215,6 +215,124 @@ impl OrderRequest {
     }
 }
 
+/// Which primitive of the venue's set contract a strategy invoked.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum SetOperationKind {
+    /// Pay one unit of cash, receive one contract on every outcome.
+    Mint,
+    /// Surrender one contract on every outcome, receive one unit of cash.
+    Redeem,
+    /// Polymarket's negative-risk conversion: surrender the NO side of
+    /// `held` and receive cash plus the YES side of everything else.
+    ///
+    /// `held` names the outcomes whose NO the strategy holds, which is how
+    /// the venue's own adapter is addressed.
+    Convert { held: Vec<OutcomeId> },
+}
+
+impl SetOperationKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SetOperationKind::Mint => "mint",
+            SetOperationKind::Redeem => "redeem",
+            SetOperationKind::Convert { .. } => "convert",
+        }
+    }
+}
+
+/// A complete-set operation a strategy asked the venue to perform.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SetOperationRequest {
+    pub instrument: InstrumentId,
+    pub kind: SetOperationKind,
+    /// Sets to mint or redeem; for a conversion, the number of NO contracts
+    /// on each named outcome.
+    pub quantity: Qty,
+    pub tag: Option<String>,
+}
+
+impl SetOperationRequest {
+    pub fn mint(instrument: InstrumentId, quantity: Qty) -> Self {
+        Self {
+            instrument,
+            kind: SetOperationKind::Mint,
+            quantity,
+            tag: None,
+        }
+    }
+
+    pub fn redeem(instrument: InstrumentId, quantity: Qty) -> Self {
+        Self {
+            instrument,
+            kind: SetOperationKind::Redeem,
+            quantity,
+            tag: None,
+        }
+    }
+
+    pub fn convert(instrument: InstrumentId, held: Vec<OutcomeId>, quantity: Qty) -> Self {
+        Self {
+            instrument,
+            kind: SetOperationKind::Convert { held },
+            quantity,
+            tag: None,
+        }
+    }
+
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = Some(tag.into());
+        self
+    }
+}
+
+/// What a complete-set operation did, or why it did nothing.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SetOperation {
+    pub ts: UnixNanos,
+    pub instrument: InstrumentId,
+    pub kind: SetOperationKind,
+    /// Complete sets actually exchanged. Zero on a rejection, and for a
+    /// conversion this is the derived set count, not the NO quantity.
+    pub sets: Qty,
+    /// Cash the account paid (positive) or received (negative), before the
+    /// flat operating cost.
+    pub cash_delta: Money,
+    /// The flat cost of performing it: a chain transaction, not a fee on
+    /// size.
+    pub cost: Money,
+    /// Set when the venue refused the operation.
+    pub rejected: Option<String>,
+}
+
+/// A probability the strategy stated, alongside what the market said.
+///
+/// This is the input a calibration report cannot reconstruct after the
+/// fact. A run's fills say what a strategy *did*; only the strategy knows
+/// what it *believed*, and scoring a forecaster against the market needs
+/// both. Recording the market's own price at the same instant here, rather
+/// than joining to a mark series later, is what keeps the pair honest: the
+/// comparison is against the price the strategy was actually looking at.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Forecast {
+    pub ts: UnixNanos,
+    pub instrument: InstrumentId,
+    pub outcome: OutcomeId,
+    /// What the strategy thought the probability was.
+    pub probability: Price,
+    /// The market's mark at that instant, when a book had one.
+    pub market: Option<Price>,
+    pub tag: Option<String>,
+}
+
+/// One sample of a market's own probability, on the equity curve's clock.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct MarkPoint {
+    pub ts: UnixNanos,
+    pub instrument: InstrumentId,
+    pub outcome: OutcomeId,
+    pub price: Price,
+}
+
 /// A command a strategy queued. Never executed inside the callback that
 /// produced it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -226,6 +344,7 @@ enum Command {
         quantity: Option<Qty>,
         limit: Option<Price>,
     },
+    Set(SetOperationRequest),
 }
 
 /// What a strategy may do and see.
@@ -236,10 +355,12 @@ enum Command {
 pub struct Context<'a> {
     now: UnixNanos,
     books: &'a BTreeMap<BookKey, OrderBook>,
+    marks: &'a BTreeMap<BookKey, Price>,
     portfolio: &'a Portfolio,
     cash: Money,
     commands: &'a mut VecDeque<Command>,
     clock_requests: &'a mut Vec<(String, UnixNanos)>,
+    forecasts: &'a mut Vec<Forecast>,
     next_order_id: &'a mut u64,
 }
 
@@ -318,6 +439,104 @@ impl<'a> Context<'a> {
     pub fn set_timer(&mut self, name: impl Into<String>, at: UnixNanos) {
         self.clock_requests.push((name.into(), at));
     }
+
+    /// The market's own last price for an outcome.
+    pub fn mark(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Option<Price> {
+        self.marks.get(&(instrument.clone(), outcome)).copied()
+    }
+
+    /// Pay one unit of cash per set and receive one contract on every
+    /// outcome.
+    ///
+    /// This is the venue's own primitive -- Polymarket's `split`, the
+    /// conditional-token contract's mint -- and modelling it is what makes
+    /// the sum-to-one relationship *transactable* rather than merely
+    /// observable. Without it a strategy cannot supply both sides of a book
+    /// without first buying them, so complete-set market making and the
+    /// arbitrage that bounds a book to a dollar are both unreachable.
+    ///
+    /// Queued like an order, and subject to the same insertion latency: a
+    /// set operation is a chain transaction, and one that lands instantly is
+    /// an arbitrage nobody could have taken.
+    pub fn mint(&mut self, instrument: &InstrumentId, sets: Qty) {
+        self.commands.push_back(Command::Set(SetOperationRequest::mint(
+            instrument.clone(),
+            sets,
+        )));
+    }
+
+    /// Surrender one contract on every outcome per set and receive one unit
+    /// of cash.
+    pub fn redeem(&mut self, instrument: &InstrumentId, sets: Qty) {
+        self.commands
+            .push_back(Command::Set(SetOperationRequest::redeem(
+                instrument.clone(),
+                sets,
+            )));
+    }
+
+    /// Perform a negative-risk conversion on the outcomes whose NO side is
+    /// held.
+    ///
+    /// See [`SetOperationKind::Convert`]. `held` must name at least two
+    /// outcomes and leave at least one out, which is the residual the
+    /// conversion pays you in.
+    pub fn convert(&mut self, instrument: &InstrumentId, held: Vec<OutcomeId>, quantity: Qty) {
+        self.commands
+            .push_back(Command::Set(SetOperationRequest::convert(
+                instrument.clone(),
+                held,
+                quantity,
+            )));
+    }
+
+    /// Queue a complete-set operation directly.
+    pub fn set_operation(&mut self, request: SetOperationRequest) {
+        self.commands.push_back(Command::Set(request));
+    }
+
+    /// State the probability this strategy assigns to an outcome.
+    ///
+    /// Purely an observation: it moves no cash, places no order, and the
+    /// engine never reads it back. It exists so a run can be *scored* --
+    /// Brier, reliability, advantage over the market -- against what the
+    /// strategy believed rather than against a rolling mean of the price it
+    /// traded, which is a proxy for a forecast and not a forecast.
+    ///
+    /// The market's mark at this instant is captured alongside it.
+    pub fn record_forecast(
+        &mut self,
+        instrument: &InstrumentId,
+        outcome: OutcomeId,
+        probability: Price,
+    ) -> Result<()> {
+        self.record_tagged_forecast(instrument, outcome, probability, None)
+    }
+
+    /// [`Context::record_forecast`], with a label carried onto the sample so
+    /// a report can score several models from one run separately.
+    pub fn record_tagged_forecast(
+        &mut self,
+        instrument: &InstrumentId,
+        outcome: OutcomeId,
+        probability: Price,
+        tag: Option<String>,
+    ) -> Result<()> {
+        if probability < Price::PROBABILITY_MIN || probability > Price::PROBABILITY_MAX {
+            return Err(BacktestError::invalid(format!(
+                "a forecast probability must lie in [0, 1], got {probability}"
+            )));
+        }
+        self.forecasts.push(Forecast {
+            ts: self.now,
+            instrument: instrument.clone(),
+            outcome,
+            probability,
+            market: self.mark(instrument, outcome),
+            tag,
+        });
+        Ok(())
+    }
 }
 
 /// What a strategy implements. Every method has a default, so a strategy
@@ -347,12 +566,24 @@ struct NoStrategy;
 
 impl Strategy for NoStrategy {}
 
-/// An order waiting out its latency before the venue sees it.
+/// What is waiting out its latency: an order, or a set operation.
+///
+/// Both travel the same queue so that their arrival order is one total
+/// order rather than two that happen to interleave. A mint that lands
+/// before the order it was meant to hedge, or after, is a different run,
+/// and which one it is should not depend on which heap was drained first.
+#[derive(PartialEq, Eq)]
+enum InFlightAction {
+    Order(Box<Order>),
+    Set(SetOperationRequest),
+}
+
+/// An action waiting out its latency before the venue sees it.
 #[derive(PartialEq, Eq)]
 struct InFlight {
     release_at: i64,
     sequence: u64,
-    order: Order,
+    action: InFlightAction,
 }
 
 impl Ord for InFlight {
@@ -389,6 +620,12 @@ pub struct RunMetrics {
     pub orders_rejected_margin: u64,
     pub orders_rejected_risk: u64,
     pub orders_rejected_self_trade: u64,
+    /// Sells that would have opened short exposure in an outcome nobody can
+    /// borrow. See [`EngineBuilder::allow_naked_shorts`].
+    pub orders_rejected_naked_short: u64,
+    /// Orders submitted, or arriving after their latency, once the
+    /// instrument had stopped trading.
+    pub orders_rejected_expired: u64,
     pub orders_amended: u64,
     pub fills_taker: u64,
     pub fills_maker: u64,
@@ -398,6 +635,12 @@ pub struct RunMetrics {
     pub queue_joins: u64,
     pub liquidations: u64,
     pub corporate_actions: u64,
+    /// Complete sets minted, redeemed or converted.
+    pub set_operations: u64,
+    /// Set operations the account could not fund or did not hold.
+    pub set_operations_rejected: u64,
+    /// Instruments that stopped trading during the run.
+    pub instruments_expired: u64,
 }
 
 impl RunMetrics {
@@ -432,6 +675,19 @@ impl RunMetrics {
                 reasons.push(format!(
                     "{} would have crossed the account's own book",
                     self.orders_rejected_self_trade
+                ));
+            }
+            if self.orders_rejected_naked_short > 0 {
+                reasons.push(format!(
+                    "{} would have shorted an outcome the venue does not let \
+                     you borrow; buy the complementary outcome instead",
+                    self.orders_rejected_naked_short
+                ));
+            }
+            if self.orders_rejected_expired > 0 {
+                reasons.push(format!(
+                    "{} arrived after their instrument had stopped trading",
+                    self.orders_rejected_expired
                 ));
             }
             if self.orders_cancelled_unfilled > 0 {
@@ -533,6 +789,17 @@ pub struct RunResult {
     /// Orders refused because they would have crossed with this account's
     /// own resting book.
     pub self_trades_prevented: u64,
+    /// Every complete-set operation attempted, in order, including the ones
+    /// the venue refused.
+    pub set_operations: Vec<SetOperation>,
+    /// Probabilities the strategy stated, each paired with the market's own
+    /// price at that instant.
+    pub forecasts: Vec<Forecast>,
+    /// The market's own probabilities, sampled on the equity curve's clock.
+    /// Empty unless [`EngineBuilder::record_mark_curve`] is on.
+    pub mark_curve: Vec<MarkPoint>,
+    /// Instruments that stopped trading during the run, with the instant.
+    pub expirations: Vec<(InstrumentId, UnixNanos)>,
     /// Counters explaining what the run did and did not do.
     pub metrics: RunMetrics,
 }
@@ -580,6 +847,67 @@ pub struct Engine {
     metrics: RunMetrics,
     execution: Box<dyn ExecutionClient>,
     risk_limits: RiskLimits,
+    /// Whether a sell may open short exposure in a market outcome.
+    allow_naked_shorts: bool,
+    /// Every instrument's expiry, ascending, with a cursor into it.
+    expiries: Vec<(i64, InstrumentId)>,
+    next_expiry: usize,
+    expired: std::collections::BTreeSet<InstrumentId>,
+    expirations: Vec<(InstrumentId, UnixNanos)>,
+    set_costs: SetOperationCosts,
+    set_operations: Vec<SetOperation>,
+    forecasts: Vec<Forecast>,
+    record_mark_curve: bool,
+    mark_curve: Vec<MarkPoint>,
+}
+
+/// What performing a complete-set operation costs, regardless of size.
+///
+/// A mint or redeem is one chain transaction. Its cost does not scale with
+/// the number of sets, which is exactly why it matters: a flat cost is what
+/// makes a one-cent-wide complete-set arbitrage unprofitable at small size
+/// and profitable at large, and a model that omits it reports every such
+/// edge as free money.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct SetOperationCosts {
+    pub mint: Money,
+    pub redeem: Money,
+    pub convert: Money,
+}
+
+impl SetOperationCosts {
+    /// The same flat cost for every operation.
+    pub fn flat(cost: Money) -> Result<Self> {
+        if cost.is_negative() {
+            return Err(BacktestError::invalid(
+                "a set operation cost must not be negative",
+            ));
+        }
+        Ok(Self {
+            mint: cost,
+            redeem: cost,
+            convert: cost,
+        })
+    }
+
+    fn for_kind(&self, kind: &SetOperationKind) -> Money {
+        match kind {
+            SetOperationKind::Mint => self.mint,
+            SetOperationKind::Redeem => self.redeem,
+            SetOperationKind::Convert { .. } => self.convert,
+        }
+    }
+}
+
+/// Where a fill came from, which decides how it is priced and counted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum FillOrigin {
+    /// Matched against a book. The fee model prices it.
+    Trade { is_taker: bool },
+    /// A leg of a complete-set operation. Not a trade: no counterparty, no
+    /// spread crossed, and no trading fee -- the operation's own flat cost
+    /// is charged once, not per leg.
+    CompleteSet,
 }
 
 impl Engine {
@@ -600,6 +928,9 @@ impl Engine {
             reporting_currency: crate::currency::Currency::new("USDC")
                 .expect("USDC is a valid code"),
             risk_limits: RiskLimits::default(),
+            allow_naked_shorts: false,
+            set_costs: SetOperationCosts::default(),
+            record_mark_curve: true,
         }
     }
 
@@ -629,6 +960,10 @@ impl Engine {
             self.with_context(|ctx| strategy.on_timer(ctx, &event))?;
             self.drain_commands()?;
         }
+
+        // 1b. Anything whose trading window closed on the way here stops
+        //     being tradable now, before the strategy gets another turn.
+        self.expire_due(ts)?;
 
         // 2. The venue sees the data before anyone else.
         self.apply_to_books(record)?;
@@ -666,6 +1001,65 @@ impl Engine {
         self.simulated_through = Some(ts);
         self.sample_equity(ts)?;
         Ok(())
+    }
+
+    /// Stop trading anything whose expiry the clock has now passed.
+    ///
+    /// Trading stops; the data does not. A venue keeps publishing after a
+    /// market closes -- late prints, a final book teardown, the settlement
+    /// itself -- and those records are still legitimate to observe. What
+    /// must not happen is a fill against them, which is what an unenforced
+    /// `expiration` allows: an order matching a book that only exists
+    /// because the market had already closed.
+    ///
+    /// Resting orders are cancelled rather than left to rot, because an
+    /// order that can never fill and never terminates is indistinguishable
+    /// in a report from one still working.
+    fn expire_due(&mut self, ts: UnixNanos) -> Result<()> {
+        while self.next_expiry < self.expiries.len() && self.expiries[self.next_expiry].0 <= ts.get()
+        {
+            let (at, instrument) = self.expiries[self.next_expiry].clone();
+            self.next_expiry += 1;
+            if !self.expired.insert(instrument.clone()) {
+                continue;
+            }
+            let doomed: Vec<OrderId> = self
+                .resting
+                .iter()
+                .copied()
+                .filter(|id| {
+                    self.orders
+                        .get(id)
+                        .is_some_and(|order| order.instrument == instrument)
+                })
+                .collect();
+            for id in doomed {
+                if let Some(order) = self.orders.get_mut(&id)
+                    && order.is_open()
+                {
+                    order.status = OrderStatus::Cancelled;
+                    order.reject_reason =
+                        Some(format!("{instrument} stopped trading at {at}"));
+                }
+                self.remove_resting(id);
+            }
+            self.expirations.push((instrument, UnixNanos::new(at)));
+            self.metrics.instruments_expired += 1;
+        }
+        Ok(())
+    }
+
+    /// Whether this instrument has stopped trading as of `ts`.
+    ///
+    /// Reads the instrument rather than the expired set, so an order whose
+    /// latency carries it past the expiry is caught even when no record has
+    /// arrived to advance the sweep.
+    fn has_expired(&self, instrument: &InstrumentId, ts: UnixNanos) -> Option<UnixNanos> {
+        self.instruments
+            .get(instrument)
+            .ok()
+            .and_then(|found| found.expiration)
+            .filter(|at| ts >= *at)
     }
 
     /// The account's margin position right now, or `None` when no margin
@@ -836,17 +1230,49 @@ impl Engine {
             realized_pnl: self.portfolio.realized_pnl()?,
             unrealized_pnl: unrealized,
         });
+        self.sample_marks(ts);
         Ok(())
+    }
+
+    /// Record what every probability book thought, on the equity clock.
+    ///
+    /// Only probability instruments, because this series exists to be
+    /// scored: a market price on a prediction market *is* a forecast, and
+    /// scoring a strategy against it is the comparison a calibration report
+    /// is for. A perpetual's mark is a price, not a probability, and has no
+    /// place in that sample.
+    fn sample_marks(&mut self, ts: UnixNanos) {
+        if !self.record_mark_curve {
+            return;
+        }
+        for ((instrument, outcome), price) in &self.marks {
+            let is_probability = self
+                .instruments
+                .get(instrument)
+                .map(|found| found.kind.is_probability())
+                .unwrap_or(false);
+            if !is_probability {
+                continue;
+            }
+            self.mark_curve.push(MarkPoint {
+                ts,
+                instrument: instrument.clone(),
+                outcome: *outcome,
+                price: *price,
+            });
+        }
     }
 
     fn with_context<T>(&mut self, f: impl FnOnce(&mut Context<'_>) -> Result<T>) -> Result<T> {
         let mut ctx = Context {
             now: self.clock.now(),
             books: &self.books,
+            marks: &self.marks,
             portfolio: &self.portfolio,
             cash: self.cash,
             commands: &mut self.commands,
             clock_requests: &mut self.clock_requests,
+            forecasts: &mut self.forecasts,
             next_order_id: &mut self.next_order_id,
         };
         let out = f(&mut ctx)?;
@@ -1071,8 +1497,23 @@ impl Engine {
                     quantity,
                     limit,
                 } => self.amend(id, quantity, limit)?,
+                Command::Set(request) => self.queue_set_operation(request)?,
             }
         }
+        Ok(())
+    }
+
+    /// Send a set operation to the venue, which sees it after the same
+    /// insertion latency an order faces.
+    fn queue_set_operation(&mut self, request: SetOperationRequest) -> Result<()> {
+        let now = self.clock.now();
+        self.sequence += 1;
+        let release_at = now.get().saturating_add(self.latency_model.insert_nanos());
+        self.inflight.push(InFlight {
+            release_at,
+            sequence: self.sequence,
+            action: InFlightAction::Set(request),
+        });
         Ok(())
     }
 
@@ -1194,6 +1635,23 @@ impl Engine {
         order.reduce_only = request.reduce_only;
 
         self.metrics.orders_submitted += 1;
+        if let Some(at) = self.has_expired(&order.instrument, now) {
+            order.status = OrderStatus::Rejected;
+            order.reject_reason = Some(format!(
+                "{} stopped trading at {at}",
+                order.instrument
+            ));
+            self.orders.insert(id, order);
+            self.metrics.orders_rejected_expired += 1;
+            return Ok(());
+        }
+        if let Some(reason) = self.naked_short_rejection(&order) {
+            order.status = OrderStatus::Rejected;
+            order.reject_reason = Some(reason);
+            self.orders.insert(id, order);
+            self.metrics.orders_rejected_naked_short += 1;
+            return Ok(());
+        }
         if let Some(reason) = self.risk_rejection(&order) {
             order.status = OrderStatus::Rejected;
             order.reject_reason = Some(reason);
@@ -1208,10 +1666,78 @@ impl Engine {
         self.inflight.push(InFlight {
             release_at,
             sequence: self.sequence,
-            order: order.clone(),
+            action: InFlightAction::Order(Box::new(order.clone())),
         });
         self.orders.insert(id, order);
         Ok(())
+    }
+
+    /// Would this sell open short exposure in an outcome nobody can borrow?
+    ///
+    /// A prediction-market contract has no lending market. Selling one you
+    /// do not hold is not a short, it is a position the venue would refuse
+    /// to open, and letting a simulator open it produces two errors at once:
+    /// a payoff that cannot be realised, and -- because a short's true
+    /// exposure is `1 - p` rather than `p` -- a collateral requirement
+    /// understated by up to the whole notional.
+    ///
+    /// The test is on the *worst case* across live orders, matching how
+    /// `max_abs_position` is enforced: opposing orders may fill in any
+    /// order, so a sell is only safe if it is covered even when every other
+    /// live sell fills first. `reduce_only` sells are exempt because
+    /// matching clamps them to what would close.
+    fn naked_short_rejection(&self, order: &Order) -> Option<String> {
+        if self.allow_naked_shorts || order.side != Side::Sell || order.reduce_only {
+            return None;
+        }
+        let instrument = self.instruments.get(&order.instrument).ok()?;
+        if !matches!(instrument.kind, crate::instrument::InstrumentKind::PredictionMarket) {
+            return None;
+        }
+        let held = self
+            .portfolio
+            .position(&order.instrument, order.outcome)
+            .map(|position| position.quantity.raw())
+            .unwrap_or(0);
+        let pending: i64 = self
+            .orders
+            .values()
+            .filter(|candidate| {
+                candidate.is_open()
+                    && !candidate.reduce_only
+                    && candidate.side == Side::Sell
+                    && candidate.instrument == order.instrument
+                    && candidate.outcome == order.outcome
+            })
+            .fold(0, |total, candidate| {
+                total.saturating_add(candidate.remaining().raw())
+            });
+        let projected = held
+            .saturating_sub(pending)
+            .saturating_sub(order.quantity.raw());
+        if projected >= 0 {
+            return None;
+        }
+        let complement = instrument
+            .outcome_ids()
+            .find(|candidate| *candidate != order.outcome)
+            .map(|candidate| {
+                instrument
+                    .outcome(candidate)
+                    .map(|label| format!("{label} (outcome {candidate})"))
+                    .unwrap_or_else(|_| candidate.to_string())
+            })
+            .unwrap_or_else(|| "the other outcome".to_string());
+        Some(format!(
+            "selling {} of {} outcome {} would leave a short of {}, and a \
+             prediction-market contract cannot be borrowed; buy {complement} \
+             instead, which has the same payoff at a cost of one minus the \
+             price",
+            order.quantity,
+            order.instrument,
+            order.outcome,
+            Qty::from_raw(-projected)
+        ))
     }
 
     fn risk_rejection(&self, order: &Order) -> Option<String> {
@@ -1280,9 +1806,30 @@ impl Engine {
             if head.release_at > ts.get() {
                 break;
             }
-            released.push(self.inflight.pop().expect("peeked").order);
+            released.push(self.inflight.pop().expect("peeked").action);
         }
-        for mut order in released {
+        for action in released {
+            let mut order = match action {
+                InFlightAction::Order(order) => *order,
+                InFlightAction::Set(request) => {
+                    self.run_set_operation(request, ts, strategy)?;
+                    continue;
+                }
+            };
+            // The order was sent while the market was open and arrived after
+            // it closed. That is a real way to miss a trade, and the honest
+            // outcome is a rejection rather than a fill against a book the
+            // venue was already tearing down.
+            if let Some(at) = self.has_expired(&order.instrument, ts) {
+                order.status = OrderStatus::Rejected;
+                order.reject_reason = Some(format!(
+                    "{} stopped trading at {at}, before this order arrived",
+                    order.instrument
+                ));
+                self.orders.insert(order.id, order);
+                self.metrics.orders_rejected_expired += 1;
+                continue;
+            }
             if let Some(other) = self.would_self_trade(&order) {
                 order.status = OrderStatus::Rejected;
                 order.reject_reason = Some(format!(
@@ -1590,6 +2137,235 @@ impl Engine {
         }
     }
 
+    /// Perform a complete-set operation against the venue's set contract.
+    ///
+    /// The whole operation is expressed as one fill per outcome, priced so
+    /// that the legs sum to exactly one unit of cash per set. That is not a
+    /// convenience: [`crate::position::Portfolio::replay`] rebuilds every
+    /// position from `bt_fills` alone, and a run whose positions moved
+    /// without a fill to explain them is one where the stored result and
+    /// the audit disagree. Minting through the same path keeps them equal.
+    ///
+    /// The division of the dollar across outcomes follows the market's own
+    /// relative prices, normalised to sum to one, falling back to an even
+    /// split where the books are not all quoting. Any division would settle
+    /// to the same total; this one keeps per-outcome profit attribution
+    /// close to what the market thought each leg was worth.
+    fn run_set_operation(
+        &mut self,
+        request: SetOperationRequest,
+        ts: UnixNanos,
+        strategy: &mut dyn Strategy,
+    ) -> Result<()> {
+        let instrument = self.instruments.get(&request.instrument)?.clone();
+        if !instrument.supports_complete_set() {
+            return Err(BacktestError::invalid(format!(
+                "{} does not trade as a complete set, so it cannot be minted \
+                 or redeemed; a group of independent conditions is several \
+                 instruments, not one with many outcomes",
+                instrument.id
+            )));
+        }
+        if !request.quantity.is_positive() {
+            return Err(BacktestError::invalid(format!(
+                "a {} needs a positive quantity",
+                request.kind.as_str()
+            )));
+        }
+        let cost = self.set_costs.for_kind(&request.kind);
+        let outcomes = instrument.outcome_count();
+
+        // A conversion is a redemption in disguise. Holding the NO side of
+        // `k` outcomes is, in this model's long-only outcome space, `k - 1`
+        // complete sets plus one contract on each outcome left out: NO(i) is
+        // "everything except i", so outcome j appears in the basket once for
+        // every i != j, which is `k - 1` times when j is named and `k` times
+        // when it is not. The venue's conversion hands back `k - 1` in cash
+        // and keeps the residual contracts, which is exactly what redeeming
+        // `k - 1` sets does. Naming it separately is worth it because the
+        // strategy reasons in NO contracts and the derivation is not
+        // obvious; collapsing it to a redemption is what keeps the two from
+        // drifting apart.
+        let (sets, side) = match &request.kind {
+            SetOperationKind::Mint => (request.quantity, Side::Buy),
+            SetOperationKind::Redeem => (request.quantity, Side::Sell),
+            SetOperationKind::Convert { held } => {
+                if !instrument.neg_risk {
+                    return Err(BacktestError::invalid(format!(
+                        "{} is not a negative-risk market, so its outcomes \
+                         cannot be converted",
+                        instrument.id
+                    )));
+                }
+                let mut sorted = held.clone();
+                sorted.sort();
+                sorted.dedup();
+                if sorted.len() != held.len() {
+                    return Err(BacktestError::invalid(
+                        "a conversion must name each outcome at most once",
+                    ));
+                }
+                for outcome in &sorted {
+                    instrument.check_outcome(*outcome)?;
+                }
+                if sorted.len() < 2 || sorted.len() >= outcomes as usize {
+                    return Err(BacktestError::invalid(format!(
+                        "a conversion on {} must name between 2 and {} \
+                         outcomes: fewer converts nothing, and naming every \
+                         outcome leaves no residual to be paid in",
+                        instrument.id,
+                        outcomes.saturating_sub(1)
+                    )));
+                }
+                let multiplier = (sorted.len() - 1) as i64;
+                let sets = request
+                    .quantity
+                    .raw()
+                    .checked_mul(multiplier)
+                    .map(Qty::from_raw)
+                    .ok_or(BacktestError::Overflow {
+                        what: "conversion set count",
+                    })?;
+                (sets, Side::Sell)
+            }
+        };
+
+        let mut record = SetOperation {
+            ts,
+            instrument: instrument.id.clone(),
+            kind: request.kind.clone(),
+            sets,
+            cash_delta: Money::ZERO,
+            cost,
+            rejected: None,
+        };
+
+        // Runtime refusals, as opposed to the structural errors above: a
+        // strategy can legitimately race into these, so they are recorded
+        // and the run continues.
+        if let Some(reason) = self.set_operation_refusal(&instrument, side, sets, cost)? {
+            record.sets = Qty::ZERO;
+            record.cash_delta = Money::ZERO;
+            record.cost = Money::ZERO;
+            record.rejected = Some(reason);
+            self.set_operations.push(record);
+            self.metrics.set_operations_rejected += 1;
+            return Ok(());
+        }
+
+        let basis = self.set_basis(&instrument)?;
+        let mut cash_delta = Money::ZERO;
+        for (index, price) in basis.iter().enumerate() {
+            let outcome = OutcomeId(index as u16);
+            self.next_order_id += 1;
+            let id = OrderId(self.next_order_id);
+            let mut order = Order::new(
+                id,
+                instrument.id.clone(),
+                outcome,
+                side,
+                OrderKind::Market,
+                sets,
+                TimeInForce::ImmediateOrCancel,
+                ts,
+            )?;
+            order.status = OrderStatus::Accepted;
+            order.accepted_at = Some(ts);
+            order.tag = Some(
+                request
+                    .tag
+                    .clone()
+                    .unwrap_or_else(|| request.kind.as_str().to_string()),
+            );
+            self.orders.insert(id, order);
+            // The flat cost rides on the first leg. Spreading it across
+            // legs would divide a transaction fee by a number that has
+            // nothing to do with it.
+            let commission = if index == 0 { cost } else { Money::ZERO };
+            let leg = notional(*price, sets)?;
+            cash_delta = match side {
+                Side::Buy => cash_delta.checked_add(leg)?,
+                Side::Sell => cash_delta.checked_sub(leg)?,
+            };
+            self.execute_with_commission(
+                id,
+                *price,
+                sets,
+                FillOrigin::CompleteSet,
+                commission,
+                ts,
+                strategy,
+            )?;
+        }
+
+        record.cash_delta = cash_delta;
+        self.set_operations.push(record);
+        self.metrics.set_operations += 1;
+        Ok(())
+    }
+
+    /// Why the venue would refuse this set operation, if it would.
+    fn set_operation_refusal(
+        &self,
+        instrument: &crate::instrument::Instrument,
+        side: Side,
+        sets: Qty,
+        cost: Money,
+    ) -> Result<Option<String>> {
+        match side {
+            Side::Buy => {
+                // A set costs exactly one unit of cash, whatever the book
+                // says the legs are worth.
+                let needed = notional(Price::PROBABILITY_MAX, sets)?.checked_add(cost)?;
+                if self.cash < needed {
+                    return Ok(Some(format!(
+                        "minting {sets} sets of {} costs {needed} but the \
+                         account holds {}",
+                        instrument.id, self.cash
+                    )));
+                }
+                Ok(None)
+            }
+            Side::Sell => {
+                // Redeeming needs the whole set in hand. Without this check
+                // a redemption would manufacture short positions in the
+                // outcomes it was missing and pay cash for them.
+                for outcome in instrument.outcome_ids() {
+                    let held = self
+                        .portfolio
+                        .position(&instrument.id, outcome)
+                        .map(|position| position.quantity)
+                        .unwrap_or(Qty::ZERO);
+                    if held < sets {
+                        return Ok(Some(format!(
+                            "redeeming {sets} sets of {} needs {sets} of \
+                             outcome {outcome} but only {held} are held",
+                            instrument.id
+                        )));
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+
+    /// How a set's single unit of cash is divided across its outcomes.
+    fn set_basis(&self, instrument: &crate::instrument::Instrument) -> Result<Vec<Price>> {
+        let quoted: Option<Vec<Price>> = instrument
+            .outcome_ids()
+            .map(|outcome| {
+                self.marks
+                    .get(&(instrument.id.clone(), outcome))
+                    .copied()
+                    .filter(|price| price.is_positive())
+            })
+            .collect();
+        match quoted {
+            Some(prices) => crate::instrument::normalise_to_one(&prices),
+            None => crate::instrument::uniform_prices(instrument.outcome_count()),
+        }
+    }
+
     fn execute(
         &mut self,
         id: OrderId,
@@ -1609,6 +2385,30 @@ impl Engine {
             quantity,
             is_taker,
         })?;
+        self.execute_with_commission(
+            id,
+            price,
+            quantity,
+            FillOrigin::Trade { is_taker },
+            commission,
+            ts,
+            strategy,
+        )
+    }
+
+    fn execute_with_commission(
+        &mut self,
+        id: OrderId,
+        price: Price,
+        quantity: Qty,
+        origin: FillOrigin,
+        commission: Money,
+        ts: UnixNanos,
+        strategy: &mut dyn Strategy,
+    ) -> Result<()> {
+        let order = self.orders.get(&id).cloned().expect("order exists");
+        let instrument = self.instruments.get(&order.instrument)?.clone();
+        let is_taker = matches!(origin, FillOrigin::Trade { is_taker: true });
 
         let fill = Fill {
             order_id: id,
@@ -1658,10 +2458,12 @@ impl Engine {
             self.remove_resting(id);
             self.fee_model.order_closed(id);
         }
-        if is_taker {
-            self.metrics.fills_taker += 1;
-        } else {
-            self.metrics.fills_maker += 1;
+        // A set leg took no liquidity and provided none, so counting it as
+        // either would misstate the ratio a maker strategy is judged on.
+        match origin {
+            FillOrigin::Trade { is_taker: true } => self.metrics.fills_taker += 1,
+            FillOrigin::Trade { is_taker: false } => self.metrics.fills_maker += 1,
+            FillOrigin::CompleteSet => {}
         }
         self.fills.push(fill.clone());
         self.with_context(|ctx| strategy.on_fill(ctx, &fill))?;
@@ -1705,6 +2507,10 @@ impl Engine {
             liquidations: self.liquidations.clone(),
             rejected_for_margin: self.rejected_for_margin,
             self_trades_prevented: self.self_trades_prevented,
+            set_operations: self.set_operations.clone(),
+            forecasts: self.forecasts.clone(),
+            mark_curve: self.mark_curve.clone(),
+            expirations: self.expirations.clone(),
             metrics: self.metrics.clone(),
         })
     }
@@ -1736,9 +2542,45 @@ pub struct EngineBuilder {
     execution: Box<dyn ExecutionClient>,
     reporting_currency: crate::currency::Currency,
     risk_limits: RiskLimits,
+    allow_naked_shorts: bool,
+    set_costs: SetOperationCosts,
+    record_mark_curve: bool,
 }
 
 impl EngineBuilder {
+    /// Let a sell open short exposure in a prediction-market outcome.
+    ///
+    /// Off by default, and it should stay off for any venue that resembles
+    /// a real one. A prediction-market contract cannot be borrowed: there is
+    /// no stock loan for a share of "YES", so a venue that lets you sell one
+    /// you do not hold is not modelling a venue. The bearish trade is to buy
+    /// the complementary outcome, which costs `1 - p` and has the same
+    /// payoff -- and a strategy that has to express it that way is one whose
+    /// capital requirement is the real one.
+    ///
+    /// Turning this on is for isolating the effect of the constraint, not
+    /// for producing a result anyone should act on.
+    pub fn allow_naked_shorts(mut self, allow: bool) -> Self {
+        self.allow_naked_shorts = allow;
+        self
+    }
+
+    /// What a mint, redeem or conversion costs to perform.
+    pub fn set_operation_costs(mut self, costs: SetOperationCosts) -> Self {
+        self.set_costs = costs;
+        self
+    }
+
+    /// Whether to sample every probability book onto the equity curve's
+    /// clock, which is what a calibration or reliability report reads.
+    ///
+    /// On by default: the series is one point per book per equity sample,
+    /// and a prediction-market run has few books. Turn it off for a run
+    /// spanning thousands of markets, where the curve stops being small.
+    pub fn record_mark_curve(mut self, record: bool) -> Self {
+        self.record_mark_curve = record;
+        self
+    }
     pub fn starting_cash(mut self, cash: Money) -> Self {
         self.starting_cash = cash;
         self
@@ -1819,6 +2661,21 @@ impl EngineBuilder {
     }
 
     pub fn build(self) -> Engine {
+        // Expiries are resolved once, ascending, so the run only has to
+        // compare the clock against the next one rather than sweep every
+        // instrument on every record.
+        let mut expiries: Vec<(i64, InstrumentId)> = self
+            .instruments
+            .ids()
+            .into_iter()
+            .filter_map(|id| {
+                let instrument = self.instruments.get(&id).ok()?;
+                instrument
+                    .expiration
+                    .map(|at| (at.get(), instrument.id.clone()))
+            })
+            .collect();
+        expiries.sort();
         Engine {
             clock: Clock::new(self.start),
             instruments: self.instruments,
@@ -1859,6 +2716,16 @@ impl EngineBuilder {
             metrics: RunMetrics::default(),
             execution: self.execution,
             risk_limits: self.risk_limits,
+            allow_naked_shorts: self.allow_naked_shorts,
+            expiries,
+            next_expiry: 0,
+            expired: Default::default(),
+            expirations: Vec::new(),
+            set_costs: self.set_costs,
+            set_operations: Vec::new(),
+            forecasts: Vec::new(),
+            record_mark_curve: self.record_mark_curve,
+            mark_curve: Vec::new(),
         }
     }
 }

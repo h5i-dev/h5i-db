@@ -20,11 +20,11 @@ use h5i_db_core::database::ReadAt;
 
 use crate::engine::{Engine, EngineBuilder, RunResult, Strategy};
 use crate::error::{BacktestError, Result};
-use crate::instrument::InstrumentSet;
+use crate::instrument::{InstrumentId, InstrumentSet, OutcomeId};
 use crate::replay::{Replay, priority};
-use crate::settlement::{SettlementReport, settle};
+use crate::settlement::{Resolution, SettlementReport, settle, validate_resolutions};
 use crate::store;
-use crate::types::{Money, UnixNanos};
+use crate::types::{Money, Price, UnixNanos};
 use crate::window::{Coverage, TimeWindow};
 
 /// What to run, and over what.
@@ -114,6 +114,39 @@ impl RunSpec {
     }
 }
 
+/// One scored forecast: what the strategy said, what the market said, and
+/// what happened.
+///
+/// The triple a Brier score, a reliability curve or an advantage-over-market
+/// series is computed from. It is assembled *after* the run, from the
+/// forecasts the strategy stated during it and the resolutions loaded once
+/// it had finished, so producing it cannot be a route by which the answer
+/// reaches the strategy.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CalibrationSample {
+    pub ts: UnixNanos,
+    pub instrument: InstrumentId,
+    pub outcome: OutcomeId,
+    /// What the strategy said the probability was.
+    pub forecast: Price,
+    /// What the market said at the same instant, where a book was quoting.
+    pub market: Option<Price>,
+    /// What the outcome paid: one, zero, or a fraction for a partial
+    /// settlement.
+    pub realized: Price,
+    /// The strategy's own label for this forecast, if it set one.
+    pub tag: Option<String>,
+}
+
+/// Why a stated forecast could not be scored.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct UnscoredForecast {
+    pub instrument: InstrumentId,
+    pub outcome: OutcomeId,
+    pub reason: String,
+    pub count: usize,
+}
+
 /// Everything a finished run produced.
 #[derive(Clone, Debug)]
 pub struct RunReport {
@@ -124,6 +157,10 @@ pub struct RunReport {
     pub settlement: SettlementReport,
     pub coverage: Option<Coverage>,
     pub instruments: InstrumentSet,
+    /// How the markets this run traded ended. Loaded after the run, and
+    /// carried here so a report can score forecasts and attribute
+    /// settlement without a second read.
+    pub resolutions: Vec<Resolution>,
 }
 
 impl RunReport {
@@ -161,7 +198,95 @@ impl RunReport {
                 coverage.ratio() * 100.0
             ));
         }
+        for dropped in self.unscored_forecasts() {
+            out.push(format!(
+                "{} forecast(s) on {} outcome {} were not scored: {}",
+                dropped.count, dropped.instrument, dropped.outcome, dropped.reason
+            ));
+        }
+        for operation in &self.result.set_operations {
+            if let Some(reason) = &operation.rejected {
+                out.push(format!(
+                    "a {} of {} was refused: {reason}",
+                    operation.kind.as_str(),
+                    operation.instrument
+                ));
+            }
+        }
         out
+    }
+
+    /// The scored forecasts this run produced.
+    ///
+    /// One sample per forecast the strategy stated on a market that
+    /// resolved to something worth scoring. Feed these to a Brier score, a
+    /// reliability curve, or an advantage-over-market series.
+    ///
+    /// Two kinds of forecast are dropped rather than scored, and both are
+    /// reported by [`RunReport::unscored_forecasts`] so the sample size is
+    /// never silently smaller than the strategy thinks. A market with no
+    /// known resolution has no outcome to score against. A market that
+    /// **voided**, or otherwise paid every outcome the same, scores every
+    /// forecast identically no matter what it said -- including forecasts
+    /// that were confidently wrong -- so including it does not measure a
+    /// forecaster, it dilutes the sample that does.
+    pub fn calibration_samples(&self) -> Vec<CalibrationSample> {
+        let by_instrument = self.resolutions_by_instrument();
+        self.result
+            .forecasts
+            .iter()
+            .filter_map(|forecast| {
+                let resolution = by_instrument.get(&forecast.instrument)?;
+                if !resolution.payout.is_informative() {
+                    return None;
+                }
+                Some(CalibrationSample {
+                    ts: forecast.ts,
+                    instrument: forecast.instrument.clone(),
+                    outcome: forecast.outcome,
+                    forecast: forecast.probability,
+                    market: forecast.market,
+                    realized: resolution.settlement_price(forecast.outcome),
+                    tag: forecast.tag.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Forecasts that could not be scored, grouped by market and outcome.
+    pub fn unscored_forecasts(&self) -> Vec<UnscoredForecast> {
+        let by_instrument = self.resolutions_by_instrument();
+        let mut grouped: BTreeMap<(InstrumentId, OutcomeId), (String, usize)> = BTreeMap::new();
+        for forecast in &self.result.forecasts {
+            let reason = match by_instrument.get(&forecast.instrument) {
+                None => "this market has no known resolution",
+                Some(resolution) if !resolution.payout.is_informative() => {
+                    "this market paid every outcome the same, so any forecast \
+                     scores identically against it"
+                }
+                Some(_) => continue,
+            };
+            let entry = grouped
+                .entry((forecast.instrument.clone(), forecast.outcome))
+                .or_insert((reason.to_string(), 0));
+            entry.1 += 1;
+        }
+        grouped
+            .into_iter()
+            .map(|((instrument, outcome), (reason, count))| UnscoredForecast {
+                instrument,
+                outcome,
+                reason,
+                count,
+            })
+            .collect()
+    }
+
+    fn resolutions_by_instrument(&self) -> BTreeMap<&InstrumentId, &Resolution> {
+        self.resolutions
+            .iter()
+            .map(|resolution| (&resolution.instrument, resolution))
+            .collect()
     }
 }
 
@@ -283,6 +408,9 @@ where
     // Only now, with the run finished and the strategy unable to influence
     // anything, does the answer get loaded.
     let resolutions = store::read_resolutions(db, spec.read_at.clone()).await?;
+    // A resolution that disagrees with the market it names is a mapping
+    // mistake, and settling on it would pay the wrong leg silently.
+    validate_resolutions(&resolutions, &instruments)?;
     let portfolio = crate::position::Portfolio::replay(&result.fills)?;
     let marks: BTreeMap<_, _> = result.marks.clone();
     let settlement = settle(&portfolio, &resolutions, result.simulated_through, &marks)?;
@@ -298,5 +426,6 @@ where
         settlement,
         coverage,
         instruments,
+        resolutions,
     })
 }
