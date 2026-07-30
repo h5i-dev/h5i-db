@@ -47,7 +47,7 @@ h5i-db query market.db "SELECT count(*) FROM trades" \
 h5i-db ui market.db                                                # 审阅与实验界面
 ```
 
-**Python 库**
+**Python 库：DataFrame 与 SQL**
 
 ```bash
 pip install h5i-db
@@ -78,7 +78,7 @@ print(plan.summary)                               # 在变更落地之前先预�
 plan.apply()
 ```
 
-**回测**（同一次安装即可，不需要服务端，也不需要另一条数据管线）
+**Python 库：回测**（同一次安装即可，不需要服务端）
 
 ```python
 from h5i_db import backtest
@@ -112,15 +112,6 @@ board = backtest.study(
         train=("2024-01-01", "2024-04-01"), holdout=("2024-04-01", "2024-07-01")
     ),
 ).leaderboard("holdout_final_cash")
-```
-
-同一份带类型的契约也能从命令行使用，所以一个配置文件就是完整的复现配方：
-
-```bash
-python -m h5i_db.backtest inspect market.db config.json   # 重放保真度与预检结论
-python -m h5i_db.backtest run     market.db config.json
-python -m h5i_db.backtest report  market.db momentum-001 --output run.html
-python -m h5i_db.backtest verify  market.db momentum-001
 ```
 
 **智能体 skill**（Claude Code、Codex、Cursor 等）

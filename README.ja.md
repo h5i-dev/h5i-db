@@ -51,7 +51,7 @@ h5i-db query market.db "SELECT count(*) FROM trades" \
 h5i-db ui market.db                                                # レビューと実験の画面
 ```
 
-**Pythonライブラリ**
+**Pythonライブラリ（DataFrameとSQL）**
 
 ```bash
 pip install h5i-db
@@ -82,7 +82,7 @@ print(plan.summary)                               # 変更が確定する前に�
 plan.apply()
 ```
 
-**バックテスト**（同じインストールのまま。サーバーも別のデータパイプラインもいらない）
+**Pythonライブラリ（バックテスト）**：同じインストールのまま、サーバーはいらない
 
 ```python
 from h5i_db import backtest
@@ -117,15 +117,6 @@ board = backtest.study(
         train=("2024-01-01", "2024-04-01"), holdout=("2024-04-01", "2024-07-01")
     ),
 ).leaderboard("holdout_final_cash")
-```
-
-同じ型付きの契約がシェルからも使える。だから設定ファイル一つが再現手順そのものになる:
-
-```bash
-python -m h5i_db.backtest inspect market.db config.json   # 再現精度と事前チェックの結果
-python -m h5i_db.backtest run     market.db config.json
-python -m h5i_db.backtest report  market.db momentum-001 --output run.html
-python -m h5i_db.backtest verify  market.db momentum-001
 ```
 
 **エージェント向けskill**（Claude Code、Codex、Cursorなど）

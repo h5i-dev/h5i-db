@@ -100,6 +100,40 @@ quant.tearsheet(series, path="run.html")
 The statistics are the same empyrical-parity set documented in
 [Quant workflows](quant.html); nothing about them is backtest-specific.
 
+## From the shell
+
+The Python bindings carry a typed configuration, `BacktestConfig`, whose
+sections are `data`, `execution`, `portfolio`, `risk` and `output`. It
+round-trips through JSON, so a config file is a complete reproduction recipe
+and the same contract drives both `backtest.execute(db, config)` and a
+command line:
+
+```bash
+python -m h5i_db.backtest inspect market.db config.json
+python -m h5i_db.backtest run     market.db config.json
+python -m h5i_db.backtest list    market.db
+python -m h5i_db.backtest report  market.db momentum-001 --output run.html
+python -m h5i_db.backtest verify  market.db momentum-001
+```
+
+| Verb | Prints | Exit |
+|---|---|---|
+| `inspect` | the preflight inspection: replay fidelity, per-table stats, errors and warnings | `2` when the config is refused |
+| `run` | the run summary, after refusing on preflight errors | |
+| `list` | one run summary per `bt-` fork, in fork-name order | |
+| `report` | the path it wrote | |
+| `verify` | whether re-executing the stored config reproduced it | `3` when it did not |
+
+Two flags are worth knowing. `run --allow-preflight-errors` records the
+findings and runs anyway, for the case where you know why the data is thin.
+`report --execution-only` renders the execution manifest instead of an equity
+tearsheet; `report` falls back to it on its own when a run produced no equity
+curve, because a tearsheet of nothing is worse than a manifest.
+
+Exit codes are distinct on purpose: a refused config (`2`) and a run that
+failed to reproduce (`3`) call for different responses, and a script should not
+have to parse stdout to tell them apart.
+
 ## Settlement
 
 Settlement is not an event in the replay stream. It is a policy applied

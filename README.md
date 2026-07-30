@@ -53,7 +53,7 @@ h5i-db query market.db "SELECT count(*) FROM trades" \
 h5i-db ui market.db                                                # review + experiments surface
 ```
 
-**Python Library**
+**Python Library for DataFrames and SQL**
 
 ```bash
 pip install h5i-db
@@ -84,7 +84,7 @@ print(plan.summary)                               # preview the mutation before 
 plan.apply()
 ```
 
-**Backtest** (same install, no server, no separate data pipeline)
+**Python Library for Backtesting** (same install, no server)
 
 ```python
 from h5i_db import backtest
@@ -119,16 +119,6 @@ board = backtest.study(
         train=("2024-01-01", "2024-04-01"), holdout=("2024-04-01", "2024-07-01")
     ),
 ).leaderboard("holdout_final_cash")
-```
-
-The same typed contract runs from the shell, so a config file is the whole
-reproduction recipe:
-
-```bash
-python -m h5i_db.backtest inspect market.db config.json   # fidelity + preflight findings
-python -m h5i_db.backtest run     market.db config.json
-python -m h5i_db.backtest report  market.db momentum-001 --output run.html
-python -m h5i_db.backtest verify  market.db momentum-001
 ```
 
 **Agent skill** (Claude Code, Codex, Cursor, …)

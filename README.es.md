@@ -57,7 +57,7 @@ h5i-db query market.db "SELECT count(*) FROM trades" \
 h5i-db ui market.db                                                # revisión y experimentos
 ```
 
-**Biblioteca de Python**
+**Biblioteca de Python para DataFrames y SQL**
 
 ```bash
 pip install h5i-db
@@ -88,7 +88,7 @@ print(plan.summary)                               # previsualiza la mutación an
 plan.apply()
 ```
 
-**Backtesting** (la misma instalación, sin servidor ni una tubería de datos aparte)
+**Biblioteca de Python para backtesting** (la misma instalación, sin servidor)
 
 ```python
 from h5i_db import backtest
@@ -124,16 +124,6 @@ board = backtest.study(
         train=("2024-01-01", "2024-04-01"), holdout=("2024-04-01", "2024-07-01")
     ),
 ).leaderboard("holdout_final_cash")
-```
-
-El mismo contrato tipado funciona desde el shell, así que un archivo de
-configuración es la receta completa de reproducción:
-
-```bash
-python -m h5i_db.backtest inspect market.db config.json   # fidelidad y hallazgos previos
-python -m h5i_db.backtest run     market.db config.json
-python -m h5i_db.backtest report  market.db momentum-001 --output run.html
-python -m h5i_db.backtest verify  market.db momentum-001
 ```
 
 **Skill para agentes** (Claude Code, Codex, Cursor, …)
