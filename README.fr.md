@@ -17,9 +17,10 @@ et pensés pour les agents, au service de la recherche quantitative. Embarqués,
 - (BT) **Un backtester événementiel efficace :** 3,05 M d'événements/s à travers le
   noyau de rejeu, soit 11,7× NautilusTrader et 31× LEAN sur une charge partagée
   portant sur le haut du carnet.
-- (BT) **Les exécutions atterrissent dans la base :** ordres, exécutions, positions
-  et courbe de capital y sont réécrits comme des tables ordinaires, si bien que
-  comparer deux exécutions est une requête SQL, pas un export.
+- (BT) **Prise en charge native des marchés courants :** les payloads Kalshi,
+  Polymarket et Hyperliquid se décodent en un unique jeu de tables canoniques,
+  chacun avec la vraie courbe de frais et le funding du venue plutôt qu'un
+  `notionnel × taux` générique.
 - (BT) **Les statistiques habituelles, et ce qu'elles valent :** les chiffres de
   facteurs et de performance correspondent à `alphalens` et `empyrical` ; le Sharpe
   dégonflé et la probabilité de surapprentissage disent quelle part d'un résultat

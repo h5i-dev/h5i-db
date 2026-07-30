@@ -14,9 +14,9 @@ Embedded, written in Rust.**
 - (BT) **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- (BT) **Runs land in the database:** orders, fills, positions and the equity
-  curve are written back as ordinary tables, so comparing two runs is a SQL
-  query, not an export.
+- (BT) **Native support for popular markets:** Kalshi, Polymarket and Hyperliquid
+  payloads decode into one canonical set of tables, each with the venue's real fee
+  curve and funding rather than a generic `notional × rate`.
 - (BT) **The usual statistics, plus how much to trust them:** factor and
   performance numbers match `alphalens` and `empyrical`; deflated Sharpe and
   overfitting probability say how much of a result was just the search that

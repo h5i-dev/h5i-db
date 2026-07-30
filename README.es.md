@@ -16,9 +16,10 @@ escritos en Rust.**
 - (BT) **Backtester orientado a eventos y eficiente:** 3,05 M de eventos/s a través
   del núcleo de replay, 11,7× NautilusTrader y 31× LEAN en una carga compartida
   sobre el tope del libro.
-- (BT) **Las ejecuciones aterrizan en la base de datos:** órdenes, ejecuciones,
-  posiciones y curva de patrimonio se escriben de vuelta como tablas normales, así
-  que comparar dos ejecuciones es una consulta SQL, no una exportación.
+- (BT) **Soporte nativo de los mercados más usados:** los payloads de Kalshi,
+  Polymarket e Hyperliquid se decodifican en un único conjunto canónico de tablas,
+  cada uno con la curva de comisiones y el funding reales del venue en lugar de un
+  `nocional × tasa` genérico.
 - (BT) **Las estadísticas de siempre, y cuánto fiarse de ellas:** las cifras de
   factores y de rendimiento coinciden con `alphalens` y `empyrical`; el Sharpe
   deflactado y la probabilidad de sobreajuste dicen cuánto de un resultado fue
