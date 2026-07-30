@@ -167,12 +167,6 @@ npx skills add h5i-dev/h5i-db        # installe la skill h5i-db depuis skills/h5
 bien que « quelles données cette exécution a-t-elle vues » a une réponse, et
 rejouer contre cette version relève du O(1) plutôt que de l'archéologie.
 
-- **Extractions point-in-time :** le point de lecture se fixe sur deux axes : le
-temps de l'événement (`--decision-time`) et l'arrivée (`--as-of`). La trame que
-vous passez à pandas est alors bornée à la source, le seul endroit où une borne
-survit au passage vers Python. `arrival-delta` mesure après coup la part d'un
-résultat qui dépendait de données arrivées plus tard.
-
 - **Qu'un résultat ne détruise pas la fenêtre de contexte.**
 `H5I_DB_PROFILE=agent` plafonne chaque requête et déverse le reste en Parquet,
 en indiquant le vrai nombre de lignes et l'endroit où se trouvent celles qui ont
@@ -185,31 +179,24 @@ de frappe, et un indicateur `retryable`.
 - **Bifurquer sans copier.** `fork` ouvre un espace de travail inscriptible
 au-dessus d'une vue figée de chaque table sans dupliquer la moindre donnée : une
 modification ou une expérience coûte un petit fichier et se jette aussi
-facilement qu'elle se garde. `forks('trades')` lit ensuite cette table sur
-toutes les branches à la fois, avec une colonne `__fork`, de sorte que comparer
-ce que chacune a produit ne demande aucune étape d'export.
+facilement qu'elle se garde.
 
-- **L'erreur coûte peu.** Les mutations se prévisualisent via `plan`/`apply` et
-la politique peut imposer ce passage ; `--idempotency-key` fait qu'une ingestion
-relancée rejoue au lieu d'ajouter deux fois ; une `data-policy` optionnelle
-rejette en position fermée les lignes mal formées ; les commits font un fsync
-avant l'échange et chaînent des empreintes de manifeste, ce qui est vérifié en
-tuant l'écrivain à chaque étape.
+- **Contrôle des privilèges.** Les mutations se prévisualisent via `plan`/`apply`
+et la politique peut imposer ce passage ; `--idempotency-key` fait qu'une ingestion
+relancée rejoue au lieu d'ajouter deux fois ; une `data-policy` optionnelle rejette
+en position fermée les lignes mal formées.
 
 - **Une exécution de backtest est une branche.** Chaque exécution se déroule dans
 son propre fork et y écrit ses ordres, exécutions, positions et
 courbe de capital comme des tables ordinaires. Deux exécutions se comparent donc au
 niveau de l'exécution avec `fork_diff`, un balayage entier s'agrège en une seule
 requête inter-forks, celle qui en vaut la peine est `promote`, et le reste est jeté.
-Rien à exporter, rien à nettoyer à la main.
 
 - **La surface de revue répartit l'attention plutôt qu'elle ne classe.**
 `h5i-db ui` trie les essais selon ce qui réclame un humain ensuite : décision
 requise, puis en échec ou avec avertissement, puis terminés et non vus, puis en
 cours, puis vus. Parcourir une liste ne marque rien comme revu ; un essai ne compte
-comme vu que lorsque son détail est ouvert. Le classement est un onglet distinct,
-parce que « lequel est le meilleur jusqu'ici » et « lequel n'ai-je pas regardé »
-sont deux questions différentes.
+comme vu que lorsque son détail est ouvert.
 
 ---
 

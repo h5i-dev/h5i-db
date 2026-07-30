@@ -165,12 +165,6 @@ npx skills add h5i-dev/h5i-db        # instala la skill de h5i-db desde skills/h
 que "qué datos vio esta ejecución" tiene respuesta, y repetirla contra esa
 versión es O(1) en lugar de un trabajo de arqueología.
 
-- **Extracciones point-in-time:** el punto de lectura se puede fijar en dos
-ejes: tiempo del evento (`--decision-time`) y llegada (`--as-of`). El marco de
-datos que entregas a pandas queda entonces acotado en el origen, que es el único
-sitio donde una cota sobrevive al viaje hacia Python. `arrival-delta` mide, a
-posteriori, cuánto de un resultado dependía de datos que llegaron después.
-
 - **Que un resultado no arrase la ventana de contexto.** `H5I_DB_PROFILE=agent`
 limita cada consulta y vuelca el resto a Parquet, informando del número real de
 filas y de dónde quedaron las que se retuvieron.
@@ -182,31 +176,24 @@ indicador `retryable`.
 - **Bifurcar sin copiar.** `fork` abre un espacio de trabajo escribible sobre una
 vista fijada de todas las tablas y no duplica ningún dato, así que una edición o
 un experimento cuestan un archivo pequeño y descartarlos sale tan barato como
-conservarlos. Después, `forks('trades')` lee esa tabla en todas las ramas a la
-vez con una columna `__fork`, de modo que comparar lo que produjo cada una no
-necesita ningún paso de exportación.
+conservarlos.
 
-- **Equivocarse sale barato.** Las mutaciones se previsualizan con `plan`/`apply`
+- **Control de privilegios.** Las mutaciones se previsualizan con `plan`/`apply`
 y la política puede exigir ese paso; `--idempotency-key` hace que una ingesta
 reintentada se repita en lugar de duplicar filas; una `data-policy` opcional
-rechaza en cerrado las filas mal formadas; los commits hacen fsync antes del
-intercambio y encadenan hashes de manifiesto, algo que se comprueba matando al
-escritor en cada paso.
+rechaza en cerrado las filas mal formadas.
 
 - **Una ejecución de backtest es una rama.** Cada ejecución corre dentro de su
 propio fork y escribe allí sus órdenes, ejecuciones, posiciones y curva
 de patrimonio como tablas normales. Así, dos ejecuciones se comparan al nivel de
 ejecución con `fork_diff`, un barrido entero se agrega en una sola consulta entre
-forks, la que merece la pena se `promote` y el resto se descarta. Nada que exportar,
-nada que limpiar a mano.
+forks, la que merece la pena se `promote` y el resto se descarta.
 
 - **La superficie de revisión reparte atención en vez de clasificar.** `h5i-db ui`
 ordena las pruebas por lo que necesita a una persona a continuación: decisión
 requerida, luego fallidas o con avisos, luego terminadas y no vistas, luego en
 ejecución, luego vistas. Recorrer una lista no marca el trabajo como revisado; una
-prueba cuenta como vista solo cuando se abre su detalle. La tabla de clasificación
-es una pestaña aparte, porque "cuál es la mejor hasta ahora" y "cuál no he mirado"
-son preguntas distintas.
+prueba cuenta como vista solo cuando se abre su detalle.
 
 ---
 

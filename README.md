@@ -157,12 +157,6 @@ npx skills add h5i-dev/h5i-db        # installs the h5i-db skill from skills/h5i
 this run see" has an answer, and re-running against that version is O(1) rather
 than an archaeology project.
 
-- **Point-in-time pulls:** a read point can be pinned on two axes: event time
-(`--decision-time`) and arrival (`--as-of`). The frame you hand to pandas is
-then bounded at the source, which is the only place a bound survives the trip
-into Python. `arrival-delta` measures, after the fact, how much of a result
-depended on data that arrived later.
-
 - **Don't let a result destroy the context window.** `H5I_DB_PROFILE=agent` caps
 every query and spills the rest to Parquet, reporting the true row count and
 where the withheld rows live.
@@ -172,28 +166,22 @@ where the withheld rows live.
 
 - **Branch without copying.** `fork` opens a writable workspace over a pinned
 view of every table and duplicates no data, so an edit or an experiment costs
-one small file and is as cheap to discard as to keep. `forks('trades')` then
-reads that table across every branch at once with a `__fork` column, so
-comparing what each one produced needs no export step.
+one small file and is as cheap to discard as to keep.
 
-- **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
+- **Privilege control.** Mutations preview through `plan`/`apply` and policy can
 require that gate; `--idempotency-key` makes a retried ingest replay instead of
-double-appending; an opt-in `data-policy` rejects malformed rows fail-closed;
-commits are fsync-before-swap with a manifest hash chain, tested by killing the
-writer at every step.
+double-appending; an opt-in `data-policy` rejects malformed rows fail-closed.
 
 - **A backtest run is a branch.** Each run executes inside its own
 fork and writes its orders, fills, positions and equity curve there as ordinary
 tables. So two runs diff at fill level with `fork_diff`, a whole sweep aggregates
 in one cross-fork query, the one worth keeping is `promote`d and the rest are
-dropped. Nothing to export, nothing to clean up by hand.
+dropped.
 
 - **The review surface routes attention rather than ranking.** `h5i-db ui` orders
 trials by what needs a human next: decision required, then failed or warned, then
 finished and unseen, then running, then seen. Scanning a list does not mark work
-reviewed; a trial counts as seen only when its detail is opened. The leaderboard
-is a separate tab, because "best so far" and "what did I not look at" are
-different questions.
+reviewed; a trial counts as seen only when its detail is opened.
 
 ---
 
