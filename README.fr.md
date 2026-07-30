@@ -6,30 +6,30 @@
 et pensés pour les agents, au service de la recherche quantitative. Embarqués,
 écrits en Rust.**
 
-- (DB) **Rapide sur la forme des séries temporelles :** plus de 4,5× plus rapide que
+- **Rapide sur la forme des séries temporelles :** plus de 4,5× plus rapide que
   DuckDB et Polars sur des agrégations OHLCV+VWAP portant sur 20 M de lignes.
-- (DB) **SQL natif pour les séries temporelles :** jointure ASOF, `time_bucket`
+- **SQL natif pour les séries temporelles :** jointure ASOF, `time_bucket`
   sensible aux fuseaux horaires, gapfill/resample, fenêtres glissantes, `vwap`,
   `ewma`.
-- (DB) **Lectures point-in-time :** fixez un instant de décision et la trame qui
+- **Lectures point-in-time :** fixez un instant de décision et la trame qui
   parvient à pandas ne pourra contenir aucune ligne postérieure. Aucun biais
   d'anticipation, par construction.
-- (BT) **Un backtester événementiel efficace :** 3,05 M d'événements/s à travers le
+- **Un backtester événementiel efficace :** 3,05 M d'événements/s à travers le
   noyau de rejeu, soit 11,7× NautilusTrader et 31× LEAN sur une charge partagée
   portant sur le haut du carnet.
-- (BT) **Prise en charge native des marchés courants :** les payloads Kalshi,
+- **Prise en charge native des marchés courants :** les payloads Kalshi,
   Polymarket et Hyperliquid se décodent en un unique jeu de tables canoniques,
   chacun avec la vraie courbe de frais et le funding du venue.
-- (BT) **Analyse statistique professionnelle :** métriques de facteurs et de
+- **Analyse statistique professionnelle :** métriques de facteurs et de
   performance à parité `alphalens` et `empyrical`, plus le Sharpe dégonflé et la
   détection de la probabilité de surapprentissage.
-- (AI) **Forkez une base en quelques millisecondes :** les forks partagent les
+- **Forkez une base en quelques millisecondes :** les forks partagent les
   données au lieu de les copier. Un agent peut enchaîner de larges boucles
   d'essai et d'erreur (forker, muter, évaluer, jeter) pour un coût quasi nul.
-- (AI) **Chaque écriture est un commit atomique et versionné :** n'importe quelle
+- **Chaque écriture est un commit atomique et versionné :** n'importe quelle
   version passée se lit en O(1), donc une ingestion ratée (humaine ou
   automatique) s'annule d'un seul `restore`.
-- (AI) **Des politiques de sécurité pour les écritures d'agents :** mutations
+- **Des politiques de sécurité pour les écritures d'agents :** mutations
   prévisualisables, garde-fous par politique, contraintes qui échouent en
   position fermée et bloquent les opérations destructrices, et une piste d'audit
   indiquant ce qui a changé et pourquoi.
@@ -166,32 +166,26 @@ npx skills add h5i-dev/h5i-db        # installe la skill h5i-db depuis skills/h5
 - **Des entrées reproductibles :** chaque lecture se résout en une version, si
 bien que « quelles données cette exécution a-t-elle vues » a une réponse, et
 rejouer contre cette version relève du O(1) plutôt que de l'archéologie.
-
 - **Qu'un résultat ne détruise pas la fenêtre de contexte.**
 `H5I_DB_PROFILE=agent` plafonne chaque requête et déverse le reste en Parquet,
 en indiquant le vrai nombre de lignes et l'endroit où se trouvent celles qui ont
 été retenues.
-
 - **Des erreurs sur lesquelles on peut agir :** l'enveloppe envoyée sur stderr
 porte `next_actions` (des commandes exécutables), `did_you_mean` pour les fautes
 de frappe, et un indicateur `retryable`.
-
 - **Bifurquer sans copier.** `fork` ouvre un espace de travail inscriptible
 au-dessus d'une vue figée de chaque table sans dupliquer la moindre donnée : une
 modification ou une expérience coûte un petit fichier et se jette aussi
 facilement qu'elle se garde.
-
 - **Contrôle des privilèges.** Les mutations se prévisualisent via `plan`/`apply`
 et la politique peut imposer ce passage ; `--idempotency-key` fait qu'une ingestion
-relancée rejoue au lieu d'ajouter deux fois ; une `data-policy` optionnelle rejette
-en position fermée les lignes mal formées.
-
+relancée rejoue ; une `data-policy` optionnelle rejette en position fermée les
+lignes mal formées.
 - **Une exécution de backtest est une branche.** Chaque exécution se déroule dans
 son propre fork et y écrit ses ordres, exécutions, positions et
 courbe de capital comme des tables ordinaires. Deux exécutions se comparent donc au
 niveau de l'exécution avec `fork_diff`, un balayage entier s'agrège en une seule
 requête inter-forks, celle qui en vaut la peine est `promote`, et le reste est jeté.
-
 - **La surface de revue répartit l'attention plutôt qu'elle ne classe.**
 `h5i-db ui` trie les essais selon ce qui réclame un humain ensuite : décision
 requise, puis en échec ou avec avertissement, puis terminés et non vus, puis en
