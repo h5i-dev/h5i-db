@@ -666,6 +666,143 @@ second venue proves the abstraction.
 
 ---
 
+## 8a. Part C — Agent-native experiment management
+
+Part B assumes a human runs backtests. The actual operator is increasingly
+a fleet of agents running thousands of trials, and that changes what the
+layer above the backtester must do. When an agent tries 5,000 strategies
+and reports the best one, the search itself is the overfitting risk, and
+the human's scarce resource is no longer compute but attention and
+statistical validity. This part is the thin layer that manages both.
+
+The design bar is §8.4's: a run is a branch with tables on it, and an
+experiment is a row with runs under it. Everything here is tables, fork
+metadata, and one invariant; nothing is a parallel object system, and
+this is explicitly not an ML experiment tracker (MLflow/W&B territory,
+§11 stands).
+
+### 8a.1 What the substrate already provides
+
+Recorded so nobody rebuilds these as new first-class objects:
+
+| Concept | Existing mechanism |
+|---|---|
+| Trial (strategy + params + data snapshot, fixed) | `RunSpec` + fork-per-run + pinned `ReadAt` + `digest()` (§8.4, `run.rs`). Content-addressed and re-checkable. |
+| Evaluation policy (fees, slippage, risk, splits) | Typed `BacktestConfig` sections, all folded into the config digest; `ValidationWindows` with explicit train/holdout and no guessed embargo. |
+| Experiment (one hypothesis) | `BacktestStudy` in embryo: study_id, base config, grid, per-trial metadata. Missing only a hypothesis field and accumulation over time. |
+| Search budget | A `COUNT(*)` over the run ledger, not an object (§8a.2). |
+| Promotion | `promote()` (first wins) plus one guard: freeze-before-reveal (§8a.3). Named pipeline stages are ceremony; the guard is the substance. |
+
+### 8a.2 The trial-ledger invariant, and dedup
+
+**There is no way to obtain a score without creating a recorded trial.**
+This already holds by construction (a run happens inside a fork and
+writes `bt_run`); it is promoted here from an accident to a guarantee,
+because every honest statistic downstream leans on it. The search budget
+is then a query, and Q3.4's deflated Sharpe reads a trial count that
+cannot be understated.
+
+The agent-native corollary is **dedup by digest**: agents re-submit
+identical configs constantly (retries, restarts, forgetful loops), which
+no human-oriented tracker had to handle. A trial whose config digest
+matches an existing run returns the recorded result instead of
+re-executing, and does not increment the trial count. This keeps the
+budget statistic honest in the other direction (a retry is not evidence
+of a wider search) and makes agent retry loops free.
+
+### 8a.3 Sealed evaluation with disclosure accounting
+
+The one genuinely new mechanism, and the only item in this part that
+*bounds* overfitting rather than measuring it. A sealed set is a pinned
+holdout (snapshot + window) that research trials never touch; candidates
+are evaluated against it only through a sealed-eval endpoint, under three
+rules:
+
+- **Freeze before reveal.** Sealed metrics are disclosed only for a
+  config digest that was committed before the evaluation ran. No
+  tweaking a candidate after seeing its holdout number.
+- **Every disclosure is counted.** The number of answers the sealed set
+  has given is recorded per sealed set and per experiment, and is the
+  budget that actually matters: 5,000 research trials with one
+  disclosure is a valid test; fifty peeks is a burned holdout regardless
+  of how disciplined the research phase looked. This is the private
+  leaderboard / reusable-holdout discipline applied to backtests.
+- **Disclosure can be coarsened.** Optionally return pass/fail against a
+  pre-registered threshold instead of raw metrics, so each disclosure
+  leaks less.
+
+Honesty about the boundary: this is a single-user embedded database with
+no auth layer, so sealing is a *protocol*, not a cryptographic wall. An
+agent could read the holdout tables directly. The DB's job is to make
+that visible, not impossible: sealed sets are declared, reads against
+them are attributable in the ledger, and the disclosure count is itself
+a recorded, queryable fact. The organizational boundary (the searching
+subagent never calls sealed-eval; the orchestrator or the human does)
+supplies the enforcement.
+
+### 8a.4 Experiments and lineage as cheap metadata
+
+- `bt_experiment`: id, hypothesis (free text), sealed-set reference,
+  created-at. Trials carry an experiment id in `bt_run`/fork metadata.
+  A leaderboard is a query over the experiment's trials; the deflated
+  Sharpe header ("this Sharpe survived N trials") comes from the same
+  scan.
+- **Lineage is recorded as a claim, not a fact.** `parent_run_ids` plus
+  a rationale string on the run's fork metadata, self-reported by the
+  agent that authored the trial. Useful as raw material for "how did we
+  get here"; never trusted for statistics (the trial count is, because
+  it cannot be faked downward). A `run_id → h5i context snapshot` link
+  is the audited upgrade: the workspace tool already records the agent's
+  reasoning trace per commit, which makes lineage observable rather than
+  self-reported. No DAG UI until the recorded lineage proves it earns
+  one.
+
+### 8a.5 Attention-routing UI
+
+With thousands of trials the review UI's product is routing scarce human
+attention, not displaying data. The model is herdr's, adopted directly:
+every item carries `(state, seen)`, attention priority is ordered, and
+containers roll up to the max priority of their children.
+
+- Per-trial states, in priority order: **needs-decision** (a sealed
+  evaluation or promotion is waiting on the human) > **failed/warned**
+  (`RunReport.warnings()` already emits exactly the right signals:
+  silent strategies, thin coverage, orders that never met a book) >
+  **finished-unseen** > **running** > **seen**. Done-but-unreviewed
+  outranks running; blocked-on-human outranks everything.
+- An experiment inherits the max priority of its trials; the sidebar
+  sorts by priority; the badge is the count of unseen-with-warnings.
+  `seen` flips only when the human opens the trial detail.
+- The leaderboard remains one tab among several, not the frame. What
+  changed since the human last looked, what is warning, and what awaits
+  a decision are the frame.
+
+### 8a.6 Retention
+
+5,000 trials is 5,000 forks. Policy, not accumulation: keep promoted
+runs, the leaderboard top-k per experiment, and anything referenced by
+lineage; `drop_fork_tree` the rest on experiment close. Constraint
+carried from the engine: vacuum's orphan sweep reads the global catalog
+only, so trial-fork GC must go through roots that sweep respects.
+
+### 8a.7 Acceptance criteria
+
+- **No off-ledger score:** property test that every metric row in any
+  `bt_*` table traces to a `bt_run` entry; the trial count over a
+  scripted agent session equals the number of distinct configs it tried.
+- **Dedup:** submitting the same config twice yields one run, a cached
+  second result, and an unchanged trial count.
+- **Sealed:** evaluation against a sealed set with an unfrozen digest is
+  refused (tested); each disclosure increments a queryable counter;
+  coarse disclosure reveals only the pre-registered comparison.
+- **Attention rollup:** done-unseen outranks running, needs-decision
+  outranks everything, and container state equals max of children
+  (mirroring herdr's own tests).
+- **Retention:** GC over a closed experiment never collects promoted,
+  top-k, or lineage-referenced forks (property-tested).
+
+---
+
 ## 9. Cross-cutting: testing and QA
 
 ### 9.1 Golden reference harness
@@ -724,9 +861,14 @@ into.
 | B2 | Tier 2 Rust strategy trait; passive book fills + queue position; latency + fee models; differential oracle suite (§9.4) | §8.7 parity criteria; scenario suite in CI |
 | B3 | Sweeps at scale over forks + comparison report + run ledger/Q3.4 wiring; Python batch-callback strategies; V2 venue (perps: funding module, margin, liquidation) | linear sweep scaling; DSR reads trial count from ledger |
 | B4+ | V3 equities (gated on VII-A1/A3); L3/MBO fill realism as data permits | tracked engine dependencies land first |
+| C1 | Trial-ledger invariant + digest dedup; `bt_experiment` + lineage metadata (§8a.2, §8a.4) | no-off-ledger-score property test; dedup criteria §8a.7 |
+| C2 | Sealed evaluation: freeze-before-reveal, disclosure counter, coarse disclosure (§8a.3) | sealed criteria §8a.7; Q3.4 header reads trial count and disclosure count |
+| C3 | Attention-routing UI + retention policy (§8a.5, §8a.6) | rollup and retention criteria §8a.7 |
 
 M1 and B1 are deliberately the two largest single milestones: everything
-after each has a demoable surface.
+after each has a demoable surface. C1 gates on B1 only (it needs runs and
+the ledger, not realism); C2/C3 are independent of B2+ and can interleave
+with it.
 
 ---
 
@@ -786,6 +928,14 @@ picks them up unchanged. What remains for Part B is **data in and language
 out** — a vendor loader at one end, Python bindings at the other — plus the
 realism work (queue position, the nautilus differential suite) and the later
 venues.
+
+Part C (§8a) is design only, though its substrate is further along than
+its milestone rows suggest: config digests, fork-per-run pinning,
+`BacktestStudy` with explicit train/holdout windows, leaderboards,
+`promote()`, and `quant.overfitting` all exist today. What does not exist
+is any of the layer itself: the ledger invariant as a tested guarantee,
+digest dedup, `bt_experiment`/lineage metadata, sealed evaluation, the
+attention UI, and retention policy.
 
 Three deviations from this document, each recorded where it lives:
 
