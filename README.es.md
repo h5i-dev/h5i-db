@@ -139,10 +139,8 @@ python examples/agent_swarm_demo.py   # tres agentes, once pruebas, luego la int
 ```
 
 Lanza una flota sobre un único conjunto de datos fijado: un barrido de umbrales,
-una escalera de costes de ejecución y una validación marcada para que la firme una
-persona. Cada prueba aterriza en su propio fork, una se sirve del registro de
-pruebas en lugar de recalcularse, y la superficie de revisión abre ordenada por lo
-que necesita a un humano a continuación.
+una escalera de costes de ejecución y una validación marcada para que la firme
+una persona.
 
 ---
 
