@@ -134,6 +134,10 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
 固定した1つのデータセットに対して群れを走らせる。しきい値のスイープ、執行コストの
 段階比較、そして人間の承認待ちとして印を付けた検証の3種類だ。
 
+<p align="center">
+  <img src="./docs/_static/backtest-ui.png" alt="デモのUI画面" width="99%">
+</p>
+
 ---
 
 ## なぜ速いのか
@@ -201,6 +205,8 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
 
 ## ベンチマーク
 
+計測方法と結果は [benchmarks](benchmarks) に全部書いてある。
+
 **データベース**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -224,8 +230,6 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
   時間インデックスで勝つ。h5i-dbのマニフェスト枝刈りはそれに次ぐ2位で、汎用エンジンは
   すべて上回っている。
 
-計測方法と結果は [benchmarks/RESULTS.md](benchmarks/RESULTS.md) に全部書いてある。
-
 **バックテスト**
 
 | エンジン | 計測した境界 | 中央値 | スループット |
@@ -239,10 +243,7 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
 20万件のイベントを全部見て200件の注文を全部出したことを検証している。計測した境界は
 列に書いたとおり同じではない。このベンチマークが照合するのはイベント数と注文数で、
 PnLの一致ではないし、Nautilusは気配ごとにPythonの戦略コールバックを呼ぶが、残りの
-2つはネイティブコードを走らせている。これはイベント駆動の狭い1ワークロードの結果で、
-バックテストシステムの順位付けではない。解釈の限界は
-[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md)
-に全部書いてある。
+2つはネイティブコードを走らせている。
 
 ---
 

@@ -142,6 +142,10 @@ python examples/agent_swarm_demo.py   # trois agents, onze essais, puis l'interf
 Lance une flotte sur un seul jeu de données figé : un balayage de seuils, une
 échelle de coûts d'exécution, et une validation marquée pour signature humaine.
 
+<p align="center">
+  <img src="./docs/_static/backtest-ui.png" alt="vue de l'interface de la démo" width="99%">
+</p>
+
 ---
 
 ## Pourquoi c'est rapide
@@ -223,6 +227,8 @@ comme vu que lorsque son détail est ouvert.
 
 ## Benchmark
 
+Méthodologie et résultats complets dans [benchmarks](benchmarks).
+
 **Base de données**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -247,8 +253,6 @@ comme vu que lorsque son détail est ouvert.
   étroites depuis son propre magasin LMDB ; l'élagage par manifeste de h5i-db
   arrive second et devance tous les moteurs généralistes.
 
-Méthodologie et résultats complets dans [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-
 **Backtesting**
 
 | moteur | frontière mesurée | médiane | débit |
@@ -263,9 +267,7 @@ adaptateur vérifiant qu'il a vu les 200 k événements et soumis les 200 ordres
 frontières mesurées diffèrent, comme l'indique la colonne : le benchmark vérifie des
 comptages d'événements et d'ordres, pas une équivalence de PnL, et Nautilus appelle
 un callback de stratégie Python à chaque cotation là où les deux autres exécutent du
-code natif. Il s'agit d'une seule charge événementielle étroite, pas d'un classement
-des systèmes de backtesting ; limites d'interprétation complètes dans
-[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
+code natif.
 
 ---
 

@@ -136,6 +136,10 @@ python examples/agent_swarm_demo.py   # three agents, eleven trials, then the UI
 Runs a fleet against one pinned dataset: a threshold sweep, an execution-cost
 ladder, and a validation flagged for human sign-off.
 
+<p align="center">
+  <img src="./docs/_static/backtest-ui.png" alt="demo ui view" width="99%">
+</p>
+
 ---
 
 ## Why it's fast
@@ -207,6 +211,8 @@ reviewed; a trial counts as seen only when its detail is opened.
 
 ## Benchmark
 
+Full methodology and results in [benchmarks](benchmarks).
+
 **Database**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -228,8 +234,6 @@ reviewed; a trial counts as seen only when its detail is opened.
 ⁵ ArcticDB's native time index wins narrow point reads from its own LMDB
   store; h5i-db's manifest pruning is second and beats every general engine.
 
-Full methodology and results in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-
 **Backtesting**
 
 | engine | measured boundary | median | throughput |
@@ -243,9 +247,7 @@ Medians of three fresh-process runs after one warm-up, each adapter verifying it
 saw all 200k events and submitted all 200 orders. The measured boundaries differ,
 as the column says: the benchmark checks event and order counts rather than PnL
 equivalence, and Nautilus invokes a Python strategy callback per quote where the
-other two run native code. This is one narrow event-driven workload, not a
-ranking of backtest systems; full interpretation limits in
-[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
+other two run native code.
 
 ---
 

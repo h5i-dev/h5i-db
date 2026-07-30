@@ -142,6 +142,10 @@ Lanza una flota sobre un único conjunto de datos fijado: un barrido de umbrales
 una escalera de costes de ejecución y una validación marcada para que la firme
 una persona.
 
+<p align="center">
+  <img src="./docs/_static/backtest-ui.png" alt="vista de la interfaz de la demo" width="99%">
+</p>
+
 ---
 
 ## Por qué es rápida
@@ -221,6 +225,8 @@ prueba cuenta como vista solo cuando se abre su detalle.
 
 ## Benchmark
 
+Metodología y resultados completos en [benchmarks](benchmarks).
+
 **Base de datos**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -244,8 +250,6 @@ prueba cuenta como vista solo cuando se abre su detalle.
   desde su propio almacén LMDB; la poda por manifiesto de h5i-db queda segunda
   y supera a todos los motores generalistas.
 
-Metodología y resultados completos en [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-
 **Backtesting**
 
 | motor | frontera medida | mediana | rendimiento |
@@ -259,10 +263,7 @@ Medianas de tres ejecuciones en procesos nuevos tras un calentamiento, y cada
 adaptador verifica que vio los 200 k eventos y envió las 200 órdenes. Las fronteras
 medidas difieren, como dice la columna: el benchmark comprueba recuentos de eventos
 y de órdenes, no equivalencia de PnL, y Nautilus invoca un callback de estrategia en
-Python por cada cotización mientras los otros dos ejecutan código nativo. Es una
-carga estrecha orientada a eventos, no una clasificación de sistemas de backtesting;
-límites de interpretación completos en
-[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
+Python por cada cotización mientras los otros dos ejecutan código nativo.
 
 ---
 

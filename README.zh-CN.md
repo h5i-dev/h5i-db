@@ -129,6 +129,10 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 让一支小队在同一份固定的数据上跑：一次阈值扫描、一组执行成本的阶梯对比，以及一次
 标记为需要人工签字的验证。
 
+<p align="center">
+  <img src="./docs/_static/backtest-ui.png" alt="演示界面视图" width="99%">
+</p>
+
 ---
 
 ## 为什么快
@@ -190,6 +194,8 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 
 ## 基准测试
 
+完整的方法说明与结果见 [benchmarks](benchmarks)。
+
 **数据库**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -212,8 +218,6 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 ⁵ ArcticDB 依靠自有 LMDB 存储上的原生时间索引，在窄范围点查上胜出；h5i-db
   的清单裁剪位列第二，并且超过了所有通用引擎。
 
-完整的方法说明与结果见 [benchmarks/RESULTS.md](benchmarks/RESULTS.md)。
-
 **回测**
 
 | 引擎 | 测量边界 | 中位数 | 吞吐 |
@@ -226,9 +230,7 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 先热身一次，之后每次都用全新进程测三遍取中位数；每个适配器都会验证自己确实看到了
 20 万个事件、发出了 200 笔订单。各家测量的边界并不相同，就是表中那一列写的意思：
 这份基准校验的是事件数和订单数，不是 PnL 的等价性；而且 Nautilus 每来一个报价就要调
-一次 Python 策略回调，另外两者跑的是原生代码。这是一份窄口径的事件驱动工作负载，
-不是对回测系统的排名；完整的解释限度见
-[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md)。
+一次 Python 策略回调，另外两者跑的是原生代码。
 
 ---
 
