@@ -23,6 +23,10 @@ pub struct FeeContext<'a> {
     pub price: Price,
     pub quantity: Qty,
     pub is_taker: bool,
+    /// When the fill happened. A schedule that depends on rolling volume
+    /// cannot be priced without it, and taking it from a wall clock rather
+    /// than the replay would make the fee non-deterministic.
+    pub ts: UnixNanos,
 }
 
 /// What a venue charges.
@@ -216,6 +220,111 @@ impl FeeModel for KalshiFees {
         if let Ok(mut accumulated) = self.rounding.lock() {
             accumulated.remove(&order_id);
         }
+    }
+}
+
+/// One step of a volume-tiered fee schedule.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct FeeTier {
+    /// Rolling traded notional at or above which this tier applies.
+    pub volume_from: Money,
+    /// Signed: a negative maker fee is a rebate, which the top tiers of a
+    /// real schedule actually pay.
+    pub maker: Price,
+    pub taker: Price,
+}
+
+/// Fees that fall as rolling traded volume rises.
+///
+/// Every serious venue prices this way and most simulators do not, which
+/// matters more than it sounds. A market-making strategy lives on the maker
+/// side of the schedule, where the difference between the entry tier and a
+/// high one is often the difference between a positive and a negative
+/// expectancy -- and at the top of a real schedule the maker fee is
+/// *negative*. Backtesting such a strategy at a flat entry-tier fee answers
+/// a question nobody asked.
+///
+/// The schedule is supplied rather than baked in: venues republish theirs,
+/// and a stale table compiled into a backtester is worse than no table at
+/// all because it looks authoritative.
+///
+/// Volume is counted over a trailing window and a fill is priced at the
+/// tier the account was in *before* it, which is what a venue does.
+#[derive(Debug)]
+pub struct TieredFees {
+    tiers: Vec<FeeTier>,
+    window_nanos: i64,
+    traded: std::sync::Mutex<std::collections::VecDeque<(i64, i64)>>,
+}
+
+impl TieredFees {
+    /// `tiers` must start at zero volume and rise; `window_nanos` is how
+    /// far back the volume is counted.
+    pub fn new(mut tiers: Vec<FeeTier>, window_nanos: i64) -> Result<Self> {
+        if tiers.is_empty() {
+            return Err(crate::error::BacktestError::invalid(
+                "a fee schedule needs at least one tier",
+            ));
+        }
+        if window_nanos <= 0 {
+            return Err(crate::error::BacktestError::invalid(
+                "a rolling fee window must be positive",
+            ));
+        }
+        tiers.sort_by_key(|tier| tier.volume_from.raw());
+        if !tiers[0].volume_from.is_zero() {
+            return Err(crate::error::BacktestError::invalid(
+                "the first fee tier must start at zero volume; an account \
+                 that has never traded still has to be charged something",
+            ));
+        }
+        if tiers
+            .windows(2)
+            .any(|pair| pair[0].volume_from == pair[1].volume_from)
+        {
+            return Err(crate::error::BacktestError::invalid(
+                "two fee tiers start at the same volume, so which one applies \
+                 would depend on sort order",
+            ));
+        }
+        Ok(Self {
+            tiers,
+            window_nanos,
+            traded: std::sync::Mutex::new(std::collections::VecDeque::new()),
+        })
+    }
+
+    /// The tier an account with this much rolling volume is in.
+    pub fn tier_for(&self, volume: Money) -> FeeTier {
+        *self
+            .tiers
+            .iter()
+            .rev()
+            .find(|tier| volume >= tier.volume_from)
+            .unwrap_or(&self.tiers[0])
+    }
+}
+
+impl FeeModel for TieredFees {
+    fn commission(&self, ctx: FeeContext<'_>) -> Result<Money> {
+        let gross = notional(ctx.price, ctx.quantity)?.abs();
+        let mut traded = self
+            .traded
+            .lock()
+            .map_err(|_| crate::error::BacktestError::invalid("fee volume state was poisoned"))?;
+        let cutoff = ctx.ts.get().saturating_sub(self.window_nanos);
+        while traded.front().is_some_and(|(at, _)| *at < cutoff) {
+            traded.pop_front();
+        }
+        let rolling: i128 = traded.iter().map(|(_, amount)| *amount as i128).sum();
+        let rolling = Money::from_raw(rolling.clamp(0, i64::MAX as i128) as i64);
+        let tier = self.tier_for(rolling);
+        // Priced at the tier reached *before* this fill, then the fill
+        // counts towards the next one.
+        traded.push_back((ctx.ts.get(), gross.raw()));
+
+        let rate = if ctx.is_taker { tier.taker } else { tier.maker };
+        notional(rate, Qty::from_raw(gross.raw()))
     }
 }
 
@@ -448,6 +557,7 @@ mod tests {
             price: Price::from_f64(price).unwrap(),
             quantity: Qty::from_f64(qty).unwrap(),
             is_taker,
+            ts: UnixNanos::new(0),
         }
     }
 

@@ -47,16 +47,17 @@ pub mod types;
 pub mod window;
 
 pub use account::{
-    Account, CashMargin, LinearMargin, MarginModel, MarginRequirement, MarginState, Valuation,
+    Account, CashMargin, LinearMargin, MarginModel, MarginRequirement, MarginState,
+    PerInstrumentMargin, Valuation,
 };
 pub use book::{BookAction, BookDelta, BookStatus, BookWalk, OrderBook};
 pub use clock::{Clock, TimeEvent};
 pub use corporate::{CorporateAction, SymbolRegistry, Universe};
 pub use currency::{Currency, FxBook, Haircuts};
 pub use engine::{
-    CommandReplay, Context, Engine, EngineBuilder, Forecast, MarkPoint, MarkSource, OrderRequest,
-    ReplayCommand, RiskLimits, RunResult, SetOperation, SetOperationCosts, SetOperationKind,
-    SetOperationRequest, SignalReplay, Strategy,
+    CommandReplay, Context, Engine, EngineBuilder, Forecast, LiquidationPolicy, MarkPoint,
+    MarkSource, OrderRequest, ReplayCommand, RiskLimits, RunResult, SetOperation,
+    SetOperationCosts, SetOperationKind, SetOperationRequest, SignalReplay, Strategy,
 };
 pub use error::{BacktestError, Result};
 pub use event::{MarketEvent, Record};
@@ -67,8 +68,9 @@ pub use instrument::{
 };
 pub use l3::{L3Book, MboMessage};
 pub use models::{
-    BookFills, ConstantLatency, FeeModel, FillModel, LatencyModel, NoFees, NoLatency,
-    PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage, VenueModule,
+    BookFills, ConstantLatency, FeeModel, FeeTier, FillModel, LatencyModel, NoFees, NoLatency,
+    PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage, TieredFees,
+    VenueModule,
 };
 pub use order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 pub use position::{Portfolio, Position};

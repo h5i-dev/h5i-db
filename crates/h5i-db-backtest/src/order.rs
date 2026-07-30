@@ -90,6 +90,14 @@ pub struct Order {
     pub tag: Option<String>,
     /// Only reduces an existing position; never opens or flips one.
     pub reduce_only: bool,
+    /// Add liquidity only: the venue refuses it rather than let it cross.
+    ///
+    /// Hyperliquid calls this ALO and Binance post-only; the behaviour is
+    /// the same everywhere it exists, and it is the difference between a
+    /// maker strategy and a very expensive taker one. A simulator without
+    /// it either crosses silently at taker cost, or invents a maker fill on
+    /// an order the venue would have rejected outright.
+    pub post_only: bool,
 }
 
 impl Order {
@@ -165,6 +173,7 @@ impl Order {
             reject_reason: None,
             tag: None,
             reduce_only: false,
+            post_only: false,
         })
     }
 
@@ -180,6 +189,11 @@ impl Order {
 
     pub fn reduce_only(mut self) -> Self {
         self.reduce_only = true;
+        self
+    }
+
+    pub fn post_only(mut self) -> Self {
+        self.post_only = true;
         self
     }
 

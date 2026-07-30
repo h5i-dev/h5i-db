@@ -142,6 +142,62 @@ impl MarginModel for LinearMargin {
     }
 }
 
+/// Leverage granted per instrument rather than per venue.
+///
+/// A venue does not offer one leverage. Hyperliquid publishes a
+/// `maxLeverage` per coin -- forty on the majors, three on the long tail --
+/// and a model that applies one number across the universe either
+/// over-margins the majors or, much worse, lets a strategy hold a position
+/// in an illiquid coin that the venue would have refused to open.
+///
+/// Maintenance is half the initial requirement at maximum leverage, which
+/// is the rule Hyperliquid documents. Instruments not in the table fall
+/// back to `default_leverage`.
+#[derive(Clone, Debug)]
+pub struct PerInstrumentMargin {
+    by_instrument: BTreeMap<InstrumentId, LinearMargin>,
+    default_model: LinearMargin,
+}
+
+impl PerInstrumentMargin {
+    pub fn new(default_leverage: f64) -> Result<Self> {
+        Ok(Self {
+            by_instrument: BTreeMap::new(),
+            default_model: LinearMargin::from_leverage(default_leverage)?,
+        })
+    }
+
+    /// Grant `leverage` on one instrument.
+    pub fn with_leverage(mut self, instrument: InstrumentId, leverage: f64) -> Result<Self> {
+        self.by_instrument
+            .insert(instrument, LinearMargin::from_leverage(leverage)?);
+        Ok(self)
+    }
+
+    fn model_for(&self, instrument: &Instrument) -> &LinearMargin {
+        self.by_instrument
+            .get(&instrument.id)
+            .unwrap_or(&self.default_model)
+    }
+}
+
+impl MarginModel for PerInstrumentMargin {
+    fn initial_margin(&self, instrument: &Instrument, quantity: Qty, mark: Price) -> Result<Money> {
+        self.model_for(instrument)
+            .initial_margin(instrument, quantity, mark)
+    }
+
+    fn maintenance_margin(
+        &self,
+        instrument: &Instrument,
+        quantity: Qty,
+        mark: Price,
+    ) -> Result<Money> {
+        self.model_for(instrument)
+            .maintenance_margin(instrument, quantity, mark)
+    }
+}
+
 /// What an equity calculation could and could not value.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Valuation {

@@ -164,6 +164,8 @@ pub struct OrderRequest {
     pub time_in_force: TimeInForce,
     pub tag: Option<String>,
     pub reduce_only: bool,
+    /// Add liquidity only: refused rather than allowed to cross.
+    pub post_only: bool,
 }
 
 impl OrderRequest {
@@ -177,6 +179,7 @@ impl OrderRequest {
             time_in_force: TimeInForce::ImmediateOrCancel,
             tag: None,
             reduce_only: false,
+            post_only: false,
         }
     }
 
@@ -196,6 +199,7 @@ impl OrderRequest {
             time_in_force: TimeInForce::GoodTilCancel,
             tag: None,
             reduce_only: false,
+            post_only: false,
         }
     }
 
@@ -211,6 +215,13 @@ impl OrderRequest {
 
     pub fn reduce_only(mut self) -> Self {
         self.reduce_only = true;
+        self
+    }
+
+    /// Add liquidity only. The venue refuses this order rather than let it
+    /// cross, and any fill it does get is a maker fill by construction.
+    pub fn post_only(mut self) -> Self {
+        self.post_only = true;
         self
     }
 }
@@ -638,6 +649,8 @@ pub struct RunMetrics {
     /// Orders submitted, or arriving after their latency, once the
     /// instrument had stopped trading.
     pub orders_rejected_expired: u64,
+    /// Post-only orders that would have crossed on arrival.
+    pub orders_rejected_post_only: u64,
     pub orders_amended: u64,
     pub fills_taker: u64,
     pub fills_maker: u64,
@@ -700,6 +713,13 @@ impl RunMetrics {
                 reasons.push(format!(
                     "{} arrived after their instrument had stopped trading",
                     self.orders_rejected_expired
+                ));
+            }
+            if self.orders_rejected_post_only > 0 {
+                reasons.push(format!(
+                    "{} were post-only and would have crossed on arrival; a \
+                     maker quote priced through the book is refused, not filled",
+                    self.orders_rejected_post_only
                 ));
             }
             if self.orders_cancelled_unfilled > 0 {
@@ -878,6 +898,12 @@ pub struct Engine {
     /// What the venue published as its oracle, which funding is charged on.
     oracles: BTreeMap<BookKey, Price>,
     mark_source: MarkSource,
+    liquidation: LiquidationPolicy,
+    /// Instruments margined on their own collateral rather than the
+    /// account's.
+    isolated: std::collections::BTreeSet<InstrumentId>,
+    /// What is posted against each of them, sized at entry.
+    isolated_collateral: BTreeMap<InstrumentId, Money>,
 }
 
 /// Which price a run values positions at.
@@ -899,6 +925,33 @@ pub enum MarkSource {
     /// Always value against the book, ignoring any published mark.
     /// For isolating what the venue's own mark was doing.
     BookMid,
+}
+
+/// One isolated instrument whose own collateral is exhausted, decided
+/// before anything is closed.
+struct IsolatedCall {
+    instrument: InstrumentId,
+    equity: Money,
+    maintenance: Money,
+    open: Vec<(OutcomeId, Qty, Price)>,
+}
+
+/// How much a margin call closes.
+///
+/// Closing everything is the conservative reading and what a margin call
+/// ultimately means, but it is not what a venue reaches for first. Closing
+/// the minimum that restores the maintenance ratio leaves the strategy in
+/// the trade it was in, and the two produce materially different results
+/// from the same data -- so it is a policy, stated, rather than an
+/// assumption buried in the kernel.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum LiquidationPolicy {
+    /// Close the whole book. The default, unchanged.
+    #[default]
+    CloseAll,
+    /// Close positions, largest maintenance requirement first, only until
+    /// the account is above maintenance again.
+    Partial,
 }
 
 /// What performing a complete-set operation costs, regardless of size.
@@ -987,6 +1040,8 @@ impl Engine {
             set_costs: SetOperationCosts::default(),
             record_mark_curve: true,
             mark_source: MarkSource::default(),
+            liquidation: LiquidationPolicy::default(),
+            isolated: Default::default(),
         }
     }
 
@@ -1042,6 +1097,7 @@ impl Engine {
         //     venue acts before the strategy gets another turn, which is
         //     the order a real one would use.
         self.check_liquidation(ts, strategy)?;
+        self.check_isolated_liquidation(ts, strategy)?;
 
         // 5. Now the strategy.
         self.with_context(|ctx| strategy.on_event(ctx, record))?;
@@ -1118,15 +1174,177 @@ impl Engine {
             .filter(|at| ts >= *at)
     }
 
+    /// Open positions drawing on the shared collateral pool.
+    fn cross_positions(&self) -> impl Iterator<Item = &crate::position::Position> {
+        self.portfolio
+            .open_positions()
+            .filter(|position| !self.isolated.contains(&position.instrument))
+    }
+
+    /// Bring an isolated instrument's posted collateral in line with the
+    /// position it backs.
+    ///
+    /// The bucket is sized at the position's **entry** price and stays
+    /// there. Recomputing it against the mark would quietly top it up from
+    /// cross cash as the trade moved against you, which is precisely the
+    /// contagion isolation is for: an isolated position is supposed to be
+    /// able to lose its collateral and nothing else.
+    fn rebalance_isolated(&mut self, instrument: &InstrumentId) -> Result<()> {
+        if !self.isolated.contains(instrument) {
+            return Ok(());
+        }
+        let Some(model) = self.margin.as_deref() else {
+            return Ok(());
+        };
+        let found = self.instruments.get(instrument)?;
+        let mut required = Money::ZERO;
+        for position in self.portfolio.open_positions() {
+            if &position.instrument != instrument {
+                continue;
+            }
+            required = required.checked_add(model.initial_margin(
+                found,
+                position.quantity,
+                position.average_price,
+            )?)?;
+        }
+        let posted = self
+            .isolated_collateral
+            .get(instrument)
+            .copied()
+            .unwrap_or(Money::ZERO);
+        let delta = required.checked_sub(posted)?;
+        if delta.is_zero() {
+            return Ok(());
+        }
+        self.cash = self.cash.checked_sub(delta)?;
+        if required.is_zero() {
+            self.isolated_collateral.remove(instrument);
+        } else {
+            self.isolated_collateral
+                .insert(instrument.clone(), required);
+        }
+        Ok(())
+    }
+
+    /// Close any isolated instrument whose own collateral is exhausted.
+    ///
+    /// Checked per instrument against its own bucket, so a loss here never
+    /// reaches the cross account and a healthy cross account never rescues
+    /// it. Closing is total: there is no other collateral to preserve the
+    /// position with, which is the whole bargain of isolating it.
+    fn check_isolated_liquidation(
+        &mut self,
+        ts: UnixNanos,
+        strategy: &mut dyn Strategy,
+    ) -> Result<()> {
+        // Decided in full before anything is closed: closing a position
+        // changes the state every later decision would read, and a venue's
+        // margin call is evaluated against the state that triggered it.
+        let mut doomed: Vec<IsolatedCall> = Vec::new();
+        {
+            let Some(model) = self.margin.as_deref() else {
+                return Ok(());
+            };
+            for instrument in &self.isolated {
+                let posted = self
+                    .isolated_collateral
+                    .get(instrument)
+                    .copied()
+                    .unwrap_or(Money::ZERO);
+                let mut unrealized = Money::ZERO;
+                let mut maintenance = Money::ZERO;
+                let mut open: Vec<(OutcomeId, Qty, Price)> = Vec::new();
+                for position in self.portfolio.open_positions() {
+                    if &position.instrument != instrument {
+                        continue;
+                    }
+                    let key = (instrument.clone(), position.outcome);
+                    let Some(mark) = self.marks.get(&key).copied() else {
+                        continue;
+                    };
+                    let found = self.instruments.get(instrument)?;
+                    unrealized = unrealized.checked_add(position.unrealized_pnl(mark)?)?;
+                    maintenance = maintenance.checked_add(model.maintenance_margin(
+                        found,
+                        position.quantity,
+                        mark,
+                    )?)?;
+                    open.push((position.outcome, position.quantity, mark));
+                }
+                if open.is_empty() {
+                    continue;
+                }
+                let equity = posted.checked_add(unrealized)?;
+                if equity >= maintenance {
+                    continue;
+                }
+                doomed.push(IsolatedCall {
+                    instrument: instrument.clone(),
+                    equity,
+                    maintenance,
+                    open,
+                });
+            }
+        }
+
+        for IsolatedCall {
+            instrument,
+            equity,
+            maintenance,
+            open,
+        } in doomed
+        {
+            for (outcome, quantity, mark) in open {
+                let side = if quantity.is_positive() {
+                    Side::Sell
+                } else {
+                    Side::Buy
+                };
+                self.next_order_id += 1;
+                let id = OrderId(self.next_order_id);
+                let mut order = Order::new(
+                    id,
+                    instrument.clone(),
+                    outcome,
+                    side,
+                    OrderKind::Market,
+                    Qty::from_raw(quantity.raw().abs()),
+                    TimeInForce::ImmediateOrCancel,
+                    ts,
+                )?;
+                order.status = OrderStatus::Accepted;
+                order.accepted_at = Some(ts);
+                order.tag = Some("liquidation:isolated".to_string());
+                self.orders.insert(id, order);
+                self.try_fill(id, ts, strategy)?;
+
+                self.metrics.liquidations += 1;
+                self.liquidations.push(Liquidation {
+                    instrument: instrument.clone(),
+                    outcome,
+                    quantity,
+                    mark,
+                    equity,
+                    maintenance,
+                });
+            }
+        }
+        Ok(())
+    }
+
     /// The account's margin position right now, or `None` when no margin
     /// model is in force (a cash account cannot be called).
     pub fn margin_state(&self) -> Result<Option<MarginState>> {
         let Some(model) = self.margin.as_deref() else {
             return Ok(None);
         };
+        // Isolated positions are excluded: their collateral is a bucket
+        // outside `cash`, and folding them into the cross calculation is
+        // exactly the cross-contamination isolation exists to prevent.
         let requirement = margin_requirement(
             model,
-            self.portfolio.open_positions(),
+            self.cross_positions(),
             &self.instruments,
             &self.marks,
         )?;
@@ -1138,7 +1356,7 @@ impl Engine {
         // waiting for the rate.
         let mut unconvertible = Vec::new();
         let mut unrealized = Money::ZERO;
-        for position in self.portfolio.open_positions() {
+        for position in self.cross_positions() {
             let key = (position.instrument.clone(), position.outcome);
             let Some(mark) = self.marks.get(&key) else {
                 continue;
@@ -1180,18 +1398,59 @@ impl Engine {
         if !state.liquidatable {
             return Ok(());
         }
-        let doomed: Vec<(InstrumentId, OutcomeId, Qty)> = self
-            .portfolio
-            .open_positions()
-            .map(|p| (p.instrument.clone(), p.outcome, p.quantity))
-            .collect();
-        for (instrument, outcome, quantity) in doomed {
+        // Largest requirement first: closing the biggest contributor is
+        // what actually restores the ratio, and it makes the sequence the
+        // same on every run without depending on portfolio iteration order.
+        let mut doomed: Vec<(InstrumentId, OutcomeId, Qty, Money)> = Vec::new();
+        for position in self.portfolio.open_positions() {
+            let key = (position.instrument.clone(), position.outcome);
+            let Some(mark) = self.marks.get(&key).copied() else {
+                continue;
+            };
+            let instrument = self.instruments.get(&position.instrument)?;
+            let requirement = match self.margin.as_deref() {
+                Some(model) => model.maintenance_margin(instrument, position.quantity, mark)?,
+                None => Money::ZERO,
+            };
+            doomed.push((
+                position.instrument.clone(),
+                position.outcome,
+                position.quantity,
+                requirement,
+            ));
+        }
+        doomed.sort_by(|left, right| {
+            right
+                .3
+                .raw()
+                .cmp(&left.3.raw())
+                .then_with(|| left.0.cmp(&right.0))
+                .then_with(|| left.1.cmp(&right.1))
+        });
+
+        for (instrument, outcome, quantity, _) in doomed {
+            // Under a partial policy, stop as soon as the account is healthy
+            // again. A venue closes what it must, not what it can.
+            if self.liquidation == LiquidationPolicy::Partial
+                && !self.margin_state()?.is_some_and(|state| state.liquidatable)
+            {
+                break;
+            }
             let key = (instrument.clone(), outcome);
             let Some(mark) = self.marks.get(&key).copied() else {
                 continue;
             };
+            let closing = match self.liquidation {
+                LiquidationPolicy::CloseAll => quantity,
+                LiquidationPolicy::Partial => {
+                    self.partial_close_quantity(&instrument, outcome, quantity, mark)?
+                }
+            };
+            if closing.is_zero() {
+                continue;
+            }
             // Close by crossing the book in the opposite direction.
-            let side = if quantity.is_positive() {
+            let side = if closing.is_positive() {
                 Side::Sell
             } else {
                 Side::Buy
@@ -1204,7 +1463,7 @@ impl Engine {
                 outcome,
                 side,
                 OrderKind::Market,
-                Qty::from_raw(quantity.raw().abs()),
+                Qty::from_raw(closing.raw().abs()),
                 TimeInForce::ImmediateOrCancel,
                 ts,
             )?;
@@ -1218,13 +1477,59 @@ impl Engine {
             self.liquidations.push(Liquidation {
                 instrument,
                 outcome,
-                quantity,
+                quantity: closing,
                 mark,
                 equity: state.equity,
                 maintenance: state.maintenance,
             });
         }
         Ok(())
+    }
+
+    /// How much of one position to close to restore the maintenance ratio.
+    ///
+    /// Closing a whole book is what a margin call ultimately means, but it
+    /// is not what a venue does first: a partial close that brings equity
+    /// back above maintenance leaves the strategy in the trade it was in,
+    /// which is both what happens and a materially different result.
+    ///
+    /// Solved by search rather than algebra, over the position's own lot
+    /// grid: closing a fraction changes equity through realised PnL and
+    /// through the requirement at once, and the relationship is not linear
+    /// once fees and a walked book are involved. The grid is at most a few
+    /// dozen steps and this runs only on a margin call.
+    fn partial_close_quantity(
+        &self,
+        instrument: &InstrumentId,
+        outcome: OutcomeId,
+        quantity: Qty,
+        mark: Price,
+    ) -> Result<Qty> {
+        let Some(model) = self.margin.as_deref() else {
+            return Ok(quantity);
+        };
+        let Some(state) = self.margin_state()? else {
+            return Ok(quantity);
+        };
+        let found = self.instruments.get(instrument)?;
+        let held = quantity.raw().abs();
+        let full = model.maintenance_margin(found, quantity, mark)?;
+        // Equity does not move as the position closes at the mark -- the
+        // unrealised profit simply becomes realised -- so the whole gain is
+        // in the requirement that goes away.
+        let need = state.maintenance.raw().saturating_sub(state.equity.raw());
+        if need <= 0 || full.raw() <= 0 {
+            return Ok(Qty::ZERO);
+        }
+        // The fraction of this position whose requirement covers the gap.
+        let fraction = (need as i128 * held as i128) / full.raw() as i128;
+        let mut closing = fraction.min(held as i128) as i64;
+        // Round up to a whole lot: a venue closes lots, not slivers.
+        let lot = found.lot_size.raw().max(1);
+        closing = closing.saturating_add(lot - 1) / lot * lot;
+        closing = closing.min(held);
+        let _ = outcome;
+        Ok(Qty::from_raw(closing * quantity.raw().signum()))
     }
 
     /// Whether the account can fund a new order.
@@ -1726,6 +2031,13 @@ impl Engine {
         )?;
         order.tag = request.tag;
         order.reduce_only = request.reduce_only;
+        order.post_only = request.post_only;
+        if order.post_only && !matches!(order.kind, OrderKind::Limit { .. }) {
+            return Err(BacktestError::invalid(
+                "a post-only order must carry a limit price; a market order \
+                 has nothing to rest at",
+            ));
+        }
 
         self.metrics.orders_submitted += 1;
         if let Some(at) = self.has_expired(&order.instrument, now) {
@@ -1760,6 +2072,25 @@ impl Engine {
         });
         self.orders.insert(id, order);
         Ok(())
+    }
+
+    /// The top-of-book price this order would immediately trade against.
+    ///
+    /// `None` when it would rest. Used only for post-only, where crossing
+    /// is the rejection condition rather than the fill condition.
+    fn crossing_price(&self, order: &Order) -> Option<Price> {
+        let limit = order.limit_price()?;
+        let book = self.books.get(&(order.instrument.clone(), order.outcome))?;
+        match order.side {
+            Side::Buy => book
+                .best_ask()
+                .map(|(price, _)| price)
+                .filter(|ask| *ask <= limit),
+            Side::Sell => book
+                .best_bid()
+                .map(|(price, _)| price)
+                .filter(|bid| *bid >= limit),
+        }
     }
 
     /// Would this sell open short exposure in an outcome nobody can borrow?
@@ -1923,6 +2254,27 @@ impl Engine {
                 self.metrics.orders_rejected_expired += 1;
                 continue;
             }
+            // Checked on arrival, not on submission: what matters is the
+            // book the venue sees when the order gets there. An order sent
+            // into a wide market and delivered into a crossed one is
+            // rejected, which is exactly the risk a maker takes.
+            if order.post_only
+                && let Some(top) = self.crossing_price(&order)
+            {
+                order.status = OrderStatus::Rejected;
+                order.reject_reason = Some(format!(
+                    "a post-only order at {} would have crossed the book at \
+                     {top}; the venue refuses it rather than filling it as a \
+                     taker",
+                    order
+                        .limit_price()
+                        .map(|price| price.to_string())
+                        .unwrap_or_default()
+                ));
+                self.orders.insert(order.id, order);
+                self.metrics.orders_rejected_post_only += 1;
+                continue;
+            }
             if let Some(other) = self.would_self_trade(&order) {
                 order.status = OrderStatus::Rejected;
                 order.reject_reason = Some(format!(
@@ -2044,8 +2396,13 @@ impl Engine {
             return Ok(());
         }
 
+        // A post-only order cannot take by construction: the venue refused
+        // it if it would have crossed on arrival, so a fill here is the book
+        // coming to a resting order. Charging it taker fees would price a
+        // maker strategy as the thing it was built to avoid being.
+        let is_taker = !order.post_only;
         for (price, quantity) in &walk.fills {
-            self.execute(id, *price, *quantity, true, ts, strategy)?;
+            self.execute(id, *price, *quantity, is_taker, ts, strategy)?;
         }
 
         let order = self.orders.get(&id).cloned().expect("order exists");
@@ -2479,6 +2836,7 @@ impl Engine {
             price,
             quantity,
             is_taker,
+            ts,
         })?;
         self.book_fill(
             id,
@@ -2551,6 +2909,9 @@ impl Engine {
                 .cash
                 .checked_add(realized_after.checked_sub(realized_before)?)?;
         }
+        // The position changed, so an isolated bucket sized against it has
+        // to move too -- in on the way up, back to cash on the way out.
+        self.rebalance_isolated(&order.instrument)?;
         if let Some(order) = self.orders.get_mut(&id) {
             order.record_fill(quantity)?;
         }
@@ -2646,9 +3007,29 @@ pub struct EngineBuilder {
     set_costs: SetOperationCosts,
     record_mark_curve: bool,
     mark_source: MarkSource,
+    liquidation: LiquidationPolicy,
+    isolated: std::collections::BTreeSet<InstrumentId>,
 }
 
 impl EngineBuilder {
+    /// Margin this instrument on its own collateral, not the account's.
+    ///
+    /// An isolated position posts its initial requirement into a bucket of
+    /// its own and can lose exactly that. It does not draw on the cross
+    /// account, and a cross account in profit will not rescue it -- which
+    /// is the trade a strategy makes when it isolates, and produces a
+    /// different result from cross on the same data.
+    pub fn isolate(mut self, instrument: InstrumentId) -> Self {
+        self.isolated.insert(instrument);
+        self
+    }
+
+    /// How much a margin call closes.
+    pub fn liquidation_policy(mut self, policy: LiquidationPolicy) -> Self {
+        self.liquidation = policy;
+        self
+    }
+
     /// Which price positions are valued, margined and liquidated at.
     pub fn mark_source(mut self, source: MarkSource) -> Self {
         self.mark_source = source;
@@ -2837,6 +3218,9 @@ impl EngineBuilder {
             venue_marks: BTreeMap::new(),
             oracles: BTreeMap::new(),
             mark_source: self.mark_source,
+            liquidation: self.liquidation,
+            isolated: self.isolated,
+            isolated_collateral: BTreeMap::new(),
         }
     }
 }

@@ -24,6 +24,7 @@
 
 use serde_json::Value;
 
+use h5i_db_backtest::account::PerInstrumentMargin;
 use h5i_db_backtest::error::{BacktestError, Result};
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId, PriceRule};
@@ -117,14 +118,12 @@ impl AssetMeta {
     /// The canonical instrument for this coin.
     pub fn instrument(&self) -> Result<Instrument> {
         let lot = 10_f64.powi(-(self.sz_decimals as i32));
-        Ok(
-            Instrument::perpetual(format!("{}-PERP", self.name), "hyperliquid")?
-                .with_lot_size(Qty::from_f64(lot)?)
-                .with_price_rule(PriceRule::SignificantFigures {
-                    significant_figures: MAX_SIGNIFICANT_FIGURES,
-                    max_decimals: self.price_decimals(),
-                })?,
-        )
+        Instrument::perpetual(format!("{}-PERP", self.name), "hyperliquid")?
+            .with_lot_size(Qty::from_f64(lot)?)
+            .with_price_rule(PriceRule::SignificantFigures {
+                significant_figures: MAX_SIGNIFICANT_FIGURES,
+                max_decimals: self.price_decimals(),
+            })
     }
 }
 
@@ -189,6 +188,38 @@ fn parse_meta_value(json: &Value) -> Result<Vec<AssetMeta>> {
         });
     }
     Ok(out)
+}
+
+/// The window Hyperliquid's fee tiers count volume over: fourteen days.
+pub const FEE_VOLUME_WINDOW_NANOS: i64 = 14 * 24 * 60 * 60 * 1_000_000_000;
+
+/// Build a margin model from the universe's per-coin `maxLeverage`.
+///
+/// The venue grants forty times on the majors and three on the long tail.
+/// One leverage across the universe either over-margins the majors or, far
+/// worse, holds a position in an illiquid coin that the venue would have
+/// refused to open at that size.
+///
+/// Maintenance lands at half the initial requirement at maximum leverage,
+/// which is the rule Hyperliquid documents.
+pub fn margin_from_meta(universe: &[AssetMeta]) -> Result<PerInstrumentMargin> {
+    // The fallback is the tightest leverage in the universe rather than the
+    // loosest: a coin that arrives without metadata should be harder to
+    // hold than the majors, not easier.
+    let floor = universe
+        .iter()
+        .map(|asset| asset.max_leverage)
+        .min()
+        .unwrap_or(1)
+        .max(1);
+    let mut margin = PerInstrumentMargin::new(floor as f64)?;
+    for asset in universe {
+        margin = margin.with_leverage(
+            perp_instrument_id(&asset.name)?,
+            asset.max_leverage.max(1) as f64,
+        )?;
+    }
+    Ok(margin)
 }
 
 /// Parse a `metaAndAssetCtxs` response into the universe and its reference

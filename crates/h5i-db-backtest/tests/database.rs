@@ -154,7 +154,7 @@ async fn a_venues_price_rule_survives_the_round_trip() {
             max_decimals: 1,
         })
         .unwrap();
-    store::write_instruments(&db, &[perp.clone()], ts(0))
+    store::write_instruments(&db, std::slice::from_ref(&perp), ts(0))
         .await
         .unwrap();
 

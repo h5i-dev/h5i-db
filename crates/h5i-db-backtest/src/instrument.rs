@@ -423,7 +423,7 @@ fn count_significant_figures(price: Price) -> u8 {
     if raw == 0 {
         return 0;
     }
-    while raw % 10 == 0 {
+    while raw.is_multiple_of(10) {
         raw /= 10;
     }
     let mut digits = 0_u8;
@@ -441,7 +441,7 @@ fn truncate_to_significant_figures(raw: i64, figures: u8) -> i64 {
     }
     let magnitude = raw.unsigned_abs();
     // A whole number keeps every digit: that is the venue's carve-out.
-    if magnitude % (SCALE as u64) == 0 {
+    if magnitude.is_multiple_of(SCALE as u64) {
         return raw;
     }
     let mut digits = 0_u32;
