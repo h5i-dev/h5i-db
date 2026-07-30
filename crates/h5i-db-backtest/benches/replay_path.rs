@@ -57,6 +57,7 @@ struct Args {
     instruments: usize,
     signals: usize,
     trials: usize,
+    common_quotes: bool,
     dir: Option<PathBuf>,
 }
 
@@ -70,6 +71,7 @@ impl Default for Args {
             instruments: 8,
             signals: 200,
             trials: 4,
+            common_quotes: false,
             dir: None,
         }
     }
@@ -92,6 +94,7 @@ fn parse_args() -> Args {
             "--instruments" => args.instruments = value(&mut argv),
             "--signals" => args.signals = value(&mut argv),
             "--trials" => args.trials = value(&mut argv),
+            "--common-quotes" => args.common_quotes = true,
             "--dir" => args.dir = argv.next().map(PathBuf::from),
             "--bench" | "--nocapture" => {}
             other if other.starts_with("--") => {}
@@ -134,11 +137,11 @@ fn mid_at(step: usize) -> f64 {
 ///
 /// The first event per instrument is a snapshot, because a delta against a
 /// book that was never opened is not a thing the engine should have to model.
-fn book_record(step: usize, ids: &[InstrumentId], count: usize) -> Record {
+fn book_record(step: usize, ids: &[InstrumentId], count: usize, common_quotes: bool) -> Record {
     let id = ids[step % count].clone();
     let ts = Stamps::immediate(UnixNanos::new(step as i64 * TICK_NANOS));
     let mid = mid_at(step);
-    if step < count {
+    if common_quotes || step < count {
         Record::new(
             ts,
             id,
@@ -230,7 +233,7 @@ async fn seed(db: &Database, args: &Args, ids: &[InstrumentId]) {
     // which would make the bench's own memory the limiting factor.
     let mut chunk = Vec::with_capacity(COMMIT_ROWS);
     for step in 0..args.book_events {
-        chunk.push(book_record(step, ids, args.instruments));
+        chunk.push(book_record(step, ids, args.instruments, args.common_quotes));
         if chunk.len() == COMMIT_ROWS {
             store::write_book_events(db, &chunk).await.unwrap();
             chunk.clear();
@@ -610,6 +613,7 @@ async fn main() {
             "instruments": args.instruments,
             "signals": args.signals,
             "trials": args.trials,
+            "common_quotes": args.common_quotes,
         },
         "phases": phases
             .iter()

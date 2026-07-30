@@ -1,5 +1,9 @@
 # h5i-db benchmark results
 
+The event-driven backtest comparison against local NautilusTrader and LEAN
+references is reported separately in
+[`backtest_compare/RESULTS.md`](backtest_compare/RESULTS.md).
+
 Date: 2026-07-22 · Machine: WSL2 Linux, 10 cores, 7 GiB RAM (aarch64) ·
 Build: `--profile bench-fast` (opt, thin-LTO off) · Seed 42.
 

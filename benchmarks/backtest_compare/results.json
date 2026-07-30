@@ -1,0 +1,211 @@
+{
+  "machine": {
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-aarch64-with-glibc2.39",
+    "processor": "aarch64"
+  },
+  "samples": {
+    "h5i": [
+      {
+        "boundary": "decoded Records -> replay kernel; persisted_run is separate",
+        "engine": "h5i-db",
+        "engine_version": "7659713d",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 2668395.7515350515,
+        "timings_ms": {
+          "decode": 84.640791,
+          "engine": 74.951401,
+          "persisted_run": 330.54310399999997
+        },
+        "workload": "top_of_book_market_orders_v1"
+      },
+      {
+        "boundary": "decoded Records -> replay kernel; persisted_run is separate",
+        "engine": "h5i-db",
+        "engine_version": "7659713d",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 3378046.9075255776,
+        "timings_ms": {
+          "decode": 84.231685,
+          "engine": 59.205808999999995,
+          "persisted_run": 301.03227799999996
+        },
+        "workload": "top_of_book_market_orders_v1"
+      },
+      {
+        "boundary": "decoded Records -> replay kernel; persisted_run is separate",
+        "engine": "h5i-db",
+        "engine_version": "7659713d",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 3045746.7197840833,
+        "timings_ms": {
+          "decode": 78.836487,
+          "engine": 65.665342,
+          "persisted_run": 369.127324
+        },
+        "workload": "top_of_book_market_orders_v1"
+      }
+    ],
+    "lean": [
+      {
+        "boundary": "first Slice callback -> OnEndOfAlgorithm; disk-fed",
+        "engine": "lean",
+        "engine_version": "11ba019f6",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 98397.20788082917,
+        "timings_ms": {
+          "engine": 2032.578,
+          "process_wall": 4383.938623
+        },
+        "workload": "top_of_book_market_orders_v1"
+      },
+      {
+        "boundary": "first Slice callback -> OnEndOfAlgorithm; disk-fed",
+        "engine": "lean",
+        "engine_version": "11ba019f6",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 103930.41443032233,
+        "timings_ms": {
+          "engine": 1924.3645,
+          "process_wall": 3932.523397
+        },
+        "workload": "top_of_book_market_orders_v1"
+      },
+      {
+        "boundary": "first Slice callback -> OnEndOfAlgorithm; disk-fed",
+        "engine": "lean",
+        "engine_version": "11ba019f6",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 91617.0155885436,
+        "timings_ms": {
+          "engine": 2183.0006,
+          "process_wall": 4252.75974
+        },
+        "workload": "top_of_book_market_orders_v1"
+      }
+    ],
+    "nautilus": [
+      {
+        "boundary": "in-memory model objects -> BacktestEngine.run",
+        "engine": "nautilus_trader",
+        "engine_version": "1.230.0",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 260881.97854906542,
+        "timings_ms": {
+          "engine": 766.630187,
+          "load": 76.596533,
+          "setup": 4.173377
+        },
+        "workload": "top_of_book_market_orders_v1"
+      },
+      {
+        "boundary": "in-memory model objects -> BacktestEngine.run",
+        "engine": "nautilus_trader",
+        "engine_version": "1.230.0",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 247560.51792319148,
+        "timings_ms": {
+          "engine": 807.883267,
+          "load": 75.150133,
+          "setup": 3.844388
+        },
+        "workload": "top_of_book_market_orders_v1"
+      },
+      {
+        "boundary": "in-memory model objects -> BacktestEngine.run",
+        "engine": "nautilus_trader",
+        "engine_version": "1.230.0",
+        "event_count": 200000,
+        "events_seen": 200000,
+        "orders_submitted": 200,
+        "schema_version": 1,
+        "signals_requested": 200,
+        "throughput_events_per_sec": 273809.21253082436,
+        "timings_ms": {
+          "engine": 730.435613,
+          "load": 95.850647,
+          "setup": 3.636122
+        },
+        "workload": "top_of_book_market_orders_v1"
+      }
+    ]
+  },
+  "schema_version": 1,
+  "summaries": [
+    {
+      "boundary": "decoded Records -> replay kernel; persisted_run is separate",
+      "engine": "h5i-db",
+      "engine_version": "7659713d",
+      "max_engine_ms": 74.951401,
+      "median_engine_ms": 65.665342,
+      "median_events_per_sec": 3045746.7197840833,
+      "min_engine_ms": 59.205808999999995,
+      "samples": 3
+    },
+    {
+      "boundary": "in-memory model objects -> BacktestEngine.run",
+      "engine": "nautilus_trader",
+      "engine_version": "1.230.0",
+      "max_engine_ms": 807.883267,
+      "median_engine_ms": 766.630187,
+      "median_events_per_sec": 260881.97854906542,
+      "min_engine_ms": 730.435613,
+      "samples": 3
+    },
+    {
+      "boundary": "first Slice callback -> OnEndOfAlgorithm; disk-fed",
+      "engine": "lean",
+      "engine_version": "11ba019f6",
+      "max_engine_ms": 2183.0006,
+      "median_engine_ms": 2032.578,
+      "median_events_per_sec": 98397.20788082917,
+      "min_engine_ms": 1924.3645,
+      "samples": 3
+    }
+  ],
+  "workload": {
+    "initial_cash": 1000000,
+    "instruments": 1,
+    "mid_price": 100.0,
+    "name": "top_of_book_market_orders_v1",
+    "quantity": 1,
+    "quote_events": 200000,
+    "repetitions": 3,
+    "schema_version": 1,
+    "signals": 200,
+    "start_utc": "2020-01-06T00:00:00Z",
+    "tick_size": 0.01,
+    "warmups": 1
+  }
+}
