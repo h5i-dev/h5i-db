@@ -9,6 +9,14 @@ Embedded, written in Rust.**
   on OHLCV+VWAP rollups over 20M rows.
 - **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
   gapfill/resample, rolling windows, `vwap`, `ewma`.
+- **Event-driven backtester over the same storage:** 3.05M events/s through
+  the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
+  top-of-book workload. A run executes inside a fork and writes its orders,
+  fills, positions and equity curve back as ordinary queryable tables.
+- **Research statistics that report their own reliability:** `alphalens`-parity
+  factor evaluation and `empyrical`-parity performance stats, plus deflated
+  Sharpe, probability of backtest overfitting, and purged/combinatorial
+  cross-validation.
 - **Fork a database in milliseconds:** forks share data instead of copying it. 
   Agents can run wide trial-and-error loops (fork, mutate, evaluate, discard) 
   at almost zero cost.
@@ -42,7 +50,7 @@ h5i-db context market.db                                           # orient in o
 h5i-db query market.db "SELECT symbol, vwap(price,size) FROM trades GROUP BY symbol"
 h5i-db query market.db "SELECT count(*) FROM trades" \
   --decision-time 2026-07-01T00:00:00Z                             # the future is unreadable
-h5i-db ui market.db                                                # review surface
+h5i-db ui market.db                                                # review + experiments surface
 ```
 
 **Python Library**
@@ -74,6 +82,53 @@ old = db.read("trades", version=1)                # time travel: read any past v
 plan = db.plan_delete_range("trades", 1_700_0_000_000)
 print(plan.summary)                               # preview the mutation before it lands
 plan.apply()
+```
+
+**Backtest** (same install, no server, no separate data pipeline)
+
+```python
+from h5i_db import backtest
+
+config = backtest.BacktestConfig(
+    run_id="momentum-001",
+    data=backtest.DataConfig(signals="signals", snapshot="2024-q1"),   # the pin
+    portfolio=backtest.PortfolioConfig(starting_cash=100_000.0),
+    execution=backtest.ExecutionConfig(fee_kind="kalshi", fee_rate=0.07),
+    risk=backtest.RiskConfig(max_order_quantity=500.0),
+)
+
+backtest.inspect(db, config).raise_for_errors()  # refuse claims the data can't support
+result = backtest.execute(db, config)            # replays inside fork "bt-momentum-001"
+
+result.summary()                  # fills, final cash, how far it actually simulated
+result.explain()                  # why orders were rejected or never filled
+result.fills                      # Arrow, or just SQL it: SELECT * FROM bt_fills
+result.tearsheet("run.html")
+result.verify()                   # re-execute the stored config and compare
+```
+
+A parameter grid becomes one fork per trial, and the winner is ranked without
+an export step. Give it explicit train and holdout windows and every trial runs
+both phases, so the leaderboard can be read out of sample:
+
+```python
+board = backtest.study(
+    db, study_id="fees", base=config,
+    parameters={"execution.fee_rate": [0.0, 0.02, 0.07]},
+    validation=backtest.ValidationWindows(
+        train=("2024-01-01", "2024-04-01"), holdout=("2024-04-01", "2024-07-01")
+    ),
+).leaderboard("holdout_final_cash")
+```
+
+The same typed contract runs from the shell, so a config file is the whole
+reproduction recipe:
+
+```bash
+python -m h5i_db.backtest inspect market.db config.json   # fidelity + preflight findings
+python -m h5i_db.backtest run     market.db config.json
+python -m h5i_db.backtest report  market.db momentum-001 --output run.html
+python -m h5i_db.backtest verify  market.db momentum-001
 ```
 
 **Agent skill** (Claude Code, Codex, Cursor, …)
@@ -162,6 +217,22 @@ Three things follow from the storage layer rather than the statistics:
 - **`quant.restatement_impact()`** re-runs one computation at two data
   versions and reports what a vendor's revision moved.
 
+Selection bias gets first-class statistics rather than a footnote, because a
+number found by searching is worth less than the same number found once:
+
+- **`quant.deflated_sharpe(returns, trials=N)`** discounts a Sharpe ratio by
+  the size of the search that found it, and `minimum_track_record_length()`
+  says how long a record must be before the ratio means anything.
+- **`quant.probability_of_backtest_overfitting(matrix)`** runs combinatorially
+  symmetric cross-validation over a sweep's trials: a PBO near 0.5 means the
+  in-sample winner carried no information.
+- **`quant.purged_kfold()`**, **`combinatorial_purged()`** and
+  **`walk_forward()`** split on horizons and embargo, so a label that depends
+  on the next ten bars cannot leak into its own training fold. Horizons are
+  never guessed: omitting them says labels are instantaneous.
+- **`quant.fit_impact()`** calibrates a slippage model from realised fills
+  instead of assuming a cost constant.
+
 ### Backtesting
 
 `h5i-db-backtest` is an event-driven backtester whose data plane is the
@@ -174,10 +245,58 @@ fork = db.fork("bt-momentum-001")
 quant.tearsheet(quant.from_levels(fork, "bt_equity"), path="run.html")
 ```
 
-Prediction markets are the first venue, with N-outcome markets as the
-general case. Settlement is gated on observability: a three-day replay of a
-six-month market leaves its position unsettled and says why, rather than
-booking a profit nobody trading that window could have collected.
+It is also fast, because replay reads decoded records straight out of the
+storage layer rather than crossing a language boundary per event. On one
+shared workload (200k top-of-book updates, 200 market orders, one instrument,
+every adapter verifying it saw all of them):
+
+| engine | measured boundary | median | throughput |
+|---|---|---:|---:|
+| **h5i-db** | decoded records through the replay kernel | **65.7 ms** | **3.05 M events/s** |
+| **h5i-db** | full persisted run: scan, decode, fork, replay, write | 331 ms | 605 k events/s |
+| NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
+| LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
+
+Even the persisted boundary, which does strictly more work than the other two,
+is 2.3× NautilusTrader's in-memory engine and 6.1× LEAN's measured callback
+throughput. This is one narrow event-driven workload, not a ranking of
+backtest systems; the boundaries differ and the benchmark checks event and
+order counts, not PnL equivalence. Methodology, raw samples and the reasons
+each boundary was drawn where it was:
+[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
+
+What the simulation itself covers:
+
+- **A run is a pure function of (data pin, strategy, config).** No wall clock,
+  no unseeded randomness, no unsorted hash-map iteration. `result.verify()`
+  re-executes a stored run and reports whether it reproduced.
+- **Look-ahead is closed structurally, not by convention.** Records carry
+  `ts_event` and `ts_init` and replay in `ts_init` order, so late data arrives
+  late; a strategy has no route to a market's resolution.
+- **Settlement is gated on observability.** A three-day replay of a six-month
+  market leaves its position unsettled and says why, rather than booking a
+  profit nobody trading that window could have collected. Both numbers
+  survive: mark-to-market and settled PnL, with the difference reported as an
+  explicit adjustment.
+- **Corporate actions apply forward, never backward.** Nobody ever traded the
+  split-adjusted price, so splits, dividends and delistings arrive as events
+  at the instant they take effect and act on positions, resting limits and
+  marks. Adjustment factors are point-in-time data; an unannounced action is
+  simply not in the stream. A ticker resolves to an instrument over half-open
+  spans, and an ambiguous lookup is refused with the candidates named.
+- **Accounts are multi-currency,** with margin, liquidation, perpetual
+  funding, order amendment, self-trade prevention and pre-trade risk limits.
+- **Preflight refuses claims the data cannot support.** `backtest.inspect()`
+  reports a replay fidelity, and asking for queue-position fills from periodic
+  snapshots is an error rather than a plausible-looking number.
+- **Strategies come in three shapes:** signals or command tables (the
+  strategy as data, no callback code and no language boundary in the loop),
+  Python `EventStrategy` callbacks, and the native Rust `Strategy` trait.
+- **Venue coverage:** prediction markets are the first venue with N-outcome
+  markets as the general case, via Kalshi, Polymarket and Hyperliquid loaders
+  that all produce the same canonical tables. `KalshiFees` implements the
+  actual quadratic fee curve, centicent rounding and per-order partial-fill
+  accumulator, not `notional × rate`.
 
 See the [quant](https://db.h5i.dev/manual/quant/) and
 [backtesting](https://db.h5i.dev/manual/backtest/) manual pages.
@@ -213,6 +332,20 @@ one small file and is as cheap to discard as to keep. `forks('trades')` then
 reads that table across every branch at once with a `__fork` column, so
 comparing what each one produced needs no export step.
 
+- **A trial is identified by its content, not its name.** A pinned, declarative
+`BacktestConfig` hashes to a `trial_digest` over every replay input, ignoring the
+run id and descriptive metadata. Re-submitting the same semantic trial returns
+the recorded result with `cached=True` instead of forking and replaying again,
+and lookup-plus-creation is serialized across local agent processes, so a retry
+loop cannot spend a second run or double-count a score.
+
+- **The review surface routes attention rather than ranking.** `h5i-db ui` orders
+trials by what needs a human next: decision required, then failed or warned, then
+finished and unseen, then running, then seen. Scanning a list does not mark work
+reviewed; a trial counts as seen only when its detail is opened. The leaderboard
+is a separate tab, because "best so far" and "what did I not look at" are
+different questions.
+
 - **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
 require that gate; `--idempotency-key` makes a retried ingest replay instead of
 double-appending; an opt-in `data-policy` rejects malformed rows fail-closed;
@@ -232,6 +365,9 @@ writer at every step.
   That is kdb+ territory.
 - **Databases with no time column:** the whole design assumes a time index;
   without one you lose pruning, the ASOF join, and point-in-time reads.
+- **Live trading:** the backtester never routes a real order. There are no
+  brokerage adapters, no portfolio optimiser and no plotting API; the boundary
+  is simulation and evaluation.
 
 ---
 
@@ -241,11 +377,15 @@ writer at every step.
 cargo test --workspace          # ~290 tests incl. crash-safety fault injection
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
 cargo run -p h5i-db-bench --profile bench-fast --bin h5i-db-fork-bench
+python3 benchmarks/backtest_compare/run.py \
+  --output benchmarks/backtest_compare/results.json   # vs NautilusTrader and LEAN
 ```
 
 Workspace crates under `crates/`: `core` (versioned storage kernel), `query`
-(DataFusion layer), `cli` (the agent-facing binary), `ui` (review surface),
-`python` (`pip install h5i-db`), `bench`.
+(DataFusion layer), `backtest` (replay kernel, venue models, settlement),
+`venues` (Kalshi, Polymarket, Hyperliquid loaders), `cli` (the agent-facing
+binary), `ui` (review surface), `observability`, `python`
+(`pip install h5i-db`), `bench`.
 
 ---
 
