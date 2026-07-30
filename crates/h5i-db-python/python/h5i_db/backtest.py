@@ -32,7 +32,7 @@ import sys
 import threading
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Optional, Sequence, Union
+from typing import Any, Mapping, Optional, Sequence, Union
 
 import pyarrow as pa
 
@@ -395,6 +395,7 @@ def run(
     max_order_quantity: Optional[float] = None,
     max_abs_position: Optional[float] = None,
     max_open_orders: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
 ) -> BacktestResult:
     """Replay ``signals`` against stored market data and record the run.
 
@@ -495,6 +496,11 @@ def run(
             max_open_orders=max_open_orders,
         ),
         output=OutputConfig(equity_interval_nanos=equity_interval_nanos),
+        # The config persisted to `bt_config` is rebuilt from this function's
+        # arguments, so anything not passed here is lost. Metadata is what
+        # groups runs into studies and names their parameters, and dropping it
+        # silently collapsed every trial into one unnamed experiment.
+        metadata=dict(metadata or {}),
     )
     inspection = inspect(db, config)
     result = BacktestResult(
@@ -574,6 +580,7 @@ def execute(
             max_order_quantity=config.risk.max_order_quantity,
             max_abs_position=config.risk.max_abs_position,
             max_open_orders=config.risk.max_open_orders,
+            metadata=config.metadata,
         )
         result.inspection = inspection
         result["cached"] = False

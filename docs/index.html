@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>h5i-db: High-Performance Analytical Database for Quantitative Finance</title>
-  <meta name="description" content="An embedded, versioned analytical database for quant workloads and AI agents. DataFusion SQL, native ASOF joins, and time travel, in Rust.">
-  <meta name="keywords" content="analytical database, time-series database, quantitative finance, asof join, ohlcv, vwap, datafusion, parquet, rust database, ai agents, versioned database, embedded database, h5i-db">
+  <title>h5i-db: AI-Native Database and Backtesting for Quant Research</title>
+  <meta name="description" content="An embedded time-series database and event-driven backtesting engine for quant research and AI agents. ASOF joins, versioned storage, and high-throughput event replay.">
+  <meta name="keywords" content="time-series database, backtesting engine, event-driven backtester, quantitative research, quantitative finance, analytical database, asof join, ohlcv, vwap, datafusion, parquet, rust database, ai agents, versioned database, embedded database, h5i-db">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -18,15 +18,15 @@
   <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="h5i-db">
-  <meta property="og:title" content="h5i-db: High-Performance Analytical Database for Quantitative Finance">
-  <meta property="og:description" content="A high-performance analytical database for quantitative finance and time-series workloads, designed for AI agents and written in Rust. Native ASOF joins, OHLCV rollups, manifest pruning, and a versioned, crash-safe storage engine.">
+  <meta property="og:title" content="h5i-db: AI-Native Database and Backtesting for Quant Research">
+  <meta property="og:description" content="An embedded time-series database with an event-driven backtesting engine built in, for quantitative research and the AI agents that run it. Native ASOF joins, OHLCV rollups, versioned crash-safe Parquet storage, and a high-throughput event replay kernel. Written in Rust.">
   <meta property="og:url" content="https://db.h5i.dev/">
   <meta property="og:image" content="https://h5i.dev/_static/logo.png">
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="h5i-db: High-Performance Analytical Database for Quantitative Finance">
-  <meta name="twitter:description" content="Polars-class analytics with a real database underneath: DataFusion SQL, native ASOF joins, versioned storage, and previewable mutations. Built in Rust for quant workloads and AI agents.">
+  <meta name="twitter:title" content="h5i-db: AI-Native Database and Backtesting for Quant Research">
+  <meta name="twitter:description" content="Database and backtester in one versioned store: DataFusion SQL, native ASOF joins, previewable mutations, and a high-throughput event replay kernel. Embedded, in Rust, for quant research and AI agents.">
 
   <!-- Structured data. The publisher node points back at h5i.dev's Organization
        so search engines treat db.h5i.dev as the same entity's docs subdomain. -->
@@ -45,7 +45,7 @@
       "@id": "https://db.h5i.dev/#website",
       "name": "h5i-db",
       "url": "https://db.h5i.dev/",
-      "description": "Documentation for h5i-db: an embedded, versioned analytical database for quantitative finance and time-series workloads, written in Rust.",
+      "description": "Documentation for h5i-db: an embedded, versioned time-series database with an event-driven backtesting engine built in, for quantitative research, written in Rust.",
       "publisher": {"@id": "https://h5i.dev/#org"},
       "inLanguage": "en"
     },
@@ -54,13 +54,13 @@
       "@id": "https://db.h5i.dev/#software",
       "name": "h5i-db",
       "applicationCategory": "DeveloperApplication",
-      "applicationSubCategory": "Database",
+      "applicationSubCategory": "Database, Backtesting Engine",
       "operatingSystem": "Linux, macOS, Windows",
       "url": "https://db.h5i.dev/",
       "downloadUrl": "https://github.com/h5i-dev/h5i-db",
       "programmingLanguage": "Rust",
       "license": "https://www.apache.org/licenses/LICENSE-2.0",
-      "description": "An embedded, versioned analytical database for quantitative finance and time-series workloads. Runs DataFusion SQL with native ASOF joins, OHLCV/VWAP rollups, time travel, and previewable mutations over immutable, time-sorted Parquet segments, driven from a CLI, Rust, or Python.",
+      "description": "An embedded, versioned time-series database with an event-driven backtesting engine built in, for quantitative research. Runs DataFusion SQL with native ASOF joins, OHLCV/VWAP rollups, time travel, and previewable mutations over immutable, time-sorted Parquet segments, and replays market data through an event-driven backtest kernel. Driven from a CLI, Rust, or Python.",
       "publisher": {"@id": "https://h5i.dev/#org"},
       "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
     }
@@ -250,12 +250,6 @@
       font-weight: 400; line-height: 1.7;
     }
     .hero-sub strong { color: var(--text); font-weight: 600; }
-    .hero-punch {
-      font-family: var(--mono); font-size: clamp(0.8rem, 1.6vw, 0.94rem);
-      letter-spacing: 0.01em; color: var(--text);
-      margin: -1.6rem auto 2.5rem; max-width: 640px;
-    }
-    .hero-punch::before { content: '→ '; color: var(--red-text); }
     .hero-actions { display: flex; gap: 0.9rem; justify-content: center; flex-wrap: wrap; margin-bottom: 2.8rem; }
     .btn {
       display: inline-flex; align-items: center; gap: 0.5rem;
@@ -320,7 +314,7 @@
     .divider { width: 40px; height: 2px; background: var(--red); margin: 1.4rem 0 0; }
 
     /* ── Features ──────────────────────────────────────────── */
-    #features, #benchmarks, #agents, #ui, #quickstart, #cta {
+    #features, #backtesting, #benchmarks, #ui, #quickstart, #cta {
       padding: 120px 0; border-top: 1px solid var(--border);
     }
     .feat-grid {
@@ -346,13 +340,6 @@
     }
     .feat-card:hover { background: var(--bg-card); }
     .feat-card:hover::before { transform: scaleX(1); }
-    .feat-cmd {
-      font-family: var(--mono); font-size: 0.72rem;
-      color: var(--text-dim); background: rgba(255,255,255,0.03);
-      border: 1px solid var(--border);
-      padding: 0.28rem 0.6rem; border-radius: 5px;
-      display: inline-block; width: fit-content;
-    }
     .feat-name { font-size: 1.06rem; font-weight: 700; color: var(--ink); }
     .feat-desc { font-size: 0.86rem; color: var(--text-dim); line-height: 1.6; }
     .feat-desc code { font-family: var(--mono); color: var(--red-text); font-size: 0.9em; }
@@ -385,6 +372,23 @@
     table.bench td:nth-child(2) {
       color: var(--red-text); font-weight: 700;
     }
+    /* The red column marks h5i-db's numbers, which is column two only while the
+       engines are columns. In the backtest table the engines are rows, so the
+       highlight moves to them and column two goes back to ordinary text. */
+    table.bench.by-row th:nth-child(2),
+    table.bench.by-row td:nth-child(2) { color: var(--text-dim); font-weight: 400; }
+    table.bench.by-row th:nth-child(2) { color: var(--text-faint); }
+    table.bench.by-row tr.mine td:first-child,
+    table.bench.by-row tr.mine td:nth-child(3),
+    table.bench.by-row tr.mine td:nth-child(4) { color: var(--red-text); font-weight: 700; }
+    .bench-label {
+      font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase;
+      letter-spacing: 0.14em; color: var(--red-text); margin: 2.6rem 0 0.5rem;
+    }
+    .bench-setup {
+      font-size: 0.86rem; color: var(--text-faint); max-width: 760px;
+      line-height: 1.7; margin-bottom: 1rem;
+    }
     .bench-note {
       margin-top: 1.4rem; font-size: 0.86rem; color: var(--text-faint);
       max-width: 760px; line-height: 1.7;
@@ -408,30 +412,6 @@
     }
     .bench-stat .lbl { font-size: 0.66rem; color: var(--text-faint); letter-spacing: 0.14em; margin-top: 0.6rem; text-transform: uppercase; }
 
-    /* ── Terminal ──────────────────────────────────────────── */
-    .terminal {
-      background: var(--bg-term); border: 1px solid var(--border);
-      border-radius: var(--radius-lg); overflow: hidden;
-      font-family: var(--mono); font-size: 0.82rem; line-height: 1.7;
-      box-shadow: 0 24px 60px rgba(0,0,0,0.4);
-      margin-bottom: 3rem;
-    }
-    .terminal-bar {
-      display: flex; align-items: center; gap: 0.5rem;
-      padding: 0.7rem 1rem; border-bottom: 1px solid var(--border);
-      background: rgba(255,255,255,0.015);
-    }
-    .dot { width: 11px; height: 11px; border-radius: 50%; background: #3a3a3f; }
-    .terminal-bar .dot:first-child { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06); }
-    .terminal-path { margin-left: 0.5rem; font-size: 0.7rem; color: var(--text-faint); letter-spacing: 0.03em; }
-    .terminal-body { padding: 1.3rem 1.5rem; overflow-x: auto; }
-    .terminal-body pre { white-space: pre; }
-    .t-prompt { color: var(--red-text); }
-    .t-cmd    { color: var(--ink); }
-    .t-cmt    { color: var(--text-faint); font-style: italic; }
-    .t-out    { color: var(--text-dim); }
-    .t-str    { color: var(--cyan); }
-    .t-pass   { color: var(--green); }
 
     /* ── Quickstart ────────────────────────────────────────── */
     .install-grid {
@@ -443,6 +423,7 @@
       background: var(--bg);
       padding: 2rem 1.9rem;
     }
+    .install-card.wide { grid-column: 1 / -1; }
     .install-card h3 {
       font-size: 0.72rem; font-weight: 700; margin-bottom: 1.2rem;
       color: var(--red-text); letter-spacing: 0.16em; font-family: var(--mono);
@@ -527,7 +508,7 @@
       .nav-hamburger { display: flex; }
       .bench-stat { border-right: none; border-bottom: 1px solid var(--border); }
       .bench-stat:last-child { border-bottom: none; }
-      #features, #benchmarks, #agents, #ui, #quickstart, #cta { padding: 80px 0; }
+      #features, #backtesting, #benchmarks, #ui, #quickstart, #cta { padding: 80px 0; }
     }
 
     /* ── Scrollbar ─────────────────────────────────────────── */
@@ -563,12 +544,11 @@
     <span>h5i-db</span>
   </a>
   <ul class="nav-links" id="nav-links">
-    <li><a href="#features">Features</a></li>
-    <li><a href="#benchmarks">Benchmarks</a></li>
-    <li><a href="#agents">For Agents</a></li>
     <li><a href="#quickstart">Quickstart</a></li>
     <li><a href="manual/">Docs</a></li>
+    <li><a href="api/">Python API</a></li>
     <li><a href="cookbook/">Cookbook</a></li>
+    <li><a href="#benchmarks">Benchmarks</a></li>
     <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
   </ul>
   <div class="nav-hamburger" id="hamburger" onclick="toggleNav()">
@@ -582,14 +562,13 @@
   <div class="hero-inner">
     <div class="hero-badge">RUST CORE · DATAFUSION SQL · ARROW + PARQUET</div>
     <h1 class="hero-title">
-      <span class="shine-text"><span class="hl">The analytical database</span><br><span class="hl">for quantitative finance</span></span>
+      <span class="shine-text"><span class="hl">Time-series DB for agents.</span><br><span class="hl">Backtesting for any asset</span></span>
     </h1>
     <p class="hero-sub">
-      h5i-db is a <strong>high-performance analytical database</strong> for quantitative finance and
-      time-series workloads, <strong>designed for AI agents</strong> and written in Rust. Full SQL with native
-      <strong>ASOF joins, OHLCV rollups, and VWAP</strong>.
+      h5i-db is an embedded <strong>time-series database</strong> and <strong>event-driven backtesting engine</strong>
+      for quantitative research. Built for <strong>AI agents</strong>, with native ASOF joins, OHLCV rollups, 
+      and high-throughput event replay.
     </p>
-    <p class="hero-punch">Polars-class analytics, with a real database underneath.</p>
     <div class="hero-actions">
       <a href="https://github.com/h5i-dev/h5i-db" class="btn btn-primary">View on GitHub</a>
       <a href="manual/" class="btn btn-ghost">Documentation</a>
@@ -618,8 +597,8 @@
 <section id="features">
   <div class="container">
     <div class="section-head reveal">
-      <span class="section-tag">What h5i-db is</span>
-      <h2 class="section-title">Quant-grade analytics in an embedded engine.</h2>
+      <span class="section-tag">The database</span>
+      <h2 class="section-title">High-speed analytical database for time-series.</h2>
       <p class="section-sub">A storage kernel and query engine tuned for the time axis: data is
       time-sorted on disk, pruned by manifest statistics before I/O, and queried through DataFusion
       SQL with native time-series operators. Version control, time travel, and previewable mutations
@@ -646,16 +625,11 @@
         <code>version_conflict</code>, never last-writer-wins.</div>
       </div>
       <div class="feat-card">
-        <div class="feat-name">Versioned storage</div>
+        <div class="feat-name">Versioned storage and time travel</div>
         <div class="feat-desc">Immutable Parquet segments with per-version manifests, directly addressed
-        by sequence. Version reads are O(1), <code>as_of</code> lookups are O(log V), and any past state
-        is one manifest read away.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-name">Time travel and snapshots</div>
-        <div class="feat-desc"><code>h5i('trades', 42)</code> reads version 42; an RFC3339 timestamp reads
-        as of a commit time; named snapshots pin exact versions across tables, keeping backtests
-        reproducible forever.</div>
+        by sequence. <code>h5i('trades', 42)</code> reads version 42 in O(1) and an RFC3339 timestamp
+        reads as of a commit time in O(log V); named snapshots pin exact versions across tables, keeping
+        a backtest reproducible forever.</div>
       </div>
       <div class="feat-card">
         <div class="feat-name">Previewable mutations</div>
@@ -669,11 +643,58 @@
         tests that kill the writer at every commit step. The old head survives, always.
         <code>verify --deep</code> re-checks the whole store.</div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Backtesting ──────────────────────────────────────────── -->
+<section id="backtesting">
+  <div class="container">
+    <div class="section-head reveal">
+      <span class="section-tag">The backtester</span>
+      <h2 class="section-title">High-throughput event-driven backtesting engine.</h2>
+      <p class="section-sub">A replay kernel that reads the same versioned tables everything
+      else queries. No export step: the pinned dataset, the run, and its results are one object, so a
+      result stays attributable to the exact data it was produced from.</p>
+      <div class="divider"></div>
+    </div>
+    <div class="feat-grid reveal">
       <div class="feat-card">
-        <div class="feat-name">Embedded, zero-ops</div>
-        <div class="feat-desc">A single directory on disk, no server process to run. Drive it from the
-        CLI, Rust, or Python; <code>to_pandas()</code> and Arrow interchange keep it inside your
-        existing research stack.</div>
+        <div class="feat-name">Event-driven replay kernel</div>
+        <div class="feat-desc">One pass over the merged event stream, pulled lazily rather than
+        materialised: memory stays flat whether a run covers an hour or a year. Order lifecycle,
+        queue position, and latency are modelled, not assumed away.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-name">Canonical venue tables</div>
+        <div class="feat-desc">Kalshi, Polymarket, and Hyperliquid payloads decode into one set of
+        tables: <code>book_deltas</code>, <code>trades</code>, <code>bars</code>,
+        <code>instruments</code>, <code>resolutions</code>, <code>funding</code>. The kernel never
+        learns which vendor a row came from.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-name">Real fee curves and funding</div>
+        <div class="feat-desc">Each venue's actual schedule, not a flat basis-point stand-in.
+        Prediction-market fees curve with price rather than scaling with notional, and perpetual
+        funding accrues against the position it was held in.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-name">Point-in-time by construction</div>
+        <div class="feat-desc">Pin a decision time and the frame that reaches pandas cannot contain
+        rows stamped after it. Lookahead bias is ruled out by the read path, not by remembering to
+        filter.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-name">Every run is a fork</div>
+        <div class="feat-desc">A run executes in its own fork and writes <code>bt_orders</code>,
+        <code>bt_fills</code>, <code>bt_positions</code>, and <code>bt_equity</code> there. Forks share
+        data instead of copying it, so a wide sweep costs close to nothing and discards cleanly.</div>
+      </div>
+      <div class="feat-card">
+        <div class="feat-name">Statistics that report their own reliability</div>
+        <div class="feat-desc">Factor and performance metrics at <code>alphalens</code> and
+        <code>empyrical</code> parity, plus deflated Sharpe, probability of backtest overfitting, and
+        purged cross-validation, so a number found by searching is discounted for the search.</div>
       </div>
     </div>
   </div>
@@ -685,9 +706,8 @@
     <div class="section-head reveal">
       <span class="section-tag">Benchmarks</span>
       <h2 class="section-title">Fast where quant workloads live.</h2>
-      <p class="section-sub">20M trades and 5M quotes, storage included on all sides: Polars, DuckDB,
-      pandas, and PyArrow over the identical h5i-db Parquet segment files, ArcticDB over its own LMDB
-      store loaded with the same data.</p>
+      <p class="section-sub">Two workloads, each measured against the tools it would replace, with
+      storage and I/O included on every side.</p>
       <div class="divider"></div>
     </div>
     <div class="bench-stats reveal">
@@ -696,6 +716,9 @@
       <div class="bench-stat"><div class="val">1.9M</div><div class="lbl">rows/s durable versioned ingest</div></div>
       <div class="bench-stat"><div class="val">1.1ms</div><div class="lbl">cold read, any version</div></div>
     </div>
+    <div class="bench-label reveal">Database</div>
+    <p class="bench-setup reveal">20M trades and 5M quotes: Polars, DuckDB, pandas, and PyArrow over the
+    identical h5i-db Parquet segment files, ArcticDB over its own LMDB store loaded with the same data.</p>
     <div class="bench-wrap reveal">
       <table class="bench">
         <tr><th>workload</th><th>h5i-db</th><th>polars 1.35</th><th>duckdb 1.3</th><th>pandas 2.3</th><th>pyarrow 24</th><th>arcticdb 6.19</th></tr>
@@ -719,56 +742,26 @@
     ² ArcticDB OHLCV/ASOF compute happens in pandas over its store reads (it has no native ASOF join).
     Full methodology in
     <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p>-->
-  </div>
-</section>
 
-<!-- ── For AI agents ────────────────────────────────────────── -->
-<section id="agents">
-  <div class="container">
-    <div class="section-head reveal">
-      <span class="section-tag">For AI agents</span>
-      <h2 class="section-title">Agent-First Architecture.</h2>
-      <p class="section-sub">Machine-readable output,
-      structured errors, hard resource limits, and a write path that policy can gate behind review.</p>
-      <div class="divider"></div>
+    <div class="bench-label reveal">Backtesting</div>
+    <p class="bench-setup reveal">200k top-of-book events and 200 orders through each engine. Medians of
+    three fresh-process runs after one warm-up, with every adapter verifying it saw all 200k events and
+    submitted all 200 orders.</p>
+    <div class="bench-wrap reveal">
+      <table class="bench by-row">
+        <tr><th>engine</th><th>measured boundary</th><th>median</th><th>throughput</th></tr>
+        <tr class="mine"><td>h5i-db</td><td>decoded records through the replay kernel</td><td>65.7 ms</td><td>3.05 M events/s</td></tr>
+        <tr class="mine"><td>h5i-db</td><td>full persisted run: scan, decode, fork, replay, write</td><td>331 ms</td><td>605 k events/s</td></tr>
+        <tr><td>NautilusTrader 1.230.0</td><td>in-memory objects through <code>BacktestEngine.run()</code></td><td>767 ms</td><td>261 k events/s</td></tr>
+        <tr><td>LEAN <code>11ba019f6</code></td><td>first <code>Slice</code> callback to <code>OnEndOfAlgorithm</code>, disk-fed</td><td>2 033 ms</td><td>98.4 k events/s</td></tr>
+      </table>
     </div>
-    <div class="terminal reveal">
-      <div class="terminal-bar">
-        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
-        <span class="terminal-path">agent shell · market.db</span>
-      </div>
-      <div class="terminal-body"><pre><span class="t-prompt">$</span> <span class="t-cmd">h5i-db query market.db</span> <span class="t-str">"SELECT symbol, vwap(price,size) FROM trades GROUP BY symbol"</span> \
-    <span class="t-cmd">--format json --max-rows 1000 --timeout 30s</span>        <span class="t-cmt"># machine formats + hard limits</span>
-
-<span class="t-prompt">$</span> <span class="t-cmd">h5i-db delete-range market.db trades --start 09:30 --end 09:31 --plan</span>
-<span class="t-out">{"plan_id": "5c41…", "summary": {"rows_affected": 12481, "segments_reused": 127}}</span>
-<span class="t-cmt"># errors are {code, message, retryable, hint} on stderr; exit codes are stable</span>
-
-<span class="t-prompt">$</span> <span class="t-cmd">h5i-db policy set market.db direct_delete=false</span>    <span class="t-cmt"># agents must preview; humans can too</span>
-<span class="t-pass">✔</span> <span class="t-out">deletes now require a reviewed plan</span></pre></div>
-    </div>
-    <div class="feat-grid reveal">
-      <div class="feat-card">
-        <div class="feat-cmd">--format json | jsonl | csv | arrow</div>
-        <div class="feat-name">Machine-readable everything</div>
-        <div class="feat-desc">Structured output in four formats, structured errors with a
-        <code>retryable</code> flag and an actionable hint, and stable exit codes (0/2/3/4/5) an
-        agent can branch on.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-cmd">--max-rows · --timeout · --memory-limit-mb</div>
-        <div class="feat-name">Resource limits as flags</div>
-        <div class="feat-desc">Row caps, query timeouts, memory ceilings with disk spilling, and
-        <code>--read-only</code>. A supervisor can hard-cap any call without touching the database.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-cmd">h5i-db policy set</div>
-        <div class="feat-name">Policy-enforceable review</div>
-        <div class="feat-desc">Direct writes and reviewed plans share one write path; the policy chooses
-        which operations may skip preview. Every manifest records <code>execution_mode</code> and the
-        plan hash.</div>
-      </div>
-    </div>
+    <!--<p class="bench-note reveal">The measured boundaries differ, as the column says, so these are not
+    like-for-like totals: the benchmark checks event and order counts rather than PnL equivalence, and
+    Nautilus invokes a Python strategy callback per quote where the other two run native code. Read the
+    persisted row against Nautilus for the closest comparison. This is one narrow event-driven workload,
+    not a ranking of backtest systems; full interpretation limits in
+    <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/backtest_compare/RESULTS.md">benchmarks/backtest_compare/RESULTS.md</a>.</p> -->
   </div>
 </section>
 
@@ -800,7 +793,7 @@
   <div class="container">
     <div class="section-head reveal">
       <span class="section-tag">Quickstart</span>
-      <h2 class="section-title">Five commands to a working database.</h2>
+      <h2 class="section-title">From install to a scored backtest.</h2>
       <div class="divider"></div>
     </div>
     <div class="install-grid reveal">
@@ -821,6 +814,17 @@
 <span class="kw">&gt;&gt;&gt;</span> <span class="hl">db.sql(</span><span class="st">"SELECT * FROM h5i('trades', 42)"</span><span class="hl">).to_pandas()</span>   <span class="cm"># time travel</span>
 <span class="kw">&gt;&gt;&gt;</span> <span class="hl">plan = db.plan_delete_range(</span><span class="st">"trades"</span><span class="hl">, start, end)</span>
 <span class="kw">&gt;&gt;&gt;</span> <span class="hl">plan.apply()</span>   <span class="cm"># preview first, commit second</span></div>
+      </div>
+      <div class="install-card wide">
+        <h3>Backtest (Python)</h3>
+        <div class="code-block"><span class="kw">&gt;&gt;&gt;</span> <span class="hl">from h5i_db import backtest, quant</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">backtest.create_signal_table(db)</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">db.append(</span><span class="st">"signals"</span><span class="hl">, backtest.signal_table(orders))</span>   <span class="cm"># intent, not fills</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">run = backtest.run(db, </span><span class="st">"mom-v1"</span><span class="hl">, starting_cash=100_000.0,</span>
+<span class="kw">...</span> <span class="hl">                   signals=</span><span class="st">"signals"</span><span class="hl">, snapshot=</span><span class="st">"q1-cut"</span><span class="hl">, fee_rate=0.02)</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">fork = db.fork(run[</span><span class="st">"fork"</span><span class="hl">])</span>   <span class="cm"># every run lands in its own fork</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">fork.read(</span><span class="st">"bt_fills"</span><span class="hl">).to_pandas()</span>   <span class="cm"># orders, fills, positions, equity</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">quant.from_levels(fork, </span><span class="st">"bt_equity"</span><span class="hl">).stats()</span>   <span class="cm"># sharpe, max drawdown, ...</span></div>
       </div>
     </div>
   </div>

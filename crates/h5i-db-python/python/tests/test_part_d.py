@@ -637,3 +637,39 @@ def test_ledger_rows_refuse_what_cannot_be_resolved():
         specs,
     )
     assert resolved[0].outcome == 1
+
+
+def test_basket_net_counts_closed_round_trips_not_just_settlement():
+    """`net` must be realized + settlement, not settlement - commissions.
+
+    The two agree only when nothing closed, so a hold-to-resolution book hides
+    the bug and a strategy that round-trips shows it. Guarded because the wrong
+    form is the intuitive one and was shipped once.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _panel(tmp)
+        panel = backtest.quote_panel(db, snapshot="panel")
+        # A rule that opens *and closes* positions, so realized_pnl is not
+        # merely the negative of commissions.
+        plan = backtest.strategies.ema_crossover(panel, fast=3, slow=8, quantity=10.0)
+        assert plan.num_signals > 4
+        db.create_table("signals_rt", plan.signals.schema, time_column="ts")
+        db.append("signals_rt", plan.signals)
+        result = backtest.execute(db, _signal_config(db, "signals_rt", "round-trip"))
+
+        summary = result.summary()
+        positions = result.positions.to_pandas()
+        settled = float(positions.settlement_pnl.fillna(0.0).sum())
+        realized = float(summary["realized_pnl"])
+        commissions = float(summary["commissions"])
+        assert result.fills.num_rows > 4
+
+        report = quant.basket_payload(db, {"rt": result}, panels=("leaderboard",))
+        reported = report.runs[0]["net"]
+        assert reported == pytest.approx(realized + settled)
+
+        # And the wrong form really is different here, which is what makes this
+        # test meaningful rather than tautological.
+        if abs(realized + commissions) > 1e-9:
+            assert reported != pytest.approx(settled - commissions)
+        db.close()
