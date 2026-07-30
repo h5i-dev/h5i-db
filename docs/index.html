@@ -3,9 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>h5i-db: High-Performance Analytical Database for Quantitative Finance</title>
-  <meta name="description" content="An embedded, versioned analytical database for quant workloads and AI agents. DataFusion SQL, native ASOF joins, and time travel, in Rust.">
-  <meta name="keywords" content="analytical database, time-series database, quantitative finance, asof join, ohlcv, vwap, datafusion, parquet, rust database, ai agents, versioned database, embedded database, h5i-db">
+  <title>h5i-db: AI-Native Database and Backtesting for Quant Research</title>
+  <meta name="description" content="An embedded time-series database and event-driven backtesting engine for quant research and AI agents. ASOF joins, versioned storage, 3.05M events/s replay.">
+  <meta name="keywords" content="time-series database, backtesting engine, event-driven backtester, quantitative research, quantitative finance, analytical database, asof join, ohlcv, vwap, datafusion, parquet, rust database, ai agents, versioned database, embedded database, h5i-db">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -18,15 +18,15 @@
   <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="h5i-db">
-  <meta property="og:title" content="h5i-db: High-Performance Analytical Database for Quantitative Finance">
-  <meta property="og:description" content="A high-performance analytical database for quantitative finance and time-series workloads, designed for AI agents and written in Rust. Native ASOF joins, OHLCV rollups, manifest pruning, and a versioned, crash-safe storage engine.">
+  <meta property="og:title" content="h5i-db: AI-Native Database and Backtesting for Quant Research">
+  <meta property="og:description" content="An embedded time-series database with an event-driven backtesting engine built in, for quantitative research and the AI agents that run it. Native ASOF joins, OHLCV rollups, versioned crash-safe Parquet storage, and a replay kernel at 3.05M events/s. Written in Rust.">
   <meta property="og:url" content="https://db.h5i.dev/">
   <meta property="og:image" content="https://h5i.dev/_static/logo.png">
 
   <!-- Twitter Card -->
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="h5i-db: High-Performance Analytical Database for Quantitative Finance">
-  <meta name="twitter:description" content="Polars-class analytics with a real database underneath: DataFusion SQL, native ASOF joins, versioned storage, and previewable mutations. Built in Rust for quant workloads and AI agents.">
+  <meta name="twitter:title" content="h5i-db: AI-Native Database and Backtesting for Quant Research">
+  <meta name="twitter:description" content="Database and backtester in one versioned store: DataFusion SQL, native ASOF joins, previewable mutations, and a 3.05M events/s replay kernel. Embedded, in Rust, for quant research and AI agents.">
 
   <!-- Structured data. The publisher node points back at h5i.dev's Organization
        so search engines treat db.h5i.dev as the same entity's docs subdomain. -->
@@ -45,7 +45,7 @@
       "@id": "https://db.h5i.dev/#website",
       "name": "h5i-db",
       "url": "https://db.h5i.dev/",
-      "description": "Documentation for h5i-db: an embedded, versioned analytical database for quantitative finance and time-series workloads, written in Rust.",
+      "description": "Documentation for h5i-db: an embedded, versioned time-series database with an event-driven backtesting engine built in, for quantitative research, written in Rust.",
       "publisher": {"@id": "https://h5i.dev/#org"},
       "inLanguage": "en"
     },
@@ -54,13 +54,13 @@
       "@id": "https://db.h5i.dev/#software",
       "name": "h5i-db",
       "applicationCategory": "DeveloperApplication",
-      "applicationSubCategory": "Database",
+      "applicationSubCategory": "Database, Backtesting Engine",
       "operatingSystem": "Linux, macOS, Windows",
       "url": "https://db.h5i.dev/",
       "downloadUrl": "https://github.com/h5i-dev/h5i-db",
       "programmingLanguage": "Rust",
       "license": "https://www.apache.org/licenses/LICENSE-2.0",
-      "description": "An embedded, versioned analytical database for quantitative finance and time-series workloads. Runs DataFusion SQL with native ASOF joins, OHLCV/VWAP rollups, time travel, and previewable mutations over immutable, time-sorted Parquet segments, driven from a CLI, Rust, or Python.",
+      "description": "An embedded, versioned time-series database with an event-driven backtesting engine built in, for quantitative research. Runs DataFusion SQL with native ASOF joins, OHLCV/VWAP rollups, time travel, and previewable mutations over immutable, time-sorted Parquet segments, and replays market data through a backtest kernel at 3.05M events/s. Driven from a CLI, Rust, or Python.",
       "publisher": {"@id": "https://h5i.dev/#org"},
       "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}
     }
@@ -250,12 +250,6 @@
       font-weight: 400; line-height: 1.7;
     }
     .hero-sub strong { color: var(--text); font-weight: 600; }
-    .hero-punch {
-      font-family: var(--mono); font-size: clamp(0.8rem, 1.6vw, 0.94rem);
-      letter-spacing: 0.01em; color: var(--text);
-      margin: -1.6rem auto 2.5rem; max-width: 640px;
-    }
-    .hero-punch::before { content: '→ '; color: var(--red-text); }
     .hero-actions { display: flex; gap: 0.9rem; justify-content: center; flex-wrap: wrap; margin-bottom: 2.8rem; }
     .btn {
       display: inline-flex; align-items: center; gap: 0.5rem;
@@ -582,14 +576,14 @@
   <div class="hero-inner">
     <div class="hero-badge">RUST CORE · DATAFUSION SQL · ARROW + PARQUET</div>
     <h1 class="hero-title">
-      <span class="shine-text"><span class="hl">The analytical database</span><br><span class="hl">for quantitative finance</span></span>
+      <span class="shine-text"><span class="hl">AI-native database and</span><br><span class="hl">backtesting infrastructure</span></span>
     </h1>
     <p class="hero-sub">
-      h5i-db is a <strong>high-performance analytical database</strong> for quantitative finance and
-      time-series workloads, <strong>designed for AI agents</strong> and written in Rust. Full SQL with native
-      <strong>ASOF joins, OHLCV rollups, and VWAP</strong>.
+      h5i-db is an embedded <strong>time-series database</strong> for quantitative research, with an
+      <strong>event-driven backtesting engine</strong> built in. Designed for <strong>AI agents</strong> and
+      written in Rust. Native ASOF joins, OHLCV rollups, and a replay kernel at
+      <strong>3.05M events/s</strong>.
     </p>
-    <p class="hero-punch">Polars-class analytics, with a real database underneath.</p>
     <div class="hero-actions">
       <a href="https://github.com/h5i-dev/h5i-db" class="btn btn-primary">View on GitHub</a>
       <a href="manual/" class="btn btn-ghost">Documentation</a>
