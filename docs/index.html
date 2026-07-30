@@ -372,6 +372,23 @@
     table.bench td:nth-child(2) {
       color: var(--red-text); font-weight: 700;
     }
+    /* The red column marks h5i-db's numbers, which is column two only while the
+       engines are columns. In the backtest table the engines are rows, so the
+       highlight moves to them and column two goes back to ordinary text. */
+    table.bench.by-row th:nth-child(2),
+    table.bench.by-row td:nth-child(2) { color: var(--text-dim); font-weight: 400; }
+    table.bench.by-row th:nth-child(2) { color: var(--text-faint); }
+    table.bench.by-row tr.mine td:first-child,
+    table.bench.by-row tr.mine td:nth-child(3),
+    table.bench.by-row tr.mine td:nth-child(4) { color: var(--red-text); font-weight: 700; }
+    .bench-label {
+      font-family: var(--mono); font-size: 0.66rem; text-transform: uppercase;
+      letter-spacing: 0.14em; color: var(--red-text); margin: 2.6rem 0 0.5rem;
+    }
+    .bench-setup {
+      font-size: 0.86rem; color: var(--text-faint); max-width: 760px;
+      line-height: 1.7; margin-bottom: 1rem;
+    }
     .bench-note {
       margin-top: 1.4rem; font-size: 0.86rem; color: var(--text-faint);
       max-width: 760px; line-height: 1.7;
@@ -689,9 +706,8 @@
     <div class="section-head reveal">
       <span class="section-tag">Benchmarks</span>
       <h2 class="section-title">Fast where quant workloads live.</h2>
-      <p class="section-sub">20M trades and 5M quotes, storage included on all sides: Polars, DuckDB,
-      pandas, and PyArrow over the identical h5i-db Parquet segment files, ArcticDB over its own LMDB
-      store loaded with the same data.</p>
+      <p class="section-sub">Two workloads, each measured against the tools it would replace, with
+      storage and I/O included on every side.</p>
       <div class="divider"></div>
     </div>
     <div class="bench-stats reveal">
@@ -700,6 +716,9 @@
       <div class="bench-stat"><div class="val">1.9M</div><div class="lbl">rows/s durable versioned ingest</div></div>
       <div class="bench-stat"><div class="val">1.1ms</div><div class="lbl">cold read, any version</div></div>
     </div>
+    <div class="bench-label reveal">Database</div>
+    <p class="bench-setup reveal">20M trades and 5M quotes: Polars, DuckDB, pandas, and PyArrow over the
+    identical h5i-db Parquet segment files, ArcticDB over its own LMDB store loaded with the same data.</p>
     <div class="bench-wrap reveal">
       <table class="bench">
         <tr><th>workload</th><th>h5i-db</th><th>polars 1.35</th><th>duckdb 1.3</th><th>pandas 2.3</th><th>pyarrow 24</th><th>arcticdb 6.19</th></tr>
@@ -723,6 +742,26 @@
     ² ArcticDB OHLCV/ASOF compute happens in pandas over its store reads (it has no native ASOF join).
     Full methodology in
     <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/RESULTS.md">benchmarks/RESULTS.md</a>.</p>-->
+
+    <div class="bench-label reveal">Backtesting</div>
+    <p class="bench-setup reveal">200k top-of-book events and 200 orders through each engine. Medians of
+    three fresh-process runs after one warm-up, with every adapter verifying it saw all 200k events and
+    submitted all 200 orders.</p>
+    <div class="bench-wrap reveal">
+      <table class="bench by-row">
+        <tr><th>engine</th><th>measured boundary</th><th>median</th><th>throughput</th></tr>
+        <tr class="mine"><td>h5i-db</td><td>decoded records through the replay kernel</td><td>65.7 ms</td><td>3.05 M events/s</td></tr>
+        <tr class="mine"><td>h5i-db</td><td>full persisted run: scan, decode, fork, replay, write</td><td>331 ms</td><td>605 k events/s</td></tr>
+        <tr><td>NautilusTrader 1.230.0</td><td>in-memory objects through <code>BacktestEngine.run()</code></td><td>767 ms</td><td>261 k events/s</td></tr>
+        <tr><td>LEAN <code>11ba019f6</code></td><td>first <code>Slice</code> callback to <code>OnEndOfAlgorithm</code>, disk-fed</td><td>2 033 ms</td><td>98.4 k events/s</td></tr>
+      </table>
+    </div>
+    <p class="bench-note reveal">The measured boundaries differ, as the column says, so these are not
+    like-for-like totals: the benchmark checks event and order counts rather than PnL equivalence, and
+    Nautilus invokes a Python strategy callback per quote where the other two run native code. Read the
+    persisted row against Nautilus for the closest comparison. This is one narrow event-driven workload,
+    not a ranking of backtest systems; full interpretation limits in
+    <a href="https://github.com/h5i-dev/h5i-db/blob/main/benchmarks/backtest_compare/RESULTS.md">benchmarks/backtest_compare/RESULTS.md</a>.</p>
   </div>
 </section>
 
