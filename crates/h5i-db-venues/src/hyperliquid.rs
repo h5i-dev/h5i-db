@@ -191,6 +191,100 @@ fn parse_meta_value(json: &Value) -> Result<Vec<AssetMeta>> {
     Ok(out)
 }
 
+/// Parse a `metaAndAssetCtxs` response into the universe and its reference
+/// prices.
+///
+/// The response is a two-element array: the `meta` object, then one context
+/// per coin **in universe order**. That positional pairing is the whole
+/// contract, so a length mismatch is refused rather than zipped to the
+/// shorter one -- a short zip silently attributes one coin's mark to
+/// another.
+///
+/// `at` is when the snapshot was taken. The payload carries no timestamp of
+/// its own, and inventing one from the wall clock is how a reference price
+/// ends up stamped before the book it was read alongside.
+pub fn parse_meta_and_asset_ctxs(
+    body: &str,
+    at: UnixNanos,
+) -> Result<(Vec<AssetMeta>, Vec<Record>)> {
+    let json = parse_json(body)?;
+    let pair = json.as_array().ok_or(BacktestError::Parse {
+        what: "metaAndAssetCtxs",
+        value: "expected a two-element array".to_string(),
+    })?;
+    if pair.len() != 2 {
+        return Err(BacktestError::Parse {
+            what: "metaAndAssetCtxs",
+            value: format!("expected two elements, got {}", pair.len()),
+        });
+    }
+    let universe = parse_meta_value(&pair[0])?;
+    let contexts = pair[1].as_array().ok_or(BacktestError::Parse {
+        what: "metaAndAssetCtxs[1]",
+        value: "expected an array of contexts".to_string(),
+    })?;
+    if contexts.len() != universe.len() {
+        return Err(BacktestError::invalid(format!(
+            "the universe has {} coins but {} contexts; the pairing is \
+             positional and a short zip would attribute one coin's mark to \
+             another",
+            universe.len(),
+            contexts.len()
+        )));
+    }
+
+    let mut records = Vec::new();
+    for (asset, context) in universe.iter().zip(contexts) {
+        let mark = optional_number(context, "markPx")?;
+        let oracle = optional_number(context, "oraclePx")?;
+        if mark.is_none() && oracle.is_none() {
+            continue;
+        }
+        records.push(Record::new(
+            Stamps::immediate(at),
+            perp_instrument_id(&asset.name)?,
+            OutcomeId::FIRST,
+            MarketEvent::Reference { mark, oracle },
+        ));
+    }
+    Ok((universe, records))
+}
+
+/// Parse an `activeAssetCtx` websocket payload into a reference record.
+///
+/// The live counterpart of [`parse_meta_and_asset_ctxs`], which is what a
+/// recorder captures continuously rather than polling.
+pub fn parse_asset_ctx(body: &str, at: UnixNanos) -> Result<Option<Record>> {
+    let json = parse_json(body)?;
+    let envelope = json.get("data").unwrap_or(&json);
+    let Some(coin) = envelope.get("coin").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let context = envelope.get("ctx").unwrap_or(envelope);
+    let mark = optional_number(context, "markPx")?;
+    let oracle = optional_number(context, "oraclePx")?;
+    if mark.is_none() && oracle.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(Record::new(
+        Stamps::immediate(at),
+        perp_instrument_id(coin)?,
+        OutcomeId::FIRST,
+        MarketEvent::Reference { mark, oracle },
+    )))
+}
+
+/// A numeric field that may be absent, and must stay absent when it is.
+///
+/// A missing mark is not a zero mark. Defaulting it would value every
+/// position in that coin at nothing and liquidate the account.
+fn optional_number(value: &Value, field: &'static str) -> Result<Option<Price>> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => Ok(Some(Price::from_f64(number(value, field)?)?)),
+    }
+}
+
 /// A perpetual instrument for a Hyperliquid coin, with a hand-supplied grid.
 ///
 /// Prefer [`parse_meta`] and [`AssetMeta::instrument`]: the venue publishes
@@ -907,6 +1001,82 @@ mod tests {
 
         let good = read_archive(std::io::Cursor::new(WS_BOOK.replace('\n', ""))).unwrap();
         assert!(good.require_yield(0.5).is_ok());
+    }
+
+    // -- reference prices --------------------------------------------------
+
+    const META_AND_CTXS: &str = r#"[
+        {"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":40},
+                     {"name":"ETH","szDecimals":4,"maxLeverage":25}]},
+        [{"markPx":"50000.0","oraclePx":"49995.0","funding":"0.0000125"},
+         {"markPx":"3000.0","oraclePx":"3000.5","funding":"-0.00001"}]
+    ]"#;
+
+    #[test]
+    fn a_venue_publishes_a_mark_and_an_oracle_that_are_not_the_mid() {
+        let at = UnixNanos::new(1_700_000_000 * MS);
+        let (universe, references) = parse_meta_and_asset_ctxs(META_AND_CTXS, at).unwrap();
+        assert_eq!(universe.len(), 2);
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].instrument.as_str(), "BTC-PERP");
+        assert_eq!(references[0].ts(), at);
+        match references[0].event {
+            MarketEvent::Reference { mark, oracle } => {
+                assert_eq!(mark, Some(Price::from_f64(50_000.0).unwrap()));
+                assert_eq!(oracle, Some(Price::from_f64(49_995.0).unwrap()));
+            }
+            _ => panic!("expected a reference"),
+        }
+    }
+
+    #[test]
+    fn the_universe_and_its_contexts_are_paired_positionally_or_refused() {
+        // A short zip would attribute one coin's mark to another, which is
+        // undetectable downstream.
+        let mismatched = r#"[
+            {"universe":[{"name":"BTC","szDecimals":5},{"name":"ETH","szDecimals":4}]},
+            [{"markPx":"50000.0"}]
+        ]"#;
+        let err = parse_meta_and_asset_ctxs(mismatched, UnixNanos::new(1)).unwrap_err();
+        assert!(err.to_string().contains("positional"), "{err}");
+        assert!(parse_meta_and_asset_ctxs(r#"[{"universe":[]}]"#, UnixNanos::new(1)).is_err());
+    }
+
+    #[test]
+    fn a_missing_mark_stays_missing_rather_than_becoming_zero() {
+        // Defaulting it would value every position in that coin at nothing
+        // and liquidate the account.
+        let body = r#"[
+            {"universe":[{"name":"BTC","szDecimals":5}]},
+            [{"oraclePx":"49995.0"}]
+        ]"#;
+        let (_, references) = parse_meta_and_asset_ctxs(body, UnixNanos::new(1)).unwrap();
+        match references[0].event {
+            MarketEvent::Reference { mark, oracle } => {
+                assert_eq!(mark, None);
+                assert!(oracle.is_some());
+            }
+            _ => panic!("expected a reference"),
+        }
+
+        // A context with neither price is not a record at all.
+        let empty = r#"[{"universe":[{"name":"BTC","szDecimals":5}]},[{}]]"#;
+        let (_, none) = parse_meta_and_asset_ctxs(empty, UnixNanos::new(1)).unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn the_live_asset_context_parses_the_same_way() {
+        let body = r#"{"channel":"activeAssetCtx","data":{"coin":"BTC",
+            "ctx":{"markPx":"50000.0","oraclePx":"49995.0"}}}"#;
+        let record = parse_asset_ctx(body, UnixNanos::new(7)).unwrap().unwrap();
+        assert_eq!(record.instrument.as_str(), "BTC-PERP");
+        assert_eq!(record.ts(), UnixNanos::new(7));
+        assert!(
+            parse_asset_ctx(r#"{"data":{"ctx":{}}}"#, UnixNanos::new(1))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

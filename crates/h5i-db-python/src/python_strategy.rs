@@ -338,6 +338,10 @@ fn add_market_fields(out: &Bound<'_, PyDict>, event: &MarketEvent) -> PyResult<(
             out.set_item("bid_levels", bids.len())?;
             out.set_item("ask_levels", asks.len())?;
         }
+        MarketEvent::Reference { mark, oracle } => {
+            out.set_item("mark", mark.map(|price| price.to_f64()))?;
+            out.set_item("oracle", oracle.map(|price| price.to_f64()))?;
+        }
         MarketEvent::Gap | MarketEvent::Corporate(_) => {}
     }
     Ok(())

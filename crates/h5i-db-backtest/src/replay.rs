@@ -47,6 +47,15 @@ pub mod priority {
     /// Corporate actions, which change what a position *is* and so must
     /// land before anything is priced against it.
     pub const CORPORATE: u32 = 5;
+    /// Venue-published mark and oracle prices.
+    ///
+    /// Early, for the same reason corporate actions are: the venue's mark
+    /// is the authority on what a position is *worth* at this instant, and
+    /// every check that prices against it -- margin, liquidation, equity --
+    /// runs per record. Landing it after the book would let a book that
+    /// gapped liquidate a position the venue was still valuing calmly, and
+    /// the liquidation would then read as a strategy result.
+    pub const REFERENCE: u32 = 7;
     /// Prints.
     pub const TRADE: u32 = 30;
     /// Funding, after prints so it settles against a current book.

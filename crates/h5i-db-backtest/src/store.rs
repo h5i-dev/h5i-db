@@ -462,10 +462,11 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
             MarketEvent::Trade { .. }
             | MarketEvent::Bar { .. }
             | MarketEvent::Funding { .. }
+            | MarketEvent::Reference { .. }
             | MarketEvent::Corporate(_) => {
                 return Err(BacktestError::invalid(
-                    "trades, bars, funding and corporate actions belong in \
-                     their own tables, not book_deltas",
+                    "trades, bars, funding, reference prices and corporate \
+                     actions belong in their own tables, not book_deltas",
                 ));
             }
         }
@@ -1234,6 +1235,102 @@ pub async fn funding_source(
         buffer: Default::default(),
         decode: decode_funding,
     }))
+}
+
+/// Stream the venue's published mark and oracle prices.
+pub async fn reference_source(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<crate::replay::RecordSource> {
+    let batches = scan_optional(db, schema::REFERENCES, at, window).await?;
+    Ok(Box::new(BatchDecoder {
+        batches: batches.into_iter(),
+        buffer: Default::default(),
+        decode: decode_reference,
+    }))
+}
+
+fn decode_reference(
+    batch: &RecordBatch,
+    out: &mut std::collections::VecDeque<Record>,
+) -> Result<()> {
+    let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
+    let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
+    let instrument = column::<StringArray>(batch, "instrument_id")?;
+    let outcome = column::<UInt16Array>(batch, "outcome")?;
+    let mark = column::<Float64Array>(batch, "mark")?;
+    let oracle = column::<Float64Array>(batch, "oracle")?;
+    for row in 0..batch.num_rows() {
+        out.push_back(Record::new(
+            Stamps::new(
+                UnixNanos::new(ts_event.value(row)),
+                UnixNanos::new(ts_init.value(row)),
+            )?,
+            InstrumentId::new(instrument.value(row))?,
+            OutcomeId(outcome.value(row)),
+            MarketEvent::Reference {
+                mark: opt_price(mark, row)?,
+                oracle: opt_price(oracle, row)?,
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn opt_price(column: &Float64Array, row: usize) -> Result<Option<Price>> {
+    if column.is_valid(row) {
+        Ok(Some(Price::from_f64(column.value(row))?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Write venue-published reference prices.
+pub async fn write_references(db: &Database, records: &[Record]) -> Result<()> {
+    let mut ts_init = TimestampNanosecondBuilder::new();
+    let mut ts_event = TimestampNanosecondBuilder::new();
+    let mut instrument = StringBuilder::new();
+    let mut outcome = UInt16Builder::new();
+    let mut mark = Float64Builder::new();
+    let mut oracle = Float64Builder::new();
+    let mut vendor = StringBuilder::new();
+
+    for record in records {
+        let MarketEvent::Reference {
+            mark: mark_value,
+            oracle: oracle_value,
+        } = &record.event
+        else {
+            return Err(BacktestError::invalid(
+                "write_references takes reference records only",
+            ));
+        };
+        ts_init.append_value(record.stamps.ts_init.get());
+        ts_event.append_value(record.stamps.ts_event.get());
+        instrument.append_value(record.instrument.as_str());
+        outcome.append_value(record.outcome.0);
+        match mark_value {
+            Some(price) => mark.append_value(price.to_f64()),
+            None => mark.append_null(),
+        }
+        match oracle_value {
+            Some(price) => oracle.append_value(price.to_f64()),
+            None => oracle.append_null(),
+        }
+        vendor.append_null();
+    }
+
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(ts_init.finish()),
+        Arc::new(ts_event.finish()),
+        Arc::new(instrument.finish()),
+        Arc::new(outcome.finish()),
+        Arc::new(mark.finish()),
+        Arc::new(oracle.finish()),
+        Arc::new(vendor.finish()),
+    ];
+    append(db, schema::REFERENCES, schema::references(), columns).await
 }
 
 fn decode_funding(batch: &RecordBatch, out: &mut std::collections::VecDeque<Record>) -> Result<()> {

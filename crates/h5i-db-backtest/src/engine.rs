@@ -356,6 +356,7 @@ pub struct Context<'a> {
     now: UnixNanos,
     books: &'a BTreeMap<BookKey, OrderBook>,
     marks: &'a BTreeMap<BookKey, Price>,
+    oracles: &'a BTreeMap<BookKey, Price>,
     portfolio: &'a Portfolio,
     cash: Money,
     commands: &'a mut VecDeque<Command>,
@@ -440,9 +441,19 @@ impl<'a> Context<'a> {
         self.clock_requests.push((name.into(), at));
     }
 
-    /// The market's own last price for an outcome.
+    /// The price this run values the position at: the venue's mark where it
+    /// publishes one, the book otherwise.
     pub fn mark(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Option<Price> {
         self.marks.get(&(instrument.clone(), outcome)).copied()
+    }
+
+    /// The venue's oracle price, where it publishes one.
+    ///
+    /// Distinct from the mark and from the mid, and worth reading directly:
+    /// the spread between oracle and book is the premium that funding is
+    /// computed from, and a basis strategy is trading exactly that.
+    pub fn oracle(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Option<Price> {
+        self.oracles.get(&(instrument.clone(), outcome)).copied()
     }
 
     /// Pay one unit of cash per set and receive one contract on every
@@ -860,6 +871,34 @@ pub struct Engine {
     forecasts: Vec<Forecast>,
     record_mark_curve: bool,
     mark_curve: Vec<MarkPoint>,
+    /// What the book itself last said: a mid, a print, or a bar close.
+    book_marks: BTreeMap<BookKey, Price>,
+    /// What the venue published as its mark, where it publishes one.
+    venue_marks: BTreeMap<BookKey, Price>,
+    /// What the venue published as its oracle, which funding is charged on.
+    oracles: BTreeMap<BookKey, Price>,
+    mark_source: MarkSource,
+}
+
+/// Which price a run values positions at.
+///
+/// A derivatives venue does not margin you against the mid. Hyperliquid
+/// publishes a mark built from an oracle and the book, and margin,
+/// unrealised PnL and liquidation all read that rather than the top of
+/// book. Valuing at the mid instead means a thin book or a single wick can
+/// liquidate a position the venue would never have touched -- and the
+/// resulting loss then reads as a strategy result rather than as a
+/// modelling artefact.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MarkSource {
+    /// Use the venue's published mark where there is one, and the book
+    /// otherwise. The default, because it is a no-op on data that carries
+    /// no reference prices and the right answer on data that does.
+    #[default]
+    VenueMark,
+    /// Always value against the book, ignoring any published mark.
+    /// For isolating what the venue's own mark was doing.
+    BookMid,
 }
 
 /// What performing a complete-set operation costs, regardless of size.
@@ -947,6 +986,7 @@ impl Engine {
             allow_naked_shorts: false,
             set_costs: SetOperationCosts::default(),
             record_mark_curve: true,
+            mark_source: MarkSource::default(),
         }
     }
 
@@ -1284,6 +1324,7 @@ impl Engine {
             now: self.clock.now(),
             books: &self.books,
             marks: &self.marks,
+            oracles: &self.oracles,
             portfolio: &self.portfolio,
             cash: self.cash,
             commands: &mut self.commands,
@@ -1323,10 +1364,18 @@ impl Engine {
                 self.metrics.book_gaps += 1;
             }
             MarketEvent::Trade { price, .. } => {
-                self.marks.insert(key.clone(), *price);
+                self.book_marks.insert(key.clone(), *price);
             }
             MarketEvent::Bar { close, .. } => {
-                self.marks.insert(key.clone(), *close);
+                self.book_marks.insert(key.clone(), *close);
+            }
+            MarketEvent::Reference { mark, oracle } => {
+                if let Some(price) = mark {
+                    self.venue_marks.insert(key.clone(), *price);
+                }
+                if let Some(price) = oracle {
+                    self.oracles.insert(key.clone(), *price);
+                }
             }
             MarketEvent::Funding { rate } => {
                 self.apply_funding(&record.instrument, *rate)?;
@@ -1336,19 +1385,47 @@ impl Engine {
             }
         }
         if let Some(mid) = self.books.get(&key).and_then(|b| b.mid()) {
-            self.marks.insert(key, mid);
+            self.book_marks.insert(key.clone(), mid);
         }
+        self.refresh_mark(&key);
         Ok(())
+    }
+
+    /// Recompute the mark this run values positions at.
+    ///
+    /// `marks` is the *effective* mark, so every existing reader -- margin,
+    /// equity, liquidation, settlement -- gets the configured price without
+    /// having to know where it came from. The book-derived and
+    /// venue-published prices are kept apart underneath so switching between
+    /// them is a policy rather than a rewrite.
+    fn refresh_mark(&mut self, key: &BookKey) {
+        let effective = match self.mark_source {
+            MarkSource::VenueMark => self
+                .venue_marks
+                .get(key)
+                .or_else(|| self.book_marks.get(key))
+                .copied(),
+            MarkSource::BookMid => self.book_marks.get(key).copied(),
+        };
+        if let Some(price) = effective {
+            self.marks.insert(key.clone(), price);
+        }
     }
 
     /// Settle a funding payment against every open position in an
     /// instrument.
     ///
-    /// `payment = position * mark * rate`, charged to the holder, so a
+    /// `payment = position * price * rate`, charged to the holder, so a
     /// positive rate takes cash from longs and pays it to shorts. A position
-    /// with no mark cannot be valued and is skipped rather than funded at a
-    /// guessed price -- silently funding at the entry price would make a
+    /// with no price cannot be valued and is skipped rather than funded at a
+    /// guessed one -- silently funding at the entry price would make a
     /// stale position drift for free.
+    ///
+    /// The price is the venue's **oracle** where it publishes one, not the
+    /// book. Hyperliquid charges funding on the oracle precisely so that a
+    /// thin book cannot inflate or deflate a payment, and charging on the
+    /// mid instead reintroduces the manipulation the oracle exists to
+    /// prevent -- at hourly settlement, over a long carry, that compounds.
     fn apply_funding(&mut self, instrument: &InstrumentId, rate: Price) -> Result<()> {
         let mut total = Money::ZERO;
         for position in self.portfolio.open_positions() {
@@ -1356,7 +1433,7 @@ impl Engine {
                 continue;
             }
             let key = (position.instrument.clone(), position.outcome);
-            let Some(mark) = self.marks.get(&key) else {
+            let Some(mark) = self.oracles.get(&key).or_else(|| self.marks.get(&key)) else {
                 continue;
             };
             let exposure = position.exposure(*mark)?;
@@ -2568,9 +2645,16 @@ pub struct EngineBuilder {
     allow_naked_shorts: bool,
     set_costs: SetOperationCosts,
     record_mark_curve: bool,
+    mark_source: MarkSource,
 }
 
 impl EngineBuilder {
+    /// Which price positions are valued, margined and liquidated at.
+    pub fn mark_source(mut self, source: MarkSource) -> Self {
+        self.mark_source = source;
+        self
+    }
+
     /// Let a sell open short exposure in a prediction-market outcome.
     ///
     /// Off by default, and it should stay off for any venue that resembles
@@ -2749,6 +2833,10 @@ impl EngineBuilder {
             forecasts: Vec::new(),
             record_mark_curve: self.record_mark_curve,
             mark_curve: Vec::new(),
+            book_marks: BTreeMap::new(),
+            venue_marks: BTreeMap::new(),
+            oracles: BTreeMap::new(),
+            mark_source: self.mark_source,
         }
     }
 }

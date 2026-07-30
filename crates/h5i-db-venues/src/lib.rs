@@ -274,6 +274,22 @@ fn hash_event(hasher: &mut blake3::Hasher, event: &MarketEvent) {
         MarketEvent::Funding { rate } => {
             hasher.update(&rate.raw().to_le_bytes());
         }
+        MarketEvent::Reference { mark, oracle } => {
+            // An absent price is hashed distinctly from a zero one: they are
+            // different facts, and a load that lost a mark must not share a
+            // digest with one that carried it.
+            for price in [mark, oracle] {
+                match price {
+                    Some(value) => {
+                        hasher.update(b"p");
+                        hasher.update(&value.raw().to_le_bytes());
+                    }
+                    None => {
+                        hasher.update(b"-");
+                    }
+                }
+            }
+        }
         MarketEvent::Bar {
             open,
             high,

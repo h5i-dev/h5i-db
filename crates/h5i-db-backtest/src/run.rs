@@ -373,6 +373,9 @@ where
     // Funding only exists for perpetuals; the reader treats an absent
     // table as no funding rather than as a failure.
     let funding = store::funding_source(db, spec.read_at.clone(), spec.window).await?;
+    // The venue's own mark and oracle, where it publishes them. Absent for
+    // any venue that does not, which is most of them.
+    let references = store::reference_source(db, spec.read_at.clone(), spec.window).await?;
 
     let coverage = spec.window.map(|requested| {
         // Coverage is measured on the book stream, which is the one that
@@ -397,6 +400,7 @@ where
     let mut replay = Replay::builder()
         .stream("book", priority::SNAPSHOT, book_events)
         .source("trades", priority::TRADE, trades)
+        .source("references", priority::REFERENCE, references)
         .source("funding", priority::FUNDING, funding)
         .build()?;
 

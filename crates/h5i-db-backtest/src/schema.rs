@@ -38,6 +38,8 @@ pub const SIGNALS: &str = "signals";
 pub const COMMANDS: &str = "commands";
 /// Perpetual funding rates.
 pub const FUNDING: &str = "funding";
+/// Venue-published mark and oracle prices, which are not the book.
+pub const REFERENCES: &str = "references";
 /// What has already been ingested, so a reload is a no-op.
 pub const INGEST_LOG: &str = "ingest_log";
 
@@ -192,6 +194,26 @@ pub fn resolutions() -> SchemaRef {
         Field::new("payout", DataType::Float64, true),
         // How many outcomes a `void` refunds across.
         Field::new("outcome_count", DataType::UInt16, true),
+    ]))
+}
+
+/// `references`: the mark and oracle prices a venue publishes.
+///
+/// Separate from the book because they are separate facts. A derivatives
+/// venue margins against its own mark and charges funding on its own
+/// oracle; storing only the book leaves a replay to substitute the mid for
+/// both, which liquidates positions the venue would not have.
+pub fn references() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        ts("ts_init"),
+        ts("ts_event"),
+        text("instrument_id"),
+        outcome(),
+        // Either may be absent: a venue can publish one and not the other,
+        // and a null must not be read as a zero price.
+        Field::new("mark", DataType::Float64, true),
+        Field::new("oracle", DataType::Float64, true),
+        opt_text("source_vendor"),
     ]))
 }
 
@@ -405,6 +427,7 @@ pub fn market_data_tables() -> Vec<(&'static str, SchemaRef, TableOptions)> {
         (INSTRUMENTS, instruments(), market_data_options()),
         (RESOLUTIONS, resolutions(), market_data_options()),
         (FUNDING, funding(), market_data_options()),
+        (REFERENCES, references(), market_data_options()),
     ]
 }
 

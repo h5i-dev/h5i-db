@@ -54,7 +54,7 @@ pub use clock::{Clock, TimeEvent};
 pub use corporate::{CorporateAction, SymbolRegistry, Universe};
 pub use currency::{Currency, FxBook, Haircuts};
 pub use engine::{
-    CommandReplay, Context, Engine, EngineBuilder, Forecast, MarkPoint, OrderRequest,
+    CommandReplay, Context, Engine, EngineBuilder, Forecast, MarkPoint, MarkSource, OrderRequest,
     ReplayCommand, RiskLimits, RunResult, SetOperation, SetOperationCosts, SetOperationKind,
     SetOperationRequest, SignalReplay, Strategy,
 };
