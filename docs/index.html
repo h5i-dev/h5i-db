@@ -423,6 +423,7 @@
       background: var(--bg);
       padding: 2rem 1.9rem;
     }
+    .install-card.wide { grid-column: 1 / -1; }
     .install-card h3 {
       font-size: 0.72rem; font-weight: 700; margin-bottom: 1.2rem;
       color: var(--red-text); letter-spacing: 0.16em; font-family: var(--mono);
@@ -792,7 +793,7 @@
   <div class="container">
     <div class="section-head reveal">
       <span class="section-tag">Quickstart</span>
-      <h2 class="section-title">Five commands to a working database.</h2>
+      <h2 class="section-title">From install to a scored backtest.</h2>
       <div class="divider"></div>
     </div>
     <div class="install-grid reveal">
@@ -813,6 +814,17 @@
 <span class="kw">&gt;&gt;&gt;</span> <span class="hl">db.sql(</span><span class="st">"SELECT * FROM h5i('trades', 42)"</span><span class="hl">).to_pandas()</span>   <span class="cm"># time travel</span>
 <span class="kw">&gt;&gt;&gt;</span> <span class="hl">plan = db.plan_delete_range(</span><span class="st">"trades"</span><span class="hl">, start, end)</span>
 <span class="kw">&gt;&gt;&gt;</span> <span class="hl">plan.apply()</span>   <span class="cm"># preview first, commit second</span></div>
+      </div>
+      <div class="install-card wide">
+        <h3>Backtest (Python)</h3>
+        <div class="code-block"><span class="kw">&gt;&gt;&gt;</span> <span class="hl">from h5i_db import backtest, quant</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">backtest.create_signal_table(db)</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">db.append(</span><span class="st">"signals"</span><span class="hl">, backtest.signal_table(orders))</span>   <span class="cm"># intent, not fills</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">run = backtest.run(db, </span><span class="st">"mom-v1"</span><span class="hl">, starting_cash=100_000.0,</span>
+<span class="kw">...</span> <span class="hl">                   signals=</span><span class="st">"signals"</span><span class="hl">, snapshot=</span><span class="st">"q1-cut"</span><span class="hl">, fee_rate=0.02)</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">fork = db.fork(run[</span><span class="st">"fork"</span><span class="hl">])</span>   <span class="cm"># every run lands in its own fork</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">fork.read(</span><span class="st">"bt_fills"</span><span class="hl">).to_pandas()</span>   <span class="cm"># orders, fills, positions, equity</span>
+<span class="kw">&gt;&gt;&gt;</span> <span class="hl">quant.from_levels(fork, </span><span class="st">"bt_equity"</span><span class="hl">).stats()</span>   <span class="cm"># sharpe, max drawdown, ...</span></div>
       </div>
     </div>
   </div>
