@@ -188,13 +188,6 @@ tables. So two runs diff at fill level with `fork_diff`, a whole sweep aggregate
 in one cross-fork query, the one worth keeping is `promote`d and the rest are
 dropped. Nothing to export, nothing to clean up by hand.
 
-- **A trial is identified by its content, not its name.** A pinned, declarative
-`BacktestConfig` hashes to a `trial_digest` over every replay input, ignoring the
-run id and descriptive metadata. Re-submitting the same semantic trial returns
-the recorded result with `cached=True` instead of forking and replaying again,
-and lookup-plus-creation is serialized across local agent processes, so a retry
-loop cannot spend a second run or double-count a score.
-
 - **The review surface routes attention rather than ranking.** `h5i-db ui` orders
 trials by what needs a human next: decision required, then failed or warned, then
 finished and unseen, then running, then seen. Scanning a list does not mark work
@@ -223,8 +216,6 @@ different questions.
 
 ## Benchmark
 
-Full methodology and results in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-
 **Database**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -245,6 +236,8 @@ Full methodology and results in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
   table function (SQL and Python).
 ⁵ ArcticDB's native time index wins narrow point reads from its own LMDB
   store; h5i-db's manifest pruning is second and beats every general engine.
+
+Full methodology and results in [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 **Backtesting**
 

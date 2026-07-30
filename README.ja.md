@@ -186,12 +186,6 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 クエリで集計でき、残す価値のあるものだけ `promote` して、あとは捨てられる。
 エクスポートも、手作業の後片付けもいらない。
 
-- **試行を識別するのは名前ではなく中身。** ピンが効いた宣言的な `BacktestConfig` は、
-リプレイの入力すべてから `trial_digest` を作る。run idや説明用のメタデータは含めない。
-意味的に同じ試行をもう一度投げると、forkして走らせ直すのではなく記録済みの結果が
-`cached=True` で返る。照合と作成はローカルのエージェントプロセスをまたいで直列化
-されるので、リトライループが実行を二重に消費したりスコアを二重に数えたりしない。
-
 - **レビュー画面がやるのは順位付けではなく注意の割り振り。** `h5i-db ui` は、次に人が
 見るべき順に試行を並べる。判断が必要、失敗または警告あり、完了して未読、実行中、既読。
 一覧を眺めただけでは既読にならない。詳細を開いたときだけ既読が付く。リーダーボードは
@@ -216,8 +210,6 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 
 ## ベンチマーク
 
-計測方法と結果は [benchmarks/RESULTS.md](benchmarks/RESULTS.md) に全部書いてある。
-
 **データベース**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -240,6 +232,8 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 ⁵ 狭い範囲のピンポイントな読み取りは、ArcticDBが自前のLMDBストア上のネイティブな
   時間インデックスで勝つ。h5i-dbのマニフェスト枝刈りはそれに次ぐ2位で、汎用エンジンは
   すべて上回っている。
+
+計測方法と結果は [benchmarks/RESULTS.md](benchmarks/RESULTS.md) に全部書いてある。
 
 **バックテスト**
 

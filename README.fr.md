@@ -203,14 +203,6 @@ niveau de l'exécution avec `fork_diff`, un balayage entier s'agrège en une seu
 requête inter-forks, celle qui en vaut la peine est `promote`, et le reste est jeté.
 Rien à exporter, rien à nettoyer à la main.
 
-- **Un essai s'identifie par son contenu, pas par son nom.** Un `BacktestConfig`
-ancré et déclaratif se résume en un `trial_digest` calculé sur toutes les entrées
-du rejeu, en ignorant l'identifiant d'exécution et les métadonnées descriptives.
-Resoumettre le même essai sémantique renvoie le résultat enregistré avec
-`cached=True` au lieu de forker et de rejouer, et la recherche puis la création
-sont sérialisées entre les processus d'agents locaux : une boucle de reprise ne
-peut donc ni dépenser une seconde exécution ni compter deux fois un score.
-
 - **La surface de revue répartit l'attention plutôt qu'elle ne classe.**
 `h5i-db ui` trie les essais selon ce qui réclame un humain ensuite : décision
 requise, puis en échec ou avec avertissement, puis terminés et non vus, puis en
@@ -241,8 +233,6 @@ sont deux questions différentes.
 
 ## Benchmark
 
-Méthodologie et résultats complets dans [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-
 **Base de données**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -266,6 +256,8 @@ Méthodologie et résultats complets dans [benchmarks/RESULTS.md](benchmarks/RES
 ⁵ L'index temporel natif d'ArcticDB l'emporte sur les lectures ponctuelles
   étroites depuis son propre magasin LMDB ; l'élagage par manifeste de h5i-db
   arrive second et devance tous les moteurs généralistes.
+
+Méthodologie et résultats complets dans [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
 
 **Backtesting**
 

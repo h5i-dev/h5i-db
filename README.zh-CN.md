@@ -172,12 +172,6 @@ npx skills add h5i-dev/h5i-db        # 从 skills/h5i-db/ 安装 h5i-db skill
 对比，整轮扫描能用一条跨 fork 查询汇总，值得留下的那次 `promote`，其余的丢掉。
 不需要导出，也没有需要手工清理的东西。
 
-- **一次试验由内容来标识，而不是由名字。** 锚定好的声明式 `BacktestConfig` 会对重放
-的全部输入算出一个 `trial_digest`，其中不含 run id 和描述性的元数据。再提交一遍语义
-相同的试验，会带着 `cached=True` 返回已记录的结果，而不是重新 fork、重新重放；查找
-与创建这一对动作在本地各个智能体进程之间是串行化的，所以重试循环既不会多花一次运行，
-也不会把同一个分数算两遍。
-
 - **审阅界面做的是分配注意力，不是排名。** `h5i-db ui` 按“接下来需要人看什么”排序：
 需要决策的、失败或有告警的、已完成但未读的、正在跑的、已读的。扫一眼列表并不算读过；
 只有打开某次试验的详情，它才计为已读。排行榜是单独一个标签页，因为“目前哪个最好”
@@ -202,8 +196,6 @@ npx skills add h5i-dev/h5i-db        # 从 skills/h5i-db/ 安装 h5i-db skill
 
 ## 基准测试
 
-完整的方法说明与结果见 [benchmarks/RESULTS.md](benchmarks/RESULTS.md)。
-
 **数据库**
 
 | | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
@@ -225,6 +217,8 @@ npx skills add h5i-dev/h5i-db        # 从 skills/h5i-db/ 安装 h5i-db skill
   表函数（SQL 与 Python 均可用）。
 ⁵ ArcticDB 依靠自有 LMDB 存储上的原生时间索引，在窄范围点查上胜出；h5i-db
   的清单裁剪位列第二，并且超过了所有通用引擎。
+
+完整的方法说明与结果见 [benchmarks/RESULTS.md](benchmarks/RESULTS.md)。
 
 **回测**
 
