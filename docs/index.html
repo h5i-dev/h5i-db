@@ -581,7 +581,7 @@
   <div class="container">
     <div class="section-head reveal">
       <span class="section-tag">The database</span>
-      <h2 class="section-title">Quant-grade analytics in an embedded engine.</h2>
+      <h2 class="section-title">High-speed analytical database for time-series.</h2>
       <p class="section-sub">A storage kernel and query engine tuned for the time axis: data is
       time-sorted on disk, pruned by manifest statistics before I/O, and queried through DataFusion
       SQL with native time-series operators. Version control, time travel, and previewable mutations
@@ -608,16 +608,11 @@
         <code>version_conflict</code>, never last-writer-wins.</div>
       </div>
       <div class="feat-card">
-        <div class="feat-name">Versioned storage</div>
+        <div class="feat-name">Versioned storage and time travel</div>
         <div class="feat-desc">Immutable Parquet segments with per-version manifests, directly addressed
-        by sequence. Version reads are O(1), <code>as_of</code> lookups are O(log V), and any past state
-        is one manifest read away.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-name">Time travel and snapshots</div>
-        <div class="feat-desc"><code>h5i('trades', 42)</code> reads version 42; an RFC3339 timestamp reads
-        as of a commit time; named snapshots pin exact versions across tables, keeping backtests
-        reproducible forever.</div>
+        by sequence. <code>h5i('trades', 42)</code> reads version 42 in O(1) and an RFC3339 timestamp
+        reads as of a commit time in O(log V); named snapshots pin exact versions across tables, keeping
+        a backtest reproducible forever.</div>
       </div>
       <div class="feat-card">
         <div class="feat-name">Previewable mutations</div>
@@ -630,12 +625,6 @@
         <div class="feat-desc">fsync-before-swap, checksums on every object, a manifest hash chain, and
         tests that kill the writer at every commit step. The old head survives, always.
         <code>verify --deep</code> re-checks the whole store.</div>
-      </div>
-      <div class="feat-card">
-        <div class="feat-name">Embedded, zero-ops</div>
-        <div class="feat-desc">A single directory on disk, no server process to run. Drive it from the
-        CLI, Rust, or Python; <code>to_pandas()</code> and Arrow interchange keep it inside your
-        existing research stack.</div>
       </div>
     </div>
   </div>
