@@ -214,6 +214,28 @@ select { background: var(--elev); color: var(--text); border: 1px solid var(--bo
   background: var(--bg); border-radius: 5px; padding: 8px 10px; margin-top: 6px;
   overflow-x: auto; white-space: nowrap; cursor: copy; }
 .cmdline:hover { color: var(--text); }
+.subnav { display: flex; gap: 4px; margin: 0 0 16px; border-bottom: 1px solid var(--line); }
+.subnav button { border: 0; border-bottom: 2px solid transparent; background: transparent;
+  color: var(--muted); padding: 8px 10px; font-family: var(--font-mono); cursor: pointer; }
+.subnav button.active { color: var(--text); border-color: var(--accent); }
+.trial-row { width: 100%; display: grid; grid-template-columns: 14px minmax(0,1fr) auto;
+  gap: 9px; align-items: center; border: 0; border-bottom: 1px solid var(--line);
+  background: transparent; color: var(--text); padding: 10px 12px; text-align: left;
+  font-family: var(--font-mono); cursor: pointer; }
+.trial-row:hover, .trial-row.selected { background: var(--elev); }
+.trial-row.seen { opacity: .52; }
+.trial-state { color: var(--dim); font-size: 10.5px; }
+.trial-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+.trial-dot.needs-decision { background: var(--red); }
+.trial-dot.failed-warned { background: var(--amber); }
+.trial-dot.finished-unseen { background: var(--accent); }
+.trial-dot.running { background: var(--blue); }
+.experiment-head { display:flex; align-items:center; gap:8px; padding:10px 12px;
+  border-bottom:1px solid var(--line); cursor:pointer; }
+.experiment-head:hover, .experiment-head.selected { background:var(--elev); }
+.experiment-head .nm { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; }
+.metric-positive { color: var(--green); }
+.metric-negative { color: var(--red); }
 
 @media (max-width: 960px) {
   .body { grid-template-columns: 1fr; }
@@ -308,10 +330,40 @@ let OV = null;               // /api/overview payload
 let view = "review";         // current view
 let tableSel = null;         // selected table for the tables/history views
 let forkSel = null;          // selected fork for the forks view
+let experimentSel = null;    // selected study in the experiments view
+let trialSel = null;         // selected run id; detail-open is the seen edge
+let experimentTab = "attention";
+const TRIAL_SEEN = new Set(JSON.parse(localStorage.getItem("h5i_trial_seen") || "[]"));
+const trialKey = (t) => `${t.fork}:${t.trial_digest || t.run_id}`;
+const trialWarnings = (t) => Array.isArray(t.warnings) ? t.warnings : [];
+function markTrialSeen(t) {
+  TRIAL_SEEN.add(trialKey(t));
+  localStorage.setItem("h5i_trial_seen", JSON.stringify([...TRIAL_SEEN].slice(-5000)));
+}
+function trialAttention(t) {
+  if (t.needs_decision) return { state: "needs-decision", priority: 5 };
+  if (t.status === "running") return { state: "running", priority: 2 };
+  if (TRIAL_SEEN.has(trialKey(t))) return { state: "seen", priority: 1 };
+  if (t.status === "failed" || t.status === "warned" || trialWarnings(t).length)
+    return { state: "failed-warned", priority: 4 };
+  return { state: "finished-unseen", priority: 3 };
+}
+function experimentAttention(e) {
+  return e.trials.reduce((best, t) => {
+    const next = trialAttention(t);
+    return next.priority > best.priority ? next : best;
+  }, { state: "seen", priority: 1 });
+}
+function routedTrial(e, t) {
+  markTrialSeen(t);
+  view = "experiments"; experimentSel = e.id; trialSel = t.run_id;
+  render();
+}
 
 // ---------------------------------------------------------------- shell
 const VIEWS = [
   ["review",   "review"],
+  ["experiments","experiments"],
   ["forks",    "forks"],
   ["tables",   "tables"],
   ["history",  "history"],
@@ -327,6 +379,10 @@ function renderNav() {
     if (id === "review") {
       const pending = OV.plans.filter(p => !p.expired).length;
       if (pending) badge = h("span", { class: "badge" }, String(pending));
+    } else if (id === "experiments") {
+      const warned = (OV.experiments || []).flatMap(e => e.trials)
+        .filter(t => trialWarnings(t).length && !TRIAL_SEEN.has(trialKey(t))).length;
+      if (warned) badge = h("span", { class: "badge alert" }, String(warned));
     } else if (id === "forks") {
       const conflicts = (OV.forks || []).filter(f => f.stale_shadows > 0).length;
       const working = (OV.forks || []).filter(f => forkState(f) === "working").length;
@@ -338,7 +394,11 @@ function renderNav() {
   }));
 }
 async function refresh() {
-  OV = await api("/api/overview");
+  const [overview, experimentData] = await Promise.all([
+    api("/api/overview"), api("/api/experiments"),
+  ]);
+  OV = overview;
+  OV.experiments = experimentData.experiments || [];
   $("#dbpath").textContent = OV.db;
   const chip = $("#forkchip");
   if (OV.fork) { chip.style.display = ""; chip.textContent = "fork: " + OV.fork; }
@@ -347,6 +407,7 @@ async function refresh() {
   mode.textContent = OV.allow_mutations ? "mutations allowed" : "read-only";
   mode.className = "mode " + (OV.allow_mutations ? "rw" : "ro");
   if (!tableSel && OV.tables.length) tableSel = OV.tables[0].name;
+  if (!experimentSel && OV.experiments.length) experimentSel = OV.experiments[0].id;
   render();
 }
 function render() {
@@ -354,9 +415,10 @@ function render() {
   renderRail();
   const main = $("#main");
   main.replaceChildren();
-  if (view === "forks") {
+  if (view === "forks" || view === "experiments") {
     main.className = "split";
-    renderForks(main);
+    if (view === "forks") renderForks(main);
+    else renderExperiments(main);
   } else {
     main.className = "doc";
     const wrap = h("div", { class: "wrap" });
@@ -408,6 +470,23 @@ function railModel() {
       label: f.name, meta: fmtAgo(f.last_write_ns),
       go: () => { view = "forks"; forkSel = f.name; render(); },
     });
+  }
+  const routed = (OV.experiments || []).flatMap(e => e.trials.map(t => ({ e, t })))
+    .sort((a, b) => trialAttention(b.t).priority - trialAttention(a.t).priority);
+  for (const { e, t } of routed) {
+    const attn = trialAttention(t);
+    const item = {
+      key: `trial:${trialKey(t)}:${attn.state}`,
+      icon: attn.state === "needs-decision" ? "◉" : "●",
+      spin: attn.state === "running",
+      cls: "st " + (attn.state === "failed-warned" ? "conflict"
+        : attn.state === "running" ? "working" : "ahead"),
+      label: `${e.id} · ${t.trial == null ? t.run_id : "trial " + t.trial}`,
+      meta: attn.state.replace("-", " "),
+      go: () => routedTrial(e, t),
+    };
+    if (attn.priority >= 4) needs.push(item);
+    else if (attn.priority >= 2) active.push(item);
   }
   const now = Date.now() * 1e6;
   for (const t of OV.tables.filter(t => now - t.committed_at_ns < ACTIVE_TABLE_NS)
@@ -482,6 +561,16 @@ function applyFrame(f) {
   renderNav();
   renderRail();
   if (view === "forks") { drawForkTree(); renderForkDetail(true); }
+}
+async function updateExperiments() {
+  const data = await api("/api/experiments");
+  OV.experiments = data.experiments || [];
+  if (experimentSel && !OV.experiments.some(e => e.id === experimentSel)) {
+    experimentSel = OV.experiments.length ? OV.experiments[0].id : null;
+    trialSel = null;
+  }
+  renderNav(); renderRail();
+  if (view === "experiments") render();
 }
 async function startLive() {
   for (;;) {
@@ -615,6 +704,117 @@ function showErr(status, e) {
     env.hint ? h("span", { class: "hint" }, ` — ${env.hint}`) : null);
 }
 const errline = (e) => h("div", { class: "statusline" }, h("span", { class: "err" }, e.message));
+
+// ------------------------------------------------------------ experiments
+// The frame is attention, not the leaderboard. Semantic state comes from the
+// run ledger; "seen" is a local review fact and flips only on detail-open.
+function trialLabel(t) {
+  const number = t.trial == null ? t.run_id : `trial ${t.trial}`;
+  return t.phase ? `${number} · ${t.phase}` : number;
+}
+function trialRow(e, t) {
+  const attn = trialAttention(t);
+  return h("button", {
+    class: "trial-row" + (trialSel === t.run_id ? " selected" : "")
+      + (attn.state === "seen" ? " seen" : ""),
+    onclick: () => routedTrial(e, t),
+  },
+    h("span", { class: "trial-dot " + attn.state }),
+    h("span", {}, trialLabel(t)),
+    h("span", { class: "trial-state" }, attn.state.replace("-", " ")));
+}
+function renderExperiments(main) {
+  const lhs = h("div", { class: "pane lhs" });
+  const rhs = h("div", { class: "pane" });
+  main.append(lhs, rhs);
+  const experiments = [...(OV.experiments || [])].sort((a, b) =>
+    experimentAttention(b).priority - experimentAttention(a).priority
+      || a.id.localeCompare(b.id));
+  lhs.append(h("p", { class: "micro" }, "experiments · max child priority"));
+  if (!experiments.length) lhs.append(h("div", { class: "quiet" },
+    "No recorded backtest trials. Runs appear here when their bt-* fork is created."));
+  for (const e of experiments) {
+    const attn = experimentAttention(e);
+    const unseenWarnings = e.trials.filter(t =>
+      trialWarnings(t).length && !TRIAL_SEEN.has(trialKey(t))).length;
+    lhs.append(h("div", {
+      class: "experiment-head" + (experimentSel === e.id ? " selected" : ""),
+      onclick: () => { experimentSel = e.id; trialSel = null; render(); },
+    },
+      h("span", { class: "trial-dot " + attn.state }),
+      h("span", { class: "nm" }, e.id),
+      unseenWarnings ? h("span", { class: "badge alert" }, String(unseenWarnings)) : null,
+      h("span", { class: "trial-state" }, String(e.trials.length))));
+  }
+  const e = experiments.find(item => item.id === experimentSel);
+  if (!e) {
+    rhs.append(h("p", { class: "micro" }, "experiment detail"),
+      h("div", { class: "quiet" }, "select an experiment"));
+    return;
+  }
+  const attn = experimentAttention(e);
+  rhs.append(h("div", { class: "plan-head" },
+    h("span", { class: "title" }, e.id),
+    h("span", { class: "tag " + (attn.priority >= 4 ? "stale" : "") },
+      attn.state.replace("-", " ")),
+    h("span", { style: "margin-left:auto;color:var(--dim)" },
+      `${e.trials.length} trial${e.trials.length === 1 ? "" : "s"}`)));
+  const tabs = [["attention","attention"],["trials","all trials"],["leaderboard","leaderboard"]];
+  rhs.append(h("div", { class: "subnav" }, tabs.map(([id, label]) =>
+    h("button", {
+      class: experimentTab === id ? "active" : "",
+      onclick: () => { experimentTab = id; render(); },
+    }, label))));
+  const body = h("div", { class: "card" });
+  if (experimentTab === "leaderboard") {
+    const ranked = e.trials.filter(t => t.metrics &&
+      Number.isFinite(Number(t.metrics.realized_pnl)))
+      .sort((a, b) => Number(b.metrics.realized_pnl) - Number(a.metrics.realized_pnl));
+    if (!ranked.length) body.append(h("div", { class: "quiet" }, "No scored trials."));
+    else {
+      const table = h("table", { class: "grid" },
+        h("tr", {}, h("th", {}, "trial"), h("th", {}, "realized pnl"),
+          h("th", {}, "final cash"), h("th", {}, "fills"), h("th", {}, "coverage")));
+      for (const t of ranked) {
+        const pnl = Number(t.metrics.realized_pnl);
+        table.append(h("tr", { onclick: () => routedTrial(e, t), style: "cursor:pointer" },
+          h("td", {}, trialLabel(t)),
+          h("td", { class: pnl < 0 ? "metric-negative" : "metric-positive" }, String(pnl)),
+          h("td", {}, String(t.metrics.final_cash ?? "—")),
+          h("td", {}, String(t.metrics.fills ?? "—")),
+          h("td", {}, String(t.metrics.coverage ?? "—"))));
+      }
+      body.append(h("div", { class: "scroll-x" }, table));
+    }
+  } else {
+    let trials = [...e.trials].sort((a, b) =>
+      trialAttention(b).priority - trialAttention(a).priority
+        || Number(a.trial ?? 0) - Number(b.trial ?? 0));
+    if (experimentTab === "attention")
+      trials = trials.filter(t => trialAttention(t).state !== "seen");
+    if (!trials.length) body.append(h("div", { class: "quiet" },
+      experimentTab === "attention" ? "Everything in this experiment has been reviewed." : "No trials."));
+    else body.append(...trials.map(t => trialRow(e, t)));
+  }
+  rhs.append(body);
+  const selected = e.trials.find(t => t.run_id === trialSel);
+  if (selected) {
+    const metrics = selected.metrics || {};
+    rhs.append(h("p", { class: "micro", style: "margin-top:18px" }, "trial detail"),
+      h("div", { class: "card" },
+        h("div", { class: "kv" },
+          h("span", { class: "k" }, "run"), h("span", {}, selected.run_id),
+          h("span", { class: "k" }, "fork"), h("span", {}, selected.fork),
+          h("span", { class: "k" }, "state"), h("span", {}, trialAttention(selected).state),
+          h("span", { class: "k" }, "parameters"),
+          h("span", {}, selected.parameters == null ? "—" : JSON.stringify(selected.parameters)),
+          h("span", { class: "k" }, "records"), h("span", {}, String(metrics.records_processed ?? "—")),
+          h("span", { class: "k" }, "orders / fills"),
+          h("span", {}, `${metrics.orders ?? "—"} / ${metrics.fills ?? "—"}`),
+          h("span", { class: "k" }, "warnings"),
+          h("span", {}, trialWarnings(selected).join("; ") || "none"))));
+  }
+}
 
 // ---------------------------------------------------------------- forks
 // One glanceable status per fork, rolled up from what the metadata proves:
@@ -1015,7 +1215,10 @@ function renderSnapshots(main) {
 }
 
 // ---------------------------------------------------------------- boot
-refresh().then(() => { startLive(); }).catch(e => {
+refresh().then(() => {
+  startLive();
+  setInterval(() => updateExperiments().catch(() => {}), 30000);
+}).catch(e => {
   $("#main").replaceChildren(h("div", { class: "wrap" }, errline(e)));
 });
 </script>

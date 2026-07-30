@@ -11,6 +11,9 @@ license = { text = "Apache-2.0" }
 dependencies = ["pyarrow>=14"]
 dynamic = ["version"]
 
+[project.scripts]
+h5i-backtest = "h5i_db.backtest:main"
+
 [tool.maturin]
 module-name = "h5i_db._native"
 python-source = "python"

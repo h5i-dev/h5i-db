@@ -15,6 +15,7 @@ crate-type = ["cdylib"]
 [dependencies]
 h5i-db-core = { workspace = true }
 h5i-db-query = { workspace = true }
+h5i-db-backtest = { path = "../h5i-db-backtest", version = "0.1.1" }
 arrow = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }

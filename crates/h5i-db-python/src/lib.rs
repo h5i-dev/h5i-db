@@ -27,6 +27,8 @@ use h5i_db_core::{DataPolicy, Database, Error, ReadAt, ScanOptions, TableOptions
 use h5i_db_query::datafusion::error::DataFusionError;
 use h5i_db_query::{DEFAULT_TOLERANCE, H5iSession, SessionOptions, arrival_delta};
 
+mod python_strategy;
+
 // -- exceptions -------------------------------------------------------------
 //
 // One Python exception class per family of the core `{code, message,
@@ -308,6 +310,13 @@ fn check_timeout(timeout: Option<f64>) -> PyResult<()> {
     Ok(())
 }
 
+fn backtest_err(error: h5i_db_backtest::BacktestError) -> PyErr {
+    // Backtest failures are input problems -- a bad window, an unsorted
+    // signal table, a book gap -- so they surface as the same
+    // invalid-input error the rest of this module raises.
+    invalid(error.to_string())
+}
+
 /// Live handle state. All handles share one bounded multi-thread runtime;
 /// database ownership and close state remain per handle.
 #[derive(Clone)]
@@ -561,7 +570,254 @@ impl NativeDatabase {
     /// raised and execution is cancelled. `max_rows` raises `LimitError` as
     /// soon as the result exceeds it — the stream stops being pulled, so
     /// execution halts early instead of truncating silently.
-    #[pyo3(signature = (query, memory_limit = None, timeout = None, max_rows = None))]
+    /// Run a Tier 1 signal-replay backtest and return its report as JSON.
+    ///
+    /// The signals table *is* the strategy: the kernel reads timestamped
+    /// intent and executes it through the full matching, fee, latency and
+    /// queue path. Results land on a fork named `bt-<run_id>` as ordinary
+    /// tables, so Python reads them back with the same query surface as
+    /// market data rather than through a second API.
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (
+        run_id,
+        starting_cash,
+        signals_table = "signals".to_string(),
+        fee_kind = None,
+        fee_rate = None,
+        maker_rebate = None,
+        queue_position = false,
+        optimistic_queue = false,
+        latency_nanos = None,
+        slippage_ticks = None,
+        window = None,
+        version = None,
+        as_of = None,
+        snapshot = None,
+        equity_interval_nanos = None,
+        minimum_coverage = None,
+        maker_fee_rate = None,
+        max_order_quantity = None,
+        max_abs_position = None,
+        max_open_orders = None,
+        commands_table = None,
+        python_strategy = None,
+    ))]
+    fn run_backtest(
+        &self,
+        py: Python<'_>,
+        run_id: &str,
+        starting_cash: f64,
+        signals_table: String,
+        fee_kind: Option<String>,
+        fee_rate: Option<f64>,
+        maker_rebate: Option<f64>,
+        queue_position: bool,
+        optimistic_queue: bool,
+        latency_nanos: Option<i64>,
+        slippage_ticks: Option<i64>,
+        window: Option<(i64, i64)>,
+        version: Option<u64>,
+        as_of: Option<String>,
+        snapshot: Option<String>,
+        equity_interval_nanos: Option<i64>,
+        minimum_coverage: Option<f64>,
+        maker_fee_rate: Option<f64>,
+        max_order_quantity: Option<f64>,
+        max_abs_position: Option<f64>,
+        max_open_orders: Option<usize>,
+        commands_table: Option<String>,
+        python_strategy: Option<Py<PyAny>>,
+    ) -> PyResult<String> {
+        use h5i_db_backtest::RiskLimits;
+        use h5i_db_backtest::engine::{CommandReplay, SignalReplay, Strategy};
+        use h5i_db_backtest::models::{
+            ConstantLatency, KalshiFees, PredictionMarketFees, ProportionalFees,
+            QueuePositionFills, TickSlippage,
+        };
+        use h5i_db_backtest::run::{RunSpec, run_in_fork};
+        use h5i_db_backtest::types::{Money, Price, Qty};
+        use h5i_db_backtest::window::TimeWindow;
+
+        let inner = self.inner()?;
+        let run_id = run_id.to_string();
+        py.detach(move || -> PyResult<String> {
+            inner.runtime.block_on(async move {
+                let read_at = parse_read_at(version, as_of.as_deref(), snapshot.as_deref())?;
+                let mut spec = RunSpec::new(
+                    run_id,
+                    Money::from_f64(starting_cash).map_err(backtest_err)?,
+                )
+                .read_at(read_at.clone());
+                if let Some((start, end)) = window {
+                    spec = spec.window(
+                        TimeWindow::new(
+                            h5i_db_backtest::types::UnixNanos::new(start),
+                            h5i_db_backtest::types::UnixNanos::new(end),
+                        )
+                        .map_err(backtest_err)?,
+                    );
+                }
+                if let Some(nanos) = equity_interval_nanos {
+                    spec = spec.equity_interval_nanos(nanos);
+                }
+                if let Some(minimum) = minimum_coverage {
+                    spec = spec.minimum_coverage(minimum);
+                }
+
+                // Signals are read at the fork's own pin, not at the
+                // market-data pin. The two are different axes: the pin says
+                // what the strategy could have *known*, while the signals
+                // table is the strategy itself, which is usually written
+                // long after the data snapshot it trades against. Reading
+                // both at one snapshot would mean a run could only ever
+                // replay strategies that predate its data.
+                //
+                // Reproducibility is not lost: the run's fork pins every
+                // table at creation, so `Latest` inside the fork is a fixed
+                // version for the life of the run.
+                let mut strategy: Box<dyn Strategy> = if let Some(object) = python_strategy {
+                    Box::new(python_strategy::PythonStrategy::new(object))
+                } else if let Some(table) = commands_table {
+                    let commands = h5i_db_backtest::store::read_commands(
+                        &inner.db,
+                        &table,
+                        h5i_db_core::ReadAt::Latest,
+                        spec.window,
+                    )
+                    .await
+                    .map_err(backtest_err)?;
+                    Box::new(CommandReplay::new(commands).map_err(backtest_err)?)
+                } else {
+                    let intents = h5i_db_backtest::store::read_signals(
+                        &inner.db,
+                        &signals_table,
+                        h5i_db_core::ReadAt::Latest,
+                        spec.window,
+                    )
+                    .await
+                    .map_err(backtest_err)?;
+                    Box::new(SignalReplay::new(intents).map_err(backtest_err)?)
+                };
+                let risk_limits = if max_order_quantity.is_some()
+                    || max_abs_position.is_some()
+                    || max_open_orders.is_some()
+                {
+                    Some(
+                        RiskLimits::new(
+                            max_order_quantity
+                                .map(Qty::from_f64)
+                                .transpose()
+                                .map_err(backtest_err)?,
+                            max_abs_position
+                                .map(Qty::from_f64)
+                                .transpose()
+                                .map_err(backtest_err)?,
+                            max_open_orders,
+                        )
+                        .map_err(backtest_err)?,
+                    )
+                } else {
+                    None
+                };
+
+                let report = run_in_fork(&inner.db, spec, strategy.as_mut(), move |mut builder| {
+                    if let Some(rate) = fee_rate {
+                        match fee_kind.as_deref() {
+                            Some("kalshi") => {
+                                if let Ok(model) = KalshiFees::with_maker_rate(rate, maker_fee_rate)
+                                {
+                                    builder = builder.fee_model(Box::new(model));
+                                }
+                            }
+                            Some("proportional") => {
+                                if let Ok(model) =
+                                    ProportionalFees::new(maker_rebate.unwrap_or(0.0), rate)
+                                {
+                                    builder = builder.fee_model(Box::new(model));
+                                }
+                            }
+                            // Prediction-market curve is the default because
+                            // it is the venue this layer leads with.
+                            _ => {
+                                if let Ok(mut model) = PredictionMarketFees::new(rate) {
+                                    if let Some(rebate) = maker_rebate
+                                        && let Ok(with_rebate) = model.with_maker_rebate(rebate)
+                                    {
+                                        model = with_rebate;
+                                    }
+                                    builder = builder.fee_model(Box::new(model));
+                                }
+                            }
+                        }
+                    }
+                    if let Some(ticks) = slippage_ticks
+                        && let Ok(tick) = Price::from_f64(0.0001)
+                    {
+                        builder = builder.fill_model(Box::new(TickSlippage::new(ticks, tick)));
+                    } else if queue_position {
+                        builder = builder.fill_model(Box::new(if optimistic_queue {
+                            QueuePositionFills::optimistic()
+                        } else {
+                            QueuePositionFills::new()
+                        }));
+                    }
+                    if let Some(nanos) = latency_nanos {
+                        builder = builder.latency_model(Box::new(ConstantLatency {
+                            insert: nanos,
+                            cancel: nanos,
+                        }));
+                    }
+                    if let Some(limits) = risk_limits {
+                        builder = builder.risk_limits(limits);
+                    }
+                    builder
+                })
+                .await
+                .map_err(backtest_err)?;
+
+                Ok(serde_json::json!({
+                    "run_id": report.run_id,
+                    "fork": report.fork,
+                    "digest": report.digest,
+                    "starting_cash": report.result.starting_cash.to_f64(),
+                    "final_cash": report.result.final_cash.to_f64(),
+                    "realized_pnl": report.result.realized_pnl.to_f64(),
+                    "commissions": report.result.commissions.to_f64(),
+                    "funding_paid": report.result.funding_paid.to_f64(),
+                    "fills": report.result.fills.len(),
+                    "orders": report.result.orders.len(),
+                    "records_processed": report.result.records_processed,
+                    "simulated_through_ns": report.result.simulated_through.map(|t| t.get()),
+                    "equity_points": report.result.equity.len(),
+                    "settlement_applied": report.settlement.was_applied(),
+                    "coverage": report.coverage.map(|c| c.ratio()),
+                    "liquidations": report.result.liquidations.len(),
+                    "rejected_for_margin": report.result.rejected_for_margin,
+                    "self_trades_prevented": report.result.self_trades_prevented,
+                    "metrics": {
+                        "orders_submitted": report.result.metrics.orders_submitted,
+                        "orders_filled": report.result.metrics.orders_filled,
+                        "orders_cancelled_unfilled":
+                            report.result.metrics.orders_cancelled_unfilled,
+                        "orders_rejected_margin":
+                            report.result.metrics.orders_rejected_margin,
+                        "orders_rejected_risk":
+                            report.result.metrics.orders_rejected_risk,
+                        "orders_rejected_self_trade":
+                            report.result.metrics.orders_rejected_self_trade,
+                        "fills_taker": report.result.metrics.fills_taker,
+                        "fills_maker": report.result.metrics.fills_maker,
+                        "book_gaps": report.result.metrics.book_gaps,
+                        "liquidations": report.result.metrics.liquidations,
+                    },
+                    "warnings": report.warnings(),
+                })
+                .to_string())
+            })
+        })
+    }
+
+    #[pyo3(signature = (query, memory_limit = None, timeout = None, max_rows = None, target_partitions = None))]
     fn sql<'py>(
         &self,
         py: Python<'py>,
@@ -569,6 +825,7 @@ impl NativeDatabase {
         memory_limit: Option<usize>,
         timeout: Option<f64>,
         max_rows: Option<usize>,
+        target_partitions: Option<usize>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         check_timeout(timeout)?;
         let inner = self.inner()?;
@@ -580,6 +837,7 @@ impl NativeDatabase {
                         inner.db.clone(),
                         SessionOptions {
                             memory_limit,
+                            target_partitions,
                             ..Default::default()
                         },
                     )

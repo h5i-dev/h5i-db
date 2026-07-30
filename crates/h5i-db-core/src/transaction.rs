@@ -151,6 +151,14 @@ impl<'a> Transaction<'a> {
             });
         }
 
+        // Inside a fork, a name that still resolves to the base has to be
+        // shadowed before it can be written. Staging would do that per table,
+        // taking the database-wide metadata lock once each; doing it here does
+        // every table under one lock. It is a no-op outside a fork and for
+        // tables the fork already owns.
+        let names: Vec<String> = self.ops.keys().cloned().collect();
+        db.materialize_shadows(&names).await?;
+
         // ------------------------------------------------------------------
         // Stage phase: per table, validate + upload segments + build the
         // manifest — everything short of publishing it.

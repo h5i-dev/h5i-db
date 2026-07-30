@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "top_of_book_market_orders_v1",
+  "start_utc": "2020-01-06T00:00:00Z",
+  "quote_events": 200000,
+  "instruments": 1,
+  "signals": 200,
+  "initial_cash": 1000000,
+  "mid_price": 100.0,
+  "tick_size": 0.01,
+  "quantity": 1,
+  "warmups": 1,
+  "repetitions": 3
+}

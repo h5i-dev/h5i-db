@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>H5i.BacktestCompare</AssemblyName>
+    <RootNamespace>H5i.BacktestCompare</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../../Ref/Lean/Algorithm/QuantConnect.Algorithm.csproj" />
+    <ProjectReference Include="../../../../../Ref/Lean/Common/QuantConnect.csproj" />
+  </ItemGroup>
+</Project>

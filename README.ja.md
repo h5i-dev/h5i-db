@@ -2,25 +2,32 @@
 
 [English](README.md) · [Español](README.es.md) · [Français](README.fr.md) · [简体中文](README.zh-CN.md) · **日本語**
 
-**クオンツ研究のための、速くてエージェント前提の時系列データベース。組み込み型、Rust製。**
+**クオンツ研究のための、速くてエージェント前提の時系列データベースとバックテスト
+エンジン。組み込み型、Rust製。**
 
-- **時系列の形に速い:** 2000万行のOHLCV+VWAP集計で、DuckDBとPolarsより4.5倍以上速い。
-- **時系列SQLがそのまま使える:** ASOF join、タイムゾーンを解釈する `time_bucket`、
+- (DB) **時系列の形に速い:** 2000万行のOHLCV+VWAP集計で、DuckDBとPolarsより4.5倍以上速い。
+- (DB) **時系列SQLがそのまま使える:** ASOF join、タイムゾーンを解釈する `time_bucket`、
   gapfill/resample、移動窓、`vwap`、`ewma`。
-- **データベースをミリ秒でforkできる:** forkはデータをコピーせず共有する。
+- (DB) **時点を固定した読み取り:** 判断時刻を固定すれば、pandasまで届くデータフレームに
+  それ以降の行は入りようがない。先読みバイアスは構造的に起こらない。
+- (BT) **速いイベント駆動バックテスタ:** リプレイカーネルは毎秒305万イベントを処理し、
+  同一ワークロードでNautilusTraderの11.7倍、LEANの31倍。
+- (BT) **主要な市場をそのまま扱える:** Kalshi、Polymarket、Hyperliquidのペイロードは
+  一組の正規化テーブルへデコードされる。手数料もファンディングも、各会場の実際の
+  仕様で計算する。
+- (BT) **本格的な統計分析:** `alphalens`・`empyrical` と一致するファクターおよび
+  パフォーマンス指標に加えて、deflated Sharpeと過剰適合確率の検出。
+- (AI) **データベースをミリ秒でforkできる:** forkはデータをコピーせず共有する。
   分岐して、変えて、評価して、捨てる。この試行錯誤をエージェントがほぼ無料で
   何度でも回せる。
-- **書き込みはすべて原子的でバージョン付きのコミット:** 過去のどのバージョンも
+- (AI) **書き込みはすべて原子的でバージョン付きのコミット:** 過去のどのバージョンも
   O(1)で読める。取り込みをしくじっても、それが人の操作でもエージェントの操作でも、
   `restore` 一回で元に戻る。
-- **エージェントの書き込みを縛る安全策:** 変更を事前に確認できるプレビュー、
+- (AI) **エージェントの書き込みを縛る安全策:** 変更を事前に確認できるプレビュー、
   ポリシーによるゲート、破壊的な操作を止めるフェイルクローズの制約、そして
   何がなぜ変わったかを残す監査証跡。
-- **時点を固定した読み取り:** 判断時刻を固定すれば、pandasまで届くデータフレームに
-  それ以降の行は入りようがない。先読みバイアスは構造的に起こらない。
-- **組み込み型:** ディレクトリが一つあればよく、サーバーもデーモンもいらない。Apache-2.0。
 
-📖 **[ドキュメント](https://db.h5i.dev/manual/)** · [マニュアル](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
+📖 **[ドキュメント](https://db.h5i.dev/manual/)** · [バックテスト](https://db.h5i.dev/manual/backtest/) · [クオンツ](https://db.h5i.dev/manual/quant/) · [Python API](https://db.h5i.dev/api/) ·
 [クックブック](https://github.com/h5i-dev/h5i-db-cookbook) · [エージェント向けskill](skills/h5i-db/SKILL.md)
 
 ---
@@ -41,10 +48,10 @@ h5i-db context market.db                                           # 一回の�
 h5i-db query market.db "SELECT symbol, vwap(price,size) FROM trades GROUP BY symbol"
 h5i-db query market.db "SELECT count(*) FROM trades" \
   --decision-time 2026-07-01T00:00:00Z                             # 未来は読めない
-h5i-db ui market.db                                                # レビュー画面
+h5i-db ui market.db                                                # レビューと実験の画面
 ```
 
-**Pythonライブラリ**
+**Pythonライブラリ（DataFrameとSQL）**
 
 ```bash
 pip install h5i-db
@@ -75,37 +82,48 @@ print(plan.summary)                               # 変更が確定する前に�
 plan.apply()
 ```
 
+**Pythonライブラリ（バックテスト）**：同じインストールのまま、サーバーはいらない
+
+```python
+from h5i_db import backtest
+
+config = backtest.BacktestConfig(
+    run_id="momentum-001",
+    data=backtest.DataConfig(signals="signals", snapshot="2024-q1"),   # 固定するピン
+    portfolio=backtest.PortfolioConfig(starting_cash=100_000.0),
+    execution=backtest.ExecutionConfig(fee_kind="kalshi", fee_rate=0.07),
+    risk=backtest.RiskConfig(max_order_quantity=500.0),
+)
+
+backtest.inspect(db, config).raise_for_errors()  # データが支えられない主張は断る
+result = backtest.execute(db, config)            # fork "bt-momentum-001" の中で走る
+
+result.summary()                  # 約定件数、最終残高、どこまで実際に再現できたか
+result.explain()                  # 注文が拒否された理由、約定しなかった理由
+result.fills                      # Arrowで受け取る。SELECT * FROM bt_fills でもよい
+result.tearsheet("run.html")
+result.verify()                   # 保存された設定で再実行して突き合わせる
+```
+
+パラメータグリッドは1試行ごとに1つのforkになり、エクスポートを挟まずに順位が出る。
+学習期間とホールドアウト期間を明示すれば各試行が両方の期間を走るので、
+リーダーボードをアウトオブサンプルで読める:
+
+```python
+board = backtest.study(
+    db, study_id="fees", base=config,
+    parameters={"execution.fee_rate": [0.0, 0.02, 0.07]},
+    validation=backtest.ValidationWindows(
+        train=("2024-01-01", "2024-04-01"), holdout=("2024-04-01", "2024-07-01")
+    ),
+).leaderboard("holdout_final_cash")
+```
+
 **エージェント向けskill**（Claude Code、Codex、Cursorなど）
 
 ```bash
 npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入れる
 ```
-
----
-
-## なぜこれを使うのか
-
-| | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
-|---|---|---|---|---|---|---|
-| 利用者から見えるバージョン管理・タイムトラベル | ✗¹ | ✗ | ✗ | ✗ | ✓ | ✓（バージョン読み取りはO(1)） |
-| join・窓関数・CTEを備えたSQL | ✓ | 一部 | ✗ | ✗ | ✗ | ✓（DataFusion） |
-| ASOF join | ✓ | ✓ | ✓ | ✗² | ✗ | ✓⁴（ソート済みストレージ上でソート不要） |
-| 変更のプレビュー（plan/apply） | ✗ | ✗ | ✗ | ✗ | ✗ | ✓、ポリシーで強制もできる |
-| 書き込みの同時実行 | MVCC | 該当なし | 該当なし | 該当なし | 安全でない³ | CAS＋明示的な衝突 |
-| 2000万行・狭い時間範囲のスキャン | 45.5 ms | 28.1 ms | 23.9 ms | 22.8 ms | **4.2 ms**⁵ | 10.0 ms |
-| 2000万行・1分足のOHLCV+VWAP | 7237 ms | 7309 ms | 5115 ms | 7121 ms | 3504 ms | **1558 ms** |
-| 2000万行・銘柄別のASOF join | 11566 ms | **1485 ms** | 6624 ms | ✗² | 7008 ms | 1548 ms |
-
-¹ `AT (VERSION …)` という構文はあるが、ネイティブのストレージが受け付けない。
-² 実験的な `join_asof` はあるものの約1000倍遅く、この規模では使いものにならない。
-³ 銘柄ごとに書き手は一つ、という前提が文書化されている。
-⁴ ネイティブの `ASOF JOIN … MATCH_CONDITION` 構文と、`asof_join(...)` テーブル関数。
-  SQLからもPythonからも呼べる。
-⁵ 狭い範囲のピンポイントな読み取りは、ArcticDBが自前のLMDBストア上のネイティブな
-  時間インデックスで勝つ。h5i-dbのマニフェスト枝刈りはそれに次ぐ2位で、汎用エンジンは
-  すべて上回っている。
-
-計測方法は [benchmarks/RESULTS.md](benchmarks/RESULTS.md) に全部書いてある。
 
 ---
 
@@ -122,9 +140,11 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 - **バージョンを意識した集計状態:** OHLCV/VWAPの集計は、不変セグメントごとに
   マージ可能な途中状態を保存する。次に同じ問い合わせが来たら再計算せず、状態を
   ミリ秒でマージし、新しく追加されたセグメントだけを読む。
-- **低レイヤの離れ業には頼らない:** 一般的なスキャンや集計は素のDataFusionの上で
-  動き、それで最速級のエンジンと肩を並べる。時系列という形のおかげで構造が効く
-  ところにだけ、h5i-dbは構造を足している。
+- **遅延リプレイ:** バックテストのカーネルは区間を一度に展開せず、レコードを
+  一件ずつ引く。だから1日を再現しようが1億イベントを再現しようが、メモリの使用量は
+  変わらない。
+- **注文照合はインデックス経由:** 板に残る注文は会場と価格でインデックスしてある。
+  新しい約定が起こすのは実際に交差する注文だけで、開いている注文を全部見直すことはない。
 
 ---
 
@@ -134,19 +154,9 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 「この実行はどのデータを見たのか」に答えがあるし、そのバージョンに対して
 実行し直すのはO(1)の操作で、発掘作業にはならない。
 
-- **時点を固定して取り出せる。** 読み取り点はイベント時刻（`--decision-time`）と
-到着時刻（`--as-of`）の2軸で固定できる。こうするとpandasに渡すデータフレームは
-データ源の側で区切られる。区切りがPythonまで生き延びる場所は、そこしかない。
-後から効いてくるのが `arrival-delta` で、ある結果のうちどれだけが遅れて到着した
-データに依存していたかを測る。
-
 - **結果でコンテキストウィンドウを潰さない。** `H5I_DB_PROFILE=agent` は
 クエリごとに上限を設け、あふれた分はParquetに書き出す。そのうえで本当の行数と、
 書き出した行の置き場所を報告する。
-
-- **一回の呼び出しで状況をつかめる。** `h5i-db context <db>` を叩けば、各テーブルの
-スキーマ、サイズ、時間範囲、最新バージョンに加えて、運用ポリシーのゲートと、
-すでに用意されているplanが返ってくる。
 
 - **手を打てるエラーが返る。** stderrに出るエラー封筒には、そのまま実行できる
 コマンド（`next_actions`）、打ち間違いに対する `did_you_mean`、再試行してよいかを
@@ -155,14 +165,20 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 - **コピーせずに分岐する。** `fork` は全テーブルの固定されたビューの上に、
 書き込める作業領域を開く。データは一切複製しないので、修正一つでも実験一つでも
 コストは小さなファイル一個ぶんで、捨てるのは取っておくのと同じくらい安い。
-そのあと `forks('trades')` を使えば、`__fork` 列つきで全ブランチのそのテーブルを
-一度に読める。どのブランチが何を出したかを比べるのに、エクスポートの手間はいらない。
 
-- **失敗しても安い。** 変更は `plan`/`apply` でプレビューでき、ポリシーでその手順を
-必須にもできる。`--idempotency-key` を付ければ、取り込みを再試行しても二重に
+- **権限のコントロール。** 変更は `plan`/`apply` でプレビューでき、ポリシーでその
+手順を必須にもできる。`--idempotency-key` を付ければ、取り込みを再試行しても二重に
 追加されず再生になる。任意で有効にする `data-policy` は、壊れた行をフェイルクローズで
-弾く。コミットは差し替えの前にfsyncし、マニフェストのハッシュチェーンを持つ。
-これらは書き手を各段階で強制終了させて検証してある。
+弾く。
+
+- **バックテストの実行はブランチ。** 実行はそれぞれ自分のforkの中で走り、注文・約定・
+ポジション・エクイティカーブを普通のテーブルとしてそこに書く。
+だから2つの実行は `fork_diff` で約定単位に差分が取れ、スイープ全体は1回のfork横断
+クエリで集計でき、残す価値のあるものだけ `promote` して、あとは捨てられる。
+
+- **レビュー画面がやるのは順位付けではなく注意の割り振り。** `h5i-db ui` は、次に人が
+見るべき順に試行を並べる。判断が必要、失敗または警告あり、完了して未読、実行中、既読。
+一覧を眺めただけでは既読にならない。詳細を開いたときだけ既読が付く。
 
 ---
 
@@ -176,6 +192,55 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
   ファイルであって、収集層そのものではない。そこはkdb+の領域。
 - **時間列を持たないデータ:** 設計全体が時間インデックスを前提にしている。それが
   ないと枝刈りもASOF joinも時点読み取りも失われる。
+- **実弾のトレード:** バックテスタは本物の注文を一度も出さない。ブローカー接続も
+  ポートフォリオ最適化も作図APIもない。担当範囲はシミュレーションと評価まで。
+
+---
+
+## ベンチマーク
+
+**データベース**
+
+| | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
+|---|---|---|---|---|---|---|
+| 利用者から見えるバージョン管理・タイムトラベル | ✗¹ | ✗ | ✗ | ✗ | ✓ | ✓（バージョン読み取りはO(1)） |
+| join・窓関数・CTEを備えたSQL | ✓ | 一部 | ✗ | ✗ | ✗ | ✓（DataFusion） |
+| ASOF join | ✓ | ✓ | ✓ | ✗² | ✗ | ✓⁴（ソート済みストレージ上でソート不要） |
+| 変更のプレビュー（plan/apply） | ✗ | ✗ | ✗ | ✗ | ✗ | ✓、ポリシーで強制もできる |
+| 書き込みの同時実行 | MVCC | 該当なし | 該当なし | 該当なし | 安全でない³ | CAS＋明示的な衝突 |
+| 2000万行・狭い時間範囲のスキャン | 45.5 ms | 28.1 ms | 23.9 ms | 22.8 ms | **4.2 ms**⁵ | 10.0 ms |
+| 2000万行・1分足のOHLCV+VWAP | 7237 ms | 7309 ms | 5115 ms | 7121 ms | 3504 ms | **1558 ms** |
+| 2000万行・銘柄別のASOF join | 11566 ms | **1485 ms** | 6624 ms | ✗² | 7008 ms | 1548 ms |
+
+
+¹ `AT (VERSION …)` という構文はあるが、ネイティブのストレージが受け付けない。
+² 実験的な `join_asof` はあるものの約1000倍遅く、この規模では使いものにならない。
+³ 銘柄ごとに書き手は一つ、という前提が文書化されている。
+⁴ ネイティブの `ASOF JOIN … MATCH_CONDITION` 構文と、`asof_join(...)` テーブル関数。
+  SQLからもPythonからも呼べる。
+⁵ 狭い範囲のピンポイントな読み取りは、ArcticDBが自前のLMDBストア上のネイティブな
+  時間インデックスで勝つ。h5i-dbのマニフェスト枝刈りはそれに次ぐ2位で、汎用エンジンは
+  すべて上回っている。
+
+計測方法と結果は [benchmarks/RESULTS.md](benchmarks/RESULTS.md) に全部書いてある。
+
+**バックテスト**
+
+| エンジン | 計測した境界 | 中央値 | スループット |
+|---|---|---:|---:|
+| **h5i-db** | デコード済みレコードがリプレイカーネルを通る区間 | **65.7 ms** | **305万 events/s** |
+| **h5i-db** | 永続化を含む実行全体: スキャン、デコード、fork、リプレイ、書き込み | 331 ms | 60.5万 events/s |
+| NautilusTrader 1.230.0 | メモリ上のオブジェクトが `BacktestEngine.run()` を通る区間 | 767 ms | 26.1万 events/s |
+| LEAN `11ba019f6` | 最初の `Slice` コールバックから `OnEndOfAlgorithm` まで、ディスク供給 | 2,033 ms | 9.84万 events/s |
+
+1回のウォームアップの後、プロセスを新しくして3回計測した中央値。どのアダプタも
+20万件のイベントを全部見て200件の注文を全部出したことを検証している。計測した境界は
+列に書いたとおり同じではない。このベンチマークが照合するのはイベント数と注文数で、
+PnLの一致ではないし、Nautilusは気配ごとにPythonの戦略コールバックを呼ぶが、残りの
+2つはネイティブコードを走らせている。これはイベント駆動の狭い1ワークロードの結果で、
+バックテストシステムの順位付けではない。解釈の限界は
+[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md)
+に全部書いてある。
 
 ---
 
@@ -185,11 +250,15 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 cargo test --workspace          # クラッシュ安全性の障害注入を含む約290テスト
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
 cargo run -p h5i-db-bench --profile bench-fast --bin h5i-db-fork-bench
+python3 benchmarks/backtest_compare/run.py \
+  --output benchmarks/backtest_compare/results.json   # NautilusTrader・LEANとの比較
 ```
 
 `crates/` 以下のワークスペースcrate: `core`（バージョン管理付きストレージの中核）、
-`query`（DataFusion層）、`cli`（エージェントが触るバイナリ）、`ui`（レビュー画面）、
-`python`（`pip install h5i-db`）、`bench`。
+`query`（DataFusion層）、`backtest`（リプレイカーネル、会場モデル、決済）、
+`venues`（Kalshi・Polymarket・Hyperliquidのローダー）、`cli`（エージェントが触る
+バイナリ）、`ui`（レビュー画面）、`observability`、`python`
+（`pip install h5i-db`）、`bench`。
 
 ---
 

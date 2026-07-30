@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Backtesting · h5i-db docs</title>
+  <meta name="description" content="Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/backtest/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Backtesting · h5i-db docs">
+  <meta property="og:description" content="Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/backtest/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Backtesting · h5i-db docs">
+  <meta name="twitter:description" content="Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/backtest/#article","headline":"Backtesting","name":"Backtesting","description":"Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.","url":"https://db.h5i.dev/manual/backtest/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/backtest/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Backtesting","item":"https://db.h5i.dev/manual/backtest/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" class="active">Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" >Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/" class="active">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/manual/">Manual</a>
+<span class="sep">/</span>
+<span>Backtesting</span></div>
+<h1 id="backtesting">Backtesting<a class="headerlink" href="#backtesting" title="Permanent link">#</a></h1>
+<p><code>h5i-db-backtest</code> simulates venues against recorded market data. It never
+routes a live order.</p>
+<p>Three properties shape the design, and each is a test rather than an
+intention:</p>
+<ul>
+<li><strong>Determinism.</strong> A run is a pure function of (data pin, strategy, config).
+  No wall clock, no unseeded randomness, no iteration over a hash map
+  without sorting first.</li>
+<li><strong>No look-ahead, structurally.</strong> Records carry <code>ts_event</code> and <code>ts_init</code>
+  and replay in <code>ts_init</code> order, so late data arrives late. A strategy has
+  no route to a market's resolution, because resolutions are read after the
+  run finishes.</li>
+<li><strong>Data honesty.</strong> Windows are half-open and owned in one place; a gap in
+  incremental data invalidates the book rather than being replayed across;
+  requested and loaded windows stay separate facts.</li>
+</ul>
+<h2 id="the-tables">The tables<a class="headerlink" href="#the-tables" title="Permanent link">#</a></h2>
+<p>Market data is venue-neutral. A Polymarket loader and a Hyperliquid loader
+both produce the same tables, and the kernel never learns which vendor a row
+came from.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>book_deltas</code></td>
+<td>snapshots, incremental level changes, and explicit gaps</td>
+</tr>
+<tr>
+<td><code>trades</code></td>
+<td>prints, with an optional aggressor</td>
+</tr>
+<tr>
+<td><code>bars</code></td>
+<td>aggregates</td>
+</tr>
+<tr>
+<td><code>instruments</code></td>
+<td>one row per outcome, so a categorical market is N rows</td>
+</tr>
+<tr>
+<td><code>resolutions</code></td>
+<td>how a market ended; never read on the strategy path</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every market-data table is time-indexed on <code>ts_init</code>, the column replay
+sorts by, so a range scan prunes on exactly the right column.</p>
+<p>Numbers are <code>Float64</code> on disk and fixed point in the kernel. The conversion
+is exact for every value the fixed-point type can represent (nine decimal
+places, magnitudes below about 9e9); a test walks the entire 0.0001 tick
+grid to confirm it rather than assuming.</p>
+<h3 id="snapshots-are-grouped">Snapshots are grouped<a class="headerlink" href="#snapshots-are-grouped" title="Permanent link">#</a></h3>
+<p>A snapshot is many rows sharing an <code>event_index</code>, with <code>is_last</code> on the
+final one. Applying half a snapshot would leave a crossed or hollow book, so
+a reader that meets a truncated one refuses it instead of reconstructing
+something plausible from the fragment.</p>
+<h2 id="a-run">A run<a class="headerlink" href="#a-run" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">h5i_db_backtest</span><span class="p">::{</span><span class="n">run_in_fork</span><span class="p">,</span><span class="w"> </span><span class="n">RunSpec</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span><span class="p">};</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SignalReplay</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">intents</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">report</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">run_in_fork</span><span class="p">(</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="n">db</span><span class="p">,</span>
+<span class="w">    </span><span class="n">RunSpec</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;momentum-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span><span class="p">::</span><span class="n">from_units</span><span class="p">(</span><span class="mi">10_000</span><span class="p">)</span><span class="o">?</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">window</span><span class="p">(</span><span class="n">window</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">read_at</span><span class="p">(</span><span class="n">ReadAt</span><span class="p">::</span><span class="n">Snapshot</span><span class="p">(</span><span class="s">&quot;2024-q1&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">()))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">minimum_coverage</span><span class="p">(</span><span class="mf">0.95</span><span class="p">),</span>
+<span class="w">    </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">strategy</span><span class="p">,</span>
+<span class="w">    </span><span class="o">|</span><span class="n">engine</span><span class="o">|</span><span class="w"> </span><span class="n">engine</span><span class="p">.</span><span class="n">fee_model</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">PredictionMarketFees</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="mf">0.07</span><span class="p">)</span><span class="o">?</span><span class="p">)),</span>
+<span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</code></pre></div>
+
+<p>The run creates a fork, replays inside it, and writes its results there:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Holds</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bt_run</code></td>
+<td>the manifest: pin, config digest, cash, how far it simulated</td>
+</tr>
+<tr>
+<td><code>bt_orders</code></td>
+<td>every order and its final status</td>
+</tr>
+<tr>
+<td><code>bt_fills</code></td>
+<td>every execution</td>
+</tr>
+<tr>
+<td><code>bt_positions</code></td>
+<td>where it finished, with settlement attribution</td>
+</tr>
+<tr>
+<td><code>bt_equity</code></td>
+<td>the equity curve</td>
+</tr>
+</tbody>
+</table></div>
+<p>Because results are ordinary tables on a branch, everything else already
+works: <code>fork_diff</code> compares two runs at fill level, a cross-fork scan
+aggregates a sweep, <code>promote</code> publishes a blessed run, and <code>drop_fork_tree</code>
+disposes of the rest.</p>
+<p><code>bt_fills</code> is authoritative. Positions are a fold over it and nothing else,
+so a stored run can be rebuilt and checked rather than trusted.</p>
+<h2 id="from-a-run-to-a-tearsheet">From a run to a tearsheet<a class="headerlink" href="#from-a-run-to-a-tearsheet" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">quant</span>
+
+<span class="n">fork</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="s2">&quot;bt-momentum-001&quot;</span><span class="p">)</span>
+<span class="n">series</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">from_levels</span><span class="p">(</span><span class="n">fork</span><span class="p">,</span> <span class="s2">&quot;bt_equity&quot;</span><span class="p">)</span>
+<span class="n">quant</span><span class="o">.</span><span class="n">tearsheet</span><span class="p">(</span><span class="n">series</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">&quot;run.html&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The statistics are the same empyrical-parity set documented in
+<a href="/manual/quant/">Quant workflows</a>; nothing about them is backtest-specific.</p>
+<h2 id="settlement">Settlement<a class="headerlink" href="#settlement" title="Permanent link">#</a></h2>
+<p>Settlement is not an event in the replay stream. It is a policy applied
+after the run, gated on one question: did the run reach the instant the
+resolution became observable?</p>
+<p>A three-day replay of a six-month market ends holding a position. Marking it
+to the eventual winner books a profit nobody trading those three days could
+have collected, so settlement applies only when
+<code>simulated_through &gt;= observable_at</code>. Otherwise the mark-to-market result
+stands and the report says why.</p>
+<p>Both numbers survive. <code>market_exit_pnl</code> is what the position was worth at
+the last mark, <code>settled_pnl</code> is what it became at resolution, and the
+difference is reported as an explicit adjustment rather than folded in
+silently.</p>
+<h2 id="venue-models">Venue models<a class="headerlink" href="#venue-models" title="Permanent link">#</a></h2>
+<p>Four small traits carry every behavioural variation:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Trait</th>
+<th>Decides</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FeeModel</code></td>
+<td>what a fill costs</td>
+</tr>
+<tr>
+<td><code>FillModel</code></td>
+<td>what book an order meets</td>
+</tr>
+<tr>
+<td><code>LatencyModel</code></td>
+<td>when the venue hears about an order</td>
+</tr>
+<tr>
+<td><code>VenueModule</code></td>
+<td>periodic processes (funding, liquidation)</td>
+</tr>
+</tbody>
+</table></div>
+<p>New behaviour is a new implementation, never a new flag. <code>FillModel</code> has one
+escape hatch worth knowing: <code>book_for_fill</code> may return a <em>synthetic</em> book,
+and matching runs against it unchanged, so slippage, bar-derived quotes and
+synthetic depth all reuse one matching path.</p>
+<p><code>PredictionMarketFees</code> implements the curved fee these venues actually
+charge, <code>rate · quantity · p · (1 - p)</code>, which peaks at even odds and
+vanishes at certainty. A flat <code>notional × rate</code> is the wrong shape and
+overcharges the tails, which is where these markets trade most.</p>
+<h2 id="strategies">Strategies<a class="headerlink" href="#strategies" title="Permanent link">#</a></h2>
+<p><strong>Tier 1, signal replay</strong> is the strategy as data: a list of timestamped
+order intents replayed through the full matching, fee and latency path. It
+covers most systematic research with no callback code and no language
+boundary in the loop.</p>
+<p><strong>Tier 2</strong> is the <code>Strategy</code> trait, for path-dependent logic. Its callbacks
+receive a <code>Context</code> that exposes the clock, books, positions and cash --
+and nothing else. There is no route from it to a resolution.</p>
+<p>Two orderings inside the loop are load-bearing:</p>
+<ul>
+<li>the venue sees data <strong>before</strong> the strategy, so a strategy cannot act on a
+  price the matching engine has not processed;</li>
+<li>strategy commands are <strong>queued</strong>, never executed inside the callback that
+  produced them, which removes reentrancy and makes latency a property of
+  the queue rather than of every call site.</li>
+</ul>
+<h2 id="what-is-not-here">What is not here<a class="headerlink" href="#what-is-not-here" title="Permanent link">#</a></h2>
+<p>No live order routing, no brokerage adapters, no portfolio optimisation, no
+plotting API. The boundary is simulation and evaluation; see
+<code>ROADMAP_QUANT.md</code> §11 for the full list and the reasoning.</p>
+    <nav class="page-nav"><a class="prev" href="/manual/operations/"><span class="dir">← Previous</span><span class="pn-title">Operations guide</span></a><a class="next" href="/api/"><span class="dir">Next →</span><span class="pn-title">Overview</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-tearsheet">From a run to a tearsheet</a></li><li><a href="#settlement">Settlement</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#strategies">Strategies</a></li><li><a href="#what-is-not-here">What is not here</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

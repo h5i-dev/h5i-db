@@ -1,0 +1,19 @@
+[package]
+name = "h5i-db-venues"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Venue adapters for h5i-db backtesting: vendor payloads into canonical market-data tables"
+
+[dependencies]
+h5i-db-backtest = { workspace = true }
+h5i-db-core = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

@@ -1,0 +1,29 @@
+[package]
+name = "h5i-db-backtest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Deterministic event-driven backtesting on versioned h5i-db data"
+
+[dependencies]
+h5i-db-core = { workspace = true }
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+
+[dev-dependencies]
+rand = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
+
+# Phase-split measurement of the storage -> decode -> kernel path. Lives here
+# rather than in h5i-db-bench so P6 holds trivially: deleting the quant layer
+# deletes its benchmark with it.
+[[bench]]
+name = "replay_path"
+harness = false

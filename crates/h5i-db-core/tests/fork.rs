@@ -1603,3 +1603,117 @@ async fn backfilling_the_new_column_rewrites_only_what_it_touches() {
         .sum();
     assert_eq!(filled_rows, 1, "exactly the backfilled row carries a tier");
 }
+
+/// A multi-table transaction into a fresh fork shadows every table it writes.
+///
+/// The transaction materializes all of its shadows under one metadata lock
+/// before staging, rather than letting staging do it one table at a time. That
+/// is a reordering of the same work, so the properties it must not disturb are
+/// the ones the per-table path already guaranteed: every table ends up
+/// fork-owned, the fork sees base rows plus its own, and the base sees neither
+/// the new rows nor the shadow tables.
+#[tokio::test]
+async fn a_transaction_shadows_every_table_it_writes_in_a_fork() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("db");
+    let db = Database::create(&root).await.unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        db.create_table(name, trades_schema(), default_options())
+            .await
+            .unwrap();
+        db.write(
+            name,
+            vec![trades_batch(&[100, 200], &["A", "B"], &[1.0, 2.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+
+    db.create_fork("w", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    let fork = db.open_fork("w").await.unwrap();
+
+    let mut txn = fork.transaction();
+    for name in ["alpha", "beta", "gamma"] {
+        txn.append(name, vec![trades_batch(&[300], &["C"], &[3.0])])
+            .unwrap();
+    }
+    let results = txn.commit().await.unwrap();
+    assert_eq!(results.len(), 3);
+
+    for name in ["alpha", "beta", "gamma"] {
+        assert_eq!(rows(&fork, name).await, 3, "{name} in the fork");
+        assert_eq!(rows(&db, name).await, 2, "{name} in the base");
+    }
+
+    // Every name is now fork-owned, so a second transaction shadows nothing
+    // and still lands.
+    let mut txn = fork.transaction();
+    for name in ["alpha", "beta", "gamma"] {
+        txn.append(name, vec![trades_batch(&[400], &["D"], &[4.0])])
+            .unwrap();
+    }
+    txn.commit().await.unwrap();
+    for name in ["alpha", "beta", "gamma"] {
+        assert_eq!(rows(&fork, name).await, 4, "{name} after the second write");
+        assert_eq!(rows(&db, name).await, 2, "{name} in the base, still");
+    }
+}
+
+/// A batch that mixes already-shadowed tables with untouched ones.
+///
+/// The batched path skips names the fork already owns. If it skipped them by
+/// re-materializing instead, the fork's history for that table would split and
+/// the rows written before the batch would vanish.
+#[tokio::test]
+async fn shadowing_a_batch_leaves_already_shadowed_tables_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("db");
+    let db = Database::create(&root).await.unwrap();
+    for name in ["one", "two"] {
+        db.create_table(name, trades_schema(), default_options())
+            .await
+            .unwrap();
+        db.write(
+            name,
+            vec![trades_batch(&[100], &["A"], &[1.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+
+    db.create_fork("mixed", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    let fork = db.open_fork("mixed").await.unwrap();
+
+    // Shadow `one` on its own first.
+    fork.append(
+        "one",
+        vec![trades_batch(&[200], &["B"], &[2.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows(&fork, "one").await, 2);
+
+    // Now a batch covering both: `one` is fork-owned, `two` is not.
+    let mut txn = fork.transaction();
+    txn.append("one", vec![trades_batch(&[300], &["C"], &[3.0])])
+        .unwrap();
+    txn.append("two", vec![trades_batch(&[300], &["C"], &[3.0])])
+        .unwrap();
+    txn.commit().await.unwrap();
+
+    assert_eq!(
+        rows(&fork, "one").await,
+        3,
+        "re-shadowing would have discarded the row written before the batch"
+    );
+    assert_eq!(rows(&fork, "two").await, 2);
+    assert_eq!(rows(&db, "one").await, 1);
+    assert_eq!(rows(&db, "two").await, 1);
+}

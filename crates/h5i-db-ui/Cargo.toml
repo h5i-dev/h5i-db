@@ -1,6 +1,6 @@
 [package]
 name = "h5i-db-ui"
-description = "Local review UI for h5i-db: versions, snapshots, and mutation-plan approval"
+description = "Local review UI for h5i-db: agent experiments, forks, versions, and approvals"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

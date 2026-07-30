@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quant workflows · h5i-db docs</title>
+  <meta name="description" content="Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/quant/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Quant workflows · h5i-db docs">
+  <meta property="og:description" content="Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/quant/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Quant workflows · h5i-db docs">
+  <meta name="twitter:description" content="Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/quant/#article","headline":"Quant workflows","name":"Quant workflows","description":"Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.","url":"https://db.h5i.dev/manual/quant/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/quant/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Quant workflows","item":"https://db.h5i.dev/manual/quant/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" class="active">Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" >Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/" class="active">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/manual/">Manual</a>
+<span class="sep">/</span>
+<span>Quant workflows</span></div>
+<h1 id="quant-workflows">Quant workflows<a class="headerlink" href="#quant-workflows" title="Permanent link">#</a></h1>
+<p><code>h5i_db.quant</code> runs the standard quant research loop against the engine:
+factor evaluation in the shape of <code>alphalens</code>, performance statistics in the
+shape of <code>pyfolio</code> (arithmetic from <code>empyrical</code>), and reports that record
+which version of the data produced them.</p>
+<p>Two things make it different from the pandas libraries it mirrors. Every
+computation runs against a <strong>pinned read</strong>, so a number can be reproduced
+later or refused as unreproducible. And every panel-scale computation
+compiles to SQL, so the data stays in the engine and only the aggregate
+comes back.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">quant</span>
+
+<span class="n">panel</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">build_panel</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span> <span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">,</span>
+    <span class="n">periods</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">),</span>      <span class="c1"># forward-return horizons, in bars</span>
+    <span class="n">quantiles</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span>
+    <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;2024-q1&quot;</span><span class="p">,</span>      <span class="c1"># the pin</span>
+<span class="p">)</span>
+<span class="n">panel</span><span class="o">.</span><span class="n">ic</span><span class="p">()</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>             <span class="c1"># per-date rank IC, one column per horizon</span>
+<span class="n">panel</span><span class="o">.</span><span class="n">quantile_returns</span><span class="p">()</span>           <span class="c1"># mean forward return per bucket</span>
+<span class="n">quant</span><span class="o">.</span><span class="n">factor_report</span><span class="p">(</span><span class="n">panel</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">&quot;factor.html&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<h2 id="inputs">Inputs<a class="headerlink" href="#inputs" title="Permanent link">#</a></h2>
+<p>Both sources are long format and may be a table name or a <code>LazyFrame</code>:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Columns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>factor</td>
+<td><code>ts</code>, <code>asset</code>, <code>factor</code>, optionally a group column</td>
+</tr>
+<tr>
+<td>prices</td>
+<td><code>ts</code>, <code>asset</code>, <code>price</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Column names are arguments (<code>ts=</code>, <code>asset=</code>, <code>factor_column=</code>,
+<code>price_column=</code>); pass a <code>LazyFrame</code> when the shape needs more than renaming.</p>
+<h2 id="pinning-and-the-embargo">Pinning and the embargo<a class="headerlink" href="#pinning-and-the-embargo" title="Permanent link">#</a></h2>
+<p><code>version=</code>, <code>as_of=</code> and <code>snapshot=</code> are the storage read point, and
+<code>event_time_cutoff=</code> is the decision-time embargo: every source read is
+restricted to <code>ts &lt;= cutoff</code>, so a forward return that would need a price
+from after the cutoff is dropped rather than computed. The result is
+identical to never having had the later data, which is asserted in the test
+suite.</p>
+<p><strong>Versions are per table.</strong> <code>version=2</code> means "version 2 of every source",
+which is only meaningful when the sources really do share a lineage. To pin
+several tables to one instant use <code>snapshot=</code> or <code>as_of=</code>; to pin them
+independently pass a mapping:</p>
+<div class="highlight"><pre><span></span><code><span class="n">quant</span><span class="o">.</span><span class="n">build_panel</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">,</span>
+                  <span class="n">version</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;signals&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">})</span>
+</code></pre></div>
+
+<h2 id="reproducibility">Reproducibility<a class="headerlink" href="#reproducibility" title="Permanent link">#</a></h2>
+<p><code>deterministic=True</code> (the default) runs every query single-partition.
+Floating-point addition is not associative, so a parallel plan may combine
+partial aggregates in a different order on each run and move a result by a
+few units in the last place. That is invisible in a chart and fatal to a
+number you intend to cite, so the default trades intra-query parallelism for
+bit-stability. Parallelism across runs (a fork sweep) is unaffected.</p>
+<p><code>quant.verify(subject, rerun=...)</code> re-executes a computation and checks the
+provenance digest still matches. An unpinned computation is <em>refused</em> rather
+than passed: reproducing it is not something its header can promise.</p>
+<h2 id="divergences-from-the-reference-implementations">Divergences from the reference implementations<a class="headerlink" href="#divergences-from-the-reference-implementations" title="Permanent link">#</a></h2>
+<p>Every difference from <code>alphalens</code> / <code>empyrical</code> is listed here and pinned by
+a test. A divergence that is not in this table is a bug.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Where</th>
+<th>h5i-db</th>
+<th>Reference</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D1</td>
+<td>Quantile assignment</td>
+<td><code>ntile(q)</code>, equal count, remainder to the earliest buckets</td>
+<td><code>pd.qcut</code>, quantile value edges</td>
+<td>Identical whenever the cross-section divides evenly by <code>q</code>. When it does not, both give equal-count buckets and differ only in <em>which</em> bucket absorbs the remainder. Bucket sizes never differ by more than one, and quantiles stay monotone in the factor: both asserted.</td>
+</tr>
+<tr>
+<td>D2</td>
+<td>Forward-return labels</td>
+<td><code>fwd_1</code>, <code>fwd_5</code> — bar counts</td>
+<td><code>'1D'</code>, <code>'5D'</code> — pandas frequency strings</td>
+<td>Horizons are bar counts here, so no trading calendar has to be inferred to name a column. A 5-bar horizon is 5 bars whether the bars are days or minutes.</td>
+</tr>
+<tr>
+<td>D3</td>
+<td>Calendar inference</td>
+<td>none; horizons are positional</td>
+<td>infers a <code>CustomBusinessDay</code> calendar from the observed index</td>
+<td>Calendar inference is what makes alphalens fragile on irregular data. Where a real calendar is needed, resample first.</td>
+</tr>
+<tr>
+<td>D4</td>
+<td><code>alpha_beta</code> annualization</td>
+<td><code>annualization / period</code>, with <code>annualization</code> an argument (252 by default)</td>
+<td><code>pd.Timedelta('252Days') / pd.Timedelta(period)</code></td>
+<td>Follows from D2. Pass <code>annualization=</code> for non-daily bars.</td>
+</tr>
+<tr>
+<td>D5</td>
+<td>Percentiles (<code>tail_ratio</code>)</td>
+<td>exact rank interpolation</td>
+<td><code>np.percentile</code>, linear</td>
+<td>Matches numpy exactly. DataFusion's own <code>percentile_cont</code> is approximate and disagrees around the eighth significant digit, which is enough to break parity.</td>
+</tr>
+<tr>
+<td>D6</td>
+<td>Rolling statistics</td>
+<td>null until the window is full</td>
+<td>pandas <code>min_periods=window</code></td>
+<td>Same behaviour; noted because a SQL frame's default is the opposite, and an unguarded frame reports a "63-bar Sharpe" from two observations.</td>
+</tr>
+<tr>
+<td>D7</td>
+<td>Omega with no winning bars</td>
+<td><code>0.0</code> numerator</td>
+<td><code>sum([]) == 0</code></td>
+<td>Same value; reached by coalescing a SQL <code>NULL</code> rather than by summing an empty list.</td>
+</tr>
+<tr>
+<td>D8</td>
+<td>Event-study family</td>
+<td>not implemented</td>
+<td><code>average_cumulative_return_by_quantile</code> etc.</td>
+<td>Needs a windowed range join around each signal date, which is a tracked engine gap. The cookbook covers the manual pattern meanwhile.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="performance-statistics">Performance statistics<a class="headerlink" href="#performance-statistics" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">series</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">returns</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;strategy_returns&quot;</span><span class="p">,</span> <span class="n">annualization</span><span class="o">=</span><span class="n">quant</span><span class="o">.</span><span class="n">DAILY</span><span class="p">)</span>
+<span class="n">series</span><span class="o">.</span><span class="n">stats</span><span class="p">()</span>                      <span class="c1"># the headline set, as one SQL row</span>
+<span class="n">series</span><span class="o">.</span><span class="n">drawdown_table</span><span class="p">(</span><span class="n">top</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>       <span class="c1"># worst non-overlapping episodes</span>
+<span class="n">series</span><span class="o">.</span><span class="n">rolling_sharpe</span><span class="p">(</span><span class="mi">63</span><span class="p">)</span>
+<span class="n">quant</span><span class="o">.</span><span class="n">tearsheet</span><span class="p">(</span><span class="n">series</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">&quot;tearsheet.html&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>stats()</code> returns annual return and volatility, cumulative return, Sharpe,
+Sortino, downside risk, max drawdown, Calmar, Omega, stability, tail ratio,
+skew, kurtosis and daily VaR, plus alpha and beta when a <code>benchmark=</code> series
+is passed. Values match <code>empyrical</code> to 1e-9; skew and kurtosis follow
+<code>scipy</code> (biased), which is what pyfolio reports.</p>
+<p><code>annualization</code> is bars per year: <code>quant.DAILY</code> (252), <code>quant.WEEKLY</code>,
+<code>quant.MONTHLY</code>, <code>quant.YEARLY</code>, or any number — <code>24 * 365</code> for hourly
+crypto bars.</p>
+<h2 id="sweeps">Sweeps<a class="headerlink" href="#sweeps" title="Permanent link">#</a></h2>
+<p>A sweep runs a parameter grid with one fork per combination. Trials cannot
+contaminate each other or the base data, and they compare in one query
+because forks share their base's segments.</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">trial</span><span class="p">(</span><span class="n">fork_db</span><span class="p">,</span> <span class="n">params</span><span class="p">):</span>
+    <span class="n">panel</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">build_panel</span><span class="p">(</span><span class="n">fork_db</span><span class="p">,</span> <span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">,</span>
+                              <span class="n">quantiles</span><span class="o">=</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;quantiles&quot;</span><span class="p">],</span> <span class="n">periods</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,))</span>
+    <span class="n">row</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">ic_decay</span><span class="p">()</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span><span class="o">.</span><span class="n">to_pylist</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;mean_ic&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;mean_ic&quot;</span><span class="p">],</span> <span class="s2">&quot;icir&quot;</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;icir&quot;</span><span class="p">]}</span>
+
+<span class="n">result</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">sweep</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;quantiles&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">10</span><span class="p">]},</span> <span class="n">trial</span><span class="p">)</span>
+<span class="n">result</span><span class="o">.</span><span class="n">compare</span><span class="p">()</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>    <span class="c1"># every trial, one cross-fork query</span>
+<span class="n">result</span><span class="o">.</span><span class="n">best</span><span class="p">(</span><span class="s2">&quot;icir&quot;</span><span class="p">)</span>
+<span class="n">result</span><span class="o">.</span><span class="n">drop</span><span class="p">()</span>                   <span class="c1"># forks and their results go together</span>
+</code></pre></div>
+
+<h2 id="reports">Reports<a class="headerlink" href="#reports" title="Permanent link">#</a></h2>
+<p><code>quant.factor_report(panel)</code> and <code>quant.tearsheet(series)</code> render one
+self-contained HTML file: inline CSS and JS, data embedded as JSON, no
+network access at view time. Section one is always the provenance header, so
+a reader sees the data version before the numbers. <code>quant.report_payload()</code>
+returns the same content as a dict, which is what agents and the CLI should
+read instead of scraping HTML.</p>
+    <nav class="page-nav"><a class="prev" href="/manual/agents/"><span class="dir">← Previous</span><span class="pn-title">Agents &amp; automation</span></a><a class="next" href="/manual/operations/"><span class="dir">Next →</span><span class="pn-title">Operations guide</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#inputs">Inputs</a></li><li><a href="#pinning-and-the-embargo">Pinning and the embargo</a></li><li><a href="#reproducibility">Reproducibility</a></li><li><a href="#divergences-from-the-reference-implementations">Divergences from the reference implementations</a></li><li><a href="#performance-statistics">Performance statistics</a></li><li><a href="#sweeps">Sweeps</a></li><li><a href="#reports">Reports</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

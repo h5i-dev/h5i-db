@@ -393,6 +393,22 @@ pub async fn create_entry(
     fork_name: &str,
     entry: &ForkTableEntry,
 ) -> Result<()> {
+    let path = create_entry_unsynced(backend, fork_name, entry).await?;
+    backend.sync_objects(&[path]).await
+}
+
+/// Write a fork catalog entry without the durability barrier, returning the
+/// path the caller must include in its own.
+///
+/// For a batch of tables registered together, one barrier over every entry is
+/// both cheaper and no weaker: the entries are independent objects and none of
+/// them is reachable until it is durable, so the only ordering that matters is
+/// "all of them before the caller reports success".
+pub(crate) async fn create_entry_unsynced(
+    backend: &Backend,
+    fork_name: &str,
+    entry: &ForkTableEntry,
+) -> Result<object_store::path::Path> {
     let path = layout::fork_catalog_entry_path(fork_name, &entry.name);
     let bytes = serde_json::to_vec_pretty(entry)?;
     if !backend.put_if_absent(&path, bytes.into()).await? {
@@ -400,7 +416,7 @@ pub async fn create_entry(
             name: entry.name.clone(),
         });
     }
-    backend.sync_objects(&[path]).await
+    Ok(path)
 }
 
 /// Overwrite a fork catalog entry (spec-revision bumps). Callers must hold the

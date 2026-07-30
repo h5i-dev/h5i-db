@@ -293,6 +293,9 @@ async fn index_serves_embedded_html() {
     let html = String::from_utf8_lossy(&bytes);
     assert!(html.contains("h5i-db review"));
     assert!(html.contains("Apply plan"));
+    assert!(html.contains("[\"experiments\",\"experiments\"]"));
+    assert!(html.contains("function trialAttention"));
+    assert!(html.contains("detail-open is the seen edge"));
 }
 
 async fn raw_status(router: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
@@ -595,4 +598,199 @@ async fn events_stream_sends_initial_frame() {
     assert!(text.contains("event: update"), "got: {text}");
     assert!(text.contains("\"forks\""), "frame carries forks: {text}");
     assert!(text.contains("exp-a"), "frame names the fork: {text}");
+}
+
+// ---------------------------------------------------------------------------
+// reports
+// ---------------------------------------------------------------------------
+
+/// A router whose reports directory holds the given files.
+fn router_with_reports(
+    db: &Arc<Database>,
+    dir: &std::path::Path,
+    files: &[(&str, &str)],
+) -> axum::Router {
+    let reports = dir.join("reports");
+    std::fs::create_dir_all(&reports).unwrap();
+    for (name, body) in files {
+        std::fs::write(reports.join(name), body).unwrap();
+    }
+    let mut state = UiState::new(db.clone(), "test.db".into(), false).with_reports_dir(reports);
+    state.token = TEST_TOKEN.into();
+    build_router(state)
+}
+
+async fn get_html(router: &axum::Router, path: &str) -> (StatusCode, String) {
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("host", "localhost:7777")
+                .header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+#[tokio::test]
+async fn reports_are_listed_and_served() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(
+        &db,
+        dir.path(),
+        &[
+            ("tearsheet.html", "<!doctype html><p>equity</p>"),
+            ("factor.html", "<!doctype html><p>ic</p>"),
+        ],
+    );
+
+    let (status, json) = get_json(&router, "/api/reports").await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<&str> = json["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["factor.html", "tearsheet.html"], "sorted");
+
+    let (status, body) = get_html(&router, "/report/tearsheet.html").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("equity"));
+
+    let (status, index) = get_html(&router, "/reports").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(index.contains("/report/factor.html"));
+}
+
+#[tokio::test]
+async fn a_missing_report_is_a_404_not_a_500() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(&db, dir.path(), &[]);
+    let (status, _) = get_html(&router, "/report/nothing.html").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn report_names_that_could_escape_the_directory_are_refused() {
+    let (dir, _router, db) = setup(false).await;
+    // A file the traversal attempts would reach if the check were weak.
+    std::fs::write(dir.path().join("secret.html"), "<p>secret</p>").unwrap();
+    let router = router_with_reports(&db, dir.path(), &[("ok.html", "<p>ok</p>")]);
+
+    for attempt in [
+        "/report/..%2Fsecret.html",
+        "/report/%2e%2e%2fsecret.html",
+        "/report/..",
+        "/report/notes.txt",
+        "/report/sub%2Fok.html",
+    ] {
+        let (status, body) = get_html(&router, attempt).await;
+        assert_ne!(status, StatusCode::OK, "{attempt} was served: {body}");
+        assert!(!body.contains("secret"), "{attempt} leaked a file");
+    }
+
+    // The legitimate name still works.
+    let (status, _) = get_html(&router, "/report/ok.html").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_database_without_reports_says_so_rather_than_failing() {
+    let (_dir, router, _db) = setup(false).await;
+    let (status, json) = get_json(&router, "/api/reports").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(json["reports"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn experiments_project_trial_ledger_rows_and_attention_priority() {
+    let (_dir, _router, db) = setup(false).await;
+    db.create_fork(
+        "bt-alpha-0000-run",
+        Some("backtest run alpha-0000-run".into()),
+        None,
+        serde_json::Map::new(),
+    )
+    .await
+    .unwrap();
+    let fork = db.open_fork("bt-alpha-0000-run").await.unwrap();
+    let config_schema = Arc::new(Schema::new(vec![
+        Field::new("run_id", DataType::Utf8, false),
+        Field::new("trial_digest", DataType::Utf8, false),
+        Field::new("config_json", DataType::Utf8, false),
+    ]));
+    fork.create_table("bt_config", config_schema.clone(), TableOptions::default())
+        .await
+        .unwrap();
+    fork.write(
+        "bt_config",
+        vec![
+            RecordBatch::try_new(
+                config_schema,
+                vec![
+                    Arc::new(StringArray::from(vec!["alpha-0000-run"])),
+                    Arc::new(StringArray::from(vec!["semantic-digest"])),
+                    Arc::new(StringArray::from(vec![
+                        r#"{"metadata":{"study_id":"alpha","trial":0,"phase":"run","parameters":{"fee":0.01},"needs_decision":true}}"#,
+                    ])),
+                ],
+            )
+            .unwrap(),
+        ],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let run_schema = Arc::new(Schema::new(vec![
+        Field::new("run_id", DataType::Utf8, false),
+        Field::new("warnings", DataType::Utf8, true),
+        Field::new("realized_pnl", DataType::Float64, false),
+        Field::new("final_cash", DataType::Float64, false),
+        Field::new("fills", DataType::Int64, false),
+    ]));
+    fork.create_table("bt_run", run_schema.clone(), TableOptions::default())
+        .await
+        .unwrap();
+    fork.write(
+        "bt_run",
+        vec![
+            RecordBatch::try_new(
+                run_schema,
+                vec![
+                    Arc::new(StringArray::from(vec!["alpha-0000-run"])),
+                    Arc::new(StringArray::from(vec![Some("thin coverage")])),
+                    Arc::new(Float64Array::from(vec![12.5])),
+                    Arc::new(Float64Array::from(vec![1012.5])),
+                    Arc::new(Int64Array::from(vec![3])),
+                ],
+            )
+            .unwrap(),
+        ],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let router = router_for(&db, false);
+    let (status, body) = get_json(&router, "/api/experiments").await;
+    assert_eq!(status, StatusCode::OK);
+    let experiments = body["experiments"].as_array().unwrap();
+    assert_eq!(experiments.len(), 1);
+    assert_eq!(experiments[0]["id"], "alpha");
+    assert_eq!(experiments[0]["priority"], 5);
+    assert_eq!(experiments[0]["warning_count"], 1);
+    let trial = &experiments[0]["trials"][0];
+    assert_eq!(trial["trial"], 0);
+    assert_eq!(trial["phase"], "run");
+    assert_eq!(trial["status"], "warned");
+    assert_eq!(trial["trial_digest"], "semantic-digest");
+    assert_eq!(trial["metrics"]["realized_pnl"], 12.5);
+    assert_eq!(trial["parameters"]["fee"], 0.01);
 }
