@@ -31,10 +31,24 @@
 :root {
   --bg: #0a0c10; --surface: #12161c; --surface-2: #1a1f26; --elev: #232931;
   --border: #2a3138; --border-strong: #3a424b;
-  --text: #f6f7f9; --muted: #abb3bf; --dim: #6b7785;
+  /* --line is the hairline between list rows; it was referenced before it
+     existed, which silently dropped every row border that used it. */
+  --line: #2a3138;
+  /* --dim carries status meta text, so it has to clear WCAG AA (4.5:1) on
+     the darkest surface it sits on, which is --elev under row hover. */
+  --text: #f6f7f9; --muted: #abb3bf; --dim: #8590a0;
   --accent: #42e2d0; --accent-hi: #7cefe0;
   --accent-bg: rgba(66,226,208,.14); --accent-glow: rgba(66,226,208,.32);
   --green: #5ee2a0; --orange: #f0a050; --red: #ff6b6b; --violet: #b48bd9;
+  /* Money. Deliberately luminance-matched (7.6:1 and 7.2:1 on --surface) so
+     a column of losses does not shout while a column of gains whispers, and
+     never load-bearing on its own: every signed number also carries a sign
+     glyph for readers who cannot separate the two hues. */
+  --gain: #3fbc83; --loss: #ff7b7b;
+  /* Status. Separate from money on purpose (they never share a visual role:
+     money is text in a numeric column, status is a dot or a chip). */
+  --alert: #f5b264; --fail: #ff6b6b; --run: #5aa9f0;
+  --amber: #f5b264; --blue: #5aa9f0;
   --font-ui: "Space Grotesk", system-ui, -apple-system, sans-serif;
   --font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --rail-w: 232px;
@@ -109,6 +123,10 @@ nav button .badge.alert { background: var(--red); color: #2b0808; }
 main { min-height: 0; min-width: 0; }
 main.doc { overflow-y: auto; }
 main.doc .wrap { max-width: 1160px; padding: 18px 22px 60px; }
+/* The experiment list is a short column of names; the panel beside it holds a
+   ten-column comparison table. Splitting them evenly starved the table and
+   left the list mostly empty, so this view gets its own ratio. */
+main.split.experiments { grid-template-columns: minmax(180px, 240px) 1fr; }
 main.split { display: grid; grid-template-columns: minmax(440px, 1.15fr) 1fr;
   overflow: hidden; }
 .pane { overflow-y: auto; min-height: 0; padding: 18px 20px 40px; }
@@ -226,16 +244,80 @@ select { background: var(--elev); color: var(--text); border: 1px solid var(--bo
 .trial-row.seen { opacity: .52; }
 .trial-state { color: var(--dim); font-size: 10.5px; }
 .trial-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
-.trial-dot.needs-decision { background: var(--red); }
-.trial-dot.failed-warned { background: var(--amber); }
+.trial-dot.needs-decision { background: var(--fail); }
+.trial-dot.failed-warned { background: var(--alert); }
 .trial-dot.finished-unseen { background: var(--accent); }
-.trial-dot.running { background: var(--blue); }
+.trial-dot.running { background: var(--run); }
 .experiment-head { display:flex; align-items:center; gap:8px; padding:10px 12px;
   border-bottom:1px solid var(--line); cursor:pointer; }
 .experiment-head:hover, .experiment-head.selected { background:var(--elev); }
 .experiment-head .nm { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; }
-.metric-positive { color: var(--green); }
-.metric-negative { color: var(--red); }
+
+/* Money colour. The selector has to out-specify `table.grid td`, which sets
+   `color: var(--text)` at (0,1,2); a bare `.metric-positive` at (0,1,0) loses
+   the cascade and renders every P&L plain white. */
+.metric-positive, table.grid td.metric-positive { color: var(--gain); }
+.metric-negative, table.grid td.metric-negative { color: var(--loss); }
+.metric-flat, table.grid td.metric-flat { color: var(--muted); }
+
+/* ---------------------------------------------------------- leaderboard */
+/* Numbers are for comparing down a column, so they are right-aligned,
+   tabular, and never wrap. */
+table.grid td.num, table.grid th.num { text-align: right; font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1; white-space: nowrap; }
+table.grid th.sortable { cursor: pointer; user-select: none; }
+table.grid th.sortable:hover { color: var(--muted); }
+table.grid th .sortcue { opacity: .35; margin-left: 4px; }
+table.grid th.sorted { color: var(--text); }
+table.grid th.sorted .sortcue { opacity: 1; color: var(--accent); }
+/* The breakeven row: a rule the eye can read gains above and losses below. */
+table.grid tr.zeroline td { border-bottom: 1px dashed var(--border-strong);
+  padding: 0; height: 0; font-size: 0; }
+table.grid tr.baseline td { color: var(--dim); font-style: italic; }
+table.grid tr.baseline td:first-child::before { content: "baseline  "; color: var(--dim); }
+table.grid tr.compared td { background: var(--accent-bg); }
+table.grid td.reused { color: var(--violet); }
+.spark { display: block; }
+.spark path { fill: none; stroke-width: 1.25; vector-effect: non-scaling-stroke; }
+.spark path.up { stroke: var(--gain); }
+.spark path.down { stroke: var(--loss); }
+.spark line.base { stroke: var(--border-strong); stroke-width: 1;
+  vector-effect: non-scaling-stroke; }
+/* A statistic whose sample is too thin to lean on. Dimmed and marked, not
+   hidden: the run did produce it, and hiding it invites recomputing it. */
+.thin { color: var(--dim); }
+.thin::after { content: "?"; color: var(--alert); margin-left: 3px; font-weight: 700; }
+
+/* --------------------------------------------------- typographic scale */
+/* Mono everywhere at one size gave titles, values and captions the same
+   voice. Panel titles step up in the UI face; captions step down. */
+.panel-title { font-family: var(--font-ui); font-size: 15px; font-weight: 600;
+  letter-spacing: -.01em; color: var(--text); }
+.panel-sub { font-family: var(--font-ui); font-size: 12px; color: var(--muted); }
+.caption { font-family: var(--font-ui); font-size: 11px; color: var(--dim);
+  letter-spacing: .02em; }
+.kpi { font-family: var(--font-mono); font-size: 19px; font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em; }
+.kpi-label { font-family: var(--font-ui); font-size: 10.5px; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .08em; }
+.kpi-note { font-family: var(--font-ui); font-size: 11px; color: var(--dim); }
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 14px 18px; margin: 4px 0 18px; }
+.chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono);
+  font-size: 10px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--border-strong);
+  color: var(--muted); white-space: nowrap; }
+.chip.warn { color: var(--alert); border-color: var(--alert); }
+.chip.bad { color: var(--fail); border-color: var(--fail); }
+.chip.info { color: var(--violet); border-color: var(--violet); }
+.copyable { cursor: copy; }
+.copyable:hover { color: var(--accent); }
+button.ghost { background: transparent; border: 1px solid var(--border-strong);
+  color: var(--muted); font-family: var(--font-mono); font-size: 11px;
+  padding: 5px 9px; border-radius: 5px; cursor: pointer; text-align: left; }
+button.ghost:hover { color: var(--text); border-color: var(--accent); }
+select { background: var(--surface-2); color: var(--text); border: 1px solid var(--border-strong);
+  border-radius: 5px; padding: 4px 8px; font-family: var(--font-mono); font-size: 11.5px; }
+input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
 
 @media (max-width: 960px) {
   .body { grid-template-columns: 1fr; }
@@ -271,7 +353,10 @@ const h = (tag, attrs, ...kids) => {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (k === "class") el.className = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
-    else el.setAttribute(k, v);
+    // An absent attribute has to be absent, not the string "null". Boolean
+    // attributes (selected, checked, disabled) are true by presence alone, so
+    // setAttribute(k, null) turned every one of them permanently on.
+    else if (v != null && v !== false) el.setAttribute(k, v);
   }
   for (const kid of kids.flat()) {
     if (kid == null) continue;
@@ -296,6 +381,41 @@ const fmtAgo = (ns) => {
   if (s < 86400) return Math.floor(s / 3600) + "h ago";
   return Math.floor(s / 86400) + "d ago";
 };
+
+// --------------------------------------------------------------- numbers
+// A leaderboard is read down its columns, so every number in a column needs
+// the same decimals and the same width. Raw String(n) gave "-89" next to
+// "-89.648" next to "-1.1", which cannot be compared by eye.
+const fmtFixed = (n, dp = 2) => n == null || !Number.isFinite(Number(n)) ? "—"
+  : Number(n).toLocaleString("en-US", { minimumFractionDigits: dp, maximumFractionDigits: dp });
+// Signed money. The glyph is not decoration: colour alone fails for readers
+// with a red/green deficiency, so the sign always travels with the hue.
+const fmtSigned = (n, dp = 2) => {
+  if (n == null || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  return (v > 0 ? "+" : v < 0 ? "−" : "") + fmtFixed(Math.abs(v), dp);
+};
+const fmtPct = (n, dp = 2) => n == null || !Number.isFinite(Number(n)) ? "—"
+  : fmtSigned(n, dp) + "%";
+// Which money class a value takes. Zero is neither a gain nor a loss.
+const signClass = (n) => {
+  if (n == null || !Number.isFinite(Number(n))) return "";
+  const v = Number(n);
+  return v > 0 ? "metric-positive" : v < 0 ? "metric-negative" : "metric-flat";
+};
+const fmtDuration = (ns) => {
+  if (ns == null) return "—";
+  const s = Number(ns) / 1e9;
+  if (s < 90) return Math.round(s) + "s";
+  if (s < 5400) return (s / 60).toFixed(s < 600 ? 1 : 0) + "m";
+  if (s < 172800) return (s / 3600).toFixed(s < 36000 ? 1 : 0) + "h";
+  return (s / 86400).toFixed(1) + "d";
+};
+// Engine warnings quote instants as raw nanosecond integers. Nobody can read
+// 1772464200000000000, and the number is 19 digits of noise in a sentence, so
+// rewrite every one of them in place.
+const humaniseInstants = (text) => String(text ?? "").replace(
+  /\b(1[0-9]{18})\b/g, (m) => fmtTs(Number(m)));
 // Access token: arrives once as ?token= on the startup URL, persisted for
 // the tab so reloads work, then stripped from the address bar. Every API
 // call sends it as a bearer header; POSTs add the CSRF header (cross-origin
@@ -332,7 +452,24 @@ let tableSel = null;         // selected table for the tables/history views
 let forkSel = null;          // selected fork for the forks view
 let experimentSel = null;    // selected study in the experiments view
 let trialSel = null;         // selected run id; detail-open is the seen edge
-let experimentTab = "attention";
+// The comparison surface is the job, so it is what the tab opens on.
+let experimentTab = "leaderboard";
+let leaderSort = { key: "ret", dir: -1 };   // best return first
+const compareSel = new Set();               // run ids ticked for comparison
+let attentionOnly = false;                  // runs list filter
+const attentionKept = new Set();            // rows that stay put after opening
+let pivotKey = null;                        // parameter being grouped on
+const warnExpanded = new Set();             // opened warning groups
+// Copy-to-clipboard with the feedback in the element that was clicked, so a
+// copy is visibly confirmed rather than silently assumed.
+function copyText(text, node) {
+  navigator.clipboard.writeText(text);
+  const el = node || window.event?.currentTarget;
+  if (!el) return;
+  const before = el.style.color;
+  el.style.color = "var(--accent)";
+  setTimeout(() => { el.style.color = before; }, 400);
+}
 const TRIAL_SEEN = new Set(JSON.parse(localStorage.getItem("h5i_trial_seen") || "[]"));
 const trialKey = (t) => `${t.fork}:${t.trial_digest || t.run_id}`;
 const trialWarnings = (t) => Array.isArray(t.warnings) ? t.warnings : [];
@@ -356,7 +493,12 @@ function experimentAttention(e) {
 }
 function routedTrial(e, t) {
   markTrialSeen(t);
+  // Opening a row must not make it disappear from under the cursor. Remember
+  // that it was open in this pass so the attention filter keeps it in place,
+  // greyed, rather than dropping it.
+  attentionKept.add(trialKey(t));
   view = "experiments"; experimentSel = e.id; trialSel = t.run_id;
+  syncHash();
   render();
 }
 
@@ -389,9 +531,53 @@ function renderNav() {
       if (conflicts) badge = h("span", { class: "badge alert" }, String(conflicts));
       else if (working) badge = h("span", { class: "badge" }, String(working));
     }
-    return h("button", { class: view === id ? "active" : "", onclick: () => { view = id; render(); } },
-      label, badge);
+    return h("button", {
+      class: view === id ? "active" : "",
+      onclick: () => { view = id; syncHash(); render(); },
+    }, label, badge);
   }));
+}
+
+// -------------------------------------------------------------- routing
+// Selection lives in the address bar so a trial can be linked to, and so a
+// reload lands where the reader was rather than back at the top.
+function syncHash() {
+  const parts = [view];
+  if (view === "experiments") {
+    if (experimentSel) parts.push(experimentSel);
+    if (experimentTab && experimentTab !== "leaderboard") parts.push(experimentTab);
+    if (trialSel) parts.push(trialSel);
+  } else if (view === "forks" && forkSel) parts.push(forkSel);
+  else if ((view === "tables" || view === "history") && tableSel) parts.push(tableSel);
+  const next = "#" + parts.map(encodeURIComponent).join("/");
+  if (location.hash !== next) history.replaceState(null, "", next);
+}
+const EXPERIMENT_TABS = ["leaderboard", "pivot", "compare", "runs"];
+function applyHash() {
+  const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean)
+    .map(decodeURIComponent);
+  if (!parts.length || !VIEWS.some(([id]) => id === parts[0])) return false;
+  view = parts[0];
+  if (view === "experiments") {
+    if (parts[1]) experimentSel = parts[1];
+    for (const part of parts.slice(2)) {
+      if (EXPERIMENT_TABS.includes(part)) experimentTab = part;
+      else trialSel = part;
+    }
+  } else if (view === "forks") forkSel = parts[1] || forkSel;
+  else if (view === "tables" || view === "history") tableSel = parts[1] || tableSel;
+  return true;
+}
+// Where to land when the address bar says nothing. Opening on an empty
+// "nothing needs review" page while another tab carries a red badge is the
+// one thing a triage surface must not do.
+function landingView() {
+  if ((OV.plans || []).some(p => !p.expired)) return "review";
+  const trials = (OV.experiments || []).flatMap(e => e.trials);
+  if (trials.some(t => trialAttention(t).priority >= 4)) return "experiments";
+  if ((OV.forks || []).some(f => f.stale_shadows > 0)) return "forks";
+  if (trials.length) return "experiments";
+  return "review";
 }
 async function refresh() {
   const [overview, experimentData] = await Promise.all([
@@ -407,9 +593,22 @@ async function refresh() {
   mode.textContent = OV.allow_mutations ? "mutations allowed" : "read-only";
   mode.className = "mode " + (OV.allow_mutations ? "rw" : "ro");
   if (!tableSel && OV.tables.length) tableSel = OV.tables[0].name;
-  if (!experimentSel && OV.experiments.length) experimentSel = OV.experiments[0].id;
+  if (!experimentSel && OV.experiments.length) {
+    // Default to the experiment that most needs a human, not the first one
+    // alphabetically.
+    experimentSel = [...OV.experiments].sort((a, b) =>
+      experimentAttention(b).priority - experimentAttention(a).priority
+        || a.id.localeCompare(b.id))[0].id;
+  }
+  if (!booted) {
+    booted = true;
+    if (!applyHash()) view = landingView();
+    syncHash();
+  }
   render();
 }
+let booted = false;
+addEventListener("hashchange", () => { if (applyHash()) render(); });
 function render() {
   renderNav();
   renderRail();
@@ -417,6 +616,8 @@ function render() {
   main.replaceChildren();
   if (view === "forks" || view === "experiments") {
     main.className = "split";
+    // renderExperiments picks its own layout: a single experiment does not
+    // need a column to choose it from.
     if (view === "forks") renderForks(main);
     else renderExperiments(main);
   } else {
@@ -481,7 +682,11 @@ function railModel() {
       spin: attn.state === "running",
       cls: "st " + (attn.state === "failed-warned" ? "conflict"
         : attn.state === "running" ? "working" : "ahead"),
-      label: `${e.id} · ${t.trial == null ? t.run_id : "trial " + t.trial}`,
+      // The run id is what differs between rows. The rail is 232px and
+      // truncates from the right, so leading with the shared study name
+      // rendered every row as the same "individua…".
+      label: t.run_id,
+      title: `${e.id} · ${trialLabel(t)}`,
       meta: attn.state.replace("-", " "),
       go: () => routedTrial(e, t),
     };
@@ -519,18 +724,28 @@ function railItem(it) {
     : h("span", { class: (it.cls || "") + " ri" }, it.spin ? "●" : it.icon);
   const row = h("div", {
     class: "ritem" + (seen ? " seen" : "") + (it.still ? " still" : ""),
+    title: it.title || it.label,
     onclick: it.still ? null : () => { markSeen(it.key); it.go(); },
   }, icon, h("span", { class: "rl" }, it.label), h("span", { class: "rm" }, it.meta || ""));
   return row;
 }
+// Sections that overflow can be opened. "+2 more" with no way to see the two
+// is a dead end.
+const railOpen = new Set();
 function railSection(out, title, items, cap, emptyRow) {
   if (!items.length && !emptyRow) return;
   out.push(h("div", { class: "rail-h" + (title === "needs you" && items.length ? " hot" : "") }, title));
   if (!items.length) { out.push(emptyRow); return; }
-  for (const it of items.slice(0, cap)) out.push(railItem(it));
-  if (items.length > cap) out.push(h("div", { class: "ritem still" },
-    h("span", { class: "ri" }, ""), h("span", { class: "rl", style: "color:var(--dim)" },
-      `+${items.length - cap} more`)));
+  const open = railOpen.has(title);
+  for (const it of open ? items : items.slice(0, cap)) out.push(railItem(it));
+  if (items.length > cap) {
+    out.push(h("div", {
+      class: "ritem", title: open ? "collapse" : "show all",
+      onclick: () => { if (open) railOpen.delete(title); else railOpen.add(title); renderRail(); },
+    }, h("span", { class: "ri" }, open ? "▾" : "▸"),
+      h("span", { class: "rl", style: "color:var(--dim)" },
+        open ? "show fewer" : `+${items.length - cap} more`)));
+  }
 }
 function renderRail() {
   const rail = $("#rail");
@@ -539,8 +754,9 @@ function renderRail() {
   const out = [];
   railSection(out, "needs you", m.needs, 12, h("div", { class: "ritem still quiet-row" },
     h("span", { class: "ri" }, "✓"), h("span", { class: "rl" }, "all quiet")));
-  railSection(out, "active", m.active, 12, null);
-  railSection(out, "info", m.info, 8, null);
+  // "active" used to hold finished runs, which is not what the word means.
+  railSection(out, "recent", m.active, 12, null);
+  railSection(out, "unpromoted", m.info, 8, null);
   rail.replaceChildren(...out);
 }
 
@@ -712,108 +928,604 @@ function trialLabel(t) {
   const number = t.trial == null ? t.run_id : `trial ${t.trial}`;
   return t.phase ? `${number} · ${t.phase}` : number;
 }
+const num = (v) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+const mOf = (t) => t.metrics || {};
+const aOf = (t) => t.analytics || {};
+// A Sharpe annualised from a two-hour run is arithmetic, not evidence. The
+// API ships what the ratio was computed from so the number can be shown with
+// its reliability rather than quietly quoted as if it were a track record.
+const THIN_SAMPLES = 30;
+const THIN_SPAN_NS = 86400e9;
+function thinSample(a) {
+  const n = num(a.sharpe_samples);
+  if (n == null) return false;
+  const span = num(a.span_ns);
+  return n < THIN_SAMPLES || (span != null && span < THIN_SPAN_NS);
+}
+// `realized_pnl` is already net of commissions, so gross edge is realised
+// plus costs. Showing gross → costs → net as three columns that add up is
+// the point of the table: it is where a strategy's edge actually goes.
+function trialCells(t) {
+  const m = mOf(t);
+  const a = aOf(t);
+  const net = num(m.realized_pnl);
+  const costs = num(m.commissions);
+  return {
+    name: t.run_id,
+    net,
+    costs,
+    gross: net == null || costs == null ? null : net + costs,
+    ret: num(a.return_pct),
+    fills: num(a.fills),
+    win: num(a.win_rate),
+    dd: num(a.max_drawdown),
+    sharpe: num(a.sharpe),
+    thin: thinSample(a),
+    equity: Array.isArray(a.equity) && a.equity.length ? a.equity : null,
+    start: num(m.starting_cash),
+    settled: m.settlement_applied === true,
+  };
+}
+
+// ------------------------------------------------------------- sparkline
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, ...kids) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v != null) el.setAttribute(k, String(v));
+  }
+  for (const kid of kids.flat()) if (kid != null) el.append(kid);
+  return el;
+}
+// Shape at a glance. Stroked against the run's own starting cash so the line
+// is read against breakeven, not against its own minimum.
+function sparkline(values, base, label) {
+  const w = 78;
+  const hgt = 18;
+  const pad = 2;
+  const lo = Math.min(...values, base ?? Infinity);
+  const hi = Math.max(...values, base ?? -Infinity);
+  const span = hi - lo || 1;
+  const x = (i) => (values.length < 2 ? w / 2 : (i / (values.length - 1)) * w);
+  const y = (v) => hgt - pad - ((v - lo) / span) * (hgt - 2 * pad);
+  const d = values
+    .map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(2)} ${y(v).toFixed(2)}`)
+    .join(" ");
+  const up = values[values.length - 1] >= (base ?? values[0]);
+  const el = svgEl("svg", {
+    class: "spark", width: w, height: hgt, viewBox: `0 0 ${w} ${hgt}`,
+    preserveAspectRatio: "none", role: "img", "aria-label": label || "equity curve",
+  });
+  if (base != null) {
+    el.append(svgEl("line", { class: "base", x1: 0, x2: w, y1: y(base), y2: y(base) }));
+  }
+  el.append(svgEl("path", { class: up ? "up" : "down", d }));
+  return el;
+}
+
+// ----------------------------------------------------------- leaderboard
+// One column per question a sweep is run to answer. `curve` is not sortable
+// because a shape has no order; everything else is.
+const LEADER_COLUMNS = [
+  { key: "name", label: "trial", kind: "text" },
+  { key: "curve", label: "equity", kind: "spark", sortable: false },
+  { key: "ret", label: "return (mark)", kind: "pct" },
+  { key: "gross", label: "gross", kind: "money" },
+  { key: "costs", label: "costs", kind: "cost" },
+  { key: "net", label: "net (realised)", kind: "money" },
+  { key: "fills", label: "fills", kind: "int" },
+  { key: "win", label: "win", kind: "rate" },
+  { key: "dd", label: "max dd", kind: "drawdown" },
+  { key: "sharpe", label: "sharpe", kind: "sharpe" },
+];
+function leaderCell(column, cells, row) {
+  const value = cells[column.key];
+  switch (column.kind) {
+    case "text":
+      return h("td", { title: row.__baseline ? "a run that never traded" : row.title },
+        cells.name);
+    case "spark":
+      return h("td", { class: "num" }, cells.equity
+        ? sparkline(cells.equity, cells.start, `${cells.name} equity curve`)
+        : "—");
+    case "pct":
+      return h("td", { class: "num " + signClass(value) }, fmtPct(value, 3));
+    case "money":
+      return h("td", { class: "num " + signClass(value) }, fmtSigned(value));
+    // Costs are always an outflow, so they carry no sign: signing them would
+    // imply a direction that a fee never has.
+    case "cost":
+      return h("td", { class: "num", title: "commissions and fees paid" },
+        value == null ? "—" : fmtFixed(value));
+    case "int":
+      return h("td", { class: "num" }, value == null ? "—" : fmtNum(value));
+    case "rate":
+      return h("td", { class: "num" }, value == null ? "—"
+        : fmtFixed(value * 100, 0) + "%");
+    case "drawdown":
+      // A drawdown is a fall, so it is never a gain; colour it only when it
+      // actually bit.
+      return h("td", { class: "num " + (value ? "metric-negative" : "") },
+        value == null ? "—" : fmtPct(value * 100, 2));
+    case "sharpe":
+      if (value == null) return h("td", { class: "num" }, "—");
+      return h("td", {
+        class: "num " + (cells.thin ? "thin" : signClass(value)),
+        title: cells.thin
+          ? `annualised from ${num(aOf(row).sharpe_samples)} samples over `
+            + `${fmtDuration(aOf(row).span_ns)} — too thin to lean on`
+          : `annualised from ${fmtDuration(aOf(row).sample_interval_ns)} samples`,
+      }, fmtFixed(value, 2));
+    default:
+      return h("td", {}, "—");
+  }
+}
+// A run that never traded. Every column it can honestly fill is zero, and it
+// sorts with the rest, so wherever the reader sorts, breakeven is visible in
+// the same column they are reading.
+function baselineRow() {
+  return {
+    __baseline: true,
+    run_id: "no trading",
+    cells: {
+      name: "no trading", ret: 0, gross: 0, costs: 0, net: 0, fills: 0,
+      win: null, dd: 0, sharpe: null, thin: false, equity: null, start: null,
+    },
+  };
+}
+function sortRows(rows, sort) {
+  const dir = sort.dir;
+  return [...rows].sort((a, b) => {
+    const x = a.cells[sort.key];
+    const y = b.cells[sort.key];
+    if (x == null && y == null) return a.cells.name.localeCompare(b.cells.name);
+    if (x == null) return 1;                       // unscored sinks, either way
+    if (y == null) return -1;
+    if (typeof x === "string") return dir * x.localeCompare(y);
+    return dir * (x - y) || a.cells.name.localeCompare(b.cells.name);
+  });
+}
+function renderLeaderboard(body, e) {
+  const scored = e.trials.filter(t => t.metrics);
+  if (!scored.length) {
+    body.append(h("div", { class: "quiet" },
+      "No scored trials yet. A trial appears here once its run writes bt_run."));
+    return;
+  }
+  const rows = scored.map(t => ({ trial: t, cells: trialCells(t), title: trialLabel(t) }));
+  rows.push(baselineRow());
+  const ordered = sortRows(rows, leaderSort);
+
+  const head = h("tr", {}, h("th", { class: "num" }, ""));
+  for (const column of LEADER_COLUMNS) {
+    const sortable = column.sortable !== false;
+    const active = leaderSort.key === column.key;
+    head.append(h("th", {
+      class: (column.kind === "text" ? "" : "num ")
+        + (sortable ? "sortable " : "") + (active ? "sorted" : ""),
+      title: sortable ? `sort by ${column.label}` : null,
+      onclick: sortable ? () => {
+        // Re-clicking a column flips it; a new column starts descending,
+        // which is "best first" for every metric here except drawdown.
+        leaderSort = active
+          ? { key: column.key, dir: -leaderSort.dir }
+          : { key: column.key, dir: column.key === "name" ? 1 : -1 };
+        render();
+      } : null,
+    }, column.label, sortable
+      ? h("span", { class: "sortcue" }, active ? (leaderSort.dir < 0 ? "▾" : "▴") : "⇅")
+      : null));
+  }
+  const table = h("table", { class: "grid" }, head);
+  for (const row of ordered) {
+    const selected = !row.__baseline && compareSel.has(row.trial.run_id);
+    const tr = h("tr", {
+      class: (row.__baseline ? "baseline " : "") + (selected ? "compared" : ""),
+      style: row.__baseline ? null : "cursor:pointer",
+      onclick: row.__baseline ? null : (event) => {
+        if (event.target.closest("input")) return;
+        routedTrial(e, row.trial);
+      },
+    });
+    tr.append(h("td", { class: "num" }, row.__baseline ? null : h("input", {
+      type: "checkbox", checked: selected ? "checked" : null,
+      title: "add to comparison",
+      onclick: (event) => {
+        event.stopPropagation();
+        if (compareSel.has(row.trial.run_id)) compareSel.delete(row.trial.run_id);
+        else compareSel.add(row.trial.run_id);
+        render();
+      },
+    })));
+    for (const column of LEADER_COLUMNS) {
+      tr.append(leaderCell(column, row.cells, row.__baseline ? row : row.trial));
+    }
+    if (!row.__baseline && row.trial.reused) {
+      tr.lastChild.append(h("span", { class: "chip info", style: "margin-left:8px" }, "served"));
+    }
+    table.append(tr);
+  }
+  body.append(h("div", { class: "scroll-x" }, table));
+
+  const provisional = scored.filter(t => mOf(t).settlement_applied === false).length;
+  const notes = [];
+  if (provisional) {
+    notes.push(`${provisional} of ${scored.length} run${scored.length === 1 ? "" : "s"} `
+      + "stopped before their markets resolved, so those numbers are provisional.");
+  }
+  notes.push("gross − costs = net. Return is marked to market and includes open "
+    + "positions; net is realised only, which is why the two can disagree.");
+  body.append(h("p", { class: "caption", style: "margin-top:12px" }, notes.join(" ")));
+}
+
+// -------------------------------------------------------------- compare
+// Two runs differ in their parameters and in their numbers. Showing both
+// together is the whole reason a sweep leaves one fork per trial.
+function renderCompare(body, e) {
+  const picked = e.trials.filter(t => compareSel.has(t.run_id));
+  if (picked.length < 2) {
+    body.append(h("div", { class: "quiet" },
+      "Tick two or more trials on the leaderboard to compare them."));
+    return;
+  }
+  const keys = [...new Set(picked.flatMap(t =>
+    Object.keys(t.parameters && typeof t.parameters === "object" ? t.parameters : {})))].sort();
+  const table = h("table", { class: "grid" });
+  const head = h("tr", {}, h("th", {}, ""));
+  for (const t of picked) head.append(h("th", { class: "num" }, t.run_id));
+  table.append(head);
+  // Parameters first: what was changed, before what it did.
+  for (const key of keys) {
+    const tr = h("tr", {}, h("td", { class: "caption" }, key));
+    const values = picked.map(t => (t.parameters || {})[key]);
+    const varies = new Set(values.map(v => JSON.stringify(v))).size > 1;
+    for (const value of values) {
+      tr.append(h("td", { class: "num" + (varies ? "" : " metric-flat") },
+        value == null ? "—" : String(value)));
+    }
+    table.append(tr);
+  }
+  if (keys.length) table.append(h("tr", { class: "zeroline" }, h("td", { colspan: picked.length + 1 })));
+  const measures = LEADER_COLUMNS.filter(c => c.kind !== "text" && c.kind !== "spark");
+  for (const column of measures) {
+    const tr = h("tr", {}, h("td", { class: "caption" }, column.label));
+    for (const t of picked) tr.append(leaderCell(column, trialCells(t), t));
+    table.append(tr);
+  }
+  body.append(h("div", { class: "scroll-x" }, table),
+    h("button", {
+      class: "ghost", style: "margin-top:12px",
+      onclick: () => { compareSel.clear(); render(); },
+    }, "clear comparison"));
+}
+
+// ---------------------------------------------------------------- pivot
+// A sweep varies one parameter on purpose. Grouping by it answers the
+// question the sweep was run to ask, which reading ten rows one at a time
+// does not.
+function parameterKeys(e) {
+  const counts = new Map();
+  for (const t of e.trials) {
+    const params = t.parameters && typeof t.parameters === "object" ? t.parameters : {};
+    for (const key of Object.keys(params)) counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  // Only keys that actually vary are worth pivoting on.
+  return [...counts.keys()].filter(key => {
+    const values = new Set(e.trials.map(t =>
+      JSON.stringify((t.parameters || {})[key])));
+    return values.size > 1;
+  }).sort();
+}
+const median = (values) => {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+function renderPivot(body, e) {
+  const keys = parameterKeys(e);
+  if (!keys.length) {
+    body.append(h("div", { class: "quiet" }, e.trials.some(t => t.parameters
+      && Object.keys(t.parameters).length)
+      ? "Every trial in this experiment ran the same parameters, so there is nothing to pivot on."
+      : "These runs recorded no parameters. Pass metadata={\"parameters\": {…}} on the "
+        + "BacktestConfig and they appear here."));
+    return;
+  }
+  if (!pivotKey || !keys.includes(pivotKey)) pivotKey = keys[0];
+  body.append(h("div", { style: "display:flex;gap:8px;align-items:center;margin-bottom:12px" },
+    h("span", { class: "caption" }, "group by"),
+    h("select", {
+      onchange: (event) => { pivotKey = event.target.value; render(); },
+    }, keys.map(key => h("option", { value: key, selected: key === pivotKey ? "" : null }, key)))));
+
+  const groups = new Map();
+  for (const t of e.trials) {
+    if (!t.metrics) continue;
+    const value = (t.parameters || {})[pivotKey];
+    const label = value == null ? "—" : String(value);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(trialCells(t));
+  }
+  const table = h("table", { class: "grid" },
+    h("tr", {}, h("th", {}, pivotKey), h("th", { class: "num" }, "trials"),
+      h("th", { class: "num" }, "median return"), h("th", { class: "num" }, "median net"),
+      h("th", { class: "num" }, "median costs"), h("th", { class: "num" }, "median fills")));
+  const ordered = [...groups.entries()].sort((a, b) => {
+    const x = Number(a[0]);
+    const y = Number(b[0]);
+    return Number.isFinite(x) && Number.isFinite(y) ? x - y : a[0].localeCompare(b[0]);
+  });
+  for (const [label, cells] of ordered) {
+    const pick = (key) => cells.map(c => c[key]).filter(v => v != null);
+    const ret = median(pick("ret"));
+    const net = median(pick("net"));
+    table.append(h("tr", {},
+      h("td", {}, label),
+      h("td", { class: "num" }, String(cells.length)),
+      h("td", { class: "num " + signClass(ret) }, fmtPct(ret, 3)),
+      h("td", { class: "num " + signClass(net) }, fmtSigned(net)),
+      h("td", { class: "num" }, fmtFixed(median(pick("costs")))),
+      h("td", { class: "num" }, fmtNum(median(pick("fills"))))));
+  }
+  body.append(h("div", { class: "scroll-x" }, table));
+}
+
+// ----------------------------------------------------------------- runs
 function trialRow(e, t) {
   const attn = trialAttention(t);
+  const cells = trialCells(t);
   return h("button", {
     class: "trial-row" + (trialSel === t.run_id ? " selected" : "")
       + (attn.state === "seen" ? " seen" : ""),
     onclick: () => routedTrial(e, t),
   },
     h("span", { class: "trial-dot " + attn.state }),
-    h("span", {}, trialLabel(t)),
-    h("span", { class: "trial-state" }, attn.state.replace("-", " ")));
+    h("span", {}, t.run_id),
+    h("span", { class: "trial-state" },
+      // A status word alone was the same for nine rows out of ten. The
+      // number is what tells them apart.
+      [cells.net == null ? null : fmtSigned(cells.net), attn.state.replace("-", " ")]
+        .filter(Boolean).join("  ·  ")));
 }
+function renderRuns(body, e) {
+  let trials = [...e.trials].sort((a, b) =>
+    trialAttention(b).priority - trialAttention(a).priority
+      || Number(a.trial ?? 0) - Number(b.trial ?? 0));
+  if (attentionOnly) {
+    // Opening a trial marks it seen, which would drop it out of this filter
+    // under the cursor. Rows opened during this pass stay put and grey in
+    // place instead; the filter re-applies when it is toggled.
+    trials = trials.filter(t =>
+      trialAttention(t).state !== "seen" || attentionKept.has(trialKey(t)));
+  }
+  const pending = e.trials.filter(t => trialAttention(t).state !== "seen").length;
+  body.append(h("label", { class: "caption", style: "display:flex;gap:7px;align-items:center;margin-bottom:10px" },
+    h("input", {
+      type: "checkbox", checked: attentionOnly ? "checked" : null,
+      onchange: () => { attentionOnly = !attentionOnly; attentionKept.clear(); render(); },
+    }),
+    `only what needs attention (${pending} of ${e.trials.length})`));
+  if (!trials.length) {
+    body.append(h("div", { class: "quiet" },
+      "Everything in this experiment has been reviewed."));
+    return;
+  }
+  body.append(...trials.map(t => trialRow(e, t)));
+}
+
+// ---------------------------------------------------------------- detail
+// Engine warnings repeat one sentence per market. Nine near-identical
+// clauses are one finding, so they collapse to a count and open on request.
+function groupWarnings(warnings) {
+  const groups = new Map();
+  for (const warning of warnings) {
+    // Strip a leading instrument id and every instant, leaving the shape of
+    // the complaint as the grouping key. The id has to look like an id (it
+    // carries a digit) or an ordinary first word gets eaten.
+    const shape = humaniseInstants(warning)
+      .replace(/^\S*\d\S*\s+/, "")
+      .replace(/\b\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z\b/g, "<instant>");
+    if (!groups.has(shape)) groups.set(shape, []);
+    groups.get(shape).push(warning);
+  }
+  return [...groups.entries()].map(([shape, items]) => ({ shape, items }));
+}
+function renderTrialDetail(rhs, e, selected) {
+  const m = mOf(selected);
+  const a = aOf(selected);
+  const cells = trialCells(selected);
+  const attn = trialAttention(selected);
+  rhs.append(h("p", { class: "micro", style: "margin-top:18px" }, "trial detail"));
+  const card = h("div", { class: "card" });
+
+  card.append(h("div", { style: "display:flex;align-items:center;gap:9px;flex-wrap:wrap" },
+    h("span", { class: "panel-title" }, selected.run_id),
+    h("span", { class: "chip" + (attn.priority >= 4 ? " bad" : "") }, attn.state.replace("-", " ")),
+    selected.reused ? h("span", { class: "chip info", title: "an identical trial digest already "
+      + "existed, so this result was served from the ledger rather than recomputed" },
+      "served from ledger") : null,
+    m.settlement_applied === false
+      ? h("span", { class: "chip warn", title: "the run stopped before its markets resolved, so "
+        + "every number here is provisional" }, "unsettled")
+      : null));
+
+  // The numbers a human actually reads, at a size they can read.
+  const kpis = [
+    ["return (mark)", fmtPct(cells.ret, 3), signClass(cells.ret),
+      "marked to market, open positions included"],
+    ["net (realised)", fmtSigned(cells.net), signClass(cells.net),
+      "realised only, already net of costs"],
+    ["costs", fmtFixed(cells.costs), "", "commissions and fees paid"],
+    ["fills / orders", `${fmtNum(a.fills)} / ${fmtNum(a.orders)}`, "",
+      a.rejected ? `${a.rejected} order(s) rejected by the book` : "every order was accepted"],
+    ["max drawdown", cells.dd == null ? "—" : fmtPct(cells.dd * 100, 2),
+      cells.dd ? "metric-negative" : "", "worst peak-to-trough fall of the equity curve"],
+    ["sharpe", cells.sharpe == null ? "—" : fmtFixed(cells.sharpe, 2),
+      cells.thin ? "thin" : signClass(cells.sharpe),
+      cells.thin ? `annualised from ${fmtNum(a.sharpe_samples)} samples over `
+        + `${fmtDuration(a.span_ns)} — too thin to lean on`
+        : "annualised from the equity samples' own spacing"],
+  ];
+  const grid = h("div", { class: "kpi-grid" });
+  for (const [label, value, cls, note] of kpis) {
+    grid.append(h("div", {},
+      h("div", { class: "kpi-label" }, label),
+      h("div", { class: "kpi " + (cls || "") }, value),
+      h("div", { class: "kpi-note" }, note)));
+  }
+  card.append(grid);
+
+  if (cells.equity) {
+    card.append(h("div", { class: "caption" }, "equity"),
+      h("div", { style: "margin:4px 0 16px" },
+        (() => {
+          const big = sparkline(cells.equity, cells.start, "equity curve");
+          big.setAttribute("width", "100%");
+          big.setAttribute("height", "56");
+          big.setAttribute("viewBox", "0 0 78 18");
+          return big;
+        })()));
+  }
+
+  // Facts, with the empty ones left out rather than rendered as dashes.
+  const facts = [];
+  const params = selected.parameters && typeof selected.parameters === "object"
+    ? Object.entries(selected.parameters) : [];
+  if (params.length) {
+    facts.push(["parameters", params.map(([k, v]) => `${k}=${v == null ? "—" : v}`).join("  ")]);
+  }
+  facts.push(["fork", h("a", {
+    class: "vlink", title: "open this trial's fork in the fork monitor",
+    onclick: () => { view = "forks"; forkSel = selected.fork; syncHash(); render(); },
+  }, selected.fork)]);
+  if (m.records_processed != null) facts.push(["records", fmtNum(m.records_processed)]);
+  if (m.simulated_through_ns != null) {
+    facts.push(["simulated through", fmtTs(m.simulated_through_ns)]);
+  }
+  if (a.instruments != null) {
+    facts.push(["instruments", a.instruments_won == null ? fmtNum(a.instruments)
+      : `${fmtNum(a.instruments_won)} of ${fmtNum(a.instruments)} ended positive`]);
+  }
+  if (selected.trial_digest) {
+    facts.push(["trial digest", h("span", {
+      class: "copyable", title: "click to copy — this is the content identity the ledger "
+        + "dedups on", onclick: () => copyText(selected.trial_digest),
+    }, selected.trial_digest.slice(0, 16) + "…")]);
+  }
+  if (m.config_digest) {
+    facts.push(["config digest", h("span", {
+      class: "copyable", title: "click to copy — the full configuration identity",
+      onclick: () => copyText(m.config_digest),
+    }, String(m.config_digest).slice(0, 16) + "…")]);
+  }
+  if (a.truncated) {
+    facts.push(["note", `result tables were read up to ${fmtNum(a.scan_limit)} rows; `
+      + "the curve and counts above are partial"]);
+  }
+  const kv = h("div", { class: "kv" });
+  for (const [key, value] of facts) {
+    kv.append(h("span", { class: "k" }, key), h("span", {}, value));
+  }
+  card.append(kv);
+
+  const warnings = trialWarnings(selected);
+  if (warnings.length) {
+    const groups = groupWarnings(warnings);
+    const box = h("div", { style: "margin-top:14px" });
+    box.append(h("div", { class: "caption" },
+      `${warnings.length} warning${warnings.length === 1 ? "" : "s"}`
+      + (groups.length < warnings.length ? `, ${groups.length} distinct` : "")));
+    for (const group of groups) {
+      const open = warnExpanded.has(group.shape);
+      box.append(h("div", { style: "margin-top:6px" },
+        h("button", {
+          class: "ghost",
+          onclick: () => {
+            if (open) warnExpanded.delete(group.shape); else warnExpanded.add(group.shape);
+            render();
+          },
+        }, `${open ? "▾" : "▸"} ${group.items.length}×  ${group.shape}`),
+        open ? h("div", { class: "cmdline", style: "white-space:pre-wrap;cursor:auto" },
+          group.items.map(humaniseInstants).join("\n\n")) : null));
+    }
+    card.append(box);
+  }
+  rhs.append(card);
+}
+
 function renderExperiments(main) {
-  const lhs = h("div", { class: "pane lhs" });
-  const rhs = h("div", { class: "pane" });
-  main.append(lhs, rhs);
   const experiments = [...(OV.experiments || [])].sort((a, b) =>
     experimentAttention(b).priority - experimentAttention(a).priority
       || a.id.localeCompare(b.id));
-  lhs.append(h("p", { class: "micro" }, "experiments · max child priority"));
-  if (!experiments.length) lhs.append(h("div", { class: "quiet" },
-    "No recorded backtest trials. Runs appear here when their bt-* fork is created."));
-  for (const e of experiments) {
-    const attn = experimentAttention(e);
-    const unseenWarnings = e.trials.filter(t =>
-      trialWarnings(t).length && !TRIAL_SEEN.has(trialKey(t))).length;
-    lhs.append(h("div", {
-      class: "experiment-head" + (experimentSel === e.id ? " selected" : ""),
-      onclick: () => { experimentSel = e.id; trialSel = null; render(); },
-    },
-      h("span", { class: "trial-dot " + attn.state }),
-      h("span", { class: "nm" }, e.id),
-      unseenWarnings ? h("span", { class: "badge alert" }, String(unseenWarnings)) : null,
-      h("span", { class: "trial-state" }, String(e.trials.length))));
-  }
-  const e = experiments.find(item => item.id === experimentSel);
-  if (!e) {
-    rhs.append(h("p", { class: "micro" }, "experiment detail"),
-      h("div", { class: "quiet" }, "select an experiment"));
+  if (!experiments.length) {
+    main.className = "doc";
+    main.append(h("div", { class: "wrap" }, h("div", { class: "quiet" },
+      "No recorded backtest trials. Runs appear here when their bt-* fork is created.")));
     return;
   }
+  // One experiment does not need a list to choose from, and a 900px column
+  // holding a single row is the emptiest thing on the screen.
+  const showList = experiments.length > 1;
+  let rhs;
+  if (showList) {
+    main.className = "split experiments";
+    const lhs = h("div", { class: "pane lhs" });
+    rhs = h("div", { class: "pane" });
+    main.append(lhs, rhs);
+    lhs.append(h("p", { class: "micro" }, "experiments · max child priority"));
+    for (const e of experiments) {
+      const attn = experimentAttention(e);
+      const unseenWarnings = e.trials.filter(t =>
+        trialWarnings(t).length && !TRIAL_SEEN.has(trialKey(t))).length;
+      lhs.append(h("div", {
+        class: "experiment-head" + (experimentSel === e.id ? " selected" : ""),
+        onclick: () => { experimentSel = e.id; trialSel = null; syncHash(); render(); },
+      },
+        h("span", { class: "trial-dot " + attn.state }),
+        h("span", { class: "nm", title: e.id }, e.id),
+        unseenWarnings ? h("span", { class: "badge alert" }, String(unseenWarnings)) : null,
+        h("span", { class: "trial-state" }, String(e.trials.length))));
+    }
+  } else {
+    main.className = "doc";
+    rhs = h("div", { class: "wrap" });
+    main.append(rhs);
+  }
+
+  const e = experiments.find(item => item.id === experimentSel) || experiments[0];
+  if (experimentSel !== e.id) experimentSel = e.id;
   const attn = experimentAttention(e);
+  const needing = e.trials.filter(t => trialAttention(t).state !== "seen").length;
   rhs.append(h("div", { class: "plan-head" },
-    h("span", { class: "title" }, e.id),
-    h("span", { class: "tag " + (attn.priority >= 4 ? "stale" : "") },
+    h("span", { class: "panel-title" }, e.id),
+    h("span", { class: "chip" + (attn.priority >= 5 ? " bad" : attn.priority >= 4 ? " warn" : "") },
       attn.state.replace("-", " ")),
-    h("span", { style: "margin-left:auto;color:var(--dim)" },
-      `${e.trials.length} trial${e.trials.length === 1 ? "" : "s"}`)));
-  const tabs = [["attention","attention"],["trials","all trials"],["leaderboard","leaderboard"]];
+    h("span", { class: "panel-sub", style: "margin-left:auto" },
+      `${e.trials.length} trial${e.trials.length === 1 ? "" : "s"}`
+      + (needing ? ` · ${needing} unreviewed` : ""))));
+
+  const tabs = [
+    ["leaderboard", "leaderboard"],
+    ["pivot", "by parameter"],
+    ["compare", compareSel.size ? `compare (${compareSel.size})` : "compare"],
+    ["runs", "runs"],
+  ];
   rhs.append(h("div", { class: "subnav" }, tabs.map(([id, label]) =>
     h("button", {
       class: experimentTab === id ? "active" : "",
-      onclick: () => { experimentTab = id; render(); },
+      onclick: () => { experimentTab = id; syncHash(); render(); },
     }, label))));
+
   const body = h("div", { class: "card" });
-  if (experimentTab === "leaderboard") {
-    const ranked = e.trials.filter(t => t.metrics &&
-      Number.isFinite(Number(t.metrics.realized_pnl)))
-      .sort((a, b) => Number(b.metrics.realized_pnl) - Number(a.metrics.realized_pnl));
-    if (!ranked.length) body.append(h("div", { class: "quiet" }, "No scored trials."));
-    else {
-      const table = h("table", { class: "grid" },
-        h("tr", {}, h("th", {}, "trial"), h("th", {}, "realized pnl"),
-          h("th", {}, "final cash"), h("th", {}, "fills"), h("th", {}, "coverage")));
-      for (const t of ranked) {
-        const pnl = Number(t.metrics.realized_pnl);
-        table.append(h("tr", { onclick: () => routedTrial(e, t), style: "cursor:pointer" },
-          h("td", {}, trialLabel(t)),
-          h("td", { class: pnl < 0 ? "metric-negative" : "metric-positive" }, String(pnl)),
-          h("td", {}, String(t.metrics.final_cash ?? "—")),
-          h("td", {}, String(t.metrics.fills ?? "—")),
-          h("td", {}, String(t.metrics.coverage ?? "—"))));
-      }
-      body.append(h("div", { class: "scroll-x" }, table));
-    }
-  } else {
-    let trials = [...e.trials].sort((a, b) =>
-      trialAttention(b).priority - trialAttention(a).priority
-        || Number(a.trial ?? 0) - Number(b.trial ?? 0));
-    if (experimentTab === "attention")
-      trials = trials.filter(t => trialAttention(t).state !== "seen");
-    if (!trials.length) body.append(h("div", { class: "quiet" },
-      experimentTab === "attention" ? "Everything in this experiment has been reviewed." : "No trials."));
-    else body.append(...trials.map(t => trialRow(e, t)));
-  }
+  if (experimentTab === "leaderboard") renderLeaderboard(body, e);
+  else if (experimentTab === "pivot") renderPivot(body, e);
+  else if (experimentTab === "compare") renderCompare(body, e);
+  else renderRuns(body, e);
   rhs.append(body);
+
   const selected = e.trials.find(t => t.run_id === trialSel);
-  if (selected) {
-    const metrics = selected.metrics || {};
-    rhs.append(h("p", { class: "micro", style: "margin-top:18px" }, "trial detail"),
-      h("div", { class: "card" },
-        h("div", { class: "kv" },
-          h("span", { class: "k" }, "run"), h("span", {}, selected.run_id),
-          h("span", { class: "k" }, "fork"), h("span", {}, selected.fork),
-          h("span", { class: "k" }, "state"), h("span", {}, trialAttention(selected).state),
-          h("span", { class: "k" }, "parameters"),
-          h("span", {}, selected.parameters == null ? "—" : JSON.stringify(selected.parameters)),
-          h("span", { class: "k" }, "records"), h("span", {}, String(metrics.records_processed ?? "—")),
-          h("span", { class: "k" }, "orders / fills"),
-          h("span", {}, `${metrics.orders ?? "—"} / ${metrics.fills ?? "—"}`),
-          h("span", { class: "k" }, "warnings"),
-          h("span", {}, trialWarnings(selected).join("; ") || "none"))));
-  }
+  if (selected) renderTrialDetail(rhs, e, selected);
 }
 
 // ---------------------------------------------------------------- forks
@@ -958,9 +1670,19 @@ async function renderForkDetail(silent) {
   const state = f ? forkState(f) : "idle";
   const info = d.info, diff = d.diff;
   const bits = [h("p", { class: "micro" }, "fork detail")];
+  // A bt-* fork is a trial's workspace. The two views describe the same run,
+  // so each links to the other rather than leaving the reader to match names
+  // by eye.
+  const owning = (OV.experiments || []).flatMap(e => e.trials.map(t => ({ e, t })))
+    .find(({ t }) => t.fork === name);
   bits.push(h("div", { class: "plan-head" },
     h("span", { class: "title" }, name),
     h("span", { class: "tag f-" + state }, state),
+    owning ? h("a", {
+      class: "vlink", style: "margin-left:8px",
+      title: "open this fork's trial in the experiment view",
+      onclick: () => routedTrial(owning.e, owning.t),
+    }, "trial " + owning.t.run_id) : null,
     h("span", { style: "margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--dim)" },
       "forked " + fmtTs(info.created_at_ns))));
   if (info.note) bits.push(h("div", { class: "hintline" }, info.note));

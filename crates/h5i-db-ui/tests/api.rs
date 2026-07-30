@@ -4,7 +4,9 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
+use arrow::array::{
+    ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -793,4 +795,272 @@ async fn experiments_project_trial_ledger_rows_and_attention_priority() {
     assert_eq!(trial["trial_digest"], "semantic-digest");
     assert_eq!(trial["metrics"]["realized_pnl"], 12.5);
     assert_eq!(trial["parameters"]["fee"], 0.01);
+}
+
+/// Minimal `bt_config` + `bt_run` pair so a fork reads as a finished trial.
+async fn write_trial_head(fork: &Database, run_id: &str, digest: &str, starting_cash: f64) {
+    let config_schema = Arc::new(Schema::new(vec![
+        Field::new("run_id", DataType::Utf8, false),
+        Field::new("trial_digest", DataType::Utf8, false),
+        Field::new("config_json", DataType::Utf8, false),
+    ]));
+    fork.create_table("bt_config", config_schema.clone(), TableOptions::default())
+        .await
+        .unwrap();
+    fork.write(
+        "bt_config",
+        vec![
+            RecordBatch::try_new(
+                config_schema,
+                vec![
+                    Arc::new(StringArray::from(vec![run_id])),
+                    Arc::new(StringArray::from(vec![digest])),
+                    Arc::new(StringArray::from(vec![
+                        r#"{"metadata":{"study_id":"alpha"}}"#,
+                    ])),
+                ],
+            )
+            .unwrap(),
+        ],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let run_schema = Arc::new(Schema::new(vec![
+        Field::new("run_id", DataType::Utf8, false),
+        Field::new("starting_cash", DataType::Float64, false),
+        Field::new("realized_pnl", DataType::Float64, false),
+    ]));
+    fork.create_table("bt_run", run_schema.clone(), TableOptions::default())
+        .await
+        .unwrap();
+    fork.write(
+        "bt_run",
+        vec![
+            RecordBatch::try_new(
+                run_schema,
+                vec![
+                    Arc::new(StringArray::from(vec![run_id])),
+                    Arc::new(Float64Array::from(vec![starting_cash])),
+                    Arc::new(Float64Array::from(vec![7.0])),
+                ],
+            )
+            .unwrap(),
+        ],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+}
+
+async fn write_table(fork: &Database, name: &str, schema: SchemaRef, columns: Vec<ArrayRef>) {
+    fork.create_table(name, schema.clone(), TableOptions::default())
+        .await
+        .unwrap();
+    fork.write(
+        name,
+        vec![RecordBatch::try_new(schema, columns).unwrap()],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+}
+
+/// The leaderboard's columns come from the result tables, not from guesses:
+/// counts off `bt_orders`/`bt_fills`, win rate off `bt_positions`, and shape
+/// off `bt_equity`. A Sharpe travels with what it was computed from.
+#[tokio::test]
+async fn trial_analytics_derive_counts_shape_and_reliability_from_result_tables() {
+    let (_dir, _router, db) = setup(false).await;
+    db.create_fork("bt-shape", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    let fork = db.open_fork("bt-shape").await.unwrap();
+    write_trial_head(&fork, "shape-run", "digest-shape", 1000.0).await;
+
+    let ts = |values: Vec<i64>| -> ArrayRef { Arc::new(TimestampNanosecondArray::from(values)) };
+
+    write_table(
+        &fork,
+        "bt_orders",
+        Arc::new(Schema::new(vec![
+            Field::new("order_id", DataType::Utf8, false),
+            Field::new("status", DataType::Utf8, false),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["o1", "o2", "o3"])),
+            Arc::new(StringArray::from(vec!["filled", "filled", "rejected"])),
+        ],
+    )
+    .await;
+    write_table(
+        &fork,
+        "bt_fills",
+        Arc::new(Schema::new(vec![Field::new(
+            "order_id",
+            DataType::Utf8,
+            false,
+        )])),
+        vec![Arc::new(StringArray::from(vec!["o1", "o2"]))],
+    )
+    .await;
+    // One instrument ends net positive (5 realised + 1 settled), one negative.
+    write_table(
+        &fork,
+        "bt_positions",
+        Arc::new(Schema::new(vec![
+            Field::new("instrument_id", DataType::Utf8, false),
+            Field::new("realized_pnl", DataType::Float64, false),
+            Field::new("settlement_pnl", DataType::Float64, true),
+        ])),
+        vec![
+            Arc::new(StringArray::from(vec!["A", "B"])),
+            Arc::new(Float64Array::from(vec![5.0, -3.0])),
+            Arc::new(Float64Array::from(vec![Some(1.0), None])),
+        ],
+    )
+    .await;
+    write_table(
+        &fork,
+        "bt_equity",
+        Arc::new(Schema::new(vec![
+            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), false),
+            Field::new("equity", DataType::Float64, false),
+        ])),
+        vec![
+            ts(vec![0, 60_000_000_000, 120_000_000_000, 180_000_000_000]),
+            Arc::new(Float64Array::from(vec![1000.0, 1010.0, 990.0, 1020.0])),
+        ],
+    )
+    .await;
+
+    let router = router_for(&db, false);
+    let (status, body) = get_json(&router, "/api/experiments").await;
+    assert_eq!(status, StatusCode::OK);
+    let analytics = &body["experiments"][0]["trials"][0]["analytics"];
+
+    assert_eq!(analytics["orders"], 3);
+    assert_eq!(analytics["rejected"], 1);
+    assert_eq!(analytics["fills"], 2);
+    assert_eq!(analytics["instruments"], 2);
+    assert_eq!(analytics["instruments_won"], 1);
+    assert_eq!(analytics["win_rate"], 0.5);
+
+    // 1010 -> 990 is the worst peak-to-trough fall.
+    let drawdown = analytics["max_drawdown"].as_f64().unwrap();
+    assert!(
+        (drawdown - (990.0 / 1010.0 - 1.0)).abs() < 1e-12,
+        "drawdown was {drawdown}"
+    );
+    // Return is measured against starting cash, not the curve's first point.
+    let ret = analytics["return_pct"].as_f64().unwrap();
+    assert!((ret - 2.0).abs() < 1e-9, "return was {ret}");
+    assert_eq!(analytics["equity_points"], 4);
+    assert_eq!(analytics["equity"].as_array().unwrap().len(), 4);
+
+    // The Sharpe is annualised from the samples' own spacing, and says so.
+    assert_eq!(analytics["sample_interval_ns"], 60_000_000_000i64);
+    assert_eq!(analytics["sharpe_samples"], 3);
+    assert_eq!(analytics["span_ns"], 180_000_000_000i64);
+    assert!(analytics["sharpe"].as_f64().unwrap().is_finite());
+    assert!(analytics.get("truncated").is_none());
+}
+
+/// A second fork carrying a digest that already exists is a served result,
+/// not a second run, and the payload says which one it was.
+#[tokio::test]
+async fn a_repeated_trial_digest_is_marked_reused_rather_than_run_twice() {
+    let (_dir, _router, db) = setup(false).await;
+    for name in ["bt-first", "bt-second"] {
+        db.create_fork(name, None, None, serde_json::Map::new())
+            .await
+            .unwrap();
+        let fork = db.open_fork(name).await.unwrap();
+        write_trial_head(
+            &fork,
+            name.trim_start_matches("bt-"),
+            "shared-digest",
+            100.0,
+        )
+        .await;
+    }
+
+    let router = router_for(&db, false);
+    let (_status, body) = get_json(&router, "/api/experiments").await;
+    let trials = body["experiments"][0]["trials"].as_array().unwrap();
+    assert_eq!(trials.len(), 2);
+    let reused: Vec<bool> = trials
+        .iter()
+        .map(|trial| trial["reused"].as_bool().unwrap())
+        .collect();
+    assert_eq!(
+        reused.iter().filter(|flag| **flag).count(),
+        1,
+        "exactly the later fork is the reuse, got {reused:?}"
+    );
+}
+
+const INDEX_HTML: &str = include_str!("../assets/index.html");
+
+/// Both of the UI's silent colour bugs were invalid CSS that a browser drops
+/// without complaint: variables used before they were defined, and a money
+/// colour that lost the cascade to `table.grid td`. Neither shows up in a
+/// screenshot review as anything but "the colour looks off", so they are
+/// asserted here instead.
+#[test]
+fn every_css_variable_the_stylesheet_uses_is_defined() {
+    let defined: std::collections::HashSet<&str> = INDEX_HTML
+        .match_indices("--")
+        .filter_map(|(at, _)| {
+            let rest = &INDEX_HTML[at..];
+            let end = rest.find(':')?;
+            let name = &rest[..end];
+            // A definition is `--name:` with nothing but the name between.
+            name[2..]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+                .then_some(name)
+        })
+        .collect();
+    let mut missing: Vec<&str> = INDEX_HTML
+        .match_indices("var(--")
+        .filter_map(|(at, _)| {
+            let rest = &INDEX_HTML[at + 4..];
+            let end = rest.find([')', ','])?;
+            Some(&rest[..end])
+        })
+        .filter(|name| !defined.contains(name))
+        .collect();
+    missing.sort_unstable();
+    missing.dedup();
+    assert!(
+        missing.is_empty(),
+        "these CSS variables are used but never defined, so every declaration \
+         using them is dropped: {missing:?}"
+    );
+}
+
+/// `table.grid td { color: var(--text) }` is specificity (0,1,2). A bare
+/// `.metric-negative` is (0,1,0) and loses, which rendered every P&L white.
+#[test]
+fn money_colours_out_specify_the_table_cell_colour() {
+    for class in ["metric-positive", "metric-negative"] {
+        let selector = format!("table.grid td.{class}");
+        assert!(
+            INDEX_HTML.contains(&selector),
+            "`.{class}` must also be written as `{selector}` or it loses the \
+             cascade to `table.grid td` and renders as plain text colour"
+        );
+    }
+}
+
+/// An absent attribute must be absent. `setAttribute(name, null)` writes the
+/// string "null", and for a boolean attribute that means permanently on --
+/// which silently ticked every checkbox and selected every dropdown option.
+#[test]
+fn the_element_helper_skips_null_attributes() {
+    assert!(
+        INDEX_HTML.contains("else if (v != null && v !== false) el.setAttribute(k, v);"),
+        "h() must skip null/false attributes rather than stringifying them"
+    );
 }

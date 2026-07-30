@@ -776,3 +776,53 @@ def test_attention_routing_uses_seen_state_and_container_rollup():
     assert backtest.AttentionState.FINISHED_UNSEEN.priority > (
         backtest.AttentionState.RUNNING.priority
     )
+
+
+def test_execute_persists_the_metadata_that_groups_runs_into_studies():
+    """`execute` flattens its config into `run`'s arguments before the config
+    is rebuilt and stored, so anything not threaded through is lost. Metadata
+    carries the study, trial, phase and parameters that the review UI groups
+    and pivots on; losing it collapsed every trial into one unnamed
+    experiment with no parameters."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        meta = {
+            "study_id": "fee-ladder",
+            "trial": 2,
+            "phase": "train",
+            "parameters": {"fee_rate": 0.07, "slippage_ticks": 1},
+            "needs_decision": True,
+        }
+        config = backtest.BacktestConfig(
+            run_id="meta-run",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+            execution=backtest.ExecutionConfig(fee_kind="prediction_market", fee_rate=0.07),
+            metadata=meta,
+        )
+        result = backtest.execute(db, config)
+
+        fork = db.fork(result.fork_name)
+        try:
+            stored = fork.read("bt_config").to_pandas()
+            recorded = json.loads(stored["config_json"].iloc[0])
+        finally:
+            fork.close()
+        assert recorded["metadata"] == meta
+
+        # The trial digest is a score identity, so annotating a run must not
+        # move it -- otherwise re-labelling a trial would defeat the ledger.
+        relabelled = replace(config, metadata={**meta, "phase": "holdout"})
+        assert relabelled.trial_digest == config.trial_digest
+        db.close()

@@ -51,6 +51,15 @@ const CSRF_HEADER: &str = "x-h5i-csrf";
 /// directory. Reports are written there by `python -m h5i_db.quant` or by a
 /// backtest run; the UI only serves them, and only ones already on disk.
 const REPORTS_SUBDIR: &str = "reports";
+/// Rows read from one trial's result tables when deriving analytics. A study
+/// fork holds one run, so this bounds a pathological run rather than a normal
+/// one; reaching it sets `truncated` on the payload instead of quietly
+/// shortening the curve.
+const TRIAL_SCAN_LIMIT: usize = 50_000;
+/// Points kept in a trial's equity sparkline.
+const SPARKLINE_POINTS: usize = 48;
+/// Nanoseconds in a Julian year, for annualising a Sharpe from sample spacing.
+const YEAR_NS: f64 = 365.25 * 24.0 * 3600.0 * 1e9;
 /// How often the `/api/events` stream re-derives the live frame. Frames are
 /// only *sent* when the frame actually changed, so an idle database costs a
 /// metadata poll per tick and no traffic.
@@ -596,6 +605,11 @@ async fn experiments(State(st): State<UiState>) -> ApiResult {
         } else {
             2
         };
+        let starting_cash = report
+            .as_ref()
+            .and_then(|row| row.get("starting_cash"))
+            .and_then(serde_json::Value::as_f64);
+        let analytics = trial_analytics(&fork, &tables, starting_cash).await?;
         grouped.entry(study_id).or_default().push(json!({
             "run_id": run_id,
             "fork": summary.name,
@@ -611,7 +625,41 @@ async fn experiments(State(st): State<UiState>) -> ApiResult {
             "trial_digest": config.as_ref()
                 .and_then(|row| row.get("trial_digest")).cloned(),
             "metrics": report,
+            "analytics": analytics,
         }));
+    }
+
+    // A trial digest identifies a computation, so a second fork carrying one
+    // is a reuse rather than a rerun. The earliest fork owns the result; the
+    // rest are marked so the leaderboard can say "served, not recomputed"
+    // instead of showing what looks like a duplicate run.
+    let mut first_seen: BTreeMap<String, i64> = BTreeMap::new();
+    for trials in grouped.values() {
+        for trial in trials {
+            let (Some(digest), Some(created)) = (
+                trial["trial_digest"].as_str(),
+                trial["created_at_ns"].as_i64(),
+            ) else {
+                continue;
+            };
+            first_seen
+                .entry(digest.to_string())
+                .and_modify(|earliest| *earliest = (*earliest).min(created))
+                .or_insert(created);
+        }
+    }
+    for trials in grouped.values_mut() {
+        for trial in trials {
+            let reused = trial["trial_digest"]
+                .as_str()
+                .zip(trial["created_at_ns"].as_i64())
+                .is_some_and(|(digest, created)| {
+                    first_seen
+                        .get(digest)
+                        .is_some_and(|earliest| created > *earliest)
+                });
+            trial["reused"] = json!(reused);
+        }
     }
 
     let mut experiments: Vec<serde_json::Value> = grouped
@@ -698,6 +746,242 @@ async fn scan_first_object(
             .map(|(name, value)| (name.to_string(), value))
             .collect(),
     ))
+}
+
+/// Read one of a trial's result tables, bounded.
+async fn scan_table(
+    fork: &Database,
+    table: &str,
+    limit: usize,
+) -> Result<Vec<arrow::array::RecordBatch>, Error> {
+    let (batches, _) = fork
+        .scan(
+            table,
+            ReadAt::Latest,
+            h5i_db_core::ScanOptions {
+                limit: Some(limit),
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(batches)
+}
+
+fn row_count(batches: &[arrow::array::RecordBatch]) -> usize {
+    batches
+        .iter()
+        .map(arrow::array::RecordBatch::num_rows)
+        .sum()
+}
+
+/// Every non-null `Float64` in a column, in row order.
+fn float_column(batches: &[arrow::array::RecordBatch], name: &str) -> Vec<Option<f64>> {
+    use arrow::array::{Array, Float64Array};
+    let mut out = Vec::new();
+    for batch in batches {
+        let Some(column) = batch.column_by_name(name) else {
+            continue;
+        };
+        let Some(values) = column.as_any().downcast_ref::<Float64Array>() else {
+            continue;
+        };
+        for index in 0..values.len() {
+            out.push((!values.is_null(index)).then(|| values.value(index)));
+        }
+    }
+    out
+}
+
+/// Every nanosecond timestamp in a column, in row order.
+fn timestamp_column(batches: &[arrow::array::RecordBatch], name: &str) -> Vec<i64> {
+    use arrow::array::{Array, TimestampNanosecondArray};
+    let mut out = Vec::new();
+    for batch in batches {
+        let Some(column) = batch.column_by_name(name) else {
+            continue;
+        };
+        let Some(values) = column.as_any().downcast_ref::<TimestampNanosecondArray>() else {
+            continue;
+        };
+        for index in 0..values.len() {
+            if !values.is_null(index) {
+                out.push(values.value(index));
+            }
+        }
+    }
+    out
+}
+
+/// How many rows carry a given value in a `Utf8` column.
+fn count_matching(batches: &[arrow::array::RecordBatch], name: &str, wanted: &str) -> usize {
+    use arrow::array::{Array, StringArray};
+    let mut hits = 0;
+    for batch in batches {
+        let Some(column) = batch.column_by_name(name) else {
+            continue;
+        };
+        let Some(values) = column.as_any().downcast_ref::<StringArray>() else {
+            continue;
+        };
+        for index in 0..values.len() {
+            if !values.is_null(index) && values.value(index) == wanted {
+                hits += 1;
+            }
+        }
+    }
+    hits
+}
+
+/// Largest peak-to-trough fall of an equity curve, as a negative fraction.
+fn max_drawdown(curve: &[f64]) -> Option<f64> {
+    let mut peak = f64::NEG_INFINITY;
+    let mut worst: Option<f64> = None;
+    for &point in curve {
+        if !point.is_finite() {
+            continue;
+        }
+        peak = peak.max(point);
+        if peak > 0.0 {
+            let fall = point / peak - 1.0;
+            worst = Some(worst.map_or(fall, |current: f64| current.min(fall)));
+        }
+    }
+    worst
+}
+
+/// Even-spaced sample of a curve, endpoints always kept, so the sparkline
+/// keeps the curve's shape without shipping every point.
+fn downsample(curve: &[f64], points: usize) -> Vec<f64> {
+    if curve.len() <= points || points < 2 {
+        return curve.to_vec();
+    }
+    let last = curve.len() - 1;
+    (0..points)
+        .map(|index| curve[index * last / (points - 1)])
+        .collect()
+}
+
+/// Per-trial numbers the leaderboard needs that `bt_run` does not carry:
+/// counts from the order and fill tables, and shape from the equity curve.
+///
+/// Everything here is derived, never assumed. A Sharpe needs a periodicity,
+/// so it is annualised from the median spacing of the equity samples and is
+/// `null` when that spacing is degenerate; the spacing travels with it so the
+/// UI can say what the number was annualised from. An unlabelled Sharpe is
+/// worse than no Sharpe.
+async fn trial_analytics(
+    fork: &Database,
+    tables: &[String],
+    starting_cash: Option<f64>,
+) -> Result<serde_json::Value, Error> {
+    let has = |name: &str| tables.iter().any(|table| table == name);
+    let mut out = serde_json::Map::new();
+    let mut truncated = false;
+
+    if has("bt_orders") {
+        let batches = scan_table(fork, "bt_orders", TRIAL_SCAN_LIMIT).await?;
+        let orders = row_count(&batches);
+        truncated |= orders >= TRIAL_SCAN_LIMIT;
+        out.insert("orders".into(), json!(orders));
+        out.insert(
+            "rejected".into(),
+            json!(count_matching(&batches, "status", "rejected")),
+        );
+    }
+    if has("bt_fills") {
+        let batches = scan_table(fork, "bt_fills", TRIAL_SCAN_LIMIT).await?;
+        let fills = row_count(&batches);
+        truncated |= fills >= TRIAL_SCAN_LIMIT;
+        out.insert("fills".into(), json!(fills));
+    }
+    if has("bt_positions") {
+        let batches = scan_table(fork, "bt_positions", TRIAL_SCAN_LIMIT).await?;
+        // A position's outcome is realised plus settled. `market_exit_pnl` is
+        // the counterfactual "worth at market" and is an alternative to
+        // settlement, not an addend -- adding it would double-count.
+        let realized = float_column(&batches, "realized_pnl");
+        let settled = float_column(&batches, "settlement_pnl");
+        let mut won = 0usize;
+        let mut scored = 0usize;
+        for (index, value) in realized.iter().enumerate() {
+            let Some(realized) = value else { continue };
+            let net = realized + settled.get(index).copied().flatten().unwrap_or(0.0);
+            scored += 1;
+            if net > 0.0 {
+                won += 1;
+            }
+        }
+        out.insert("instruments".into(), json!(scored));
+        if scored > 0 {
+            out.insert("instruments_won".into(), json!(won));
+            out.insert("win_rate".into(), json!(won as f64 / scored as f64));
+        }
+    }
+    if has("bt_equity") {
+        let batches = scan_table(fork, "bt_equity", TRIAL_SCAN_LIMIT).await?;
+        truncated |= row_count(&batches) >= TRIAL_SCAN_LIMIT;
+        let curve: Vec<f64> = float_column(&batches, "equity")
+            .into_iter()
+            .flatten()
+            .filter(|value| value.is_finite())
+            .collect();
+        let stamps = timestamp_column(&batches, "ts");
+        if !curve.is_empty() {
+            out.insert("equity_points".into(), json!(curve.len()));
+            out.insert("equity".into(), json!(downsample(&curve, SPARKLINE_POINTS)));
+            if let Some(drawdown) = max_drawdown(&curve) {
+                out.insert("max_drawdown".into(), json!(drawdown));
+            }
+            let base = starting_cash
+                .filter(|cash| *cash > 0.0)
+                .or(curve.first().copied());
+            if let (Some(base), Some(last)) = (base.filter(|value| *value > 0.0), curve.last()) {
+                out.insert("return_pct".into(), json!((last / base - 1.0) * 100.0));
+            }
+        }
+        // Per-sample simple returns, then an annualisation read off the
+        // samples' own median spacing rather than an assumed calendar.
+        let returns: Vec<f64> = curve
+            .windows(2)
+            .filter(|pair| pair[0] != 0.0 && pair[0].is_finite())
+            .map(|pair| pair[1] / pair[0] - 1.0)
+            .filter(|value| value.is_finite())
+            .collect();
+        let mut gaps: Vec<i64> = stamps.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        gaps.retain(|gap| *gap > 0);
+        gaps.sort_unstable();
+        let interval = gaps.get(gaps.len() / 2).copied();
+        if returns.len() >= 3 {
+            let mean = returns.iter().sum::<f64>() / returns.len() as f64;
+            let variance = returns
+                .iter()
+                .map(|value| (value - mean).powi(2))
+                .sum::<f64>()
+                / (returns.len() - 1) as f64;
+            let deviation = variance.sqrt();
+            if deviation > 0.0
+                && let Some(interval) = interval.filter(|gap| *gap > 0)
+            {
+                let per_year = YEAR_NS / interval as f64;
+                out.insert("sharpe".into(), json!(mean / deviation * per_year.sqrt()));
+                out.insert("sample_interval_ns".into(), json!(interval));
+                // Annualising a two-hour run to a year is arithmetic, not
+                // evidence. Ship what the ratio was computed from so the UI
+                // can mark a thin sample rather than quoting a
+                // confident-looking number nobody should trade on.
+                out.insert("sharpe_samples".into(), json!(returns.len()));
+                out.insert(
+                    "span_ns".into(),
+                    json!(interval.saturating_mul(returns.len() as i64)),
+                );
+            }
+        }
+    }
+    if truncated {
+        out.insert("truncated".into(), json!(true));
+        out.insert("scan_limit".into(), json!(TRIAL_SCAN_LIMIT));
+    }
+    Ok(serde_json::Value::Object(out))
 }
 
 /// Fork monitor projection: every fork with lineage and liveness numbers.
