@@ -5,27 +5,27 @@
 **A fast, agent-native time-series *d*atabase and *b*acktesting engine for quant research.
 Embedded, written in Rust.**
 
-- 🗄️ **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
+- **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
   on OHLCV+VWAP rollups over 20M rows.
-- 🗄️ **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
+- **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
   gapfill/resample, rolling windows, `vwap`, `ewma`.
-- 🗄️ **Point-in-time reads:** pin a decision time and the frame that reaches
+- **Point-in-time reads:** pin a decision time and the frame that reaches
   pandas cannot contain rows from after it. No lookahead bias, by construction.
-- 📈 **Efficient event-driven backtester:** 3.05M events/s through
+- **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- 📈 **Native support for popular markets:** Kalshi, Polymarket and Hyperliquid
+- **Native support for popular markets:** Kalshi, Polymarket and Hyperliquid
   payloads decode into one canonical set of tables, each with the venue's real fee
   curve and funding.
-- 📈 **Professional statistical analysis:** factor and performance metrics at
+- **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.
-- 🤖 **Fork a database in milliseconds:** forks share data instead of copying it. 
+- **Fork a database in milliseconds:** forks share data instead of copying it. 
   Agents can run wide trial-and-error loops (fork, mutate, evaluate, discard) 
   at almost zero cost.
-- 🤖 **Every write is an atomic, versioned commit:** any past version reads in
+- **Every write is an atomic, versioned commit:** any past version reads in
   O(1), so a bad ingest (human or agent) is one `restore` away from undone.
-- 🤖 **Safety policies for agent writes:** previewable mutations, policy gates,
+- **Safety policies for agent writes:** previewable mutations, policy gates,
   fail-closed constraints that block destructive operations, and an audit
   trail of what changed and why.
 
