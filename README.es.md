@@ -134,32 +134,6 @@ npx skills add h5i-dev/h5i-db        # instala la skill de h5i-db desde skills/h
 
 ---
 
-## Por qué
-
-| | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
-|---|---|---|---|---|---|---|
-| Versionado / viaje en el tiempo de cara al usuario | ✗¹ | ✗ | ✗ | ✗ | ✓ | ✓ (lecturas de versión en O(1)) |
-| SQL con joins/ventanas/CTE | ✓ | parcial | ✗ | ✗ | ✗ | ✓ (DataFusion) |
-| ASOF join | ✓ | ✓ | ✓ | ✗² | ✗ | ✓⁴ (sin ordenación sobre almacenamiento ordenado) |
-| Mutaciones previsualizables (plan/apply) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓, exigible por política |
-| Escritores concurrentes | MVCC | n/d | n/d | n/d | inseguro³ | CAS + conflicto explícito |
-| Escaneo de rango temporal estrecho, 20 M filas | 45,5 ms | 28,1 ms | 23,9 ms | 22,8 ms | **4,2 ms**⁵ | 10,0 ms |
-| OHLCV+VWAP de 1 min, 20 M filas | 7237 ms | 7309 ms | 5115 ms | 7121 ms | 3504 ms | **1558 ms** |
-| ASOF join por símbolo, 20 M filas | 11566 ms | **1485 ms** | 6624 ms | ✗² | 7008 ms | 1548 ms |
-
-¹ La sintaxis `AT (VERSION …)` existe, pero el almacenamiento nativo la rechaza.
-² Existe un `join_asof` experimental, pero es unas 1000× más lento: inviable a esta escala.
-³ Asume, y así lo documenta, un único escritor por símbolo.
-⁴ Sintaxis SQL nativa `ASOF JOIN … MATCH_CONDITION` y una función de tabla
-  `asof_join(...)` (en SQL y en Python).
-⁵ El índice temporal nativo de ArcticDB gana en lecturas puntuales estrechas
-  desde su propio almacén LMDB; la poda por manifiesto de h5i-db queda segunda
-  y supera a todos los motores generalistas.
-
-Metodología completa en [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
-
----
-
 ## Por qué es rápida
 
 - **Poda por manifiesto:** el manifiesto de cada versión guarda los rangos
@@ -176,139 +150,16 @@ Metodología completa en [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
   OHLCV/VWAP persisten estados combinables por segmento inmutable; volver a
   consultar los combina en milisegundos en lugar de recalcular, y solo escanea
   los segmentos recién añadidos.
+- **Replay perezoso:** el núcleo de backtest tira de los registros de uno en uno
+  en lugar de materializar una ventana, así que la memoria se mantiene plana tanto
+  si una ejecución reproduce un día como cien millones de eventos.
+- **Emparejamiento de órdenes indexado:** las órdenes en el libro se indexan por
+  mercado y precio, así que un nuevo print solo despierta las que realmente cruza,
+  en vez de repasar todas las abiertas.
 - **Sin heroicidades a bajo nivel:** los escaneos y agregaciones genéricos
   corren sobre DataFusion estándar y empatan con los mejores motores; h5i-db
   solo añade estructura allí donde la forma de las series temporales hace que
   esa estructura rinda.
-
----
-
-## Flujos de trabajo cuantitativos
-
-`h5i_db.quant` ejecuta el ciclo de investigación habitual contra el motor, y cada
-resultado registra la versión de los datos a partir de la que se calculó.
-
-```python
-from h5i_db import quant
-
-panel = quant.build_panel(db, "signals", "prices",
-                          periods=(1, 5, 10), quantiles=5,
-                          snapshot="2024-q1")     # el anclaje
-
-panel.ic()                  # IC de rango por fecha, una columna por horizonte
-panel.quantile_returns()    # retorno futuro medio por cubeta
-quant.factor_report(panel, path="factor.html")
-```
-
-Las estadísticas de factores coinciden con `alphalens-reloaded` y las de cartera
-con `empyrical-reloaded`, así que los números son los que ya conoces; lo nuevo es
-que son atribuibles. Un informe empieza por el SHA de la versión y el anclaje bajo
-el que corrió, una ejecución sin anclar lo dice, y `quant.verify()` se niega a
-certificar un resultado que no se puede reproducir.
-
-Tres cosas se derivan de la capa de almacenamiento, no de la estadística:
-
-- **`event_time_cutoff=`** restringe cada lectura a lo que era conocible en un
-  instante de decisión, así que un retorno futuro que necesitaría un precio
-  posterior se descarta en lugar de calcularse.
-- **`quant.sweep()`** recorre una malla de parámetros con un fork por prueba, así
-  que las pruebas no se contaminan entre sí y todas se comparan en una única
-  consulta entre forks.
-- **`quant.restatement_impact()`** repite un cálculo en dos versiones de los datos
-  e informa de qué movió la revisión de un proveedor.
-
-El sesgo de selección recibe estadísticas de primera clase y no una nota al pie,
-porque un número hallado buscando vale menos que el mismo número hallado de una vez:
-
-- **`quant.deflated_sharpe(returns, trials=N)`** descuenta un ratio de Sharpe por
-  el tamaño de la búsqueda que lo encontró, y `minimum_track_record_length()` dice
-  cuánto historial hace falta para que el ratio signifique algo.
-- **`quant.probability_of_backtest_overfitting(matrix)`** ejecuta validación
-  cruzada combinatoriamente simétrica: un PBO cercano a 0,5 significa que el
-  ganador dentro de muestra no llevaba información.
-- **`quant.purged_kfold()`**, **`combinatorial_purged()`** y **`walk_forward()`**
-  parten según horizontes y embargo, así que una etiqueta que depende de las diez
-  barras siguientes no puede filtrarse a su propio pliegue de entrenamiento. Los
-  horizontes nunca se adivinan: omitirlos significa que las etiquetas son
-  instantáneas.
-- **`quant.fit_impact()`** calibra un modelo de slippage a partir de ejecuciones
-  reales en lugar de suponer una constante de coste.
-
-### Backtesting
-
-`h5i-db-backtest` es un backtester orientado a eventos cuyo plano de datos es la
-base de datos. Una ejecución corre dentro de un fork y escribe allí `bt_orders`,
-`bt_fills`, `bt_positions` y `bt_equity`, así que los resultados se consultan con
-el mismo SQL que los datos de mercado y dos ejecuciones se comparan al nivel de
-ejecución con `fork_diff`.
-
-```python
-fork = db.fork("bt-momentum-001")
-quant.tearsheet(quant.from_levels(fork, "bt_equity"), path="run.html")
-```
-
-También es rápido, porque el replay lee registros ya decodificados directamente
-de la capa de almacenamiento en vez de cruzar una frontera de lenguaje por evento.
-Sobre una carga compartida (200 k actualizaciones del tope del libro, 200 órdenes
-de mercado, un instrumento, y cada adaptador verificando que las vio todas):
-
-| motor | frontera medida | mediana | rendimiento |
-|---|---|---:|---:|
-| **h5i-db** | registros decodificados por el núcleo de replay | **65,7 ms** | **3,05 M eventos/s** |
-| **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 331 ms | 605 k eventos/s |
-| NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
-| LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
-
-Incluso la frontera persistida, que hace estrictamente más trabajo que las otras
-dos, es 2,3× el motor en memoria de NautilusTrader y 6,1× el rendimiento medido
-de los callbacks de LEAN. Esto es una carga estrecha orientada a eventos, no una
-clasificación de sistemas de backtesting: las fronteras difieren y el benchmark
-comprueba recuentos de eventos y de órdenes, no equivalencia de PnL. Metodología,
-muestras en bruto y por qué cada frontera se trazó donde se trazó:
-[benchmarks/backtest_compare/RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
-
-Qué cubre la simulación en sí:
-
-- **Una ejecución es una función pura de (anclaje de datos, estrategia,
-  configuración).** Sin reloj de pared, sin aleatoriedad sin semilla, sin iterar
-  un mapa hash sin ordenar antes. `result.verify()` reejecuta una ejecución
-  guardada e informa de si se reprodujo.
-- **La anticipación se cierra por estructura, no por convención.** Los registros
-  llevan `ts_event` y `ts_init` y se reproducen en orden de `ts_init`, así que los
-  datos tardíos llegan tarde; una estrategia no tiene ninguna ruta hacia la
-  resolución de un mercado.
-- **La liquidación depende de la observabilidad.** Un replay de tres días sobre un
-  mercado de seis meses termina con la posición abierta y dice por qué, en lugar
-  de anotar un beneficio que nadie que operase esa ventana pudo cobrar. Los dos
-  números sobreviven: el PnL a mercado y el liquidado, con la diferencia
-  reportada como un ajuste explícito.
-- **Las operaciones societarias se aplican hacia delante, nunca hacia atrás.**
-  Nadie operó nunca al precio ajustado por split, así que splits, dividendos y
-  exclusiones de cotización llegan como eventos en el instante en que surten
-  efecto y actúan sobre posiciones, límites en el libro y valoraciones. Los
-  factores de ajuste son datos point-in-time; una operación aún no anunciada
-  simplemente no está en el flujo. Un ticker se resuelve a un instrumento sobre
-  intervalos semiabiertos, y una consulta ambigua se rechaza nombrando los
-  candidatos.
-- **Las cuentas son multidivisa,** con margen, liquidación forzosa, funding de
-  perpetuos, modificación de órdenes, prevención de auto-cruce y límites de riesgo
-  previos al envío.
-- **La comprobación previa rechaza lo que los datos no pueden sostener.**
-  `backtest.inspect()` informa de una fidelidad de replay, y pedir ejecuciones por
-  posición en cola a partir de instantáneas periódicas es un error, no un número
-  con buena pinta.
-- **Las estrategias vienen en tres formas:** tablas de señales o de comandos (la
-  estrategia como dato, sin código de callback ni frontera de lenguaje en el
-  bucle), callbacks `EventStrategy` de Python y el trait nativo `Strategy` de Rust.
-- **Cobertura de mercados:** los mercados de predicción son el primer venue, con
-  los mercados de N resultados como caso general, mediante cargadores de Kalshi,
-  Polymarket e Hyperliquid que producen todos las mismas tablas canónicas.
-  `KalshiFees` implementa la curva de comisiones cuadrática real, el redondeo a
-  centicentavos y el acumulador de redondeo por ejecución parcial, no
-  `nocional × tasa`.
-
-Consulta las páginas del manual sobre [cuantitativa](https://db.h5i.dev/manual/quant/)
-y [backtesting](https://db.h5i.dev/manual/backtest/).
 
 ---
 
@@ -342,6 +193,13 @@ un experimento cuestan un archivo pequeño y descartarlos sale tan barato como
 conservarlos. Después, `forks('trades')` lee esa tabla en todas las ramas a la
 vez con una columna `__fork`, de modo que comparar lo que produjo cada una no
 necesita ningún paso de exportación.
+
+- **Una ejecución de backtest es una rama, no un informe.** Cada ejecución corre
+dentro de su propio fork y escribe allí sus órdenes, ejecuciones, posiciones y curva
+de patrimonio como tablas normales. Así, dos ejecuciones se comparan al nivel de
+ejecución con `fork_diff`, un barrido entero se agrega en una sola consulta entre
+forks, la que merece la pena se `promote` y el resto se descarta. Nada que exportar,
+nada que limpiar a mano.
 
 - **Una prueba se identifica por su contenido, no por su nombre.** Un
 `BacktestConfig` anclado y declarativo se resume en un `trial_digest` sobre todas
@@ -383,6 +241,44 @@ escritor en cada paso.
 - **Operar en real:** el backtester nunca enruta una orden de verdad. No hay
   adaptadores de bróker, ni optimizador de cartera, ni API de gráficos; el límite
   es la simulación y la evaluación.
+
+---
+
+## Benchmark
+
+Metodología y resultados completos en [benchmarks/RESULTS.md](benchmarks/RESULTS.md).
+
+**Base de datos**
+
+| | DuckDB | Polars | pandas | PyArrow | ArcticDB | **h5i-db** |
+|---|---|---|---|---|---|---|
+| Versionado / viaje en el tiempo de cara al usuario | ✗¹ | ✗ | ✗ | ✗ | ✓ | ✓ (lecturas de versión en O(1)) |
+| SQL con joins/ventanas/CTE | ✓ | parcial | ✗ | ✗ | ✗ | ✓ (DataFusion) |
+| ASOF join | ✓ | ✓ | ✓ | ✗² | ✗ | ✓⁴ (sin ordenación sobre almacenamiento ordenado) |
+| Mutaciones previsualizables (plan/apply) | ✗ | ✗ | ✗ | ✗ | ✗ | ✓, exigible por política |
+| Escritores concurrentes | MVCC | n/d | n/d | n/d | inseguro³ | CAS + conflicto explícito |
+| Escaneo de rango temporal estrecho, 20 M filas | 45,5 ms | 28,1 ms | 23,9 ms | 22,8 ms | **4,2 ms**⁵ | 10,0 ms |
+| OHLCV+VWAP de 1 min, 20 M filas | 7237 ms | 7309 ms | 5115 ms | 7121 ms | 3504 ms | **1558 ms** |
+| ASOF join por símbolo, 20 M filas | 11566 ms | **1485 ms** | 6624 ms | ✗² | 7008 ms | 1548 ms |
+
+
+¹ La sintaxis `AT (VERSION …)` existe, pero el almacenamiento nativo la rechaza.
+² Existe un `join_asof` experimental, pero es unas 1000× más lento: inviable a esta escala.
+³ Asume, y así lo documenta, un único escritor por símbolo.
+⁴ Sintaxis SQL nativa `ASOF JOIN … MATCH_CONDITION` y una función de tabla
+  `asof_join(...)` (en SQL y en Python).
+⁵ El índice temporal nativo de ArcticDB gana en lecturas puntuales estrechas
+  desde su propio almacén LMDB; la poda por manifiesto de h5i-db queda segunda
+  y supera a todos los motores generalistas.
+
+**Backtesting**
+
+| motor | frontera medida | mediana | rendimiento |
+|---|---|---:|---:|
+| **h5i-db** | registros decodificados por el núcleo de replay | **65,7 ms** | **3,05 M eventos/s** |
+| **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 331 ms | 605 k eventos/s |
+| NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
+| LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
 
 ---
 
