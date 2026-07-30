@@ -521,13 +521,110 @@ mod tests {
     }
 
     #[test]
-    fn two_winners_is_an_error_not_a_coin_flip() {
+    fn every_token_winning_is_a_refund_not_a_coin_flip() {
+        // This is how a voided market reaches us: UMA could not answer, the
+        // venue refunds a complete set at cost, and both sides pay half.
+        // Picking one as the winner would be wrong by the whole notional on
+        // each side, in opposite directions.
         let body = r#"{
             "condition_id":"0xbad","closed":true,
             "tokens":[{"token_id":"1","outcome":"A","winner":true},
                       {"token_id":"2","outcome":"B","winner":true}]
         }"#;
+        let resolution = resolution_from_market(body, UnixNanos::new(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolution.winner(), None);
+        assert_eq!(
+            resolution.settlement_price(OutcomeId(0)),
+            Price::from_f64(0.5).unwrap()
+        );
+    }
+
+    #[test]
+    fn the_fifty_fifty_flag_is_honoured_on_its_own() {
+        let body = r#"{
+            "condition_id":"0xbad","closed":true,"is_50_50_outcome":true,
+            "tokens":[{"token_id":"1","outcome":"A","winner":true},
+                      {"token_id":"2","outcome":"B","winner":false}]
+        }"#;
+        let resolution = resolution_from_market(body, UnixNanos::new(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolution.winner(), None);
+    }
+
+    #[test]
+    fn some_but_not_all_winners_is_still_an_error() {
+        // Neither a winner nor a refund. Choosing between them would be a
+        // guess dressed as a result.
+        let body = r#"{
+            "condition_id":"0xbad","closed":true,
+            "tokens":[{"token_id":"1","outcome":"A","winner":true},
+                      {"token_id":"2","outcome":"B","winner":true},
+                      {"token_id":"3","outcome":"C","winner":false}]
+        }"#;
         assert!(resolution_from_market(body, UnixNanos::new(1)).is_err());
+    }
+
+    #[test]
+    fn an_explicit_payout_vector_settles_the_question() {
+        // Gamma reports these as shares of the pot, so a scalar market that
+        // paid 70/30 arrives as [7, 3] rather than [0.7, 0.3].
+        let body = r#"{
+            "condition_id":"0xscalar","closed":true,"payouts":["7","3"],
+            "tokens":[{"token_id":"1","outcome":"A"},
+                      {"token_id":"2","outcome":"B"}]
+        }"#;
+        let resolution = resolution_from_market(body, UnixNanos::new(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            resolution.settlement_price(OutcomeId(0)),
+            Price::from_f64(0.7).unwrap()
+        );
+        assert_eq!(
+            resolution.settlement_price(OutcomeId(1)),
+            Price::from_f64(0.3).unwrap()
+        );
+        assert_eq!(resolution.winner(), None);
+    }
+
+    #[test]
+    fn a_payout_vector_of_the_wrong_length_is_refused() {
+        let body = r#"{
+            "condition_id":"0xbad","closed":true,"payouts":["1"],
+            "tokens":[{"token_id":"1","outcome":"A"},
+                      {"token_id":"2","outcome":"B"}]
+        }"#;
+        assert!(resolution_from_market(body, UnixNanos::new(1)).is_err());
+    }
+
+    #[test]
+    fn a_negative_risk_market_is_recorded_as_one() {
+        // Absent means no: a market wrongly believed to trade as a set is
+        // one a strategy could mint cash out of.
+        let plain = r#"{
+            "condition_id":"0xabc",
+            "tokens":[{"token_id":"111","outcome":"Yes"},
+                      {"token_id":"222","outcome":"No"}]
+        }"#;
+        assert!(!instrument_from_market(plain).unwrap().0.neg_risk);
+
+        for body in [
+            r#"{"condition_id":"0xabc","neg_risk":true,
+                "tokens":[{"token_id":"111","outcome":"A"},
+                          {"token_id":"222","outcome":"B"},
+                          {"token_id":"333","outcome":"C"}]}"#,
+            r#"{"condition_id":"0xabc","negRisk":true,
+                "tokens":[{"token_id":"111","outcome":"A"},
+                          {"token_id":"222","outcome":"B"},
+                          {"token_id":"333","outcome":"C"}]}"#,
+        ] {
+            let (instrument, _) = instrument_from_market(body).unwrap();
+            assert!(instrument.neg_risk, "{body}");
+            assert!(instrument.supports_complete_set());
+        }
     }
 
     #[test]

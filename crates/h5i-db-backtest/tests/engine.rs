@@ -1426,6 +1426,11 @@ fn an_amendment_below_the_filled_quantity_is_refused() {
 #[test]
 fn an_order_that_would_cross_this_accounts_own_book_is_refused() {
     // A wash trade: rest a bid, then send a marketable offer into it.
+    //
+    // The account buys the inventory first so that the offer is one it
+    // could legitimately make. Without that it is *also* a naked short,
+    // which is refused earlier and would leave this test passing for the
+    // wrong reason.
     struct SelfCross {
         step: u32,
     }
@@ -1433,6 +1438,13 @@ fn an_order_that_would_cross_this_accounts_own_book_is_refused() {
         fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
             self.step += 1;
             if self.step == 1 {
+                ctx.submit(OrderRequest::market(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    qty(10.0),
+                ));
+            } else if self.step == 2 {
                 ctx.submit(OrderRequest::limit(
                     instrument_id(),
                     OutcomeId::FIRST,
