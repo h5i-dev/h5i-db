@@ -37,6 +37,19 @@ from .overfitting import (
     minimum_track_record_length,
     probability_of_backtest_overfitting,
 )
+from .basket import (
+    PANELS,
+    PORTFOLIO_PANELS,
+    BasketReport,
+    basket_payload,
+    basket_report,
+)
+from .calibration import (
+    BrierAdvantage,
+    brier_advantage,
+    brier_decomposition,
+    reliability_curve,
+)
 from .report import factor_report, report_payload, tearsheet
 from .validation import Split, combinatorial_purged, purged_kfold, walk_forward
 from .sweep import (
@@ -66,6 +79,17 @@ __all__ = [
     "verify",
     "VerificationError",
     "restatement_impact",
+    "basket_payload",
+    "basket_report",
+    "BasketReport",
+    "PANELS",
+    "PORTFOLIO_PANELS",
+    "brier_advantage",
+    "brier_decomposition",
+    "reliability_curve",
+    "BrierAdvantage",
+    "calibration",
+    "basket",
     "report",
     "factor_report",
     "tearsheet",

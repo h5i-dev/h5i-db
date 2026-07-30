@@ -1,6 +1,6 @@
 ---
 name: h5i-db
-description: Use when working with an h5i-db database — an embedded, versioned time-series database for quant research, driven by the `h5i-db` CLI or the `h5i_db` Python package. Covers creating a database and loading Parquet or CSV tick data, orienting in an existing one, querying it (SQL, ASOF joins, OHLCV/VWAP rollups, time travel) under a context budget, running look-ahead-free backtests, and previewing destructive changes before they land.
+description: Use when working with an h5i-db database — an embedded, versioned time-series database and event-driven backtesting engine for quant research, driven by the `h5i-db` CLI or the `h5i_db` Python package. Covers creating a database and loading Parquet or CSV tick data, orienting in an existing one, querying it (SQL, ASOF joins, OHLCV/VWAP rollups, time travel) under a context budget, look-ahead-free reads, running event-driven backtests with settlement and fee models, scoring them (factor stats, tearsheets, deflated Sharpe), importing vendor market-data archives, and previewing destructive changes before they land.
 ---
 
 # Driving h5i-db
@@ -82,10 +82,10 @@ is expressible directly; `forks('t')` queries a table across every fork at
 once with a `__fork` column; and `fork create --count N` makes a fanout in one
 command. → [references/forks.md](references/forks.md)
 
-## Backtesting: let the database withhold the future
+## Look-ahead-free reads: let the database withhold the future
 
 Do not filter the future out in SQL — you will forget once, and a leaked
-backtest looks like a good one. Pin the session instead, so no query in it can
+result looks like a good one. Pin the session instead, so no query in it can
 reach past the decision instant:
 
 ```bash
@@ -98,6 +98,51 @@ h5i-db query market.db "<sql>" \
 are visible — so a restatement that arrived later stays invisible too.
 → [references/research-mode.md](references/research-mode.md)
 
+## Simulating a strategy
+
+The backtester is a separate layer with no CLI verb: drive it from Python, or
+from `python -m h5i_db.backtest` with a JSON config.
+
+```python
+from h5i_db import backtest
+
+config = backtest.BacktestConfig(
+    run_id="momentum-001",
+    data=backtest.DataConfig(signals="signals", snapshot="2024-q1"),
+    portfolio=backtest.PortfolioConfig(starting_cash=100_000.0),
+)
+backtest.inspect(db, config).raise_for_errors()   # refuse unsupported claims
+result = backtest.execute(db, config)             # runs inside its own fork
+```
+
+Three things decide whether the number it returns means anything, and each has a
+way of going wrong quietly:
+
+- **Stamp a signal a microsecond after the quote it was decided from.** An order
+  sharing a timestamp with a book event may match the previous snapshot.
+- **Read `settlement_pnl` beside `realized_pnl`.** A book held to resolution
+  reads zero in the second, and settlement only applies when the replay reached
+  the instant the result became observable.
+- **Search honestly.** `WalkForward` plus `TopK` keeps a holdout a holdout, and
+  `quant.deflated_sharpe` discounts whatever the search picked.
+
+→ [references/backtest.md](references/backtest.md) ·
+[references/quant.md](references/quant.md)
+
+## Loading somebody else's market data
+
+`h5i_db.venues` normalises vendor Parquet already on disk into the canonical
+tables. It does not fetch; a vendor dialect is an `ArchiveLayout` literal rather
+than a code path, re-running an import replays instead of duplicating, and
+requested versus loaded coverage comes back as separate facts.
+
+```bash
+python -m h5i_db.venues markets market.db specs.json
+python -m h5i_db.venues ingest  market.db specs.json --root /mnt/mirror --min-coverage 0.95
+```
+
+→ [references/data-onramp.md](references/data-onramp.md)
+
 ## Reference
 
 [Setup and guardrails](references/setup.md) · [SQL extensions](references/sql.md)
@@ -105,7 +150,10 @@ are visible — so a restatement that arrived later stays invisible too.
 [mutations and safety net](references/mutations.md) ·
 [research mode and leakage](references/research-mode.md) ·
 [forks and parallel work](references/forks.md) ·
-[Python](references/python.md)
+[Python](references/python.md) ·
+[backtesting](references/backtest.md) (configs, preflight, settlement, studies) ·
+[quant analytics](references/quant.md) (factors, tearsheets, deflated Sharpe, PBO) ·
+[vendor data on-ramp](references/data-onramp.md) (archives, layouts, ledger replay)
 
 Everything needed for the work above is in this directory and in
 `h5i-db <command> --help`. If you have network access and want to go deeper,

@@ -52,6 +52,17 @@ final one. Applying half a snapshot would leave a crossed or hollow book, so
 a reader that meets a truncated one refuses it instead of reconstructing
 something plausible from the fragment.
 
+One event is one book: every row under an `event_index` must carry the same
+`instrument_id` and `outcome`. A feed that puts two outcomes under one event is
+refused for the same reason a truncated snapshot is. The alternative is worse
+than an error, because the levels would merge into a single book whose best ask
+belongs to the other side of the market, and a buy would fill against it
+without complaint.
+
+The index values themselves only have to *change* between events. They are not
+required to increase with `ts_init`, since grouping follows row order and ends
+at `is_last`, so a recorder that writes instrument-major is fine.
+
 ## A run
 
 ```rust
@@ -229,6 +240,39 @@ Two orderings inside the loop are load-bearing:
   produced them, which removes reentrancy and makes latency a property of
   the queue rather than of every call site.
 
+### Stamp a signal after the quote it came from
+
+Market data is merged on the total order `(ts_init, stream priority, stream,
+arrival)`, and the priorities are explicit: gaps before corporate actions
+before snapshots before deltas before prints. Signals are not part of that
+order. An intent is released on the first record whose timestamp reaches it,
+which puts one detail in the analyst's hands.
+
+A signal timestamped *exactly* on a book instant is released while the venue is
+partway through that instant. Whether its own instrument has been updated yet
+depends on where that instrument falls among the records sharing the timestamp,
+so with one market the signal sees the new book and with sixty it may match
+against the previous one. The replay stays deterministic, because the merge
+order is total and the same data always produces the same answer; what varies
+is which book a same-timestamp signal meets, and that varies with the shape of
+the panel rather than with anything the strategy did.
+
+Stamp the intent strictly after the quote it was decided from and the question
+disappears:
+
+```python
+signals = backtest.signal_table([
+    {"ts": decision_ts + datetime.timedelta(microseconds=1),
+     "instrument_id": market, "outcome": 0, "side": "buy", "quantity": 20.0},
+])
+```
+
+The order then fills at exactly the bid or ask carried by the decision
+snapshot, stamped at the next event. That is also the honest reading of a
+backtest: you transacted at a price that was knowable when you chose to trade.
+Tier 2 strategies are unaffected, because a callback is already invoked after
+the venue has processed the record it is reacting to.
+
 ## Agent trial ledger
 
 `backtest.execute(db, config)` treats every pinned, declarative
@@ -264,3 +308,169 @@ the browser. The leaderboard remains a separate tab.
 No live order routing, no brokerage adapters, no portfolio optimisation, no
 plotting API. The boundary is simulation and evaluation; see
 `ROADMAP_QUANT.md` §11 for the full list and the reasoning.
+
+## Bringing your own data
+
+`h5i_db.venues` turns vendor archives already on disk into the canonical
+tables. It does not fetch: downloading belongs in a script, where credentials
+and rate limits belong, and this layer is the part that must be testable
+offline and byte-reproducible.
+
+```python
+from h5i_db import venues
+
+specs = venues.polymarket_markets_from_json(payloads)   # slug -> outcomes, tokens
+venues.write_markets(db, specs)                         # instruments, resolutions
+report = venues.ingest_archive(                         # book_deltas, trades
+    db,
+    files=venues.discover("/mnt/pmxt"),
+    markets=specs,
+    layout=venues.PMXT_LAYOUT,
+    window=(start_ns, end_ns),
+)
+report.coverage, report.gaps, report.replayed
+```
+
+The same three steps run from a shell, with market definitions travelling as a
+JSON file rather than as flags:
+
+```bash
+python -m h5i_db.venues markets market.db specs.json
+python -m h5i_db.venues ingest  market.db specs.json --root /mnt/pmxt \
+    --start-ns 1777000000000000000 --end-ns 1777003600000000000 --min-coverage 0.95
+python -m h5i_db.venues inspect market.db
+```
+
+Four properties are worth knowing before pointing it at a mirror.
+
+**Re-running is a replay, not a duplicate.** Every commit is keyed by the hash
+of the normalised rows it carries, so identical inputs produce identical keys
+and h5i-db recognises them. An interrupted backfill is safe to restart, and two
+sources serving the same hour converge on one commit rather than two.
+
+**Requested and loaded windows stay separate facts.** `report.coverage` is the
+loaded span over the requested one, and it is `None` when no window was asked
+for, because a ratio against an unbounded request would be meaningless.
+`--min-coverage` exits non-zero rather than letting a short load pass quietly.
+
+**A vendor dialect is data, not a code path.** `ArchiveLayout` carries the
+column names, event vocabulary, timestamp unit and level shape.
+`PMXT_LAYOUT` and `TELONEX_LAYOUT` are literals of that type, and a third
+vendor is a new literal. An event type present in the file but absent from the
+layout is counted and reported, never guessed at.
+
+**Outcome order is positional and refused when ambiguous.** A market spec pairs
+`outcome_labels` with `tokens` by index, a token claimed by two markets is an
+error, and a resolution with no observability instant is an error too, since
+settlement is gated on when the result became knowable.
+
+## Searching without fooling yourself
+
+`backtest.study` runs a grid by default. Three additions make the search
+shape explicit when it matters.
+
+```python
+from h5i_db import backtest
+
+result = backtest.study(
+    db,
+    study_id="threshold",
+    base=config,
+    parameters={"execution.fee_rate": backtest.Range(0.0, 0.08)},
+    search=backtest.RandomSearch(trials=40, seed=7),
+    validation=backtest.WalkForward.of(fold_one, fold_two, fold_three),
+    selection=backtest.TopK(k=5, metric="final_cash"),
+)
+result.ranked()          # holdout median, train score as the tie-break
+result.selected          # only the trials that reached the holdout
+```
+
+`WalkForward` scores a candidate on several folds and reports the median, so one
+lucky window cannot carry it; per-fold columns are `fold{i}_train_*` and
+`fold{i}_holdout_*`, with `train_median_*` and `holdout_median_*` alongside. A
+single `ValidationWindows` keeps the flat `train_*` / `holdout_*` names.
+
+`TopK` makes the holdout a second stage: candidates are ranked on train, only
+`k` are run out of sample, and nothing else ever touches it. A holdout every
+candidate touched is a second training set with a different name.
+
+`RandomSearch` beats a grid when the space is wide and most axes do not matter.
+`TPESearch` needs the optional `optuna` extra and runs sequentially, because
+each point is proposed from the results so far. Duplicate draws are kept rather
+than resampled: dropping them would change the trial count that the
+deflated-Sharpe correction in `quant.deflated_sharpe` depends on.
+
+Subprocess isolation per trial is deliberately absent. A study refuses callback
+strategies, so a trial is a declarative config that cannot crash the driver;
+the isolation the reference stacks need is buying safety this API already has.
+
+## Comparing many runs at once
+
+A sweep produces one fork per trial, and opening twenty tearsheets is not
+comparing them. `quant.basket_report` assembles one document from stored tables
+only, with no re-simulation:
+
+```python
+from h5i_db import quant
+
+quant.basket_report(
+    db,
+    {"th50": result_a, "th60": result_b},
+    path="basket.html",
+    panels=quant.PORTFOLIO_PANELS + ("equity", "price"),
+    snapshot="panel-v1",
+)
+```
+
+Portfolio panels (`total_equity`, `total_drawdown`, `total_rolling_sharpe`,
+`total_cash_equity`, `periodic_pnl`, `leaderboard`) are safe at any size.
+Per-run panels draw one series each and are dropped, with a reason recorded in
+`report.skipped`, once the basket exceeds `per_run_limit`: silently thinning
+lines to fit would misrepresent the basket. The `price` panel puts fill markers
+on the book the fills actually met, read at the same pin the runs used.
+
+The charts are inline SVG with no external requests, because a report that needs
+a plotting library installed to be *read* is not a report.
+
+`brier_advantage` is the one panel that needs an input the report cannot
+derive: your strategy's own probability. `market_brier - strategy_brier` says
+whether the forecast beat the price it paid, which is a comparison an equity
+curve cannot make and which cannot be inflated by sizing.
+
+## A pack of strategies, as data
+
+`backtest.strategies` ships the standard rules as signal *generators*: each
+takes a quote panel and returns a signals table, so the trial ledger can
+identify it and `verify()` can reproduce it.
+
+```python
+panel = backtest.quote_panel(db, snapshot="panel-v1")
+plan = backtest.strategies.late_favorite_hold(panel, min_price=0.75)
+db.append("signals", plan.signals)
+```
+
+`quote_panel` stops at `expiration_ns`, so no rule can read the resolution jump
+as a price move. Every generator stamps its orders a microsecond after the quote
+they were decided from. `STRATEGIES` maps name to generator for sweeping the
+pack itself; `pair_arbitrage` is outside it because it reads both outcomes from
+the database rather than one side's panel.
+
+## Replaying an account's ledger
+
+The strictest realism question available: given the trades an account actually
+took, does the engine reproduce the same portfolio? Usually not, and that is the
+point. `venues.commands_from_ledger` compiles a ledger into *intent* rather than
+into fills, so the historical book accepts or refuses each order on its merits:
+limit orders at the ledger's own price, immediate-or-cancel, and sells as
+`reduce_only` so a replay cannot invent short exposure the ledger never showed.
+
+```python
+commands = venues.commands_from_ledger(rows, specs)
+db.append("commands", commands)
+result = backtest.execute(db, config)          # data=DataConfig(commands="commands", ...)
+venues.compare_to_ledger(result, typed_rows)   # per-market reconciliation
+```
+
+A forced-fill simulator would reproduce the ledger by construction and test
+nothing. The comparison reports per-market shortfalls rather than one
+pass/fail, because *where* the book refused is the finding.

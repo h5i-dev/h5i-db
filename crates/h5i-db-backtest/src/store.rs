@@ -489,6 +489,21 @@ pub async fn read_book_events(
                             entry.0
                         )));
                     }
+                    // The instrument and outcome come from the event's first
+                    // row, so rows that disagree would be folded into that
+                    // book silently: a YES book carrying NO levels, whose
+                    // best ask belongs to the other outcome. One event is one
+                    // book, and a row saying otherwise is a broken feed.
+                    if entry.2 != id || entry.3 != out_id {
+                        return Err(BacktestError::invalid(format!(
+                            "snapshot event {index} mixes {}/{} with {}/{}; \
+                             one event describes one outcome of one instrument",
+                            entry.2.as_str(),
+                            entry.3.0,
+                            id.as_str(),
+                            out_id.0
+                        )));
+                    }
                     if let (Some(side_text), Some(p), Some(q)) =
                         (opt_str(side, row), opt_f64(price, row), opt_f64(size, row))
                     {

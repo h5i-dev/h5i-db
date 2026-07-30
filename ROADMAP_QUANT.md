@@ -1,9 +1,12 @@
 # Quant Workflow Layer — Product Roadmap
 
-Status: v2, 2026-07-29 (branch `qpian`). v1 (same date) scoped the layer to
-analytics only and listed backtesting as a non-goal; v2 adds Part B, a
-production-grade backtest program, and supersedes that non-goal (revised
-boundary in §11). The engine-side scope rule in `ROADMAP.md` Part VII is
+Status: v2.1, 2026-07-30. v1 (2026-07-29) scoped the layer to
+analytics only and listed backtesting as a non-goal; v2 (same date,
+branch `qpian`) added Part B, a production-grade backtest program, and
+superseded that non-goal (revised boundary in §11); v2.1 adds Part D
+(§8b), a migration gap analysis against the Nautilus-based reference
+stack, written after the prediction-market cookbook work exercised the
+whole surface. The engine-side scope rule in `ROADMAP.md` Part VII is
 narrowed, not violated: the *engine crates* still borrow no backtester
 mechanisms; the backtester is a separate layer crate that consumes the
 engine (P6).
@@ -800,6 +803,172 @@ only, so trial-fork GC must go through roots that sweep respects.
   (mirroring herdr's own tests).
 - **Retention:** GC over a closed experiment never collects promoted,
   top-k, or lineage-referenced forks (property-tested).
+
+---
+
+## 8b. Part D — Migration from Nautilus-based stacks
+
+Gap analysis against the studied reference stack
+(`prediction-market-backtesting`, NautilusTrader + custom Polymarket
+adapters), written 2026-07-30 from its docs and runner plumbing
+(`docs/backtests.md`, `data-loading.md`, `data-vendors.md`,
+`research.md`, `plotting.md`, `account-ledger-replay.md`,
+`strategies/core.py`, `_optimizer.py`). The question it answers: what
+must exist before that stack's users can switch to h5i-db and get
+*better* usability, not a lateral move plus a rewrite. Ordered by what
+actually blocks a switch.
+
+### 8b.1 D0 — the data on-ramp (decides everything else)
+
+The reference stack's biggest asset is not the engine, it is the vendor
+pipeline: PMXT hourly raw archives and Telonex API-day files, layered
+source resolution (`local:` mirror → `archive:` host → `api:`),
+incremental downloaders that skip existing hours, filtered per-market
+caches, and staged loading that scans one raw hour once for many
+markets. Its users already own local mirrors in these formats. h5i-db's
+venue adapters deliberately parse and do not fetch, so a switching user
+today writes their own downloader *and* their own normalization driver.
+Two components close that:
+
+- **PMXT/Telonex → canonical-tables importer.** The parsing exists in
+  `h5i-db-venues::polymarket`; what is missing is the driver: walk a
+  raw-hour directory, decompress, filter by market/token, batch-append
+  into `book_deltas`/`trades` with `--idempotency-key` per source file.
+  Incremental re-ingest then falls out of a primitive we already have
+  and is stronger than the reference stack's cache-invalidation story
+  (a re-run replays instead of double-appending, and the commit note
+  records source, window, counts — the §8.6 manifest requirement).
+  Surface: `venues.ingest_pmxt(db, dir, markets=[...])` in Python and an
+  `h5i-db ingest-pmxt` verb; same pair for Telonex day files.
+- **Market metadata resolution.** Slug → token map →
+  `instruments` + `resolutions` rows. `instrument_from_market` and
+  `resolution_from_market` parsers exist; missing is the driver that
+  takes a list of slugs and builds the tables (their Gamma/CLOB API
+  step). Without it, users hand-author `instruments`, which is where
+  outcome mix-ups start.
+
+Consistent with §8.6: fetchers stay documented scripts/cookbook recipes
+until a second venue proves the abstraction; the *importers* (local
+files → tables) are core surface.
+
+**The claim this unlocks:** PMXT carries full L2 deltas, not periodic
+snapshots. Queue-position fills exist in the kernel and preflight
+currently refuses them on snapshot-only data — correctly. A delta
+importer is the only missing link between h5i-db and an *honest* version
+of the queue-aware replay that is Nautilus's headline feature.
+
+### 8b.2 D1 — research parity
+
+- **`backtest.study` upgrades.** The reference optimizer does random
+  sampling and Optuna TPE over a parameter space, *multiple*
+  walk-forward windows scored by median, top-k holdout reruns with train
+  score as tie-breaker, and one subprocess per trial so a crashing
+  strategy cannot poison the driver. The scientifically load-bearing
+  parts are the multi-window walk-forward and the top-k holdout policy;
+  both fit `study()`'s existing shape (`ValidationWindows` becomes a
+  sequence; a `rerun_top_k` result policy). TPE lands as an optional
+  `optuna` extra, not a dependency. Subprocess isolation matters only
+  for Python-callback strategies; declarative configs cannot crash the
+  driver.
+- **Basket/portfolio reporting.** Their single summary HTML has panels
+  the tearsheet lacks: basket `total_equity`, per-market equity and
+  allocation, `yes_price` with fill markers, drawdown, rolling Sharpe,
+  monthly returns, and `brier_advantage` — a prediction-market-specific
+  "did you beat the market's own probability" panel. All ingredients
+  exist (cross-fork queries, `bt_fills`, `bt_equity`, quant stats);
+  missing is a report builder that takes N run forks and emits one
+  comparative HTML. This is the most *visible* usability gap after
+  data. `brier_advantage` belongs in `quant.perf` regardless, next to
+  the calibration work the cookbook already demonstrates.
+
+### 8b.3 D2 — ergonomics
+
+- **A strategy pack.** The reference ships ~12 importable strategies
+  (EMA crossover, RSI reversion, microprice imbalance, pair arbitrage,
+  late-favorite hold, panic fade, …). Signals-as-data plus
+  `EventStrategy` is the architecturally better answer, but an empty
+  toolbox reads as "you write everything." Ship the standard set as
+  signal *generators* (`h5i_db.backtest.strategies` or a cookbook
+  section): each returns a signals/commands table from a panel, so the
+  replay path stays declarative and the trial ledger keeps its identity
+  guarantees.
+- **Account ledger replay.** Their strictest realism experiment replays
+  a public account's filled ledger as reduce-only limit-IOC orders and
+  lets the historical book accept or reject each one. This maps directly
+  onto the commands table, and `verify()` plus pinned data make the
+  comparison auditable in a way theirs is not. Missing: a loader from
+  the Polymarket data-API trade rows to a commands table, and a
+  replayed-vs-actual comparison report.
+
+### 8b.4 What stays out
+
+Their live/sandbox path remains out of scope per §11: the pitch to
+switchers is research and backtesting; live wiring stays where it is.
+No commitment to their operator menu (`make`-driven runner discovery)
+either — the CLI and `python -m h5i_db.backtest` cover it.
+
+### 8b.5 Implementation status (2026-07-30)
+
+Built and tested. What landed, and where it diverged from the plan above:
+
+| Item | State | Where |
+|---|---|---|
+| D0 archive importer | done | `h5i_db.venues.ingest_archive`, `ArchiveLayout` |
+| D0 metadata resolution | done | `venues.polymarket_markets_from_json`, `write_markets` |
+| D0 CLI | done | `python -m h5i_db.venues markets\|ingest\|inspect` |
+| D1 walk-forward + top-k | done | `WalkForward`, `TopK` in `backtest_study` |
+| D1 random + TPE search | done | `RandomSearch`, `TPESearch`, `Range` |
+| D1 basket report | done | `quant.basket_report`, `quant.PANELS` |
+| D1 brier advantage | done | `quant.calibration` |
+| D2 strategy pack | done | `backtest.strategies`, 12 generators |
+| D2 ledger replay | done | `venues.commands_from_ledger`, `compare_to_ledger` |
+
+Three deviations, each recorded because the plan above asserted otherwise:
+
+- **The importer is Python, not Rust.** §8b.1 said the parsing already existed
+  in `h5i-db-venues::polymarket` and only a driver was missing. That is true of
+  the *websocket JSON* path and false of the archive path: both vendors ship
+  Parquet, so archive normalisation was new work either way, and a columnar
+  pyarrow transform is the right tool for it. The Rust JSON parsers keep the
+  live/websocket path.
+- **The CLI is `python -m h5i_db.venues`, not an `h5i-db ingest-pmxt` verb**,
+  following from the same decision and matching `python -m h5i_db.backtest`.
+- **No per-trial subprocess isolation.** A study already refuses callback
+  strategies, so a trial is a declarative config that cannot crash the driver.
+  The reference stack needs the isolation because its trials run arbitrary
+  Python; buying it here would cost process overhead for a hazard the API has
+  already excluded.
+
+One design choice worth carrying forward: `ArchiveLayout` makes a vendor dialect
+data rather than a code path, so a third vendor is a literal (column names,
+event vocabulary, timestamp unit, level shape) instead of a module. The test
+suite exercises that by ingesting a synthetic third dialect with no new code.
+
+### 8b.5 Sequencing and acceptance
+
+Order: importer → metadata resolution → basket report → study upgrades →
+strategy pack → ledger replay. D0 first because every h5i-db advantage
+(pinned versions, trial dedup, settlement gating, speed, SQL over
+results) is invisible to these users until their existing mirrors load
+in one command.
+
+- **Importer:** a PMXT raw-hour mirror ingests to canonical tables in
+  one command; re-running the command appends zero rows; the commit
+  notes record file, window, and counts; a book gap in the source
+  becomes a `gap` action row, not silent continuity.
+- **Metadata:** a slug list yields `instruments` and `resolutions`
+  consistent with the venue's own market API, with
+  `settlement_observable_ns` populated where knowable.
+- **Queue honesty:** the same market replayed from PMXT deltas passes
+  preflight with `queue_position=True`; downgraded snapshot-only data
+  is still refused (existing test holds).
+- **Study:** a walk-forward search over ≥3 windows with top-k holdout
+  rerun produces a leaderboard whose ranks differ from train-only
+  ranking on a fixture built to punish overfitting (the §9.4 harness
+  pattern).
+- **Basket report:** one HTML over ≥20 run forks with total and
+  per-market panels and fill markers over `yes_price`; renders from
+  stored tables only, no re-simulation.
 
 ---
 

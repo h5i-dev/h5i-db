@@ -656,6 +656,7 @@ class Database:
 
 
 from . import backtest as backtest  # noqa: E402  (optional subpackage)
+from . import venues as venues  # noqa: E402  (vendor archives -> canonical tables)
 
 __all__ = [
     "Database",

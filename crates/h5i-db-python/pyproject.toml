@@ -11,8 +11,14 @@ license = { text = "Apache-2.0" }
 dependencies = ["pyarrow>=14"]
 dynamic = ["version"]
 
+[project.optional-dependencies]
+# TPE parameter search only. Everything else, including seeded random search,
+# works without it, so it stays an extra rather than a dependency.
+optuna = ["optuna>=3.4"]
+
 [project.scripts]
 h5i-backtest = "h5i_db.backtest:main"
+h5i-venues = "h5i_db.venues.__main__:main"
 
 [tool.maturin]
 module-name = "h5i_db._native"
