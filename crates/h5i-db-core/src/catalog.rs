@@ -78,6 +78,19 @@ pub async fn store_entry(backend: &Backend, entry: &CatalogEntry) -> Result<()> 
 /// with `TableExists` when the name is already cataloged. This closes the
 /// check-then-put race at the storage layer even without the metadata lock.
 pub async fn create_entry(backend: &Backend, entry: &CatalogEntry) -> Result<()> {
+    let path = create_entry_unsynced(backend, entry).await?;
+    backend.sync_objects(&[path]).await
+}
+
+/// Write a catalog entry without the durability barrier, returning the path the
+/// caller must include in its own.
+///
+/// See [`crate::fork::create_entry_unsynced`] for why batching the barrier over
+/// several entries is no weaker than one barrier each.
+pub(crate) async fn create_entry_unsynced(
+    backend: &Backend,
+    entry: &CatalogEntry,
+) -> Result<object_store::path::Path> {
     let path = layout::catalog_entry_path(&entry.name);
     let bytes = serde_json::to_vec_pretty(entry)?;
     if !backend.put_if_absent(&path, bytes.into()).await? {
@@ -85,7 +98,7 @@ pub async fn create_entry(backend: &Backend, entry: &CatalogEntry) -> Result<()>
             name: entry.name.clone(),
         });
     }
-    backend.sync_objects(&[path]).await
+    Ok(path)
 }
 
 pub async fn remove_entry(backend: &Backend, name: &str) -> Result<()> {

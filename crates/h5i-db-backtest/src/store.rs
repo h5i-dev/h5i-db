@@ -50,6 +50,13 @@ pub async fn create_run_tables(db: &Database) -> Result<()> {
     create_tables(db, schema::run_output_tables()).await
 }
 
+/// Create whichever of `tables` do not exist yet, in one batch.
+///
+/// Batched because creating a table is metadata-bound: each one is a spec, an
+/// empty manifest, a HEAD and a catalog entry, and the cost is almost entirely
+/// the fsyncs behind them. Creating the run schema one table at a time was the
+/// largest single item in a backtest run (`benches/replay_path.rs`), since
+/// every run does it inside a fresh fork.
 async fn create_tables(
     db: &Database,
     tables: Vec<(
@@ -65,14 +72,15 @@ async fn create_tables(
         .into_iter()
         .map(|entry| entry.name)
         .collect();
-    for (name, schema, options) in tables {
-        if existing.iter().any(|e| e == name) {
-            continue;
-        }
-        db.create_table(name, schema, options)
-            .await
-            .map_err(core_err)?;
+    let missing: Vec<(String, _, _)> = tables
+        .into_iter()
+        .filter(|(name, _, _)| !existing.iter().any(|e| e == name))
+        .map(|(name, schema, options)| (name.to_string(), schema, options))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
     }
+    db.create_tables(missing).await.map_err(core_err)?;
     Ok(())
 }
 
