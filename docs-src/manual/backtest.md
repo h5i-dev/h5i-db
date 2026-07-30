@@ -195,6 +195,36 @@ Two orderings inside the loop are load-bearing:
   produced them, which removes reentrancy and makes latency a property of
   the queue rather than of every call site.
 
+## Agent trial ledger
+
+`backtest.execute(db, config)` treats every pinned, declarative
+`BacktestConfig` as one score-producing trial. Its `trial_digest` hashes every
+replay input but excludes `run_id` and descriptive `metadata`. Re-submitting
+the same semantic config returns the recorded result with
+`result["cached"] == True`; it does not create another fork or increase
+`backtest.trial_count(db)`. Lookup plus creation is serialized per database,
+including across local agent processes.
+
+Unpinned configs and Python callback strategies still create normal recorded
+runs, but are not reused: current table heads and callback implementations do
+not have a complete identity in the typed config. Use a snapshot, version, or
+as-of pin and a signals/commands strategy when retry-safe deduplication matters.
+
+The `h5i-db-ui` experiments view is an attention router rather than a
+leaderboard wrapper. Its default tab orders trials as:
+
+1. human decision required;
+2. failed or warned;
+3. finished and unseen;
+4. running;
+5. seen.
+
+The experiment sidebar rolls up the maximum child priority and counts unseen
+warnings. Merely scanning a list does not mark work reviewed:
+`StudyResult.open_trial(n)` marks in-process state, while `h5i-db-ui` marks a
+trial seen only when its detail is opened and persists that review state in
+the browser. The leaderboard remains a separate tab.
+
 ## What is not here
 
 No live order routing, no brokerage adapters, no portfolio optimisation, no

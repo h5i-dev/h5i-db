@@ -12,7 +12,13 @@ import pyarrow as pa
 
 from .backtest_config import BacktestConfig, PreflightInspection
 
-__all__ = ["BacktestResult", "list_runs", "open_result"]
+__all__ = [
+    "BacktestResult",
+    "find_trial",
+    "list_runs",
+    "open_result",
+    "trial_count",
+]
 
 _RESULT_TABLES = (
     "bt_run",
@@ -26,6 +32,7 @@ _CONFIG_SCHEMA = pa.schema(
     [
         pa.field("run_id", pa.string(), nullable=False),
         pa.field("config_digest", pa.string(), nullable=False),
+        pa.field("trial_digest", pa.string(), nullable=False),
         pa.field("config_json", pa.string(), nullable=False),
         pa.field("fidelity", pa.string(), nullable=False),
         pa.field("inspection_json", pa.string(), nullable=False),
@@ -49,6 +56,7 @@ def _persist_config(
                     {
                         "run_id": [config.run_id],
                         "config_digest": [config.digest],
+                        "trial_digest": [config.trial_digest],
                         "config_json": [config.to_json(indent=None)],
                         "fidelity": [inspection.fidelity.value],
                         "inspection_json": [
@@ -372,3 +380,58 @@ def list_runs(db: Any) -> list[dict[str, Any]]:
             continue
         runs.append(result.summary())
     return runs
+
+
+def find_trial(db: Any, trial_digest: str) -> Optional[BacktestResult]:
+    """Return the recorded trial for a semantic config digest, if any."""
+    match = None
+    for fork_name in sorted(
+        name for name in db.fork_names() if name.startswith("bt-")
+    ):
+        fork = db.fork(fork_name)
+        try:
+            if "bt_config" not in fork.tables():
+                continue
+            rows = fork.read("bt_config").to_pylist()
+            if len(rows) != 1:
+                continue
+            row = rows[0]
+            recorded = row.get("trial_digest")
+            if recorded is None:
+                recorded = BacktestConfig.from_json(row["config_json"]).trial_digest
+            if recorded == trial_digest:
+                match = fork_name
+                break
+        finally:
+            fork.close()
+    return open_result(db, match) if match is not None else None
+
+
+def trial_count(db: Any) -> int:
+    """Count distinct score-producing configurations in the trial ledger."""
+    digests: set[str] = set()
+    for fork_name in sorted(
+        name for name in db.fork_names() if name.startswith("bt-")
+    ):
+        fork = db.fork(fork_name)
+        try:
+            tables = fork.tables()
+            if "bt_config" in tables:
+                for row in fork.read("bt_config").to_pylist():
+                    digest = row.get("trial_digest")
+                    if digest is None:
+                        digest = BacktestConfig.from_json(
+                            row["config_json"]
+                        ).trial_digest
+                    digests.add(str(digest))
+            elif "bt_run" in tables:
+                # Native/Rust-created runs may not carry the Python typed
+                # config table. They are still ledger trials and must never
+                # disappear from the search budget.
+                for row in fork.read("bt_run").to_pylist():
+                    digest = row.get("config_digest") or row.get("digest")
+                    if digest is not None:
+                        digests.add(str(digest))
+        finally:
+            fork.close()
+    return len(digests)

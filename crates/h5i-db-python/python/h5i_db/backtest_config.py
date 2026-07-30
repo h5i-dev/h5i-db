@@ -303,6 +303,20 @@ class BacktestConfig:
         payload = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
+    @property
+    def trial_digest(self) -> str:
+        """Content identity for a score-producing trial.
+
+        ``run_id`` names storage and ``metadata`` annotates it; neither can
+        affect the replay's score. Excluding them makes retries converge on
+        one ledger entry even when another agent supplies a new name.
+        """
+        payload = self.to_dict()
+        payload.pop("run_id", None)
+        payload.pop("metadata", None)
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def to_json(
         self, path: Optional[Union[str, Path]] = None, *, indent: int = 2
     ) -> str:

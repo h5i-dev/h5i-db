@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import tempfile
+from dataclasses import replace
 
 import h5i_db
 import pyarrow as pa
@@ -653,3 +654,125 @@ def test_python_event_strategy_is_explicit_and_receives_fills():
         verified = result.verify(strategy=BuyOnThirdSecond())
         assert verified["verified"]
         db.close()
+
+
+def test_trial_ledger_deduplicates_semantic_configs_and_keeps_one_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        first_config = backtest.BacktestConfig(
+            run_id="agent-attempt-1",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+            metadata={"agent": "alpha", "attempt": 1},
+        )
+        retry_config = replace(
+            first_config,
+            run_id="agent-attempt-2",
+            metadata={"agent": "beta", "attempt": 99},
+        )
+
+        first = backtest.execute(db, first_config)
+        retry = backtest.execute(db, retry_config)
+
+        assert first_config.trial_digest == retry_config.trial_digest
+        assert first["cached"] is False
+        assert retry["cached"] is True
+        assert retry["requested_run_id"] == "agent-attempt-2"
+        assert retry.fork_name == first.fork_name
+        assert backtest.trial_count(db) == 1
+        assert (
+            backtest.find_trial(db, first_config.trial_digest).fork_name
+            == first.fork_name
+        )
+        assert {name for name in db.fork_names() if name.startswith("bt-")} == {
+            first.fork_name
+        }
+
+        fork = db.fork(first.fork_name)
+        try:
+            assert fork.read("bt_run").num_rows == 1
+            for table in fork.tables():
+                if table.startswith("bt_") and fork.read(table).num_rows:
+                    assert fork.read("bt_run").num_rows == 1
+        finally:
+            fork.close()
+        db.close()
+
+
+def test_duplicate_study_trials_share_the_ledger_even_when_concurrent():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        result = backtest.study(
+            db,
+            study_id="retry-loop",
+            base=backtest.BacktestConfig(
+                run_id="template",
+                portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+                data=backtest.DataConfig(snapshot="seed"),
+            ),
+            parameters={"execution.fee_rate": [0.0, 0.0]},
+            max_workers=2,
+        )
+
+        assert len(result.trials) == 2
+        assert [row["cached"] for row in result.trials].count(True) == 1
+        assert len({row["fork"] for row in result.trials}) == 1
+        assert backtest.trial_count(db) == 1
+        db.close()
+
+
+def test_attention_routing_uses_seen_state_and_container_rollup():
+    result = backtest.StudyResult(
+        study_id="attention",
+        trials=[
+            {"trial": 0, "status": "running"},
+            {"trial": 1, "status": "ok"},
+            {"trial": 2, "status": "warned", "warnings": ["thin coverage"]},
+            {
+                "trial": 3,
+                "status": "ok",
+                "needs_decision": True,
+                "seen": True,
+            },
+            {
+                "trial": 4,
+                "status": "warned",
+                "warnings": ["reviewed"],
+                "seen": True,
+            },
+        ],
+    )
+
+    assert [item.trial for item in result.attention()] == [3, 2, 1, 0, 4]
+    assert result.attention_state is backtest.AttentionState.NEEDS_DECISION
+    assert result.warning_badge == 1
+    result.open_trial(2)
+    assert result.warning_badge == 0
+    assert backtest.attention_for_trial(result.trials[2]).state is (
+        backtest.AttentionState.SEEN
+    )
+    assert backtest.AttentionState.FINISHED_UNSEEN.priority > (
+        backtest.AttentionState.RUNNING.priority
+    )

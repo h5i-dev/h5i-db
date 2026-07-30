@@ -10,10 +10,23 @@ from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Union
 
+from .backtest_attention import (
+    AttentionState,
+    TrialAttention,
+    attention_for_trial,
+    rollup_attention,
+)
 from .backtest_config import BacktestConfig
 from .backtest_result import BacktestResult
 
-__all__ = ["BacktestStudy", "StudyResult", "ValidationWindows", "study"]
+__all__ = [
+    "AttentionState",
+    "BacktestStudy",
+    "StudyResult",
+    "TrialAttention",
+    "ValidationWindows",
+    "study",
+]
 
 _CONFIG_SECTIONS = {"data", "execution", "portfolio", "risk", "output"}
 _NON_TUNABLE = {
@@ -119,12 +132,35 @@ class StudyResult:
     def drop(self) -> int:
         dropped = 0
         for result in self.results:
+            if result.get("cached", False):
+                continue
             try:
                 dropped += int(result.drop())
             except Exception:
                 if result.fork_name in result._db.fork_names():
                     raise
         return dropped
+
+    def attention(self) -> list[TrialAttention]:
+        """Trials in the order a reviewer should visit them."""
+        items = [attention_for_trial(row) for row in self.trials]
+        return sorted(items, key=lambda item: (-item.priority, item.trial))
+
+    @property
+    def attention_state(self) -> AttentionState:
+        return rollup_attention(self.attention())
+
+    @property
+    def warning_badge(self) -> int:
+        return sum(bool(item.warnings) and not item.seen for item in self.attention())
+
+    def open_trial(self, trial: int) -> dict[str, Any]:
+        """Open a detail row and mark it seen; list views never mark it."""
+        for row in self.trials:
+            if int(row.get("trial", -1)) == trial:
+                row["seen"] = True
+                return row
+        raise KeyError(f"trial {trial} is not present in study {self.study_id!r}")
 
     def to_html(
         self,
@@ -206,6 +242,9 @@ class BacktestStudy:
                 "trial": index,
                 "status": "ok",
                 "parameters": json.dumps(parameters, sort_keys=True, default=str),
+                "seen": False,
+                "needs_decision": bool(base.metadata.get("needs_decision", False)),
+                "warnings": [],
             }
             outputs: list[BacktestResult] = []
             for phase, window in phases:
@@ -237,6 +276,10 @@ class BacktestStudy:
                     row[f"{prefix}{metric}"] = result.get(metric)
                 row[f"{prefix}fork"] = result.fork_name
                 row[f"{prefix}digest"] = result.get("digest")
+                row[f"{prefix}trial_digest"] = configured.trial_digest
+                row[f"{prefix}cached"] = bool(result.get("cached", False))
+                row["warnings"].extend(str(item) for item in result.get("warnings", []))
+            row["cached"] = all(result.get("cached", False) for result in outputs)
             return row, outputs
 
         rows: list[Optional[dict[str, Any]]] = [None] * len(combinations)

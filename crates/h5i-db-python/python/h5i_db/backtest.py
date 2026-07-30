@@ -27,12 +27,21 @@ import datetime as _dt
 import hashlib
 import inspect as _inspect
 import json
+import os
 import sys
+import threading
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Optional, Sequence, Union
 
 import pyarrow as pa
 
+from .backtest_attention import (
+    AttentionState,
+    TrialAttention,
+    attention_for_trial,
+    rollup_attention,
+)
 from .backtest_config import (
     BacktestConfig,
     DataConfig,
@@ -44,7 +53,14 @@ from .backtest_config import (
     RiskConfig,
     inspect,
 )
-from .backtest_result import BacktestResult, _persist_config, list_runs, open_result
+from .backtest_result import (
+    BacktestResult,
+    _persist_config,
+    find_trial,
+    list_runs,
+    open_result,
+    trial_count,
+)
 from .backtest_strategy import from_signals, target_positions
 from .backtest_study import (
     BacktestStudy,
@@ -57,6 +73,7 @@ __all__ = [
     "BacktestConfig",
     "BacktestResult",
     "BacktestStudy",
+    "AttentionState",
     "EventStrategy",
     "DataConfig",
     "ExecutionConfig",
@@ -66,12 +83,14 @@ __all__ = [
     "ReplayFidelity",
     "RiskConfig",
     "StudyResult",
+    "TrialAttention",
     "ValidationWindows",
     "run",
     "run_strategy",
     "execute",
     "from_signals",
     "inspect",
+    "find_trial",
     "list_runs",
     "main",
     "open_result",
@@ -80,12 +99,42 @@ __all__ = [
     "signal_table",
     "command_table",
     "study",
+    "trial_count",
+    "attention_for_trial",
+    "rollup_attention",
     "target_positions",
     "create_signal_table",
     "create_command_table",
     "MARKET_DATA_TABLES",
     "RESULT_TABLES",
 ]
+
+_LEDGER_LOCKS: dict[str, threading.RLock] = {}
+_LEDGER_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _trial_ledger_lock(db: Any):
+    """Serialize digest lookup plus run creation for one local database."""
+    database_path = os.path.abspath(os.fspath(db.path))
+    with _LEDGER_LOCKS_GUARD:
+        process_lock = _LEDGER_LOCKS.setdefault(database_path, threading.RLock())
+    with process_lock:
+        handle = (Path(database_path) / ".trial-ledger.lock").open("a+b")
+        fcntl = None
+        try:
+            try:
+                import fcntl as _fcntl
+            except ImportError:  # pragma: no cover - Windows process fallback
+                pass
+            else:
+                fcntl = _fcntl
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
 
 #: Mirrors `crates/h5i-db-backtest/src/schema.rs::signals()`.
 SIGNAL_SCHEMA = pa.schema(
@@ -462,34 +511,56 @@ def execute(
     data = config.data
     execution = config.execution
     output = config.output
-    result = run(
-        db,
-        config.run_id,
-        starting_cash=config.portfolio.starting_cash,
-        signals=data.signals,
-        commands=data.commands,
-        strategy_id=data.strategy_id,
-        _python_strategy=strategy,
-        fee_kind=execution.fee_kind,
-        fee_rate=execution.fee_rate,
-        maker_rebate=execution.maker_rebate,
-        maker_fee_rate=execution.maker_fee_rate,
-        queue_position=execution.queue_position,
-        optimistic_queue=execution.optimistic_queue,
-        latency_nanos=execution.latency_nanos,
-        slippage_ticks=execution.slippage_ticks,
-        window=data.window,
-        version=data.version,
-        as_of=data.as_of,
-        snapshot=data.snapshot,
-        equity_interval_nanos=output.equity_interval_nanos,
-        minimum_coverage=data.minimum_coverage,
-        max_order_quantity=config.risk.max_order_quantity,
-        max_abs_position=config.risk.max_abs_position,
-        max_open_orders=config.risk.max_open_orders,
+    # Unpinned inputs and callback implementations lack a complete reusable
+    # identity. They still produce an on-ledger run, but cannot be cached.
+    deduplicable = (
+        any(
+            (
+                data.snapshot is not None,
+                data.version is not None,
+                data.as_of is not None,
+            )
+        )
+        and data.strategy_kind != "callback"
     )
-    result.inspection = inspection
-    return result
+    lock = _trial_ledger_lock(db) if deduplicable else nullcontext()
+    with lock:
+        if deduplicable:
+            cached = find_trial(db, config.trial_digest)
+            if cached is not None:
+                cached["cached"] = True
+                cached["requested_run_id"] = config.run_id
+                return cached
+        result = run(
+            db,
+            config.run_id,
+            starting_cash=config.portfolio.starting_cash,
+            signals=data.signals,
+            commands=data.commands,
+            strategy_id=data.strategy_id,
+            _python_strategy=strategy,
+            fee_kind=execution.fee_kind,
+            fee_rate=execution.fee_rate,
+            maker_rebate=execution.maker_rebate,
+            maker_fee_rate=execution.maker_fee_rate,
+            queue_position=execution.queue_position,
+            optimistic_queue=execution.optimistic_queue,
+            latency_nanos=execution.latency_nanos,
+            slippage_ticks=execution.slippage_ticks,
+            window=data.window,
+            version=data.version,
+            as_of=data.as_of,
+            snapshot=data.snapshot,
+            equity_interval_nanos=output.equity_interval_nanos,
+            minimum_coverage=data.minimum_coverage,
+            max_order_quantity=config.risk.max_order_quantity,
+            max_abs_position=config.risk.max_abs_position,
+            max_open_orders=config.risk.max_open_orders,
+        )
+        result.inspection = inspection
+        result["cached"] = False
+        result["trial_digest"] = config.trial_digest
+        return result
 
 
 def run_strategy(

@@ -293,6 +293,9 @@ async fn index_serves_embedded_html() {
     let html = String::from_utf8_lossy(&bytes);
     assert!(html.contains("h5i-db review"));
     assert!(html.contains("Apply plan"));
+    assert!(html.contains("[\"experiments\",\"experiments\"]"));
+    assert!(html.contains("function trialAttention"));
+    assert!(html.contains("detail-open is the seen edge"));
 }
 
 async fn raw_status(router: &axum::Router, req: Request<Body>) -> (StatusCode, serde_json::Value) {
@@ -704,4 +707,90 @@ async fn a_database_without_reports_says_so_rather_than_failing() {
     let (status, json) = get_json(&router, "/api/reports").await;
     assert_eq!(status, StatusCode::OK);
     assert!(json["reports"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn experiments_project_trial_ledger_rows_and_attention_priority() {
+    let (_dir, _router, db) = setup(false).await;
+    db.create_fork(
+        "bt-alpha-0000-run",
+        Some("backtest run alpha-0000-run".into()),
+        None,
+        serde_json::Map::new(),
+    )
+    .await
+    .unwrap();
+    let fork = db.open_fork("bt-alpha-0000-run").await.unwrap();
+    let config_schema = Arc::new(Schema::new(vec![
+        Field::new("run_id", DataType::Utf8, false),
+        Field::new("trial_digest", DataType::Utf8, false),
+        Field::new("config_json", DataType::Utf8, false),
+    ]));
+    fork.create_table("bt_config", config_schema.clone(), TableOptions::default())
+        .await
+        .unwrap();
+    fork.write(
+        "bt_config",
+        vec![
+            RecordBatch::try_new(
+                config_schema,
+                vec![
+                    Arc::new(StringArray::from(vec!["alpha-0000-run"])),
+                    Arc::new(StringArray::from(vec!["semantic-digest"])),
+                    Arc::new(StringArray::from(vec![
+                        r#"{"metadata":{"study_id":"alpha","trial":0,"phase":"run","parameters":{"fee":0.01},"needs_decision":true}}"#,
+                    ])),
+                ],
+            )
+            .unwrap(),
+        ],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let run_schema = Arc::new(Schema::new(vec![
+        Field::new("run_id", DataType::Utf8, false),
+        Field::new("warnings", DataType::Utf8, true),
+        Field::new("realized_pnl", DataType::Float64, false),
+        Field::new("final_cash", DataType::Float64, false),
+        Field::new("fills", DataType::Int64, false),
+    ]));
+    fork.create_table("bt_run", run_schema.clone(), TableOptions::default())
+        .await
+        .unwrap();
+    fork.write(
+        "bt_run",
+        vec![
+            RecordBatch::try_new(
+                run_schema,
+                vec![
+                    Arc::new(StringArray::from(vec!["alpha-0000-run"])),
+                    Arc::new(StringArray::from(vec![Some("thin coverage")])),
+                    Arc::new(Float64Array::from(vec![12.5])),
+                    Arc::new(Float64Array::from(vec![1012.5])),
+                    Arc::new(Int64Array::from(vec![3])),
+                ],
+            )
+            .unwrap(),
+        ],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let router = router_for(&db, false);
+    let (status, body) = get_json(&router, "/api/experiments").await;
+    assert_eq!(status, StatusCode::OK);
+    let experiments = body["experiments"].as_array().unwrap();
+    assert_eq!(experiments.len(), 1);
+    assert_eq!(experiments[0]["id"], "alpha");
+    assert_eq!(experiments[0]["priority"], 5);
+    assert_eq!(experiments[0]["warning_count"], 1);
+    let trial = &experiments[0]["trials"][0];
+    assert_eq!(trial["trial"], 0);
+    assert_eq!(trial["phase"], "run");
+    assert_eq!(trial["status"], "warned");
+    assert_eq!(trial["trial_digest"], "semantic-digest");
+    assert_eq!(trial["metrics"]["realized_pnl"], 12.5);
+    assert_eq!(trial["parameters"]["fee"], 0.01);
 }

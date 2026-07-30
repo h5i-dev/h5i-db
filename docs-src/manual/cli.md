@@ -545,9 +545,16 @@ Launch the local review UI, loopback only.
 | `--port <N>` | Port (default 7351) |
 | `--allow-mutations` | Enable plan apply/discard from the UI (default: read-only) |
 
-The UI shows pending plans with previews, a live fork monitor, the version
-timeline with audit badges, version diffs, and an SQL scratchpad that reports
-pruning per query.
+The UI shows pending plans with previews, agent backtest experiments, a live
+fork monitor, the version timeline with audit badges, version diffs, and an
+SQL scratchpad that reports pruning per query.
+
+The **Experiments** tab routes attention using the state recorded on each
+`bt-*` run fork: `needs-decision` > `failed/warned` > `finished-unseen` >
+`running` > `seen`. Experiments inherit their most urgent trial. Opening a
+trial detail—not scanning a list—marks it seen in the browser; the tab badge
+counts unseen warnings. Attention, all-trials, and leaderboard views remain
+separate so a best score cannot hide a blocked or suspicious run.
 
 The **Forks** tab renders the fork lineage as a tree that updates itself over
 a server-sent event stream: each fork carries one glanceable status —

@@ -2,9 +2,10 @@
 //!
 //! A thin review surface, not a database GUI (DESIGN_CLAUDE.md §8-UI): its
 //! job is letting a human inspect and approve what agents did or plan to do —
-//! pending mutation plans first (they block someone), then the live fork
-//! monitor (what every agent branch is doing right now, pushed over SSE),
-//! version history, snapshots, tables, and an SQL scratchpad.
+//! human-blocked experiment trials and mutation plans first, then warnings,
+//! completed unseen work, the live fork monitor (what every agent branch is
+//! doing right now, pushed over SSE), version history, snapshots, tables, and
+//! an SQL scratchpad.
 //!
 //! Server design follows `h5i serve`: axum on loopback only, single embedded
 //! HTML asset, flat `/api/*` JSON endpoints, read-only unless the process was
@@ -12,6 +13,7 @@
 //! the plan's base version — a moved HEAD is a `version_conflict`, never a
 //! silent re-plan).
 
+use std::collections::BTreeMap;
 use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -141,6 +143,7 @@ pub fn build_router(state: UiState) -> Router {
         .route("/report/{name}", get(report))
         .route("/api/reports", get(reports_list))
         .route("/api/overview", get(overview))
+        .route("/api/experiments", get(experiments))
         .route("/api/forks", get(forks))
         .route("/api/fork/{name}", get(fork_detail))
         .route("/api/events", get(events))
@@ -444,8 +447,9 @@ async fn live_frame(st: &UiState) -> Result<serde_json::Value, Error> {
     }))
 }
 
-/// The triage projection: everything the front page needs in one call —
-/// pending plans (needs-a-human), tables, forks, snapshots, policy, mode.
+/// The core triage projection: pending plans, tables, forks, snapshots,
+/// policy, and mode. Experiment trials have their own projection because
+/// deriving them opens run forks and should not delay the live metadata frame.
 async fn overview(State(st): State<UiState>) -> ApiResult {
     let mut out = live_frame(&st).await?;
     let snapshots: Vec<_> = st
@@ -468,6 +472,232 @@ async fn overview(State(st): State<UiState>) -> ApiResult {
     out["policy"] = serde_json::to_value(st.db.policy().await?).map_err(Error::from)?;
     out["snapshots"] = json!(snapshots);
     Ok(Json(out))
+}
+
+/// Agent-native experiment projection, derived from the run forks themselves.
+///
+/// A score is never copied into a second UI-owned object: `bt_config` supplies
+/// experiment identity and `bt_run` supplies the recorded result. Forks which
+/// have started but do not yet contain `bt_run` remain visible as running (or
+/// failed when they have gone quiet), so attention routing does not depend on
+/// a successful run.
+async fn experiments(State(st): State<UiState>) -> ApiResult {
+    let mut grouped: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+    let now_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    let summaries: Vec<_> = st
+        .db
+        .list_forks()
+        .await?
+        .into_iter()
+        .filter(|fork| fork.name.starts_with("bt-"))
+        .collect();
+    for summary in summaries {
+        let fork = st.db.base().open_fork(&summary.name).await?;
+        let tables: Vec<String> = fork
+            .list_tables()
+            .await?
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        let config = if tables.iter().any(|name| name == "bt_config") {
+            scan_first_object(&fork, "bt_config").await?
+        } else {
+            None
+        };
+        let report = if tables.iter().any(|name| name == "bt_run") {
+            scan_first_object(&fork, "bt_run").await?
+        } else {
+            None
+        };
+
+        let config_json = config
+            .as_ref()
+            .and_then(|row| row.get("config_json"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok());
+        let metadata = config_json
+            .as_ref()
+            .and_then(|value| value.get("metadata"))
+            .and_then(serde_json::Value::as_object);
+        let run_id = report
+            .as_ref()
+            .and_then(|row| row.get("run_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                config
+                    .as_ref()
+                    .and_then(|row| row.get("run_id"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .or_else(|| {
+                summary
+                    .note
+                    .as_deref()
+                    .and_then(|note| note.strip_prefix("backtest run "))
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| summary.name.trim_start_matches("bt-").to_string());
+        let inferred = infer_study_trial(&run_id);
+        let study_id = metadata
+            .and_then(|meta| meta.get("study_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| inferred.as_ref().map(|value| value.0.clone()))
+            .unwrap_or_else(|| "individual runs".to_string());
+        let trial = metadata
+            .and_then(|meta| meta.get("trial"))
+            .cloned()
+            .or_else(|| inferred.as_ref().map(|value| json!(value.1)));
+        let phase = metadata
+            .and_then(|meta| meta.get("phase"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| inferred.as_ref().map(|value| value.2.clone()));
+        let parameters = metadata
+            .and_then(|meta| meta.get("parameters"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let needs_decision = metadata
+            .and_then(|meta| meta.get("needs_decision"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let warnings: Vec<String> = report
+            .as_ref()
+            .and_then(|row| row.get("warnings"))
+            .and_then(serde_json::Value::as_str)
+            .map(|text| {
+                text.split("; ")
+                    .filter(|warning| !warning.is_empty())
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let last_activity = summary.last_write_ns.unwrap_or(summary.created_at_ns);
+        let recently_active = now_ns.saturating_sub(last_activity) < 15_000_000_000;
+        let status = if report.is_some() {
+            if warnings.is_empty() {
+                "finished"
+            } else {
+                "warned"
+            }
+        } else if recently_active {
+            "running"
+        } else {
+            "failed"
+        };
+        let priority = if needs_decision {
+            5
+        } else if status == "failed" || !warnings.is_empty() {
+            4
+        } else if status == "finished" {
+            3
+        } else {
+            2
+        };
+        grouped.entry(study_id).or_default().push(json!({
+            "run_id": run_id,
+            "fork": summary.name,
+            "trial": trial,
+            "phase": phase,
+            "parameters": parameters,
+            "status": status,
+            "warnings": warnings,
+            "needs_decision": needs_decision,
+            "priority": priority,
+            "created_at_ns": summary.created_at_ns,
+            "last_write_ns": summary.last_write_ns,
+            "trial_digest": config.as_ref()
+                .and_then(|row| row.get("trial_digest")).cloned(),
+            "metrics": report,
+        }));
+    }
+
+    let mut experiments: Vec<serde_json::Value> = grouped
+        .into_iter()
+        .map(|(id, mut trials)| {
+            trials.sort_by(|a, b| {
+                b["priority"]
+                    .as_u64()
+                    .cmp(&a["priority"].as_u64())
+                    .then_with(|| a["trial"].as_u64().cmp(&b["trial"].as_u64()))
+            });
+            let priority = trials
+                .iter()
+                .filter_map(|trial| trial["priority"].as_u64())
+                .max()
+                .unwrap_or(1);
+            let warning_count = trials
+                .iter()
+                .filter(|trial| {
+                    trial["warnings"]
+                        .as_array()
+                        .is_some_and(|warnings| !warnings.is_empty())
+                })
+                .count();
+            json!({
+                "id": id,
+                "priority": priority,
+                "warning_count": warning_count,
+                "trials": trials,
+            })
+        })
+        .collect();
+    experiments.sort_by(|a, b| {
+        b["priority"]
+            .as_u64()
+            .cmp(&a["priority"].as_u64())
+            .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
+    });
+    Ok(Json(json!({ "experiments": experiments })))
+}
+
+fn infer_study_trial(run_id: &str) -> Option<(String, u64, String)> {
+    let mut parts = run_id.rsplitn(3, '-');
+    let phase = parts.next()?.to_string();
+    let trial_text = parts.next()?;
+    let study = parts.next()?.to_string();
+    if trial_text.len() != 4 || !trial_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some((study, trial_text.parse().ok()?, phase))
+}
+
+async fn scan_first_object(
+    db: &Database,
+    table: &str,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, Error> {
+    let (batches, _) = db
+        .scan(
+            table,
+            ReadAt::Latest,
+            h5i_db_core::ScanOptions {
+                limit: Some(1),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let payload = batches_to_json(&batches)?;
+    let names: Vec<&str> = payload["schema"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|field| field["name"].as_str())
+        .collect();
+    let Some(row) = payload["rows"].as_array().and_then(|rows| rows.first()) else {
+        return Ok(None);
+    };
+    let values = row
+        .as_array()
+        .ok_or_else(|| Error::internal("UI table row is not an array"))?;
+    Ok(Some(
+        names
+            .into_iter()
+            .zip(values.iter().cloned())
+            .map(|(name, value)| (name.to_string(), value))
+            .collect(),
+    ))
 }
 
 /// Fork monitor projection: every fork with lineage and liveness numbers.
