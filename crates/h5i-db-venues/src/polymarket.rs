@@ -104,7 +104,9 @@ fn number(value: &Value, field: &'static str) -> Result<f64> {
             what: field,
             value: text.clone(),
         }),
-        Some(Value::Number(number)) => number.as_f64().ok_or(BacktestError::NotFinite { what: field }),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .ok_or(BacktestError::NotFinite { what: field }),
         _ => Err(BacktestError::Parse {
             what: field,
             value: "missing".to_string(),
@@ -297,7 +299,12 @@ pub fn resolution_from_market(body: &str, observable_at: UnixNanos) -> Result<Op
     let winners: Vec<usize> = tokens
         .iter()
         .enumerate()
-        .filter(|(_, token)| token.get("winner").and_then(Value::as_bool).unwrap_or(false))
+        .filter(|(_, token)| {
+            token
+                .get("winner")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
         .map(|(index, _)| index)
         .collect();
     match winners.len() {
@@ -424,7 +431,11 @@ mod tests {
     #[test]
     fn resolution_is_extracted_only_deliberately() {
         // An open market has no resolution to give.
-        assert!(resolution_from_market(MARKET, UnixNanos::new(1)).unwrap().is_none());
+        assert!(
+            resolution_from_market(MARKET, UnixNanos::new(1))
+                .unwrap()
+                .is_none()
+        );
 
         let resolution = resolution_from_market(RESOLVED, UnixNanos::new(500))
             .unwrap()
@@ -451,13 +462,23 @@ mod tests {
             "asks":[{"price":"0.57","size":"80"}]
         }"#;
         let record = parse_book(body, &tokens()).unwrap();
-        assert_eq!(record.outcome, OutcomeId(1), "asset 222 is the second outcome");
+        assert_eq!(
+            record.outcome,
+            OutcomeId(1),
+            "asset 222 is the second outcome"
+        );
         assert_eq!(record.ts().get(), 1_700_000_000_000 * MS);
         let MarketEvent::BookSnapshot { bids, asks } = &record.event else {
             panic!()
         };
         assert_eq!(bids.len(), 2);
-        assert_eq!(bids[0], (Price::from_f64(0.55).unwrap(), Qty::from_f64(100.0).unwrap()));
+        assert_eq!(
+            bids[0],
+            (
+                Price::from_f64(0.55).unwrap(),
+                Qty::from_f64(100.0).unwrap()
+            )
+        );
         assert_eq!(asks.len(), 1);
     }
 
@@ -521,7 +542,10 @@ mod tests {
     #[test]
     fn malformed_payloads_are_refused() {
         assert!(parse_book("{", &tokens()).is_err());
-        assert!(parse_book(r#"{"asset_id":"111"}"#, &tokens()).is_err(), "no timestamp");
+        assert!(
+            parse_book(r#"{"asset_id":"111"}"#, &tokens()).is_err(),
+            "no timestamp"
+        );
         assert!(
             parse_price_change(r#"{"asset_id":"111","timestamp":1}"#, &tokens()).is_err(),
             "no changes array"

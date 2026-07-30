@@ -140,7 +140,9 @@ impl Clock {
 
     /// The next time a timer is due.
     pub fn next_timer(&self) -> Option<UnixNanos> {
-        self.timers.peek().map(|Reverse(t)| UnixNanos::new(t.key.at))
+        self.timers
+            .peek()
+            .map(|Reverse(t)| UnixNanos::new(t.key.at))
     }
 
     /// Move the clock to `ts` and return every timer that came due, in

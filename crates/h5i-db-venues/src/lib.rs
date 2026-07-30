@@ -116,11 +116,7 @@ impl IngestPlan {
     }
 
     fn sort(&mut self) {
-        for stream in [
-            &mut self.book_events,
-            &mut self.trades,
-            &mut self.funding,
-        ] {
+        for stream in [&mut self.book_events, &mut self.trades, &mut self.funding] {
             stream.sort_by_key(|record| record.ts().get());
         }
     }
@@ -248,7 +244,11 @@ fn hash_event(hasher: &mut blake3::Hasher, event: &MarketEvent) {
             hasher.update(&delta.price.raw().to_le_bytes());
             hasher.update(&delta.size.raw().to_le_bytes());
         }
-        MarketEvent::Trade { price, size, aggressor } => {
+        MarketEvent::Trade {
+            price,
+            size,
+            aggressor,
+        } => {
             hasher.update(&price.raw().to_le_bytes());
             hasher.update(&size.raw().to_le_bytes());
             hasher.update(aggressor.map(|s| s.as_str()).unwrap_or("?").as_bytes());
@@ -256,7 +256,13 @@ fn hash_event(hasher: &mut blake3::Hasher, event: &MarketEvent) {
         MarketEvent::Funding { rate } => {
             hasher.update(&rate.raw().to_le_bytes());
         }
-        MarketEvent::Bar { open, high, low, close, volume } => {
+        MarketEvent::Bar {
+            open,
+            high,
+            low,
+            close,
+            volume,
+        } => {
             for value in [open.raw(), high.raw(), low.raw(), close.raw()] {
                 hasher.update(&value.to_le_bytes());
             }
@@ -385,8 +391,7 @@ mod tests {
 
     #[test]
     fn a_plan_reports_the_window_it_actually_loaded() {
-        let plan = IngestPlan::new("test")
-            .with_book_events(vec![gap("m", 100), gap("m", 300)]);
+        let plan = IngestPlan::new("test").with_book_events(vec![gap("m", 100), gap("m", 300)]);
         let window = plan.loaded_window().unwrap();
         assert_eq!(window.start().get(), 100);
         assert_eq!(window.end().get(), 301, "half-open past the last record");

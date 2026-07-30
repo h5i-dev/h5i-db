@@ -12,7 +12,7 @@ use crate::book::OrderBook;
 use crate::error::Result;
 use crate::instrument::Instrument;
 use crate::order::{Order, OrderId};
-use crate::types::{notional, Money, Price, Qty, Side, UnixNanos, SCALE};
+use crate::types::{Money, Price, Qty, SCALE, Side, UnixNanos, notional};
 
 /// What a fee model needs to price a fill.
 #[derive(Clone, Copy, Debug)]
@@ -160,13 +160,13 @@ impl KalshiFees {
         let scaled = notional(Price::from_raw(pq.raw()), quantity)?;
         let raw = notional(rate, Qty::from_raw(scaled.raw()))?.raw();
         const CENTICENT: i64 = SCALE / 10_000;
-        let rounded = raw
-            .checked_add(CENTICENT - 1)
-            .ok_or(crate::error::BacktestError::Overflow {
-                what: "rounding Kalshi trade fee",
-            })?
-            / CENTICENT
-            * CENTICENT;
+        let rounded =
+            raw.checked_add(CENTICENT - 1)
+                .ok_or(crate::error::BacktestError::Overflow {
+                    what: "rounding Kalshi trade fee",
+                })?
+                / CENTICENT
+                * CENTICENT;
         Ok(Money::from_raw(rounded))
     }
 }
@@ -187,11 +187,12 @@ impl FeeModel for KalshiFees {
             Side::Buy => -gross.raw(),
             Side::Sell => gross.raw(),
         };
-        let after_trade_fee = revenue.checked_sub(trade_fee.raw()).ok_or(
-            crate::error::BacktestError::Overflow {
-                what: "applying Kalshi trade fee",
-            },
-        )?;
+        let after_trade_fee =
+            revenue
+                .checked_sub(trade_fee.raw())
+                .ok_or(crate::error::BacktestError::Overflow {
+                    what: "applying Kalshi trade fee",
+                })?;
         const CENT: i64 = SCALE / 100;
         let cent_aligned = after_trade_fee.div_euclid(CENT) * CENT;
         let rounding_fee = after_trade_fee - cent_aligned;
@@ -200,16 +201,15 @@ impl FeeModel for KalshiFees {
             crate::error::BacktestError::invalid("Kalshi fee accumulator lock poisoned")
         })?;
         let accumulated = accumulators.entry(ctx.order_id).or_default();
-        *accumulated = accumulated.checked_add(rounding_fee).ok_or(
-            crate::error::BacktestError::Overflow {
-                what: "accumulating Kalshi rounding fee",
-            },
-        )?;
+        *accumulated =
+            accumulated
+                .checked_add(rounding_fee)
+                .ok_or(crate::error::BacktestError::Overflow {
+                    what: "accumulating Kalshi rounding fee",
+                })?;
         let rebate = (*accumulated / CENT) * CENT;
         *accumulated -= rebate;
-        Ok(Money::from_raw(
-            trade_fee.raw() + rounding_fee - rebate,
-        ))
+        Ok(Money::from_raw(trade_fee.raw() + rounding_fee - rebate))
     }
 
     fn order_closed(&self, order_id: OrderId) {
@@ -368,7 +368,11 @@ impl FillModel for TickSlippage {
             .collect();
         let mut synthetic = OrderBook::new();
         synthetic
-            .apply_snapshot(&bids, &asks, book.last_update().unwrap_or(UnixNanos::new(0)))
+            .apply_snapshot(
+                &bids,
+                &asks,
+                book.last_update().unwrap_or(UnixNanos::new(0)),
+            )
             .ok()?;
         Some(synthetic)
     }
@@ -452,11 +456,15 @@ mod tests {
         let instrument = market();
         let fees = PredictionMarketFees::new(0.07).unwrap();
         // 0.07 * 100 * 0.5 * 0.5 = 1.75
-        let even = fees.commission(ctx(&instrument, 0.50, 100.0, true)).unwrap();
+        let even = fees
+            .commission(ctx(&instrument, 0.50, 100.0, true))
+            .unwrap();
         assert_eq!(even, Money::from_f64(1.75).unwrap());
 
         // The same notional far from even odds costs much less.
-        let tail = fees.commission(ctx(&instrument, 0.05, 100.0, true)).unwrap();
+        let tail = fees
+            .commission(ctx(&instrument, 0.05, 100.0, true))
+            .unwrap();
         assert_eq!(tail, Money::from_f64(0.07 * 100.0 * 0.05 * 0.95).unwrap());
         assert!(tail < even);
     }
@@ -535,13 +543,17 @@ mod tests {
             .unwrap()
             .with_maker_rebate(0.25)
             .unwrap();
-        let maker = fees.commission(ctx(&instrument, 0.5, 100.0, false)).unwrap();
+        let maker = fees
+            .commission(ctx(&instrument, 0.5, 100.0, false))
+            .unwrap();
         assert!(maker.is_negative(), "the venue pays the maker");
         assert_eq!(maker, Money::from_f64(-0.4375).unwrap());
         // Without a rebate configured a maker simply pays nothing.
         let plain = PredictionMarketFees::new(0.07).unwrap();
         assert_eq!(
-            plain.commission(ctx(&instrument, 0.5, 100.0, false)).unwrap(),
+            plain
+                .commission(ctx(&instrument, 0.5, 100.0, false))
+                .unwrap(),
             Money::ZERO
         );
     }
@@ -552,11 +564,13 @@ mod tests {
         let fees = ProportionalFees::new(0.0002, 0.0005).unwrap();
         // 0.0005 * (100 * 10) = 0.5
         assert_eq!(
-            fees.commission(ctx(&instrument, 100.0, 10.0, true)).unwrap(),
+            fees.commission(ctx(&instrument, 100.0, 10.0, true))
+                .unwrap(),
             Money::from_f64(0.5).unwrap()
         );
         assert_eq!(
-            fees.commission(ctx(&instrument, 100.0, 10.0, false)).unwrap(),
+            fees.commission(ctx(&instrument, 100.0, 10.0, false))
+                .unwrap(),
             Money::from_f64(0.2).unwrap()
         );
     }
@@ -565,7 +579,9 @@ mod tests {
     fn no_fees_charges_nothing() {
         let instrument = market();
         assert_eq!(
-            NoFees.commission(ctx(&instrument, 0.5, 1_000.0, true)).unwrap(),
+            NoFees
+                .commission(ctx(&instrument, 0.5, 1_000.0, true))
+                .unwrap(),
             Money::ZERO
         );
     }

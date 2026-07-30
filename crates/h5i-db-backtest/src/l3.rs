@@ -20,6 +20,7 @@
 //! been replayed through them. That check is still outstanding and is a
 //! different kind of assurance from the tests below.
 
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::error::{BacktestError, Result};
@@ -41,10 +42,7 @@ pub enum MboMessage {
     /// An order leaves the book.
     Cancel { order_id: VenueOrderId },
     /// An order trades, in whole or in part.
-    Execute {
-        order_id: VenueOrderId,
-        size: Qty,
-    },
+    Execute { order_id: VenueOrderId, size: Qty },
     /// An order's size is reduced in place.
     ///
     /// Reductions keep queue priority; increases do not, and a venue that
@@ -277,8 +275,8 @@ impl L3Book {
             .filter(|(_, size)| size.is_positive())
             .collect();
         match side {
-            Side::Buy => out.sort_by(|a, b| b.0.cmp(&a.0)),
-            Side::Sell => out.sort_by(|a, b| a.0.cmp(&b.0)),
+            Side::Buy => out.sort_by_key(|(price, _)| Reverse(*price)),
+            Side::Sell => out.sort_by_key(|(price, _)| *price),
         }
         out
     }
@@ -319,7 +317,11 @@ mod tests {
         assert_eq!(book.size_ahead_of(1).unwrap(), Qty::ZERO);
         assert_eq!(book.size_ahead_of(2).unwrap(), qty(10.0));
         assert_eq!(book.size_ahead_of(3).unwrap(), qty(30.0));
-        assert_eq!(book.size_ahead_of(99), None, "an unknown order has no place");
+        assert_eq!(
+            book.size_ahead_of(99),
+            None,
+            "an unknown order has no place"
+        );
     }
 
     #[test]
@@ -331,7 +333,11 @@ mod tests {
         book.cancel(1).unwrap();
         assert_eq!(book.size_ahead_of(3).unwrap(), qty(20.0));
         book.cancel(2).unwrap();
-        assert_eq!(book.size_ahead_of(3).unwrap(), Qty::ZERO, "now at the front");
+        assert_eq!(
+            book.size_ahead_of(3).unwrap(),
+            Qty::ZERO,
+            "now at the front"
+        );
     }
 
     #[test]

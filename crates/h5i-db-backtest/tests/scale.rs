@@ -14,13 +14,13 @@
 
 use std::time::Instant;
 
+use h5i_db_backtest::Result;
 use h5i_db_backtest::engine::{Engine, OrderRequest, SignalReplay};
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, InstrumentSet, OutcomeId};
 use h5i_db_backtest::models::QueuePositionFills;
-use h5i_db_backtest::replay::{priority, Replay};
+use h5i_db_backtest::replay::{Replay, priority};
 use h5i_db_backtest::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
-use h5i_db_backtest::Result;
 
 const MARKET: &str = "SCALE-PERP";
 
@@ -200,7 +200,11 @@ fn a_full_run_over_a_generated_day_completes() {
                 OrderRequest::market(
                     id.clone(),
                     OutcomeId::FIRST,
-                    if index % 2 == 0 { Side::Buy } else { Side::Sell },
+                    if index % 2 == 0 {
+                        Side::Buy
+                    } else {
+                        Side::Sell
+                    },
                     Qty::from_f64(1.0).unwrap(),
                 ),
             )
@@ -380,7 +384,10 @@ fn queue_matching_scales_across_many_prints_and_orders() {
     let result = engine.run(&mut replay, &mut strategy).unwrap();
     let elapsed = started.elapsed();
     assert_eq!(result.metrics.orders_submitted, 500);
-    assert!(result.fills.is_empty(), "displayed queue was never exhausted");
+    assert!(
+        result.fills.is_empty(),
+        "displayed queue was never exhausted"
+    );
     assert!(
         elapsed.as_secs_f64() < 30.0,
         "10k prints over 500 queued orders took {elapsed:?}"

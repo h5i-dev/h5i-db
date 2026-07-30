@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use crate::error::{BacktestError, Result};
 use crate::instrument::{InstrumentId, OutcomeId};
 use crate::position::Portfolio;
-use crate::types::{notional, Money, Price, Qty, UnixNanos, SCALE};
+use crate::types::{Money, Price, Qty, SCALE, UnixNanos, notional};
 
 /// How a market resolved.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -113,7 +113,10 @@ pub fn settle(
 ) -> Result<SettlementReport> {
     let mut by_instrument: BTreeMap<&InstrumentId, &Resolution> = BTreeMap::new();
     for resolution in resolutions {
-        if by_instrument.insert(&resolution.instrument, resolution).is_some() {
+        if by_instrument
+            .insert(&resolution.instrument, resolution)
+            .is_some()
+        {
             return Err(BacktestError::invalid(format!(
                 "two resolutions supplied for {}",
                 resolution.instrument

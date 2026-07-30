@@ -134,6 +134,7 @@ impl Order {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: OrderId,
         instrument: InstrumentId,
@@ -244,24 +245,28 @@ mod tests {
     #[test]
     fn quantity_must_be_positive_because_side_carries_direction() {
         let (instrument, outcome) = ids();
-        assert!(Order::market(
-            OrderId(1),
-            instrument.clone(),
-            outcome,
-            Side::Buy,
-            Qty::ZERO,
-            UnixNanos::new(0)
-        )
-        .is_err());
-        assert!(Order::market(
-            OrderId(1),
-            instrument,
-            outcome,
-            Side::Sell,
-            Qty::from_raw(-1),
-            UnixNanos::new(0)
-        )
-        .is_err());
+        assert!(
+            Order::market(
+                OrderId(1),
+                instrument.clone(),
+                outcome,
+                Side::Buy,
+                Qty::ZERO,
+                UnixNanos::new(0)
+            )
+            .is_err()
+        );
+        assert!(
+            Order::market(
+                OrderId(1),
+                instrument,
+                outcome,
+                Side::Sell,
+                Qty::from_raw(-1),
+                UnixNanos::new(0)
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -615,7 +615,7 @@ fn settlement_is_refused_when_the_run_ends_before_resolution() {
 
     let refused = settle(
         &portfolio,
-        &[resolution.clone()],
+        std::slice::from_ref(&resolution),
         result.simulated_through,
         &result.marks,
     )

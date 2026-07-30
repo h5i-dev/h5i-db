@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use crate::error::Result;
 use crate::instrument::{InstrumentId, OutcomeId};
 use crate::order::Fill;
-use crate::types::{notional, Money, Price, Qty};
+use crate::types::{Money, Price, Qty, notional};
 
 /// The key a position is held under: an instrument *and* an outcome.
 pub type PositionKey = (InstrumentId, OutcomeId);
@@ -186,20 +186,13 @@ impl Portfolio {
     }
 
     /// Cash owed on a dividend: positive to a long, negative from a short.
-    pub fn dividend_due(
-        &self,
-        instrument: &InstrumentId,
-        per_share: Money,
-    ) -> Result<Money> {
+    pub fn dividend_due(&self, instrument: &InstrumentId, per_share: Money) -> Result<Money> {
         let mut total = Money::ZERO;
         for position in self.positions.values() {
             if &position.instrument != instrument || position.is_flat() {
                 continue;
             }
-            let due = crate::types::notional(
-                Price::from_raw(per_share.raw()),
-                position.quantity,
-            )?;
+            let due = crate::types::notional(Price::from_raw(per_share.raw()), position.quantity)?;
             total = total.checked_add(due)?;
         }
         Ok(total)
@@ -246,7 +239,10 @@ impl Portfolio {
     pub fn unrealized_pnl(&self) -> Result<Money> {
         let mut total = Money::ZERO;
         for position in self.positions.values() {
-            if let Some(mark) = self.marks.get(&(position.instrument.clone(), position.outcome)) {
+            if let Some(mark) = self
+                .marks
+                .get(&(position.instrument.clone(), position.outcome))
+            {
                 total = total.checked_add(position.unrealized_pnl(*mark)?)?;
             }
         }
@@ -267,7 +263,10 @@ impl Portfolio {
     pub fn gross_exposure(&self) -> Result<Money> {
         let mut total = Money::ZERO;
         for position in self.positions.values() {
-            if let Some(mark) = self.marks.get(&(position.instrument.clone(), position.outcome)) {
+            if let Some(mark) = self
+                .marks
+                .get(&(position.instrument.clone(), position.outcome))
+            {
                 total = total.checked_add(position.exposure(*mark)?.abs())?;
             }
         }
@@ -347,7 +346,11 @@ mod tests {
         assert!(p.is_flat());
         // Sold at 0.60, bought back at 0.50: a gain for a short.
         assert_eq!(p.realized_pnl, money(10.0));
-        assert_eq!(p.average_price, Price::ZERO, "a flat position has no average");
+        assert_eq!(
+            p.average_price,
+            Price::ZERO,
+            "a flat position has no average"
+        );
     }
 
     #[test]
@@ -385,7 +388,10 @@ mod tests {
     #[test]
     fn unrealized_pnl_needs_an_open_position() {
         let mut p = position();
-        assert_eq!(p.unrealized_pnl(Price::from_f64(0.9).unwrap()).unwrap(), Money::ZERO);
+        assert_eq!(
+            p.unrealized_pnl(Price::from_f64(0.9).unwrap()).unwrap(),
+            Money::ZERO
+        );
         p.apply(&fill(Side::Buy, 0.40, 100.0, 0.0)).unwrap();
         assert_eq!(
             p.unrealized_pnl(Price::from_f64(0.55).unwrap()).unwrap(),

@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::error::{BacktestError, Result};
-use crate::types::{Price, Qty, UnixNanos, SCALE};
+use crate::types::{Price, Qty, SCALE, UnixNanos};
 
 /// A venue-qualified instrument identifier.
 ///
@@ -94,7 +94,10 @@ impl InstrumentKind {
     /// drives cash deeply negative on entry, which then reads as an
     /// insolvent account and liquidates a perfectly healthy position.
     pub fn is_funded(&self) -> bool {
-        matches!(self, InstrumentKind::PredictionMarket | InstrumentKind::Spot)
+        matches!(
+            self,
+            InstrumentKind::PredictionMarket | InstrumentKind::Spot
+        )
     }
 }
 
@@ -333,7 +336,10 @@ mod tests {
         assert_eq!(market.outcome_count(), 4);
         assert_eq!(market.outcome(OutcomeId(2)).unwrap(), "C");
         let err = market.outcome(OutcomeId(9)).unwrap_err();
-        assert!(matches!(err, BacktestError::UnknownOutcome { count: 4, .. }));
+        assert!(matches!(
+            err,
+            BacktestError::UnknownOutcome { count: 4, .. }
+        ));
     }
 
     #[test]
@@ -367,12 +373,9 @@ mod tests {
 
     #[test]
     fn completeness_error_measures_the_deviation_from_one() {
-        let market = Instrument::prediction_market(
-            "m",
-            "v",
-            vec!["A".into(), "B".into(), "C".into()],
-        )
-        .unwrap();
+        let market =
+            Instrument::prediction_market("m", "v", vec!["A".into(), "B".into(), "C".into()])
+                .unwrap();
         let exact = [
             Price::from_f64(0.5).unwrap(),
             Price::from_f64(0.3).unwrap(),

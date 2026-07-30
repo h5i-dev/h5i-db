@@ -70,9 +70,11 @@ pub fn l2_book_request(coin: &str) -> String {
 
 /// A perpetual instrument for a Hyperliquid coin.
 pub fn instrument(coin: &str, tick_size: f64, lot_size: f64) -> Result<Instrument> {
-    Ok(Instrument::perpetual(format!("{coin}-PERP"), "hyperliquid")?
-        .with_tick_size(Price::from_f64(tick_size)?)
-        .with_lot_size(Qty::from_f64(lot_size)?))
+    Ok(
+        Instrument::perpetual(format!("{coin}-PERP"), "hyperliquid")?
+            .with_tick_size(Price::from_f64(tick_size)?)
+            .with_lot_size(Qty::from_f64(lot_size)?),
+    )
 }
 
 fn parse_json(body: &str) -> Result<Value> {
@@ -89,7 +91,9 @@ fn number(value: &Value, field: &'static str) -> Result<f64> {
             what: field,
             value: text.clone(),
         }),
-        Some(Value::Number(number)) => number.as_f64().ok_or(BacktestError::NotFinite { what: field }),
+        Some(Value::Number(number)) => number
+            .as_f64()
+            .ok_or(BacktestError::NotFinite { what: field }),
         _ => Err(BacktestError::Parse {
             what: field,
             value: "missing".to_string(),
@@ -126,10 +130,7 @@ pub fn parse_candles(body: &str, instrument_id: &str) -> Result<Vec<Record>> {
         let open_ms = millis(row, "t")?;
         let close_ms = millis(row, "T")?;
         out.push(Record::new(
-            Stamps::new(
-                UnixNanos::new(open_ms * MS),
-                UnixNanos::new(close_ms * MS),
-            )?,
+            Stamps::new(UnixNanos::new(open_ms * MS), UnixNanos::new(close_ms * MS))?,
             id.clone(),
             OutcomeId::FIRST,
             MarketEvent::Bar {
@@ -254,7 +255,10 @@ mod tests {
 
         let funding: Value = serde_json::from_str(&funding_request("BTC", 1, None)).unwrap();
         assert_eq!(funding["type"], "fundingHistory");
-        assert!(funding["req"].get("endTime").is_none(), "omitted when absent");
+        assert!(
+            funding["req"].get("endTime").is_none(),
+            "omitted when absent"
+        );
 
         let book: Value = serde_json::from_str(&l2_book_request("ETH")).unwrap();
         assert_eq!(book["type"], "l2Book");
@@ -267,7 +271,13 @@ mod tests {
         assert_eq!(records.len(), 2);
         // 1640995200000 ms is 2022-01-01T00:00:00Z, not 1970.
         assert_eq!(records[0].stamps.ts_event.get(), 1_640_995_200_000 * MS);
-        let MarketEvent::Bar { open, close, volume, .. } = &records[0].event else {
+        let MarketEvent::Bar {
+            open,
+            close,
+            volume,
+            ..
+        } = &records[0].event
+        else {
             panic!("expected a bar");
         };
         assert_eq!(*open, Price::from_f64(46000.5).unwrap());
@@ -324,17 +334,36 @@ mod tests {
             panic!("expected a snapshot");
         };
         assert_eq!(bids.len(), 2);
-        assert_eq!(bids[0], (Price::from_f64(46000.0).unwrap(), Qty::from_f64(1.5).unwrap()));
-        assert_eq!(asks[0], (Price::from_f64(46001.0).unwrap(), Qty::from_f64(0.75).unwrap()));
+        assert_eq!(
+            bids[0],
+            (
+                Price::from_f64(46000.0).unwrap(),
+                Qty::from_f64(1.5).unwrap()
+            )
+        );
+        assert_eq!(
+            asks[0],
+            (
+                Price::from_f64(46001.0).unwrap(),
+                Qty::from_f64(0.75).unwrap()
+            )
+        );
         assert!(bids[0].0 < asks[0].0, "the book must not be crossed");
     }
 
     #[test]
     fn the_parsed_book_reconstructs() {
         let record = parse_l2_book(BOOK, "BTC-PERP").unwrap();
-        let book = h5i_db_backtest::store::replay_book(std::slice::from_ref(&record), "BTC-PERP").unwrap();
-        assert_eq!(book.best_bid().unwrap().0, Price::from_f64(46000.0).unwrap());
-        assert_eq!(book.best_ask().unwrap().0, Price::from_f64(46001.0).unwrap());
+        let book =
+            h5i_db_backtest::store::replay_book(std::slice::from_ref(&record), "BTC-PERP").unwrap();
+        assert_eq!(
+            book.best_bid().unwrap().0,
+            Price::from_f64(46000.0).unwrap()
+        );
+        assert_eq!(
+            book.best_ask().unwrap().0,
+            Price::from_f64(46001.0).unwrap()
+        );
     }
 
     #[test]
@@ -345,10 +374,16 @@ mod tests {
         assert!(parse_candles(r#"[{"t":1,"T":2,"o":"1","h":"1","l":"1","v":"1"}]"#, "X").is_err());
         // Nor an unparseable one.
         assert!(
-            parse_candles(r#"[{"t":1,"T":2,"o":"x","h":"1","l":"1","c":"1","v":"1"}]"#, "X")
-                .is_err()
+            parse_candles(
+                r#"[{"t":1,"T":2,"o":"x","h":"1","l":"1","c":"1","v":"1"}]"#,
+                "X"
+            )
+            .is_err()
         );
-        assert!(parse_l2_book(r#"{"time":1,"levels":[[]]}"#, "X").is_err(), "needs two sides");
+        assert!(
+            parse_l2_book(r#"{"time":1,"levels":[[]]}"#, "X").is_err(),
+            "needs two sides"
+        );
     }
 
     #[test]

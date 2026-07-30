@@ -336,8 +336,7 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
     let mut is_last = BooleanBuilder::new();
     let mut vendor = StringBuilder::new();
 
-    let mut index: i64 = 0;
-    for record in records {
+    for (index, record) in records.iter().enumerate() {
         let mut push = |action_name: &str,
                         side_value: Option<Side>,
                         price_value: Option<Price>,
@@ -360,7 +359,7 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
                 Some(value) => size.append_value(value.to_f64()),
                 None => size.append_null(),
             }
-            event_index.append_value(index);
+            event_index.append_value(index as i64);
             is_last.append_value(last);
             vendor.append_null();
         };
@@ -420,7 +419,6 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
                 ));
             }
         }
-        index += 1;
     }
 
     let columns: Vec<ArrayRef> = vec![
@@ -448,14 +446,15 @@ pub async fn read_book_events(
     let batches = scan_optional(db, schema::BOOK_DELTAS, at, window).await?;
     let mut out: Vec<Record> = Vec::new();
     // Snapshot levels accumulate here until their `is_last` row arrives.
-    let mut pending: Option<(
+    type PendingSnapshot = (
         i64,
         Stamps,
         InstrumentId,
         OutcomeId,
         Vec<(Price, Qty)>,
         Vec<(Price, Qty)>,
-    )> = None;
+    );
+    let mut pending: Option<PendingSnapshot> = None;
 
     for batch in &batches {
         let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;

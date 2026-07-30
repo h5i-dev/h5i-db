@@ -196,12 +196,7 @@ pub struct ReplayBuilder {
 
 impl ReplayBuilder {
     /// Add a stream from a vector, which must already be sorted by `ts_init`.
-    pub fn stream(
-        self,
-        name: impl Into<String>,
-        priority: u32,
-        records: Vec<Record>,
-    ) -> Self {
+    pub fn stream(self, name: impl Into<String>, priority: u32, records: Vec<Record>) -> Self {
         self.source(name, priority, Box::new(records.into_iter().map(Ok)))
     }
 
@@ -211,12 +206,7 @@ impl ReplayBuilder {
     /// book data never exists as a `Vec<Record>`. Only one record per
     /// stream is held at any moment, plus whatever the source itself
     /// buffers.
-    pub fn source(
-        mut self,
-        name: impl Into<String>,
-        priority: u32,
-        source: RecordSource,
-    ) -> Self {
+    pub fn source(mut self, name: impl Into<String>, priority: u32, source: RecordSource) -> Self {
         self.streams.push((name.into(), priority, source));
         self
     }
@@ -293,7 +283,12 @@ mod tests {
             .stream("b", priority::TRADE, vec![record(20, "b"), record(40, "b")])
             .build()
             .unwrap();
-        let order: Vec<i64> = replay.collect_all().unwrap().iter().map(|r| r.ts().get()).collect();
+        let order: Vec<i64> = replay
+            .collect_all()
+            .unwrap()
+            .iter()
+            .map(|r| r.ts().get())
+            .collect();
         assert_eq!(order, vec![10, 20, 30, 40]);
     }
 
@@ -342,7 +337,11 @@ mod tests {
         // Two streams at identical priority and timestamp: the declared
         // stream order decides, and it decides the same way every run.
         let mut first = Replay::builder()
-            .stream("x", priority::TRADE, vec![trade(1, "x", 0.1), trade(1, "x", 0.2)])
+            .stream(
+                "x",
+                priority::TRADE,
+                vec![trade(1, "x", 0.1), trade(1, "x", 0.2)],
+            )
             .stream("y", priority::TRADE, vec![trade(1, "y", 0.3)])
             .build()
             .unwrap();
@@ -396,14 +395,22 @@ mod tests {
         // and the error names the record that broke the order rather than
         // the stream as a whole.
         let mut replay = Replay::builder()
-            .stream("bad", priority::TRADE, vec![record(10, "m"), record(5, "m")])
+            .stream(
+                "bad",
+                priority::TRADE,
+                vec![record(10, "m"), record(5, "m")],
+            )
             .build()
             .expect("the first record is fine");
         // The offending record is pulled while emitting the one before it,
         // so the error arrives on the call that would have needed it.
         let err = replay.next_record().unwrap_err();
         match err {
-            BacktestError::OutOfOrder { stream, ts, previous } => {
+            BacktestError::OutOfOrder {
+                stream,
+                ts,
+                previous,
+            } => {
                 assert_eq!(stream, "bad");
                 assert_eq!((ts, previous), (5, 10));
             }

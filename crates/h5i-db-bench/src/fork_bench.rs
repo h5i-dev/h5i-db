@@ -294,9 +294,13 @@ async fn seed_shadow_tables(db: &Database, count: usize, rows: usize) {
         .collect();
     db.create_tables(specs).await.unwrap();
     for i in 0..count {
-        db.write(&shadow_table(i), vec![batch(0, rows)], WriteOptions::default())
-            .await
-            .unwrap();
+        db.write(
+            &shadow_table(i),
+            vec![batch(0, rows)],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
     }
 }
 
@@ -628,7 +632,10 @@ async fn main() {
         "resolve       {:.2}x over {} live forks, {:.2}x over {} levels of depth",
         report.resolve_vs_fork_count.ratio, args.forks, report.resolve_vs_depth.ratio, args.depth
     );
-    eprintln!("\n--- first touch ({} inherited tables) ---", args.shadow_tables);
+    eprintln!(
+        "\n--- first touch ({} inherited tables) ---",
+        args.shadow_tables
+    );
     eprintln!(
         "serial appends {:>5} ms   one transaction {:>5} ms   already shadowed {:>5} ms  ({:.2}x)",
         report.first_touch.serial_ms,

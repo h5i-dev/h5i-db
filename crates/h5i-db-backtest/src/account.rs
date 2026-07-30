@@ -18,7 +18,7 @@ use crate::currency::{Currency, FxBook, FxError, Haircuts};
 use crate::error::{BacktestError, Result};
 use crate::instrument::{Instrument, InstrumentId, OutcomeId};
 use crate::position::Position;
-use crate::types::{notional, Money, Price, Qty, SCALE};
+use crate::types::{Money, Price, Qty, SCALE, notional};
 
 /// How much collateral a position requires.
 ///
@@ -27,8 +27,7 @@ use crate::types::{notional, Money, Price, Qty, SCALE};
 /// one number makes a position that can be opened immediately liquidatable,
 /// which no real venue does.
 pub trait MarginModel: std::fmt::Debug {
-    fn initial_margin(&self, instrument: &Instrument, quantity: Qty, mark: Price)
-    -> Result<Money>;
+    fn initial_margin(&self, instrument: &Instrument, quantity: Qty, mark: Price) -> Result<Money>;
 
     fn maintenance_margin(
         &self,
@@ -165,7 +164,7 @@ impl Account {
             balances: BTreeMap::new(),
             reporting,
             haircuts: Haircuts::new(),
-            margin: margin,
+            margin,
         }
     }
 
@@ -216,9 +215,7 @@ impl Account {
             }
             match fx.convert(*amount, currency, &self.reporting) {
                 Ok(converted) => total = total.checked_add(converted)?,
-                Err(FxError::NoRate { .. }) => {
-                    unconvertible.push((currency.clone(), *amount))
-                }
+                Err(FxError::NoRate { .. }) => unconvertible.push((currency.clone(), *amount)),
             }
         }
         Ok(Valuation {
@@ -238,18 +235,14 @@ impl Account {
                 // counts against you in full regardless of haircut.
                 match fx.convert(*amount, currency, &self.reporting) {
                     Ok(converted) => total = total.checked_add(converted)?,
-                    Err(FxError::NoRate { .. }) => {
-                        unconvertible.push((currency.clone(), *amount))
-                    }
+                    Err(FxError::NoRate { .. }) => unconvertible.push((currency.clone(), *amount)),
                 }
                 continue;
             }
             let after_haircut = self.haircuts.apply(*amount, currency)?;
             match fx.convert(after_haircut, currency, &self.reporting) {
                 Ok(converted) => total = total.checked_add(converted)?,
-                Err(FxError::NoRate { .. }) => {
-                    unconvertible.push((currency.clone(), *amount))
-                }
+                Err(FxError::NoRate { .. }) => unconvertible.push((currency.clone(), *amount)),
             }
         }
         Ok(Valuation {
@@ -292,12 +285,16 @@ pub fn margin_requirement<'a>(
             continue;
         };
         let instrument = instruments.get(&position.instrument)?;
-        out.initial = out
-            .initial
-            .checked_add(model.initial_margin(instrument, position.quantity, *mark)?)?;
-        out.maintenance = out
-            .maintenance
-            .checked_add(model.maintenance_margin(instrument, position.quantity, *mark)?)?;
+        out.initial = out.initial.checked_add(model.initial_margin(
+            instrument,
+            position.quantity,
+            *mark,
+        )?)?;
+        out.maintenance = out.maintenance.checked_add(model.maintenance_margin(
+            instrument,
+            position.quantity,
+            *mark,
+        )?)?;
     }
     Ok(out)
 }
@@ -490,7 +487,9 @@ mod tests {
         let model = CashMargin;
         let instrument = perp();
         assert_eq!(
-            model.initial_margin(&instrument, qty(2.0), price(100.0)).unwrap(),
+            model
+                .initial_margin(&instrument, qty(2.0), price(100.0))
+                .unwrap(),
             money(200.0)
         );
         assert_eq!(
@@ -507,7 +506,9 @@ mod tests {
         let instrument = perp();
         // 2 BTC at 100 = 200 notional; 10x leverage needs 20.
         assert_eq!(
-            model.initial_margin(&instrument, qty(2.0), price(100.0)).unwrap(),
+            model
+                .initial_margin(&instrument, qty(2.0), price(100.0))
+                .unwrap(),
             money(20.0)
         );
         // Maintenance is half of initial by default.
@@ -523,8 +524,12 @@ mod tests {
     fn a_short_requires_the_same_margin_as_a_long() {
         let model = LinearMargin::from_leverage(5.0).unwrap();
         let instrument = perp();
-        let long = model.initial_margin(&instrument, qty(3.0), price(50.0)).unwrap();
-        let short = model.initial_margin(&instrument, qty(-3.0), price(50.0)).unwrap();
+        let long = model
+            .initial_margin(&instrument, qty(3.0), price(50.0))
+            .unwrap();
+        let short = model
+            .initial_margin(&instrument, qty(-3.0), price(50.0))
+            .unwrap();
         assert_eq!(long, short);
     }
 
@@ -573,12 +578,8 @@ mod tests {
             maintenance: money(10.0),
             unmarked: Vec::new(),
         };
-        let state = margin_state(
-            &account.collateral(&fx).unwrap(),
-            Money::ZERO,
-            &requirement,
-        )
-        .unwrap();
+        let state =
+            margin_state(&account.collateral(&fx).unwrap(), Money::ZERO, &requirement).unwrap();
         assert_eq!(state.equity, money(100.0));
         assert!(!state.liquidatable);
         assert_eq!(state.available(), money(80.0));
@@ -618,12 +619,8 @@ mod tests {
             maintenance: money(10.0),
             unmarked: Vec::new(),
         };
-        let state = margin_state(
-            &account.collateral(&fx).unwrap(),
-            Money::ZERO,
-            &requirement,
-        )
-        .unwrap();
+        let state =
+            margin_state(&account.collateral(&fx).unwrap(), Money::ZERO, &requirement).unwrap();
         assert!(state.incomplete);
         assert!(
             !state.liquidatable,
@@ -637,7 +634,9 @@ mod tests {
             unmarked: vec![(InstrumentId::new("x").unwrap(), OutcomeId::FIRST)],
         };
         let state = margin_state(
-            &Account::cash(usd(), money(1.0)).collateral(&FxBook::new()).unwrap(),
+            &Account::cash(usd(), money(1.0))
+                .collateral(&FxBook::new())
+                .unwrap(),
             Money::ZERO,
             &unmarked,
         )

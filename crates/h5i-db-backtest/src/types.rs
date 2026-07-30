@@ -346,7 +346,10 @@ mod tests {
     fn notional_is_exact_for_representable_values() {
         let price = Price::from_f64(0.37).unwrap();
         let qty = Qty::from_units(100).unwrap();
-        assert_eq!(notional(price, qty).unwrap(), Money::from_f64(37.0).unwrap());
+        assert_eq!(
+            notional(price, qty).unwrap(),
+            Money::from_f64(37.0).unwrap()
+        );
     }
 
     #[test]
@@ -383,7 +386,9 @@ mod tests {
         assert!(Stamps::new(event, UnixNanos::new(999)).is_err());
         assert!(Stamps::new(event, event).is_ok());
         assert_eq!(
-            Stamps::new(event, UnixNanos::new(1_500)).unwrap().delay_nanos(),
+            Stamps::new(event, UnixNanos::new(1_500))
+                .unwrap()
+                .delay_nanos(),
             500
         );
     }
@@ -399,7 +404,11 @@ mod tests {
 
     #[test]
     fn checked_arithmetic_reports_overflow() {
-        assert!(Money::from_raw(i64::MAX).checked_add(Money::from_raw(1)).is_err());
+        assert!(
+            Money::from_raw(i64::MAX)
+                .checked_add(Money::from_raw(1))
+                .is_err()
+        );
         assert!(Money::from_units(i64::MAX).is_err());
     }
 }

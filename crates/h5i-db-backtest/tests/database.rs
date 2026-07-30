@@ -13,13 +13,13 @@ use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId};
 use h5i_db_backtest::models::PredictionMarketFees;
 use h5i_db_backtest::position::Portfolio;
-use h5i_db_backtest::run::{run_in_fork, run_in_place, RunSpec};
+use h5i_db_backtest::run::{RunSpec, run_in_fork, run_in_place};
 use h5i_db_backtest::settlement::Resolution;
 use h5i_db_backtest::store;
 use h5i_db_backtest::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
 use h5i_db_backtest::window::TimeWindow;
-use h5i_db_core::database::ReadAt;
 use h5i_db_core::Database;
+use h5i_db_core::database::ReadAt;
 
 const MARKET: &str = "will-x-happen";
 const SECOND: i64 = 1_000_000_000;
@@ -66,7 +66,9 @@ fn snapshot_at(at: i64, best_ask: f64) -> Record {
 async fn seeded_db(dir: &tempfile::TempDir) -> Database {
     let db = Database::create(&dir.path().join("bt.db")).await.unwrap();
     store::create_market_data_tables(&db).await.unwrap();
-    store::write_instruments(&db, &[market()], ts(0)).await.unwrap();
+    store::write_instruments(&db, &[market()], ts(0))
+        .await
+        .unwrap();
 
     let mut records = Vec::new();
     for step in 1..=10i64 {
@@ -120,7 +122,10 @@ async fn instruments_survive_the_round_trip() {
     let read = store::read_instruments(&db, ReadAt::Latest).await.unwrap();
     assert_eq!(read.len(), 2);
     let restored = read.get(&InstrumentId::new("three-way").unwrap()).unwrap();
-    assert_eq!(restored, &categorical, "an instrument must round trip whole");
+    assert_eq!(
+        restored, &categorical,
+        "an instrument must round trip whole"
+    );
     assert_eq!(restored.outcomes, vec!["A", "B", "C"]);
     assert_eq!(restored.expiration, Some(ts(42)));
 }
@@ -168,7 +173,9 @@ async fn book_events_survive_the_round_trip_including_snapshot_grouping() {
     ];
     store::write_book_events(&db, &written).await.unwrap();
 
-    let read = store::read_book_events(&db, ReadAt::Latest, None).await.unwrap();
+    let read = store::read_book_events(&db, ReadAt::Latest, None)
+        .await
+        .unwrap();
     assert_eq!(read, written, "book events must round trip exactly");
     // The late-arriving delta kept both of its stamps.
     assert_eq!(read[1].stamps.ts_event, ts(2));
@@ -191,7 +198,9 @@ async fn an_empty_snapshot_is_a_state_not_an_absence() {
     )];
     store::write_book_events(&db, &written).await.unwrap();
     assert_eq!(
-        store::read_book_events(&db, ReadAt::Latest, None).await.unwrap(),
+        store::read_book_events(&db, ReadAt::Latest, None)
+            .await
+            .unwrap(),
         written
     );
 }
@@ -288,8 +297,17 @@ async fn a_run_lives_on_a_fork_and_leaves_the_base_untouched() {
         .into_iter()
         .map(|entry| entry.name)
         .collect();
-    for expected in ["bt_run", "bt_orders", "bt_fills", "bt_positions", "bt_equity"] {
-        assert!(fork_tables.contains(&expected.to_string()), "missing {expected}");
+    for expected in [
+        "bt_run",
+        "bt_orders",
+        "bt_fills",
+        "bt_positions",
+        "bt_equity",
+    ] {
+        assert!(
+            fork_tables.contains(&expected.to_string()),
+            "missing {expected}"
+        );
     }
 }
 
@@ -311,9 +329,14 @@ async fn positions_rebuild_from_the_stored_fill_log() {
     ])
     .unwrap();
 
-    let report = run_in_fork(&db, RunSpec::new("audit", money(1_000.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let report = run_in_fork(
+        &db,
+        RunSpec::new("audit", money(1_000.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
 
     let fork = db.open_fork("bt-audit").await.unwrap();
     let stored = store::read_fills(&fork, ReadAt::Latest).await.unwrap();
@@ -442,13 +465,21 @@ async fn the_equity_curve_is_written_and_ends_where_the_run_did() {
         OrderRequest::market(id(), OutcomeId::FIRST, Side::Buy, qty(100.0)),
     )])
     .unwrap();
-    let report = run_in_fork(&db, RunSpec::new("curve", money(1_000.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let report = run_in_fork(
+        &db,
+        RunSpec::new("curve", money(1_000.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
 
     let curve = &report.result.equity;
     assert!(curve.len() >= 2, "a ten second run must produce a curve");
-    assert_eq!(curve.last().unwrap().ts, report.result.simulated_through.unwrap());
+    assert_eq!(
+        curve.last().unwrap().ts,
+        report.result.simulated_through.unwrap()
+    );
     // Equity starts at the starting cash, because nothing has traded yet.
     assert_eq!(curve[0].equity, money(1_000.0));
     // Buying converts cash into position value, and the only thing it costs
@@ -480,18 +511,25 @@ async fn settlement_is_gated_on_what_the_run_actually_reached() {
         OrderRequest::market(id(), OutcomeId::FIRST, Side::Buy, qty(100.0)),
     )])
     .unwrap();
-    let short = run_in_fork(&db, RunSpec::new("short", money(1_000.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let short = run_in_fork(
+        &db,
+        RunSpec::new("short", money(1_000.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
 
     assert!(
         !short.settlement.was_applied(),
         "a run that ended before resolution must not book settlement"
     );
-    assert!(short
-        .warnings()
-        .iter()
-        .any(|warning| warning.contains("unsettled")));
+    assert!(
+        short
+            .warnings()
+            .iter()
+            .any(|warning| warning.contains("unsettled"))
+    );
 
     // Extend the data past resolution and the same strategy settles.
     store::write_book_events(&db, &[snapshot_at(200 * SECOND, 0.99)])
@@ -502,9 +540,14 @@ async fn settlement_is_gated_on_what_the_run_actually_reached() {
         OrderRequest::market(id(), OutcomeId::FIRST, Side::Buy, qty(100.0)),
     )])
     .unwrap();
-    let full = run_in_fork(&db, RunSpec::new("full", money(1_000.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let full = run_in_fork(
+        &db,
+        RunSpec::new("full", money(1_000.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
     assert!(full.settlement.was_applied());
     assert_eq!(full.settlement.settled.len(), 1);
 }
@@ -572,12 +615,13 @@ async fn a_truncated_snapshot_is_refused_rather_than_half_applied() {
     // Simulate a writer that died mid-snapshot by writing the levels of one
     // event with no is_last row.
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::create(&dir.path().join("trunc.db")).await.unwrap();
+    let db = Database::create(&dir.path().join("trunc.db"))
+        .await
+        .unwrap();
     store::create_market_data_tables(&db).await.unwrap();
 
     use arrow::array::{
-        BooleanArray, Float64Array, Int64Array, StringArray, TimestampNanosecondArray,
-        UInt16Array,
+        BooleanArray, Float64Array, Int64Array, StringArray, TimestampNanosecondArray, UInt16Array,
     };
     use std::sync::Arc;
     let batch = arrow::record_batch::RecordBatch::try_new(
@@ -637,17 +681,20 @@ async fn marks_and_settlement_agree_on_the_stored_positions() {
         OrderRequest::market(id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
     )])
     .unwrap();
-    let report = run_in_fork(&db, RunSpec::new("marks", money(100.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let report = run_in_fork(
+        &db,
+        RunSpec::new("marks", money(100.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
 
     let settled = &report.settlement.settled[0];
     // A YES position that resolved YES is worth 1.00 per contract.
     let portfolio = Portfolio::replay(&report.result.fills).unwrap();
     let position = portfolio.position(&id(), OutcomeId::FIRST).unwrap();
-    let expected = position
-        .unrealized_pnl(price(1.0))
-        .unwrap();
+    let expected = position.unrealized_pnl(price(1.0)).unwrap();
     assert_eq!(settled.settled_pnl, expected);
     // And the market-exit figure came from the last mark, not from nothing.
     let marks: BTreeMap<_, _> = report.result.marks.clone();
@@ -702,11 +749,16 @@ async fn perp_db(dir: &tempfile::TempDir) -> Database {
     .await
     .unwrap();
 
-    let books: Vec<Record> = (1..=10).map(|step| perp_snapshot(step * SECOND, 100.0)).collect();
+    let books: Vec<Record> = (1..=10)
+        .map(|step| perp_snapshot(step * SECOND, 100.0))
+        .collect();
     store::write_book_events(&db, &books).await.unwrap();
     store::write_funding(
         &db,
-        &[funding_at(4 * SECOND, 0.0001), funding_at(8 * SECOND, 0.0001)],
+        &[
+            funding_at(4 * SECOND, 0.0001),
+            funding_at(8 * SECOND, 0.0001),
+        ],
     )
     .await
     .unwrap();
@@ -717,7 +769,9 @@ async fn perp_db(dir: &tempfile::TempDir) -> Database {
 async fn funding_records_round_trip() {
     let dir = tempfile::tempdir().unwrap();
     let db = perp_db(&dir).await;
-    let read = store::read_funding(&db, ReadAt::Latest, None).await.unwrap();
+    let read = store::read_funding(&db, ReadAt::Latest, None)
+        .await
+        .unwrap();
     assert_eq!(read.len(), 2);
     assert_eq!(read[0], funding_at(4 * SECOND, 0.0001));
 }
@@ -732,9 +786,14 @@ async fn a_long_pays_funding_when_the_rate_is_positive() {
         OrderRequest::market(perp_id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
     )])
     .unwrap();
-    let report = run_in_fork(&db, RunSpec::new("long", money(10_000.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let report = run_in_fork(
+        &db,
+        RunSpec::new("long", money(10_000.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
 
     // Long 10 at mark 100 = 1000 exposure; 0.0001 twice = 0.20 paid.
     assert_eq!(report.result.funding_paid, money(0.2));
@@ -754,9 +813,14 @@ async fn a_short_receives_funding_when_the_rate_is_positive() {
         OrderRequest::market(perp_id(), OutcomeId::FIRST, Side::Sell, qty(10.0)),
     )])
     .unwrap();
-    let report = run_in_fork(&db, RunSpec::new("short", money(10_000.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let report = run_in_fork(
+        &db,
+        RunSpec::new("short", money(10_000.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(report.result.funding_paid, money(-0.2));
     assert!(
@@ -776,9 +840,14 @@ async fn funding_before_a_position_exists_costs_nothing() {
         OrderRequest::market(perp_id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
     )])
     .unwrap();
-    let report = run_in_fork(&db, RunSpec::new("late", money(10_000.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let report = run_in_fork(
+        &db,
+        RunSpec::new("late", money(10_000.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
     assert_eq!(report.result.funding_paid, Money::ZERO);
 }
 
@@ -791,9 +860,14 @@ async fn funding_moves_cash_and_therefore_equity() {
         OrderRequest::market(perp_id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
     )])
     .unwrap();
-    let report = run_in_fork(&db, RunSpec::new("carry", money(10_000.0)), &mut strategy, |b| b)
-        .await
-        .unwrap();
+    let report = run_in_fork(
+        &db,
+        RunSpec::new("carry", money(10_000.0)),
+        &mut strategy,
+        |b| b,
+    )
+    .await
+    .unwrap();
 
     let before = report
         .result

@@ -31,7 +31,7 @@ use std::collections::BTreeMap;
 
 use crate::error::{BacktestError, Result};
 use crate::instrument::InstrumentId;
-use crate::types::{Money, Price, Qty, UnixNanos, SCALE};
+use crate::types::{Money, Price, Qty, SCALE, UnixNanos};
 use crate::window::TimeWindow;
 
 /// Something a company did to its own shares.
@@ -71,9 +71,7 @@ impl CorporateAction {
             // from quietly draining an account.
             CorporateAction::Dividend { per_share } => {
                 if per_share.is_negative() {
-                    return Err(BacktestError::invalid(
-                        "a dividend must not be negative",
-                    ));
+                    return Err(BacktestError::invalid("a dividend must not be negative"));
                 }
                 Ok(())
             }
@@ -310,8 +308,16 @@ mod tests {
 
     #[test]
     fn actions_validate_their_own_shape() {
-        assert!(CorporateAction::Split { ratio: price(2.0) }.validate().is_ok());
-        assert!(CorporateAction::Split { ratio: Price::ZERO }.validate().is_err());
+        assert!(
+            CorporateAction::Split { ratio: price(2.0) }
+                .validate()
+                .is_ok()
+        );
+        assert!(
+            CorporateAction::Split { ratio: Price::ZERO }
+                .validate()
+                .is_err()
+        );
         assert!(
             CorporateAction::Dividend {
                 per_share: Money::from_f64(-1.0).unwrap()
@@ -336,13 +342,21 @@ mod tests {
     fn a_ticker_resolves_to_whoever_held_it_at_the_time() {
         let mut registry = SymbolRegistry::new();
         registry.assign("XYZ", id("old-company"), ts(0)).unwrap();
-        registry.assign("XYZ", id("new-company"), ts(1_000)).unwrap();
+        registry
+            .assign("XYZ", id("new-company"), ts(1_000))
+            .unwrap();
 
         assert_eq!(registry.resolve("XYZ", ts(500)).unwrap(), id("old-company"));
-        assert_eq!(registry.resolve("XYZ", ts(1_500)).unwrap(), id("new-company"));
+        assert_eq!(
+            registry.resolve("XYZ", ts(1_500)).unwrap(),
+            id("new-company")
+        );
         // The handover instant belongs to the new holder: spans are
         // half-open, so there is no instant claimed by both.
-        assert_eq!(registry.resolve("XYZ", ts(1_000)).unwrap(), id("new-company"));
+        assert_eq!(
+            registry.resolve("XYZ", ts(1_000)).unwrap(),
+            id("new-company")
+        );
         assert_eq!(registry.resolve("XYZ", ts(999)).unwrap(), id("old-company"));
     }
 
@@ -366,7 +380,9 @@ mod tests {
         registry.assign("XYZ", id("old-company"), ts(0)).unwrap();
         assert_eq!(registry.resolve_unique("XYZ").unwrap(), id("old-company"));
 
-        registry.assign("XYZ", id("new-company"), ts(1_000)).unwrap();
+        registry
+            .assign("XYZ", id("new-company"), ts(1_000))
+            .unwrap();
         let error = registry.resolve_unique("XYZ").unwrap_err().to_string();
         assert!(error.contains("old-company"), "{error}");
         assert!(error.contains("new-company"), "{error}");
@@ -408,7 +424,10 @@ mod tests {
         universe.add(id("b"), TimeWindow::new(ts(50), ts(200)).unwrap());
 
         assert!(universe.contains(&id("a"), ts(50)));
-        assert!(!universe.contains(&id("a"), ts(100)), "half-open at the end");
+        assert!(
+            !universe.contains(&id("a"), ts(100)),
+            "half-open at the end"
+        );
         assert_eq!(universe.members_at(ts(75)), vec![id("a"), id("b")]);
         assert_eq!(universe.members_at(ts(150)), vec![id("b")]);
         assert!(universe.members_at(ts(500)).is_empty());

@@ -15,14 +15,14 @@
 
 use std::collections::BTreeMap;
 
-use h5i_db_core::database::ReadAt;
 use h5i_db_core::Database;
+use h5i_db_core::database::ReadAt;
 
 use crate::engine::{Engine, EngineBuilder, RunResult, Strategy};
 use crate::error::{BacktestError, Result};
 use crate::instrument::InstrumentSet;
-use crate::replay::{priority, Replay};
-use crate::settlement::{settle, SettlementReport};
+use crate::replay::{Replay, priority};
+use crate::settlement::{SettlementReport, settle};
 use crate::store;
 use crate::types::{Money, UnixNanos};
 use crate::window::{Coverage, TimeWindow};
@@ -140,8 +140,7 @@ impl RunReport {
             .orders
             .iter()
             .filter(|order| {
-                order.status == crate::order::OrderStatus::Cancelled
-                    && order.filled.is_zero()
+                order.status == crate::order::OrderStatus::Cancelled && order.filled.is_zero()
             })
             .count();
         if unfilled > 0 {
@@ -229,11 +228,7 @@ pub async fn run_in_place<F>(
 where
     F: FnOnce(EngineBuilder) -> EngineBuilder,
 {
-    let started_at = UnixNanos::new(
-        spec.window
-            .map(|w| w.start().get())
-            .unwrap_or_default(),
-    );
+    let started_at = UnixNanos::new(spec.window.map(|w| w.start().get()).unwrap_or_default());
 
     // Market data first. Resolutions are deliberately not read here.
     let instruments = store::read_instruments(db, spec.read_at.clone()).await?;
@@ -256,10 +251,7 @@ where
         // Coverage is measured on the book stream, which is the one that
         // is materialised; adding the streamed ones would mean draining
         // them, which is exactly what streaming exists to avoid.
-        let observed: Vec<i64> = book_events
-            .iter()
-            .map(|record| record.ts().get())
-            .collect();
+        let observed: Vec<i64> = book_events.iter().map(|record| record.ts().get()).collect();
         match (observed.iter().min(), observed.iter().max()) {
             (Some(first), Some(last)) => {
                 // The loaded span is what arrived, not what was asked for.
@@ -293,12 +285,7 @@ where
     let resolutions = store::read_resolutions(db, spec.read_at.clone()).await?;
     let portfolio = crate::position::Portfolio::replay(&result.fills)?;
     let marks: BTreeMap<_, _> = result.marks.clone();
-    let settlement = settle(
-        &portfolio,
-        &resolutions,
-        result.simulated_through,
-        &marks,
-    )?;
+    let settlement = settle(&portfolio, &resolutions, result.simulated_through, &marks)?;
 
     let digest = spec.digest();
     store::write_run(db, &spec.run_id, &digest, &result, &settlement, started_at).await?;

@@ -147,12 +147,7 @@ impl OrderBook {
     ///
     /// Errors when the book is stale or was never snapshotted: an
     /// incremental update has no meaning without a base to apply it to.
-    pub fn apply_delta(
-        &mut self,
-        instrument: &str,
-        delta: BookDelta,
-        ts: UnixNanos,
-    ) -> Result<()> {
+    pub fn apply_delta(&mut self, instrument: &str, delta: BookDelta, ts: UnixNanos) -> Result<()> {
         match self.status {
             Some(BookStatus::Fresh) => {}
             Some(BookStatus::Stale { since }) => {
@@ -218,9 +213,7 @@ impl OrderBook {
     /// Mid price, or `None` when either side is empty.
     pub fn mid(&self) -> Option<Price> {
         match (self.best_bid(), self.best_ask()) {
-            (Some((bid, _)), Some((ask, _))) => {
-                Some(Price::from_raw((bid.raw() + ask.raw()) / 2))
-            }
+            (Some((bid, _)), Some((ask, _))) => Some(Price::from_raw((bid.raw() + ask.raw()) / 2)),
             _ => None,
         }
     }
@@ -382,7 +375,11 @@ mod tests {
         let mut book = OrderBook::new();
         // Insert deliberately out of order.
         book.apply_snapshot(
-            &[(price(0.39), qty(1.0)), (price(0.41), qty(1.0)), (price(0.40), qty(1.0))],
+            &[
+                (price(0.39), qty(1.0)),
+                (price(0.41), qty(1.0)),
+                (price(0.40), qty(1.0)),
+            ],
             &[(price(0.45), qty(1.0)), (price(0.42), qty(1.0))],
             ts(1),
         )
@@ -396,8 +393,12 @@ mod tests {
     #[test]
     fn deltas_update_delete_and_clear() {
         let mut book = snapshotted();
-        book.apply_delta("m", BookDelta::set(Side::Buy, price(0.41), qty(50.0)), ts(2))
-            .unwrap();
+        book.apply_delta(
+            "m",
+            BookDelta::set(Side::Buy, price(0.41), qty(50.0)),
+            ts(2),
+        )
+        .unwrap();
         assert_eq!(book.best_bid().unwrap(), (price(0.41), qty(50.0)));
 
         book.apply_delta("m", BookDelta::delete(Side::Buy, price(0.41)), ts(3))
@@ -405,8 +406,12 @@ mod tests {
         assert_eq!(book.best_bid().unwrap().0, price(0.40));
 
         // A zero-size set is how most venues spell a delete.
-        book.apply_delta("m", BookDelta::set(Side::Buy, price(0.40), Qty::ZERO), ts(4))
-            .unwrap();
+        book.apply_delta(
+            "m",
+            BookDelta::set(Side::Buy, price(0.40), Qty::ZERO),
+            ts(4),
+        )
+        .unwrap();
         assert_eq!(book.best_bid().unwrap().0, price(0.39));
 
         book.apply_delta("m", BookDelta::clear(Side::Sell), ts(5))
@@ -440,10 +445,18 @@ mod tests {
         book.mark_gap(ts(5_000));
 
         let err = book
-            .apply_delta("mkt", BookDelta::set(Side::Buy, price(0.4), qty(1.0)), ts(6_000))
+            .apply_delta(
+                "mkt",
+                BookDelta::set(Side::Buy, price(0.4), qty(1.0)),
+                ts(6_000),
+            )
             .unwrap_err();
         match err {
-            BacktestError::BookGap { instrument, ts, gap_ts } => {
+            BacktestError::BookGap {
+                instrument,
+                ts,
+                gap_ts,
+            } => {
                 assert_eq!(instrument, "mkt");
                 assert_eq!(ts, 6_000);
                 assert_eq!(gap_ts, 5_000);
@@ -455,9 +468,14 @@ mod tests {
         book.apply_snapshot(&[(price(0.5), qty(10.0))], &[], ts(7_000))
             .unwrap();
         assert!(book.is_fresh());
-        assert!(book
-            .apply_delta("mkt", BookDelta::set(Side::Buy, price(0.49), qty(1.0)), ts(7_001))
-            .is_ok());
+        assert!(
+            book.apply_delta(
+                "mkt",
+                BookDelta::set(Side::Buy, price(0.49), qty(1.0)),
+                ts(7_001)
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -496,7 +514,10 @@ mod tests {
     #[test]
     fn selling_hits_bids_and_buying_lifts_offers() {
         let book = snapshotted();
-        assert_eq!(book.walk(Side::Sell, qty(1.0), None).fills[0].0, price(0.40));
+        assert_eq!(
+            book.walk(Side::Sell, qty(1.0), None).fills[0].0,
+            price(0.40)
+        );
         assert_eq!(book.walk(Side::Buy, qty(1.0), None).fills[0].0, price(0.42));
     }
 

@@ -14,6 +14,7 @@
 //! WebSocket stream. A missing sequence emits an explicit [`MarketEvent::Gap`]
 //! and no more deltas are accepted until a fresh snapshot arrives.
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 
 use chrono::DateTime;
@@ -245,16 +246,15 @@ fn decimal_pair(value: &Value, what: &'static str) -> Result<f64> {
     }
 }
 
-fn normalized_book(
-    yes: Vec<(Price, Qty)>,
-    no: Vec<(Price, Qty)>,
-) -> Result<(Vec<(Price, Qty)>, Vec<(Price, Qty)>)> {
+type BookSide = Vec<(Price, Qty)>;
+
+fn normalized_book(yes: BookSide, no: BookSide) -> Result<(BookSide, BookSide)> {
     let mut bids = yes;
     let mut asks = no
         .into_iter()
         .map(|(price, size)| Ok((price.complement()?, size)))
         .collect::<Result<Vec<_>>>()?;
-    bids.sort_by(|a, b| b.0.cmp(&a.0));
+    bids.sort_by_key(|(price, _)| Reverse(*price));
     asks.sort_by_key(|(price, _)| *price);
     Ok((bids, asks))
 }
@@ -654,15 +654,17 @@ mod tests {
             .unwrap();
         assert!(matches!(gap[0].event, MarketEvent::Gap));
         assert!(!decoder.is_synced());
-        assert!(decoder
-            .decode(
-                r#"{"type":"orderbook_delta","seq":14,"msg":{
+        assert!(
+            decoder
+                .decode(
+                    r#"{"type":"orderbook_delta","seq":14,"msg":{
                         "market_ticker":"KXTEST","price_dollars":"0.40",
                         "delta_fp":"1.00","side":"yes","ts_ms":5
                     }}"#,
-                ns(6_000_000),
-            )
-            .is_err());
+                    ns(6_000_000),
+                )
+                .is_err()
+        );
     }
 
     #[test]

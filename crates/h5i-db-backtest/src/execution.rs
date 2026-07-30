@@ -115,7 +115,9 @@ impl SimulatedExecution {
                     limit,
                 } => format!(
                     "{ts} amend {id} qty={} px={}",
-                    quantity.map(|q| q.to_string()).unwrap_or_else(|| "-".into()),
+                    quantity
+                        .map(|q| q.to_string())
+                        .unwrap_or_else(|| "-".into()),
                     limit.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
                 ),
             })

@@ -158,7 +158,7 @@ fn book_record(step: usize, ids: &[InstrumentId], count: usize, common_quotes: b
             },
         )
     } else {
-        let (side, price) = if step % 2 == 0 {
+        let (side, price) = if step.is_multiple_of(2) {
             (Side::Buy, mid - 0.01)
         } else {
             (Side::Sell, mid + 0.01)
@@ -185,7 +185,11 @@ fn trade_record(index: usize, ids: &[InstrumentId], count: usize, spacing: usize
         MarketEvent::Trade {
             price: Price::from_f64(mid_at(step)).unwrap(),
             size: Qty::from_f64(1.0).unwrap(),
-            aggressor: Some(if index % 2 == 0 { Side::Buy } else { Side::Sell }),
+            aggressor: Some(if index.is_multiple_of(2) {
+                Side::Buy
+            } else {
+                Side::Sell
+            }),
         },
     )
 }
@@ -202,7 +206,11 @@ fn signals(args: &Args, ids: &[InstrumentId]) -> Vec<(UnixNanos, OrderRequest)> 
             // Start after every instrument has an open book, or the order is
             // cancelled for want of anything to match against.
             let step = args.instruments + index * spacing;
-            let side = if index % 2 == 0 { Side::Buy } else { Side::Sell };
+            let side = if index.is_multiple_of(2) {
+                Side::Buy
+            } else {
+                Side::Sell
+            };
             (
                 UnixNanos::new(step as i64 * TICK_NANOS),
                 OrderRequest::market(
@@ -370,7 +378,9 @@ async fn main() {
     let book_decode_ms = phases.last().unwrap().millis;
 
     let (trade_phase, trade_records) = timed("decode: trades -> Record", None, async {
-        let source = store::trade_source(&db, ReadAt::Latest, None).await.unwrap();
+        let source = store::trade_source(&db, ReadAt::Latest, None)
+            .await
+            .unwrap();
         source.collect::<Result<Vec<Record>, _>>().unwrap()
     })
     .await;
@@ -446,7 +456,9 @@ async fn main() {
     phases.push(phase);
 
     let (phase, ()) = timed("step: read_instruments", None, async {
-        store::read_instruments(&fork, ReadAt::Latest).await.unwrap();
+        store::read_instruments(&fork, ReadAt::Latest)
+            .await
+            .unwrap();
     })
     .await;
     let instruments_ms = phase.millis;
@@ -459,7 +471,9 @@ async fn main() {
         let _ = store::funding_source(&fork, ReadAt::Latest, None)
             .await
             .unwrap();
-        store::read_resolutions(&fork, ReadAt::Latest).await.unwrap();
+        store::read_resolutions(&fork, ReadAt::Latest)
+            .await
+            .unwrap();
     })
     .await;
     let absent_ms = phase.millis;
@@ -518,9 +532,14 @@ async fn main() {
 
     let (phase, records_processed) = timed("run: end to end (fork + write)", None, async {
         let mut strategy = SignalReplay::new(intents.clone()).unwrap();
-        let report = run_in_fork(&db, run_spec("bench-single".to_string()), &mut strategy, |b| b)
-            .await
-            .unwrap();
+        let report = run_in_fork(
+            &db,
+            run_spec("bench-single".to_string()),
+            &mut strategy,
+            |b| b,
+        )
+        .await
+        .unwrap();
         report.result.records_processed
     })
     .await;
@@ -562,7 +581,11 @@ async fn main() {
     } else {
         0.0
     };
-    let decode_share_of_run = if run_ms > 0.0 { decode_ms / run_ms } else { 0.0 };
+    let decode_share_of_run = if run_ms > 0.0 {
+        decode_ms / run_ms
+    } else {
+        0.0
+    };
 
     // Every step a run performs, so the end-to-end figure is accounted for
     // rather than assumed.
@@ -592,7 +615,12 @@ async fn main() {
         ("scan absent tables", absent_ms),
         ("Portfolio::replay", portfolio_ms),
     ] {
-        eprintln!("    {:<32} {:>6.1} ms  {:>4.0}%", label, ms, ms / run_ms * 100.0);
+        eprintln!(
+            "    {:<32} {:>6.1} ms  {:>4.0}%",
+            label,
+            ms,
+            ms / run_ms * 100.0
+        );
     }
     eprintln!(
         "    {:<32} {:>6.1} ms  {:>4.0}%",

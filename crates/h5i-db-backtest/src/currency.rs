@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::error::{BacktestError, Result};
-use crate::types::{notional, Money, Price, Qty};
+use crate::types::{Money, Price, Qty, notional};
 
 /// An ISO-style currency code.
 ///
@@ -121,8 +121,8 @@ impl FxBook {
         if let Some(rate) = self.rates.get(&(to.clone(), from.clone()))
             && rate.is_positive()
         {
-            let inverse = (crate::types::SCALE as i128 * crate::types::SCALE as i128)
-                / rate.raw() as i128;
+            let inverse =
+                (crate::types::SCALE as i128 * crate::types::SCALE as i128) / rate.raw() as i128;
             return Ok(Price::from_raw(inverse as i64));
         }
         Err(FxError::NoRate {
@@ -231,14 +231,21 @@ mod tests {
     #[test]
     fn converting_to_the_same_currency_is_the_identity() {
         let book = FxBook::new();
-        assert_eq!(book.convert(money(100.0), &usd(), &usd()).unwrap(), money(100.0));
+        assert_eq!(
+            book.convert(money(100.0), &usd(), &usd()).unwrap(),
+            money(100.0)
+        );
     }
 
     #[test]
     fn a_known_rate_converts_both_ways() {
         let mut book = FxBook::new();
-        book.set(eur(), usd(), Price::from_f64(1.10).unwrap()).unwrap();
-        assert_eq!(book.convert(money(100.0), &eur(), &usd()).unwrap(), money(110.0));
+        book.set(eur(), usd(), Price::from_f64(1.10).unwrap())
+            .unwrap();
+        assert_eq!(
+            book.convert(money(100.0), &eur(), &usd()).unwrap(),
+            money(110.0)
+        );
         // The inverse is derived, not stored.
         let back = book.convert(money(110.0), &usd(), &eur()).unwrap();
         assert!(
@@ -252,31 +259,43 @@ mod tests {
         // The failure this prevents: silently valuing EUR as USD.
         let book = FxBook::new();
         let error = book.convert(money(100.0), &eur(), &usd()).unwrap_err();
-        assert_eq!(error, FxError::NoRate { from: eur(), to: usd() });
+        assert_eq!(
+            error,
+            FxError::NoRate {
+                from: eur(),
+                to: usd()
+            }
+        );
         assert!(error.to_string().contains("must not be assumed equal"));
     }
 
     #[test]
     fn a_later_rate_replaces_an_earlier_one() {
         let mut book = FxBook::new();
-        book.set(eur(), usd(), Price::from_f64(1.10).unwrap()).unwrap();
-        book.set(eur(), usd(), Price::from_f64(1.20).unwrap()).unwrap();
-        assert_eq!(book.convert(money(100.0), &eur(), &usd()).unwrap(), money(120.0));
+        book.set(eur(), usd(), Price::from_f64(1.10).unwrap())
+            .unwrap();
+        book.set(eur(), usd(), Price::from_f64(1.20).unwrap())
+            .unwrap();
+        assert_eq!(
+            book.convert(money(100.0), &eur(), &usd()).unwrap(),
+            money(120.0)
+        );
     }
 
     #[test]
     fn a_non_positive_rate_is_refused() {
         let mut book = FxBook::new();
         assert!(book.set(eur(), usd(), Price::ZERO).is_err());
-        assert!(book.set(eur(), usd(), Price::from_f64(-1.0).unwrap()).is_err());
+        assert!(
+            book.set(eur(), usd(), Price::from_f64(-1.0).unwrap())
+                .is_err()
+        );
     }
 
     #[test]
     fn haircuts_discount_collateral_and_default_to_full_value() {
         let mut haircuts = Haircuts::new();
-        haircuts
-            .set(eur(), Price::from_f64(0.9).unwrap())
-            .unwrap();
+        haircuts.set(eur(), Price::from_f64(0.9).unwrap()).unwrap();
         assert_eq!(haircuts.apply(money(100.0), &eur()).unwrap(), money(90.0));
         // An unlisted currency counts in full rather than at zero.
         assert_eq!(haircuts.apply(money(100.0), &usd()).unwrap(), money(100.0));

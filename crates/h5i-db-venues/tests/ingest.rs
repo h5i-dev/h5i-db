@@ -7,12 +7,12 @@
 
 use h5i_db_backtest::engine::{OrderRequest, SignalReplay};
 use h5i_db_backtest::instrument::{InstrumentId, OutcomeId};
-use h5i_db_backtest::run::{run_in_fork, RunSpec};
+use h5i_db_backtest::run::{RunSpec, run_in_fork};
 use h5i_db_backtest::store;
 use h5i_db_backtest::types::{Money, Qty, Side, UnixNanos};
-use h5i_db_core::database::ReadAt;
 use h5i_db_core::Database;
-use h5i_db_venues::{hyperliquid, polymarket, write_plan, IngestPlan};
+use h5i_db_core::database::ReadAt;
+use h5i_db_venues::{IngestPlan, hyperliquid, polymarket, write_plan};
 
 const HOUR_MS: i64 = 3_600_000;
 
@@ -102,7 +102,11 @@ fn polymarket_plan() -> IngestPlan {
     let books: Vec<_> = (0..4i64)
         .map(|hour| {
             polymarket::parse_book(
-                &poly_book(hour * HOUR_MS, 0.40 + hour as f64 * 0.01, 0.42 + hour as f64 * 0.01),
+                &poly_book(
+                    hour * HOUR_MS,
+                    0.40 + hour as f64 * 0.01,
+                    0.42 + hour as f64 * 0.01,
+                ),
                 &tokens,
             )
             .unwrap()
@@ -130,7 +134,9 @@ async fn a_hyperliquid_plan_ingests_and_runs() {
     // Everything landed in the canonical tables.
     let instruments = store::read_instruments(&db, ReadAt::Latest).await.unwrap();
     assert_eq!(instruments.len(), 1);
-    let funding = store::read_funding(&db, ReadAt::Latest, None).await.unwrap();
+    let funding = store::read_funding(&db, ReadAt::Latest, None)
+        .await
+        .unwrap();
     assert_eq!(funding.len(), 2);
 
     let id = InstrumentId::new("BTC-PERP").unwrap();
@@ -166,7 +172,12 @@ async fn a_polymarket_plan_ingests_and_settles() {
     let id = InstrumentId::new("0xelection").unwrap();
     let mut strategy = SignalReplay::new(vec![(
         UnixNanos::new(0),
-        OrderRequest::market(id, OutcomeId::FIRST, Side::Buy, Qty::from_f64(100.0).unwrap()),
+        OrderRequest::market(
+            id,
+            OutcomeId::FIRST,
+            Side::Buy,
+            Qty::from_f64(100.0).unwrap(),
+        ),
     )])
     .unwrap();
     let report = run_in_fork(
@@ -255,7 +266,9 @@ async fn an_invalid_plan_is_refused_before_anything_is_written() {
     let (_, tokens) = polymarket::instrument_from_market(POLY_MARKET).unwrap();
     let plan = IngestPlan::new("polymarket")
         .with_instruments(vec![hyperliquid::instrument("BTC", 0.5, 0.0001).unwrap()])
-        .with_book_events(vec![polymarket::parse_book(&poly_book(0, 0.4, 0.42), &tokens).unwrap()]);
+        .with_book_events(vec![
+            polymarket::parse_book(&poly_book(0, 0.4, 0.42), &tokens).unwrap(),
+        ]);
 
     assert!(write_plan(&db, &plan, UnixNanos::new(0)).await.is_err());
     // Nothing was committed, so a later correct load starts clean.
@@ -282,7 +295,10 @@ async fn candles_ingest_as_bars_and_keep_their_close_stamp() {
         .with_instruments(vec![hyperliquid::instrument("BTC", 0.5, 0.0001).unwrap()]);
     write_plan(&db, &plan, UnixNanos::new(0)).await.unwrap();
     assert_eq!(
-        store::read_instruments(&db, ReadAt::Latest).await.unwrap().len(),
+        store::read_instruments(&db, ReadAt::Latest)
+            .await
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -343,7 +359,9 @@ async fn a_later_load_covering_an_earlier_window_is_merged_in() {
     // sorted and rewritten atomically, so history stays in time order
     // without the caller having to know the load order in advance.
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::create(&dir.path().join("backfill.db")).await.unwrap();
+    let db = Database::create(&dir.path().join("backfill.db"))
+        .await
+        .unwrap();
 
     write_plan(&db, &hyperliquid_plan(), UnixNanos::new(0))
         .await
@@ -382,7 +400,9 @@ async fn a_later_load_covering_an_earlier_window_is_merged_in() {
 #[tokio::test]
 async fn a_backfilled_table_still_replays() {
     let dir = tempfile::tempdir().unwrap();
-    let db = Database::create(&dir.path().join("bf-run.db")).await.unwrap();
+    let db = Database::create(&dir.path().join("bf-run.db"))
+        .await
+        .unwrap();
     write_plan(&db, &hyperliquid_plan(), UnixNanos::new(0))
         .await
         .unwrap();
