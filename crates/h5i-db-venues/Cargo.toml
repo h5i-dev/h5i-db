@@ -13,6 +13,7 @@ h5i-db-core = { workspace = true }
 serde_json = { workspace = true }
 blake3 = { workspace = true }
 chrono = { workspace = true }
+lz4_flex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

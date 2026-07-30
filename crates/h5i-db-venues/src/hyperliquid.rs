@@ -27,7 +27,7 @@ use serde_json::Value;
 use h5i_db_backtest::error::{BacktestError, Result};
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId, PriceRule};
-use h5i_db_backtest::types::{Price, Qty, Stamps, UnixNanos};
+use h5i_db_backtest::types::{Price, Qty, Side, Stamps, UnixNanos};
 
 /// Mainnet info endpoint.
 pub const MAINNET_INFO_URL: &str = "https://api.hyperliquid.xyz/info";
@@ -306,8 +306,11 @@ pub fn parse_funding(body: &str, instrument_id: &str) -> Result<Vec<Record>> {
 /// The payload is `{ coin, time, levels: [[bids], [asks]] }`, each level
 /// `{ px, sz, n }` with `px` and `sz` as strings.
 pub fn parse_l2_book(body: &str, instrument_id: &str) -> Result<Record> {
-    let json = parse_json(body)?;
-    let at = UnixNanos::new(millis(&json, "time")? * MS);
+    book_from_value(&parse_json(body)?, &InstrumentId::new(instrument_id)?)
+}
+
+fn book_from_value(json: &Value, id: &InstrumentId) -> Result<Record> {
+    let at = UnixNanos::new(millis(json, "time")? * MS);
     let levels = json
         .get("levels")
         .and_then(Value::as_array)
@@ -339,13 +342,211 @@ pub fn parse_l2_book(body: &str, instrument_id: &str) -> Result<Record> {
 
     Ok(Record::new(
         Stamps::immediate(at),
-        InstrumentId::new(instrument_id)?,
+        id.clone(),
         OutcomeId::FIRST,
         MarketEvent::BookSnapshot {
             bids: side(0)?,
             asks: side(1)?,
         },
     ))
+}
+
+/// Which side of a trade was the aggressor.
+///
+/// Hyperliquid labels a print with the side of the taker: `"B"` when a
+/// buyer lifted, `"A"` when a seller hit. Anything else is left as unknown
+/// rather than guessed, because a guessed aggressor biases every
+/// queue-position fill that reads it -- and the queue model is the whole
+/// reason to carry trades at all.
+fn aggressor(value: &Value) -> Option<Side> {
+    match value.get("side").and_then(Value::as_str) {
+        Some("B") | Some("b") => Some(Side::Buy),
+        Some("A") | Some("a") => Some(Side::Sell),
+        _ => None,
+    }
+}
+
+/// Parse a `trades` payload into print records.
+///
+/// Prints are what make a *maker* fill modellable. Without them the queue
+/// model has nothing to consume the size ahead of a resting order, so every
+/// touched limit fills immediately -- the single most flattering assumption
+/// a market-making backtest can make.
+///
+/// Accepts either the bare array the websocket `trades` channel sends or a
+/// single trade object.
+pub fn parse_trades(body: &str, instrument_id: &str) -> Result<Vec<Record>> {
+    let json = parse_json(body)?;
+    let id = InstrumentId::new(instrument_id)?;
+    trades_from_value(&json, &id)
+}
+
+fn trades_from_value(json: &Value, id: &InstrumentId) -> Result<Vec<Record>> {
+    let rows = match json {
+        Value::Array(rows) => rows.as_slice(),
+        Value::Object(_) => std::slice::from_ref(json),
+        other => {
+            return Err(BacktestError::Parse {
+                what: "trades",
+                value: other.to_string(),
+            });
+        }
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let at = UnixNanos::new(millis(row, "time")? * MS);
+        out.push(Record::new(
+            Stamps::immediate(at),
+            id.clone(),
+            OutcomeId::FIRST,
+            MarketEvent::Trade {
+                price: Price::from_f64(number(row, "px")?)?,
+                size: Qty::from_f64(number(row, "sz")?)?,
+                aggressor: aggressor(row),
+            },
+        ));
+    }
+    out.sort_by_key(|record| record.ts().get());
+    Ok(out)
+}
+
+/// The coin a websocket payload is about, if it names one.
+fn payload_coin(data: &Value) -> Option<&str> {
+    data.get("coin")
+        .and_then(Value::as_str)
+        .or_else(|| data.as_array()?.first()?.get("coin")?.as_str())
+}
+
+/// How a coin becomes an instrument id.
+///
+/// The archive and the websocket both key by coin (`"BTC"`), while the
+/// canonical instrument is `"BTC-PERP"`. Naming the mapping rather than
+/// hard-coding a suffix at four call sites keeps a spot universe, whose
+/// coins look like `"@1"`, expressible later.
+pub fn perp_instrument_id(coin: &str) -> Result<InstrumentId> {
+    InstrumentId::new(format!("{coin}-PERP"))
+}
+
+/// Parse one websocket message into records, or nothing for a channel this
+/// module does not model.
+///
+/// Handles `l2Book` and `trades`. A `subscriptionResponse`, a `pong` or any
+/// other channel yields an empty vector rather than an error: a reader
+/// walking a live capture must not stop at the first heartbeat.
+///
+/// The instrument comes from the payload's own `coin`, mapped through
+/// [`perp_instrument_id`], so one call handles a capture spanning many
+/// markets.
+pub fn parse_ws_message(body: &str) -> Result<Vec<Record>> {
+    records_from_envelope(&parse_json(body)?)
+}
+
+fn records_from_envelope(json: &Value) -> Result<Vec<Record>> {
+    // Archive lines wrap the live envelope; unwrap either shape.
+    let envelope = json.get("raw").unwrap_or(json);
+    let Some(channel) = envelope.get("channel").and_then(Value::as_str) else {
+        return Ok(Vec::new());
+    };
+    let Some(data) = envelope.get("data") else {
+        return Ok(Vec::new());
+    };
+    let Some(coin) = payload_coin(data) else {
+        return Ok(Vec::new());
+    };
+    let id = perp_instrument_id(coin)?;
+    match channel {
+        "l2Book" => Ok(vec![book_from_value(data, &id)?]),
+        "trades" => trades_from_value(data, &id),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Read a decompressed archive stream: one JSON envelope per line.
+///
+/// Hyperliquid publishes its history as hourly LZ4 files of newline-
+/// delimited messages, and it is the only source of book history at all --
+/// `candleSnapshot` returns bars, and the REST `l2Book` returns only the
+/// book as it is right now. A backtest that wants depth has to read this.
+///
+/// Takes already-decompressed bytes so the frame format stays the caller's
+/// business; [`read_archive_lz4`] is the convenience wrapper.
+///
+/// A line that is blank, unparseable, or on a channel this module does not
+/// model is skipped and counted. An archive with a few corrupt lines is
+/// normal and refusing the whole hour over one of them would be worse than
+/// reporting it -- but the count is returned, not swallowed, so a caller
+/// can refuse a file that is mostly junk.
+pub fn read_archive<R: std::io::BufRead>(reader: R) -> Result<ArchiveRead> {
+    let mut out = ArchiveRead::default();
+    for line in reader.lines() {
+        let line = line.map_err(|error| BacktestError::Parse {
+            what: "hyperliquid archive",
+            value: error.to_string(),
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.lines += 1;
+        match serde_json::from_str::<Value>(&line) {
+            Ok(json) => match records_from_envelope(&json) {
+                Ok(records) if records.is_empty() => out.skipped += 1,
+                Ok(records) => out.records.extend(records),
+                Err(_) => out.malformed += 1,
+            },
+            Err(_) => out.malformed += 1,
+        }
+    }
+    out.records.sort_by_key(|record| record.ts().get());
+    Ok(out)
+}
+
+/// [`read_archive`], decompressing an LZ4 frame first.
+pub fn read_archive_lz4(bytes: &[u8]) -> Result<ArchiveRead> {
+    let decoded = lz4_flex::frame::FrameDecoder::new(bytes);
+    read_archive(std::io::BufReader::new(decoded))
+}
+
+/// What one archive file yielded, including what it did not.
+#[derive(Clone, Default, Debug)]
+pub struct ArchiveRead {
+    pub records: Vec<Record>,
+    /// Non-blank lines seen.
+    pub lines: u64,
+    /// Lines on a channel this module does not model.
+    pub skipped: u64,
+    /// Lines that were not readable as an envelope.
+    pub malformed: u64,
+}
+
+impl ArchiveRead {
+    /// The share of lines that produced nothing.
+    ///
+    /// A file whose lines are mostly skipped is usually the wrong channel
+    /// or the wrong decompression, and is worth refusing rather than
+    /// replaying as a thin book.
+    pub fn barren_ratio(&self) -> f64 {
+        if self.lines == 0 {
+            return 0.0;
+        }
+        (self.skipped + self.malformed) as f64 / self.lines as f64
+    }
+
+    /// Refuse a read whose lines mostly produced nothing.
+    pub fn require_yield(&self, minimum: f64) -> Result<()> {
+        let produced = 1.0 - self.barren_ratio();
+        if produced < minimum {
+            return Err(BacktestError::invalid(format!(
+                "only {:.1}% of {} archive lines produced records ({} skipped, \
+                 {} malformed); check the channel and the decompression \
+                 before replaying this as market data",
+                produced * 100.0,
+                self.lines,
+                self.skipped,
+                self.malformed
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -604,5 +805,121 @@ mod tests {
             meta_and_asset_ctxs_request(),
             r#"{"type":"metaAndAssetCtxs"}"#
         );
+    }
+
+    // -- trades ------------------------------------------------------------
+
+    const TRADES: &str = r#"[
+        {"coin":"BTC","side":"B","px":"50000.0","sz":"0.1","time":1700000002000,"tid":2},
+        {"coin":"BTC","side":"A","px":"49999.0","sz":"0.2","time":1700000001000,"tid":1},
+        {"coin":"BTC","px":"49998.0","sz":"0.3","time":1700000003000,"tid":3}
+    ]"#;
+
+    #[test]
+    fn trades_carry_the_aggressor_the_queue_model_needs() {
+        let records = parse_trades(TRADES, "BTC-PERP").unwrap();
+        assert_eq!(records.len(), 3);
+        // Sorted by time, not by arrival in the payload.
+        assert_eq!(records[0].ts(), UnixNanos::new(1_700_000_001_000 * MS));
+
+        let sides: Vec<Option<Side>> = records
+            .iter()
+            .map(|record| match record.event {
+                MarketEvent::Trade { aggressor, .. } => aggressor,
+                _ => panic!("expected a trade"),
+            })
+            .collect();
+        // "A" is a seller hitting, "B" a buyer lifting, and a print with no
+        // side stays unknown rather than being guessed into one.
+        assert_eq!(sides, vec![Some(Side::Sell), Some(Side::Buy), None]);
+    }
+
+    #[test]
+    fn a_single_trade_object_parses_like_a_batch_of_one() {
+        let one = r#"{"coin":"BTC","side":"B","px":"1.5","sz":"2","time":1700000000000}"#;
+        assert_eq!(parse_trades(one, "BTC-PERP").unwrap().len(), 1);
+        assert!(parse_trades("7", "BTC-PERP").is_err());
+    }
+
+    // -- websocket and archive --------------------------------------------
+
+    const WS_BOOK: &str = r#"{"channel":"l2Book","data":{"coin":"BTC","time":1700000000000,
+        "levels":[[{"px":"49999.0","sz":"1.0","n":1}],[{"px":"50001.0","sz":"2.0","n":1}]]}}"#;
+    const WS_TRADES: &str = r#"{"channel":"trades","data":[
+        {"coin":"ETH","side":"A","px":"3000.0","sz":"1.5","time":1700000000500}]}"#;
+
+    #[test]
+    fn a_websocket_message_names_its_own_instrument() {
+        // One call handles a capture spanning many markets, because the
+        // coin travels in the payload rather than in the call site.
+        let book = parse_ws_message(WS_BOOK).unwrap();
+        assert_eq!(book.len(), 1);
+        assert_eq!(book[0].instrument.as_str(), "BTC-PERP");
+        assert!(matches!(book[0].event, MarketEvent::BookSnapshot { .. }));
+
+        let trades = parse_ws_message(WS_TRADES).unwrap();
+        assert_eq!(trades[0].instrument.as_str(), "ETH-PERP");
+    }
+
+    #[test]
+    fn a_channel_this_module_does_not_model_yields_nothing_rather_than_failing() {
+        // A reader walking a live capture must not stop at the first
+        // heartbeat or subscription acknowledgement.
+        for body in [
+            r#"{"channel":"pong"}"#,
+            r#"{"channel":"subscriptionResponse","data":{"method":"subscribe"}}"#,
+            r#"{"channel":"allMids","data":{"mids":{"BTC":"50000"}}}"#,
+            r#"{"not":"an envelope"}"#,
+        ] {
+            assert!(parse_ws_message(body).unwrap().is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn an_archive_reads_newline_delimited_envelopes_in_time_order() {
+        // The archive wraps the live envelope; both shapes must read.
+        let lines = format!(
+            "{}\n\n{}\n{{\"time\":\"x\",\"raw\":{}}}\n",
+            WS_TRADES.replace('\n', ""),
+            WS_BOOK.replace('\n', ""),
+            WS_TRADES.replace('\n', "")
+        );
+        let read = read_archive(std::io::Cursor::new(lines)).unwrap();
+        assert_eq!(read.lines, 3);
+        assert_eq!(read.records.len(), 3);
+        assert_eq!(read.malformed, 0);
+        let stamps: Vec<i64> = read.records.iter().map(|r| r.ts().get()).collect();
+        assert!(stamps.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn a_mostly_barren_archive_is_reported_and_can_be_refused() {
+        // Usually the wrong channel or the wrong decompression. Replaying
+        // it as a thin book is worse than saying so.
+        let lines = "{\"channel\":\"pong\"}\nnot json\n{\"channel\":\"pong\"}\n";
+        let read = read_archive(std::io::Cursor::new(lines)).unwrap();
+        assert_eq!(read.lines, 3);
+        assert_eq!(read.skipped, 2);
+        assert_eq!(read.malformed, 1);
+        assert!(read.records.is_empty());
+        assert_eq!(read.barren_ratio(), 1.0);
+        assert!(read.require_yield(0.5).is_err());
+
+        let good = read_archive(std::io::Cursor::new(WS_BOOK.replace('\n', ""))).unwrap();
+        assert!(good.require_yield(0.5).is_ok());
+    }
+
+    #[test]
+    fn an_lz4_frame_round_trips_into_records() {
+        // The archive is published compressed; reading it must not need a
+        // shell pipeline.
+        let line = WS_BOOK.replace('\n', "");
+        let mut encoder = lz4_flex::frame::FrameEncoder::new(Vec::new());
+        std::io::Write::write_all(&mut encoder, line.as_bytes()).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let read = read_archive_lz4(&compressed).unwrap();
+        assert_eq!(read.records.len(), 1);
+        assert_eq!(read.records[0].instrument.as_str(), "BTC-PERP");
     }
 }

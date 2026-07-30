@@ -91,6 +91,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
 
 blake3 = "1"
+# Hyperliquid publishes its market-data archive as LZ4 frames, which is the
+# only source of book history the venue offers.
+lz4_flex = { version = "0.13", default-features = false, features = ["frame"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = [
     "clock",
