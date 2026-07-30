@@ -142,9 +142,6 @@ npx skills add h5i-dev/h5i-db        # installs the h5i-db skill from skills/h5i
 - **Version-aware aggregate states:** OHLCV/VWAP rollups persist mergeable
   states per immutable segment; re-queries merge states in milliseconds
   instead of recomputing, scanning only newly appended segments.
-- **No kernel heroics:** generic scans and aggregations run on stock
-  DataFusion and tie the best engines; h5i-db only adds structure where
-  time-series shape makes that structure pay.
 - **Lazy replay:** the backtest kernel pulls records one at a time instead of
   materializing a window, so memory stays flat whether a run replays a day or a
   hundred million events.
@@ -170,10 +167,6 @@ depended on data that arrived later.
 every query and spills the rest to Parquet, reporting the true row count and
 where the withheld rows live.
 
-- **One call to get oriented:** `h5i-db context <db>` returns every table's
-schema, size, time range and head version, the operations policy gates, and
-any plan already staged.
-
 - **Errors that can be acted on:** the stderr envelope carries `next_actions`
 (runnable commands), `did_you_mean` for typos, and a `retryable` flag.
 
@@ -183,7 +176,13 @@ one small file and is as cheap to discard as to keep. `forks('trades')` then
 reads that table across every branch at once with a `__fork` column, so
 comparing what each one produced needs no export step.
 
-- **A backtest run is a branch, not a report.** Each run executes inside its own
+- **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
+require that gate; `--idempotency-key` makes a retried ingest replay instead of
+double-appending; an opt-in `data-policy` rejects malformed rows fail-closed;
+commits are fsync-before-swap with a manifest hash chain, tested by killing the
+writer at every step.
+
+- **A backtest run is a branch.** Each run executes inside its own
 fork and writes its orders, fills, positions and equity curve there as ordinary
 tables. So two runs diff at fill level with `fork_diff`, a whole sweep aggregates
 in one cross-fork query, the one worth keeping is `promote`d and the rest are
@@ -202,12 +201,6 @@ finished and unseen, then running, then seen. Scanning a list does not mark work
 reviewed; a trial counts as seen only when its detail is opened. The leaderboard
 is a separate tab, because "best so far" and "what did I not look at" are
 different questions.
-
-- **Mistakes are cheap.** Mutations preview through `plan`/`apply` and policy can
-require that gate; `--idempotency-key` makes a retried ingest replay instead of
-double-appending; an opt-in `data-policy` rejects malformed rows fail-closed;
-commits are fsync-before-swap with a manifest hash chain, tested by killing the
-writer at every step.
 
 ---
 

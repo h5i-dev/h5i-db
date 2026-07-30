@@ -158,10 +158,6 @@ npx skills add h5i-dev/h5i-db        # installe la skill h5i-db depuis skills/h5
 - **Appariement d'ordres indexé :** les ordres en carnet sont indexés par marché et
   par prix, si bien qu'un nouveau print ne réveille que ceux qu'il croise vraiment,
   au lieu de repasser sur tous les ordres ouverts.
-- **Aucune prouesse bas niveau :** les balayages et agrégations génériques
-  s'exécutent sur un DataFusion standard et rivalisent avec les meilleurs
-  moteurs ; h5i-db n'ajoute de la structure que là où la forme des séries
-  temporelles rend cette structure payante.
 
 ---
 
@@ -182,10 +178,6 @@ résultat qui dépendait de données arrivées plus tard.
 en indiquant le vrai nombre de lignes et l'endroit où se trouvent celles qui ont
 été retenues.
 
-- **Un seul appel pour se repérer :** `h5i-db context <db>` renvoie le schéma, la
-taille, la plage temporelle et la version courante de chaque table, les
-garde-fous de la politique d'exploitation, ainsi que tout plan déjà préparé.
-
 - **Des erreurs sur lesquelles on peut agir :** l'enveloppe envoyée sur stderr
 porte `next_actions` (des commandes exécutables), `did_you_mean` pour les fautes
 de frappe, et un indicateur `retryable`.
@@ -197,8 +189,15 @@ facilement qu'elle se garde. `forks('trades')` lit ensuite cette table sur
 toutes les branches à la fois, avec une colonne `__fork`, de sorte que comparer
 ce que chacune a produit ne demande aucune étape d'export.
 
-- **Une exécution de backtest est une branche, pas un rapport.** Chaque exécution
-se déroule dans son propre fork et y écrit ses ordres, exécutions, positions et
+- **L'erreur coûte peu.** Les mutations se prévisualisent via `plan`/`apply` et
+la politique peut imposer ce passage ; `--idempotency-key` fait qu'une ingestion
+relancée rejoue au lieu d'ajouter deux fois ; une `data-policy` optionnelle
+rejette en position fermée les lignes mal formées ; les commits font un fsync
+avant l'échange et chaînent des empreintes de manifeste, ce qui est vérifié en
+tuant l'écrivain à chaque étape.
+
+- **Une exécution de backtest est une branche.** Chaque exécution se déroule dans
+son propre fork et y écrit ses ordres, exécutions, positions et
 courbe de capital comme des tables ordinaires. Deux exécutions se comparent donc au
 niveau de l'exécution avec `fork_diff`, un balayage entier s'agrège en une seule
 requête inter-forks, celle qui en vaut la peine est `promote`, et le reste est jeté.
@@ -219,13 +218,6 @@ cours, puis vus. Parcourir une liste ne marque rien comme revu ; un essai ne com
 comme vu que lorsque son détail est ouvert. Le classement est un onglet distinct,
 parce que « lequel est le meilleur jusqu'ici » et « lequel n'ai-je pas regardé »
 sont deux questions différentes.
-
-- **L'erreur coûte peu.** Les mutations se prévisualisent via `plan`/`apply` et
-la politique peut imposer ce passage ; `--idempotency-key` fait qu'une ingestion
-relancée rejoue au lieu d'ajouter deux fois ; une `data-policy` optionnelle
-rejette en position fermée les lignes mal formées ; les commits font un fsync
-avant l'échange et chaînent des empreintes de manifeste, ce qui est vérifié en
-tuant l'écrivain à chaque étape.
 
 ---
 

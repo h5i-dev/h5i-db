@@ -156,10 +156,6 @@ npx skills add h5i-dev/h5i-db        # instala la skill de h5i-db desde skills/h
 - **Emparejamiento de órdenes indexado:** las órdenes en el libro se indexan por
   mercado y precio, así que un nuevo print solo despierta las que realmente cruza,
   en vez de repasar todas las abiertas.
-- **Sin heroicidades a bajo nivel:** los escaneos y agregaciones genéricos
-  corren sobre DataFusion estándar y empatan con los mejores motores; h5i-db
-  solo añade estructura allí donde la forma de las series temporales hace que
-  esa estructura rinda.
 
 ---
 
@@ -179,10 +175,6 @@ posteriori, cuánto de un resultado dependía de datos que llegaron después.
 limita cada consulta y vuelca el resto a Parquet, informando del número real de
 filas y de dónde quedaron las que se retuvieron.
 
-- **Una sola llamada para orientarse:** `h5i-db context <db>` devuelve el esquema,
-el tamaño, el rango temporal y la versión actual de cada tabla, los controles de
-la política de operaciones y cualquier plan ya preparado.
-
 - **Errores sobre los que se puede actuar:** el sobre de stderr lleva
 `next_actions` (comandos ejecutables), `did_you_mean` para las erratas y un
 indicador `retryable`.
@@ -194,8 +186,15 @@ conservarlos. Después, `forks('trades')` lee esa tabla en todas las ramas a la
 vez con una columna `__fork`, de modo que comparar lo que produjo cada una no
 necesita ningún paso de exportación.
 
-- **Una ejecución de backtest es una rama, no un informe.** Cada ejecución corre
-dentro de su propio fork y escribe allí sus órdenes, ejecuciones, posiciones y curva
+- **Equivocarse sale barato.** Las mutaciones se previsualizan con `plan`/`apply`
+y la política puede exigir ese paso; `--idempotency-key` hace que una ingesta
+reintentada se repita en lugar de duplicar filas; una `data-policy` opcional
+rechaza en cerrado las filas mal formadas; los commits hacen fsync antes del
+intercambio y encadenan hashes de manifiesto, algo que se comprueba matando al
+escritor en cada paso.
+
+- **Una ejecución de backtest es una rama.** Cada ejecución corre dentro de su
+propio fork y escribe allí sus órdenes, ejecuciones, posiciones y curva
 de patrimonio como tablas normales. Así, dos ejecuciones se comparan al nivel de
 ejecución con `fork_diff`, un barrido entero se agrega en una sola consulta entre
 forks, la que merece la pena se `promote` y el resto se descarta. Nada que exportar,
@@ -216,13 +215,6 @@ ejecución, luego vistas. Recorrer una lista no marca el trabajo como revisado; 
 prueba cuenta como vista solo cuando se abre su detalle. La tabla de clasificación
 es una pestaña aparte, porque "cuál es la mejor hasta ahora" y "cuál no he mirado"
 son preguntas distintas.
-
-- **Equivocarse sale barato.** Las mutaciones se previsualizan con `plan`/`apply`
-y la política puede exigir ese paso; `--idempotency-key` hace que una ingesta
-reintentada se repita en lugar de duplicar filas; una `data-policy` opcional
-rechaza en cerrado las filas mal formadas; los commits hacen fsync antes del
-intercambio y encadenan hashes de manifiesto, algo que se comprueba matando al
-escritor en cada paso.
 
 ---
 
