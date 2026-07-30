@@ -6,33 +6,33 @@
 nativos para agentes, pensados para la investigación cuantitativa. Embebidos y
 escritos en Rust.**
 
-- **Rápida en la forma de las series temporales:** más de 4,5× más rápida que
+- (DB) **Rápida en la forma de las series temporales:** más de 4,5× más rápida que
   DuckDB y Polars en agregaciones OHLCV+VWAP sobre 20 M de filas.
-- **SQL nativo de series temporales:** ASOF join, `time_bucket` con zonas
+- (DB) **SQL nativo de series temporales:** ASOF join, `time_bucket` con zonas
   horarias, gapfill/resample, ventanas móviles, `vwap`, `ewma`.
-- **Backtester orientado a eventos sobre el mismo almacenamiento:** 3,05 M de
-  eventos/s a través del núcleo de replay, 11,7× NautilusTrader y 31× LEAN en
-  una carga compartida sobre el tope del libro. Una ejecución corre dentro de un
-  fork y escribe de vuelta sus órdenes, ejecuciones, posiciones y curva de
-  patrimonio como tablas consultables normales.
-- **Estadísticas que informan de su propia fiabilidad:** evaluación de factores
-  con paridad `alphalens` y estadísticas de rendimiento con paridad `empyrical`,
-  además de Sharpe deflactado, probabilidad de sobreajuste del backtest y
-  validación cruzada purgada y combinatoria.
-- **Bifurca una base de datos en milisegundos:** los forks comparten los datos
+- (DB) **Lecturas point-in-time:** fija un instante de decisión y el marco de datos
+  que llega a pandas no podrá contener filas posteriores a él. Sin sesgo de
+  anticipación, por construcción.
+- (BT) **Backtester orientado a eventos y eficiente:** 3,05 M de eventos/s a través
+  del núcleo de replay, 11,7× NautilusTrader y 31× LEAN en una carga compartida
+  sobre el tope del libro.
+- (BT) **Las ejecuciones aterrizan en la base de datos:** órdenes, ejecuciones,
+  posiciones y curva de patrimonio se escriben de vuelta como tablas normales, así
+  que comparar dos ejecuciones es una consulta SQL, no una exportación.
+- (BT) **Las estadísticas de siempre, y cuánto fiarse de ellas:** las cifras de
+  factores y de rendimiento coinciden con `alphalens` y `empyrical`; el Sharpe
+  deflactado y la probabilidad de sobreajuste dicen cuánto de un resultado fue
+  solo la búsqueda que lo encontró.
+- (AI) **Bifurca una base de datos en milisegundos:** los forks comparten los datos
   en lugar de copiarlos. Un agente puede recorrer ciclos amplios de ensayo y
   error (bifurcar, mutar, evaluar, descartar) a un coste casi nulo.
-- **Cada escritura es un commit atómico y versionado:** cualquier versión
+- (AI) **Cada escritura es un commit atómico y versionado:** cualquier versión
   pasada se lee en O(1), así que una ingesta defectuosa (humana o de un agente)
   se deshace con un solo `restore`.
-- **Políticas de seguridad para las escrituras de agentes:** mutaciones
+- (AI) **Políticas de seguridad para las escrituras de agentes:** mutaciones
   previsualizables, controles por política, restricciones que fallan en cerrado
   y bloquean las operaciones destructivas, y un registro de auditoría de qué
   cambió y por qué.
-- **Lecturas point-in-time:** fija un instante de decisión y el marco de datos
-  que llega a pandas no podrá contener filas posteriores a él. Sin sesgo de
-  anticipación, por construcción.
-- **Embebida:** un directorio, sin servidor ni demonio. Apache-2.0.
 
 📖 **[Documentación](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [API de Python](https://db.h5i.dev/api/) ·
 [Recetario](https://github.com/h5i-dev/h5i-db-cookbook) · [Skill para agentes](skills/h5i-db/SKILL.md)

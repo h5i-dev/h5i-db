@@ -5,29 +5,30 @@
 **A fast, agent-native time-series *d*atabase and *b*acktesting engine for quant research.
 Embedded, written in Rust.**
 
-- **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
+- (DB) **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
   on OHLCV+VWAP rollups over 20M rows.
-- **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
+- (DB) **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
   gapfill/resample, rolling windows, `vwap`, `ewma`.
-- **Event-driven backtester over the same storage:** 3.05M events/s through
+- (DB) **Point-in-time reads:** pin a decision time and the frame that reaches
+  pandas cannot contain rows from after it. No lookahead bias, by construction.
+- (BT) **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
-  top-of-book workload. A run executes inside a fork and writes its orders,
-  fills, positions and equity curve back as ordinary queryable tables.
-- **Research statistics that report their own reliability:** `alphalens`-parity
-  factor evaluation and `empyrical`-parity performance stats, plus deflated
-  Sharpe, probability of backtest overfitting, and purged/combinatorial
-  cross-validation.
-- **Fork a database in milliseconds:** forks share data instead of copying it. 
+  top-of-book workload.
+- (BT) **Runs land in the database:** orders, fills, positions and the equity
+  curve are written back as ordinary tables, so comparing two runs is a SQL
+  query, not an export.
+- (BT) **The usual statistics, plus how much to trust them:** factor and
+  performance numbers match `alphalens` and `empyrical`; deflated Sharpe and
+  overfitting probability say how much of a result was just the search that
+  found it.
+- (AI) **Fork a database in milliseconds:** forks share data instead of copying it. 
   Agents can run wide trial-and-error loops (fork, mutate, evaluate, discard) 
   at almost zero cost.
-- **Every write is an atomic, versioned commit:** any past version reads in
+- (AI) **Every write is an atomic, versioned commit:** any past version reads in
   O(1), so a bad ingest (human or agent) is one `restore` away from undone.
-- **Safety policies for agent writes:** previewable mutations, policy gates,
+- (AI) **Safety policies for agent writes:** previewable mutations, policy gates,
   fail-closed constraints that block destructive operations, and an audit
   trail of what changed and why.
-- **Point-in-time reads:** pin a decision time and the frame that reaches
-  pandas cannot contain rows from after it. No lookahead bias, by construction.
-- **Embedded:** one directory, no server, no daemon. Apache-2.0.
 
 📖 **[Documentation](https://db.h5i.dev/manual/)** · [Manual](https://db.h5i.dev/manual/) · [Python API](https://db.h5i.dev/api/) ·
 [Cookbook](https://github.com/h5i-dev/h5i-db-cookbook) · [Agent skill](skills/h5i-db/SKILL.md)
