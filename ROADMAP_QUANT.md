@@ -907,6 +907,43 @@ switchers is research and backtesting; live wiring stays where it is.
 No commitment to their operator menu (`make`-driven runner discovery)
 either — the CLI and `python -m h5i_db.backtest` cover it.
 
+### 8b.5 Implementation status (2026-07-30)
+
+Built and tested. What landed, and where it diverged from the plan above:
+
+| Item | State | Where |
+|---|---|---|
+| D0 archive importer | done | `h5i_db.venues.ingest_archive`, `ArchiveLayout` |
+| D0 metadata resolution | done | `venues.polymarket_markets_from_json`, `write_markets` |
+| D0 CLI | done | `python -m h5i_db.venues markets\|ingest\|inspect` |
+| D1 walk-forward + top-k | done | `WalkForward`, `TopK` in `backtest_study` |
+| D1 random + TPE search | done | `RandomSearch`, `TPESearch`, `Range` |
+| D1 basket report | done | `quant.basket_report`, `quant.PANELS` |
+| D1 brier advantage | done | `quant.calibration` |
+| D2 strategy pack | done | `backtest.strategies`, 12 generators |
+| D2 ledger replay | done | `venues.commands_from_ledger`, `compare_to_ledger` |
+
+Three deviations, each recorded because the plan above asserted otherwise:
+
+- **The importer is Python, not Rust.** §8b.1 said the parsing already existed
+  in `h5i-db-venues::polymarket` and only a driver was missing. That is true of
+  the *websocket JSON* path and false of the archive path: both vendors ship
+  Parquet, so archive normalisation was new work either way, and a columnar
+  pyarrow transform is the right tool for it. The Rust JSON parsers keep the
+  live/websocket path.
+- **The CLI is `python -m h5i_db.venues`, not an `h5i-db ingest-pmxt` verb**,
+  following from the same decision and matching `python -m h5i_db.backtest`.
+- **No per-trial subprocess isolation.** A study already refuses callback
+  strategies, so a trial is a declarative config that cannot crash the driver.
+  The reference stack needs the isolation because its trials run arbitrary
+  Python; buying it here would cost process overhead for a hazard the API has
+  already excluded.
+
+One design choice worth carrying forward: `ArchiveLayout` makes a vendor dialect
+data rather than a code path, so a third vendor is a literal (column names,
+event vocabulary, timestamp unit, level shape) instead of a module. The test
+suite exercises that by ingesting a synthetic third dialect with no new code.
+
 ### 8b.5 Sequencing and acceptance
 
 Order: importer → metadata resolution → basket report → study upgrades →

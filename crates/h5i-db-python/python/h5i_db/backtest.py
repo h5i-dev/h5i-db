@@ -62,10 +62,18 @@ from .backtest_result import (
     trial_count,
 )
 from .backtest_strategy import from_signals, target_positions
+from . import backtest_strategies as strategies
+from .backtest_strategies import STRATEGIES, SignalPlan, quote_panel
 from .backtest_study import (
     BacktestStudy,
+    GridSearch,
+    Range,
+    RandomSearch,
     StudyResult,
+    TopK,
+    TPESearch,
     ValidationWindows,
+    WalkForward,
     study,
 )
 
@@ -85,6 +93,16 @@ __all__ = [
     "StudyResult",
     "TrialAttention",
     "ValidationWindows",
+    "WalkForward",
+    "GridSearch",
+    "RandomSearch",
+    "TPESearch",
+    "TopK",
+    "Range",
+    "SignalPlan",
+    "STRATEGIES",
+    "quote_panel",
+    "strategies",
     "run",
     "run_strategy",
     "execute",
