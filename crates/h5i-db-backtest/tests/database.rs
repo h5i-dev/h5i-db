@@ -883,3 +883,91 @@ async fn funding_moves_cash_and_therefore_equity() {
         "funding is a real cash cost, not a reporting line"
     );
 }
+
+/// One snapshot event describes one book. A feed that puts two outcomes under
+/// a single `event_index` used to be accepted silently: the instrument and
+/// outcome were taken from the event's first row, the remaining rows' levels
+/// were folded into that book, and a market buy on YES could lift an ask
+/// belonging to NO. Reading such a feed must fail instead.
+#[tokio::test]
+async fn a_snapshot_event_mixing_two_outcomes_is_refused() {
+    use std::sync::Arc;
+
+    use arrow::array::{
+        BooleanBuilder, Float64Builder, Int64Builder, StringBuilder, TimestampNanosecondBuilder,
+        UInt16Builder,
+    };
+    use arrow::record_batch::RecordBatch;
+    use h5i_db_core::WriteOptions;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("bt.db")).await.unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+    store::write_instruments(&db, &[market()], ts(0))
+        .await
+        .unwrap();
+
+    // Four rows, one event_index, both outcomes: YES quoted 0.40/0.60 and NO
+    // quoted 0.30/0.45. Well-formed in every other respect.
+    let mut ts_init = TimestampNanosecondBuilder::new();
+    let mut ts_event = TimestampNanosecondBuilder::new();
+    let mut instrument = StringBuilder::new();
+    let mut outcome = UInt16Builder::new();
+    let mut action = StringBuilder::new();
+    let mut side = StringBuilder::new();
+    let mut price_col = Float64Builder::new();
+    let mut size = Float64Builder::new();
+    let mut event_index = Int64Builder::new();
+    let mut is_last = BooleanBuilder::new();
+    let mut vendor = StringBuilder::new();
+
+    let levels = [
+        (0u16, "buy", 0.40),
+        (0, "sell", 0.60),
+        (1, "buy", 0.30),
+        (1, "sell", 0.45),
+    ];
+    for (row, (out, sid, px)) in levels.iter().enumerate() {
+        ts_init.append_value(SECOND);
+        ts_event.append_value(SECOND);
+        instrument.append_value(MARKET);
+        outcome.append_value(*out);
+        action.append_value("snapshot");
+        side.append_value(*sid);
+        price_col.append_value(*px);
+        size.append_value(100.0);
+        event_index.append_value(1);
+        is_last.append_value(row == levels.len() - 1);
+        vendor.append_value("test");
+    }
+
+    let batch = RecordBatch::try_new(
+        h5i_db_backtest::schema::book_deltas(),
+        vec![
+            Arc::new(ts_init.finish()),
+            Arc::new(ts_event.finish()),
+            Arc::new(instrument.finish()),
+            Arc::new(outcome.finish()),
+            Arc::new(action.finish()),
+            Arc::new(side.finish()),
+            Arc::new(price_col.finish()),
+            Arc::new(size.finish()),
+            Arc::new(event_index.finish()),
+            Arc::new(is_last.finish()),
+            Arc::new(vendor.finish()),
+        ],
+    )
+    .unwrap();
+    db.append("book_deltas", vec![batch], WriteOptions::default())
+        .await
+        .unwrap();
+
+    let error = store::read_book_events(&db, ReadAt::Latest, None)
+        .await
+        .expect_err("a mixed-outcome snapshot event must be refused");
+    let message = error.to_string();
+    assert!(
+        message.contains("one event describes one outcome of one instrument"),
+        "the error should name the rule that was broken, got: {message}"
+    );
+}

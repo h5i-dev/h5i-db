@@ -52,6 +52,17 @@ final one. Applying half a snapshot would leave a crossed or hollow book, so
 a reader that meets a truncated one refuses it instead of reconstructing
 something plausible from the fragment.
 
+One event is one book: every row under an `event_index` must carry the same
+`instrument_id` and `outcome`. A feed that puts two outcomes under one event is
+refused for the same reason a truncated snapshot is. The alternative is worse
+than an error, because the levels would merge into a single book whose best ask
+belongs to the other side of the market, and a buy would fill against it
+without complaint.
+
+The index values themselves only have to *change* between events. They are not
+required to increase with `ts_init`, since grouping follows row order and ends
+at `is_last`, so a recorder that writes instrument-major is fine.
+
 ## A run
 
 ```rust
@@ -228,6 +239,39 @@ Two orderings inside the loop are load-bearing:
 - strategy commands are **queued**, never executed inside the callback that
   produced them, which removes reentrancy and makes latency a property of
   the queue rather than of every call site.
+
+### Stamp a signal after the quote it came from
+
+Market data is merged on the total order `(ts_init, stream priority, stream,
+arrival)`, and the priorities are explicit: gaps before corporate actions
+before snapshots before deltas before prints. Signals are not part of that
+order. An intent is released on the first record whose timestamp reaches it,
+which puts one detail in the analyst's hands.
+
+A signal timestamped *exactly* on a book instant is released while the venue is
+partway through that instant. Whether its own instrument has been updated yet
+depends on where that instrument falls among the records sharing the timestamp,
+so with one market the signal sees the new book and with sixty it may match
+against the previous one. The replay stays deterministic, because the merge
+order is total and the same data always produces the same answer; what varies
+is which book a same-timestamp signal meets, and that varies with the shape of
+the panel rather than with anything the strategy did.
+
+Stamp the intent strictly after the quote it was decided from and the question
+disappears:
+
+```python
+signals = backtest.signal_table([
+    {"ts": decision_ts + datetime.timedelta(microseconds=1),
+     "instrument_id": market, "outcome": 0, "side": "buy", "quantity": 20.0},
+])
+```
+
+The order then fills at exactly the bid or ask carried by the decision
+snapshot, stamped at the next event. That is also the honest reading of a
+backtest: you transacted at a price that was knowable when you chose to trade.
+Tier 2 strategies are unaffected, because a callback is already invoked after
+the venue has processed the record it is reacting to.
 
 ## Agent trial ledger
 
