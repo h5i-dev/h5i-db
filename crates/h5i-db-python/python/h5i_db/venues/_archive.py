@@ -36,6 +36,8 @@ from ._markets import MarketSpec, token_index
 __all__ = [
     "ArchiveLayout",
     "LevelLayout",
+    "KAGGLE_POLYMARKET_LAYOUT",
+    "KAGGLE_POLYMARKET_TRADES_LAYOUT",
     "PMXT_LAYOUT",
     "TELONEX_LAYOUT",
     "discover",
@@ -47,9 +49,11 @@ __all__ = [
 class LevelLayout:
     """How one file spells a price level.
 
-    Two shapes exist in the wild. `nested` means bids and asks are list columns
-    of structs, one row per book state. `flat` means one row per level, with the
-    side in its own column. Both reduce to the same canonical rows.
+    Three shapes exist in the wild. `nested` means bids and asks are list
+    columns of structs, one row per book state. `flat` means one row per level,
+    with the side in its own column. `payload` means the whole event is a JSON
+    string in one column, which is what a websocket capture written straight to
+    Parquet looks like. All three reduce to the same canonical rows.
     """
 
     style: str = "nested"
@@ -64,8 +68,8 @@ class LevelLayout:
     ask_values: tuple[str, ...] = ("sell", "ask", "offer", "s", "a")
 
     def __post_init__(self) -> None:
-        if self.style not in ("nested", "flat"):
-            raise ValueError("level style must be 'nested' or 'flat'")
+        if self.style not in ("nested", "flat", "payload"):
+            raise ValueError("level style must be 'nested', 'flat' or 'payload'")
 
     def side_of(self, raw: Any) -> str:
         text = str(raw).strip().lower()
@@ -107,6 +111,20 @@ class ArchiveLayout:
     trade_id_column: Optional[str] = None
     arrival_column: Optional[str] = None
     file_glob: str = "*.parquet"
+    # A JSON-payload archive keeps the event inside one string column. The token
+    # usually lives in there too, which is why filtering happens in two passes:
+    # cheaply on `instrument_column` first, then on the decoded token.
+    payload_column: Optional[str] = None
+    payload_token_field: str = "token_id"
+    payload_bids_field: str = "bids"
+    payload_asks_field: str = "asks"
+    payload_outcome_field: Optional[str] = None
+    outcome_labels: tuple[str, ...] = ()
+    # Keep only the best N levels per side. A full-depth capture can carry two
+    # hundred levels per snapshot, which a top-of-book study never reads and
+    # pays for in rows. Truncation is opt-in and always reported, because a
+    # silently shallower book is a different book.
+    max_levels: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.timestamp_unit not in ("s", "ms", "us", "ns"):
@@ -117,6 +135,18 @@ class ArchiveLayout:
             raise ValueError(
                 f"{self.name}: without an event-type column the layout must "
                 "describe exactly one kind of row"
+            )
+        if self.levels.style == "payload" and not self.payload_column:
+            raise ValueError(
+                f"{self.name}: a payload layout needs payload_column, the column "
+                "holding the JSON event"
+            )
+        if self.max_levels is not None and self.max_levels < 1:
+            raise ValueError(f"{self.name}: max_levels must be at least 1")
+        if self.payload_outcome_field and not self.outcome_labels:
+            raise ValueError(
+                f"{self.name}: payload_outcome_field names a label, so "
+                "outcome_labels must give the order those labels map to"
             )
 
     @property
@@ -136,7 +166,9 @@ class ArchiveLayout:
         ):
             if optional:
                 wanted.append(optional)
-        if self.levels.style == "nested":
+        if self.levels.style == "payload":
+            wanted.append(self.payload_column)  # type: ignore[arg-type]
+        elif self.levels.style == "nested":
             wanted += [self.levels.bids_column, self.levels.asks_column]
         else:
             wanted += [
@@ -180,6 +212,42 @@ TELONEX_LAYOUT = ArchiveLayout(
     event_type_column=None,
     snapshot_events=("book_snapshot_full",),
     levels=LevelLayout(style="nested"),
+)
+
+
+# A websocket capture written straight to Parquet: the event is a JSON string,
+# the token and both sides live inside it, and the outcome is named rather than
+# indexed. `outcome_labels` gives the order those names map to.
+KAGGLE_POLYMARKET_LAYOUT = ArchiveLayout(
+    name="kaggle-polymarket",
+    timestamp_column="timestamp_received",
+    timestamp_unit="ms",
+    instrument_column="market_id",
+    event_type_column="update_type",
+    snapshot_events=("book_snapshot",),
+    levels=LevelLayout(style="payload"),
+    arrival_column=None,
+    payload_column="data",
+    payload_token_field="token_id",
+    payload_bids_field="bids",
+    payload_asks_field="asks",
+    payload_outcome_field="side",
+    outcome_labels=("YES", "NO"),
+)
+
+# The same dataset's trade file: flat columns, seconds, outcome named not indexed.
+KAGGLE_POLYMARKET_TRADES_LAYOUT = ArchiveLayout(
+    name="kaggle-polymarket-trades",
+    timestamp_column="timestamp",
+    timestamp_unit="s",
+    instrument_column="condition_id",
+    token_column="asset",
+    event_type_column=None,
+    trade_events=("trade",),
+    levels=LevelLayout(style="flat"),
+    trade_price_column="price",
+    trade_size_column="size",
+    trade_side_column="side",
 )
 
 
@@ -230,6 +298,21 @@ def _levels_from_nested(value: Any, layout: LevelLayout) -> list[tuple[float, fl
             continue
         out.append((float(price), float(size)))
     return out
+
+
+def _decode_payload(raw: Any) -> Optional[Mapping[str, Any]]:
+    """One JSON event, or None when the cell is empty or unparseable."""
+    if raw is None:
+        return None
+    if isinstance(raw, Mapping):
+        return raw
+    import json
+
+    try:
+        decoded = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return decoded if isinstance(decoded, Mapping) else None
 
 
 @dataclass
@@ -379,6 +462,8 @@ def ingest_archive(
     accumulator = _Accumulator(vendor=layout.name)
     unknown_events: dict[str, int] = {}
     unknown_tokens: set[str] = set()
+    unparseable = 0
+    dropped_levels = 0
     loaded_low: Optional[int] = None
     loaded_high: Optional[int] = None
 
@@ -387,11 +472,12 @@ def ingest_archive(
         parquet = pq.ParquetFile(path)
         available = set(parquet.schema_arrow.names)
         needed = [name for name in layout.columns() if name in available]
-        missing_required = [
-            name
-            for name in (layout.timestamp_column, layout.token_column)
-            if name not in available
-        ]
+        required = [layout.timestamp_column]
+        if layout.levels.style == "payload":
+            required.append(layout.payload_column)  # type: ignore[arg-type]
+        else:
+            required.append(layout.token_column)
+        missing_required = [name for name in required if name not in available]
         if missing_required:
             report.skipped.append(
                 {
@@ -405,7 +491,18 @@ def ingest_archive(
         table = parquet.read(columns=needed)
         rows_read = table.num_rows
         stamps = _timestamps_ns(table, layout)
-        keep = pc.is_in(table.column(layout.token_column), value_set=wanted_tokens)
+        if layout.levels.style == "payload":
+            # The token is inside the JSON, so pre-filter on whatever cheap
+            # identifier the file does carry and decode only the survivors.
+            if layout.instrument_column and layout.instrument_column in available:
+                keep = pc.is_in(
+                    table.column(layout.instrument_column),
+                    value_set=pa.array(sorted(by_instrument), pa.string()),
+                )
+            else:
+                keep = pc.scalar(True)
+        else:
+            keep = pc.is_in(table.column(layout.token_column), value_set=wanted_tokens)
         if window is not None:
             keep = pc.and_(
                 keep,
@@ -414,7 +511,8 @@ def ingest_archive(
                     pc.less(stamps, pa.scalar(window[1], pa.int64())),
                 ),
             )
-        table = table.append_column("__ts_ns", stamps).filter(keep)
+        table = table.append_column("__ts_ns", stamps)
+        table = table.filter(keep) if not isinstance(keep, bool) else table
         rows_kept = table.num_rows
         report.sources.append(
             SourceFile(
@@ -437,6 +535,9 @@ def ingest_archive(
         trade_ids = (
             columns.get(layout.trade_id_column) if layout.trade_id_column else None
         )
+        payloads = (
+            columns.get(layout.payload_column) if layout.payload_column else None
+        )
         bids = columns.get(layout.levels.bids_column)
         asks = columns.get(layout.levels.asks_column)
         flat_side = columns.get(layout.levels.side_column)
@@ -447,12 +548,39 @@ def ingest_archive(
         trade_side = (
             columns.get(layout.trade_side_column) if layout.trade_side_column else None
         )
-        token_values = columns[layout.token_column]
+        token_values = columns.get(layout.token_column)
+        instrument_values = (
+            columns.get(layout.instrument_column) if layout.instrument_column else None
+        )
         stamp_values = columns["__ts_ns"]
 
         for row in range(rows_kept):
-            token = token_values[row]
-            resolved = tokens.get(str(token))
+            event: Optional[Mapping[str, Any]] = None
+            if payloads is not None:
+                event = _decode_payload(payloads[row])
+                if event is None:
+                    unparseable += 1
+                    continue
+                token = event.get(layout.payload_token_field)
+            else:
+                token = token_values[row] if token_values is not None else None
+            resolved = tokens.get(str(token)) if token is not None else None
+            if resolved is None and event is not None and layout.payload_outcome_field:
+                # A capture may name the outcome rather than carry a known token.
+                # Resolving through the instrument plus the label is exact when
+                # the layout states the label order; guessing it would not be.
+                label = event.get(layout.payload_outcome_field)
+                instrument_id = (
+                    str(instrument_values[row]) if instrument_values is not None else None
+                )
+                spec_by_id = by_instrument.get(instrument_id or "")
+                if spec_by_id is not None and label is not None:
+                    try:
+                        index = layout.outcome_labels.index(str(label))
+                    except ValueError:
+                        index = None  # type: ignore[assignment]
+                    if index is not None and index < spec_by_id.outcome_count:
+                        resolved = (spec_by_id, index)
             if resolved is None:
                 unknown_tokens.add(str(token))
                 continue
@@ -505,10 +633,26 @@ def ingest_archive(
                 )
             elif kind == "snapshot":
                 levels: list[tuple[str, float, float]] = []
-                for side, source in (("buy", bids), ("sell", asks)):
+                if event is not None:
+                    sides = (
+                        ("buy", event.get(layout.payload_bids_field)),
+                        ("sell", event.get(layout.payload_asks_field)),
+                    )
+                else:
+                    sides = (
+                        ("buy", bids[row] if bids is not None else None),
+                        ("sell", asks[row] if asks is not None else None),
+                    )
+                for side, source in sides:
                     if source is None:
                         continue
-                    for price, size in _levels_from_nested(source[row], layout.levels):
+                    parsed = _levels_from_nested(source, layout.levels)
+                    if layout.max_levels is not None and len(parsed) > layout.max_levels:
+                        # Best first: highest bids, lowest asks.
+                        parsed.sort(key=lambda level: level[0], reverse=side == "buy")
+                        dropped_levels += len(parsed) - layout.max_levels
+                        parsed = parsed[: layout.max_levels]
+                    for price, size in parsed:
                         levels.append((side, price, size))
                 accumulator.book_event(
                     ts_event=ts_event,
@@ -565,6 +709,16 @@ def ingest_archive(
 
     if unknown_events:
         report.skipped.append({"reason": "unknown_event_types", "counts": unknown_events})
+    if unparseable:
+        report.skipped.append({"reason": "unparseable_payload", "rows": unparseable})
+    if dropped_levels:
+        report.skipped.append(
+            {
+                "reason": "depth_truncated",
+                "max_levels": layout.max_levels,
+                "levels_dropped": dropped_levels,
+            }
+        )
     report.unknown_instruments = sorted(unknown_tokens)
     if loaded_low is not None and loaded_high is not None:
         report.loaded_window = (loaded_low, loaded_high)

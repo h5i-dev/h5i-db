@@ -30,6 +30,8 @@ h5i-db recognises them. That makes an interrupted backfill safe to restart.
 from __future__ import annotations
 
 from ._archive import (
+    KAGGLE_POLYMARKET_LAYOUT,
+    KAGGLE_POLYMARKET_TRADES_LAYOUT,
     PMXT_LAYOUT,
     TELONEX_LAYOUT,
     ArchiveLayout,
@@ -66,6 +68,8 @@ __all__ = [
     # layouts and ingest
     "ArchiveLayout",
     "LevelLayout",
+    "KAGGLE_POLYMARKET_LAYOUT",
+    "KAGGLE_POLYMARKET_TRADES_LAYOUT",
     "PMXT_LAYOUT",
     "TELONEX_LAYOUT",
     "discover",
