@@ -16,7 +16,7 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Array, Float64Builder, Int64Array,
     Int64Builder, StringArray, StringBuilder, TimestampNanosecondArray, TimestampNanosecondBuilder,
-    UInt16Array, UInt16Builder,
+    UInt8Array, UInt8Builder, UInt16Array, UInt16Builder,
 };
 use arrow::record_batch::RecordBatch;
 use h5i_db_core::Database;
@@ -26,7 +26,9 @@ use crate::book::{BookDelta, OrderBook};
 use crate::engine::RunResult;
 use crate::error::{BacktestError, Result};
 use crate::event::{MarketEvent, Record};
-use crate::instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
+use crate::instrument::{
+    Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId, PriceRule,
+};
 use crate::position::Portfolio;
 use crate::schema;
 use crate::settlement::{Payout, Resolution, SettlementReport};
@@ -183,6 +185,8 @@ pub async fn write_instruments(
     let mut expiration = Int64Builder::new();
     let mut observable = Int64Builder::new();
     let mut neg_risk = BooleanBuilder::new();
+    let mut significant_figures = UInt8Builder::new();
+    let mut max_decimals = UInt8Builder::new();
 
     for instrument in instruments {
         for (index, name) in instrument.outcomes.iter().enumerate() {
@@ -203,6 +207,19 @@ pub async fn write_instruments(
                 None => observable.append_null(),
             }
             neg_risk.append_value(instrument.neg_risk);
+            match instrument.price_rule {
+                PriceRule::Tick => {
+                    significant_figures.append_null();
+                    max_decimals.append_null();
+                }
+                PriceRule::SignificantFigures {
+                    significant_figures: figures,
+                    max_decimals: decimals,
+                } => {
+                    significant_figures.append_value(figures);
+                    max_decimals.append_value(decimals);
+                }
+            }
         }
     }
 
@@ -218,6 +235,8 @@ pub async fn write_instruments(
         Arc::new(expiration.finish()),
         Arc::new(observable.finish()),
         Arc::new(neg_risk.finish()),
+        Arc::new(significant_figures.finish()),
+        Arc::new(max_decimals.finish()),
     ];
     append(db, schema::INSTRUMENTS, schema::instruments(), columns).await
 }
@@ -261,6 +280,8 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
         // Absent for rows written before the column existed; false is the
         // reading that cannot invent a mintable set.
         let neg_risk = column::<BooleanArray>(batch, "neg_risk").ok();
+        let significant_figures = column::<UInt8Array>(batch, "price_significant_figures").ok();
+        let max_decimals = column::<UInt8Array>(batch, "price_max_decimals").ok();
 
         for row in 0..batch.num_rows() {
             let draft = collected
@@ -276,6 +297,14 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
                     neg_risk: neg_risk
                         .map(|column| column.is_valid(row) && column.value(row))
                         .unwrap_or(false),
+                    price_rule: match (significant_figures, max_decimals) {
+                        (Some(figures), Some(decimals))
+                            if figures.is_valid(row) && decimals.is_valid(row) =>
+                        {
+                            Some((figures.value(row), decimals.value(row)))
+                        }
+                        _ => None,
+                    },
                 });
             draft
                 .outcomes
@@ -305,6 +334,15 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
                 spot
             }
         };
+        // The rule comes first: it fixes the tick at the finest legal
+        // increment, and the stored tick must win over that default so a
+        // venue quoting coarser than its own rule round-trips faithfully.
+        if let Some((significant_figures, max_decimals)) = draft.price_rule {
+            instrument = instrument.with_price_rule(PriceRule::SignificantFigures {
+                significant_figures,
+                max_decimals,
+            })?;
+        }
         instrument.tick_size = Price::from_f64(draft.tick)?;
         instrument.lot_size = Qty::from_f64(draft.lot)?;
         instrument.expiration = draft.expiration.map(UnixNanos::new);
@@ -324,6 +362,7 @@ struct InstrumentDraft {
     expiration: Option<i64>,
     observable: Option<i64>,
     neg_risk: bool,
+    price_rule: Option<(u8, u8)>,
 }
 
 // -- book events ------------------------------------------------------------

@@ -101,6 +101,34 @@ impl InstrumentKind {
     }
 }
 
+/// Which prices a venue will accept.
+///
+/// A uniform grid is the common case and the one every equity and
+/// prediction market uses. It is not universal. Hyperliquid caps a price at
+/// **five significant figures** as well as a decimal count, so the spacing
+/// widens as the price rises: `0.0012345` is valid and `1.0012345` is not,
+/// and no single tick expresses that. Rounding such a venue onto a flat
+/// grid accepts orders it would reject at high prices and rejects orders it
+/// would accept at low ones, which shows up as fills at prices the venue
+/// could never have quoted -- exactly what [`Instrument::check_price`]
+/// exists to prevent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum PriceRule {
+    /// Every price is a multiple of the instrument's tick.
+    #[default]
+    Tick,
+    /// At most `significant_figures` significant digits *and* at most
+    /// `max_decimals` decimal places.
+    ///
+    /// A whole number is always accepted regardless of its digit count,
+    /// which is the venue's own carve-out: without it a price of 123456
+    /// would be untradeable.
+    SignificantFigures {
+        significant_figures: u8,
+        max_decimals: u8,
+    },
+}
+
 /// One tradable instrument.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Instrument {
@@ -141,6 +169,9 @@ pub struct Instrument {
     /// A two-outcome market is set-exchangeable regardless: see
     /// [`Instrument::supports_complete_set`].
     pub neg_risk: bool,
+    /// Which prices the venue accepts. `tick_size` is the finest increment
+    /// under any rule; a non-`Tick` rule narrows what is legal further.
+    pub price_rule: PriceRule,
 }
 
 impl Instrument {
@@ -166,6 +197,7 @@ impl Instrument {
             expiration: None,
             settlement_observable: None,
             neg_risk: false,
+            price_rule: PriceRule::Tick,
         })
     }
 
@@ -186,6 +218,7 @@ impl Instrument {
             expiration: None,
             settlement_observable: None,
             neg_risk: false,
+            price_rule: PriceRule::Tick,
         })
     }
 
@@ -218,6 +251,34 @@ impl Instrument {
     pub fn with_neg_risk(mut self, neg_risk: bool) -> Self {
         self.neg_risk = neg_risk;
         self
+    }
+
+    /// Which prices this venue accepts, when a flat tick does not say it.
+    ///
+    /// A significant-figure rule also fixes the tick at the finest legal
+    /// increment, `10^-max_decimals`, since the two constraints are checked
+    /// together and a tick coarser than that would silently dominate.
+    pub fn with_price_rule(mut self, rule: PriceRule) -> Result<Self> {
+        if let PriceRule::SignificantFigures {
+            significant_figures,
+            max_decimals,
+        } = rule
+        {
+            if significant_figures == 0 || significant_figures > 18 {
+                return Err(BacktestError::invalid(
+                    "a significant-figure limit must lie in 1..=18",
+                ));
+            }
+            if max_decimals > 9 {
+                return Err(BacktestError::invalid(format!(
+                    "{} decimal places exceeds the fixed-point scale's nine",
+                    max_decimals
+                )));
+            }
+            self.tick_size = Price::from_raw(10_i64.pow(9 - max_decimals as u32));
+        }
+        self.price_rule = rule;
+        Ok(self)
     }
 
     #[inline]
@@ -286,16 +347,42 @@ impl Instrument {
                 self.id, self.tick_size
             )));
         }
+        if let PriceRule::SignificantFigures {
+            significant_figures,
+            ..
+        } = self.price_rule
+            && !is_whole(price)
+            && count_significant_figures(price) > significant_figures
+        {
+            return Err(BacktestError::invalid(format!(
+                "price {price} carries {} significant figures but {} accepts \
+                 at most {significant_figures}",
+                count_significant_figures(price),
+                self.id
+            )));
+        }
         Ok(())
     }
 
-    /// Round a price down to the tick grid (towards zero).
+    /// Round a price towards zero onto the grid this instrument accepts.
+    ///
+    /// Kept named for the tick because that is what it does under the common
+    /// rule; under a significant-figure rule it also drops the digits the
+    /// venue would refuse.
     pub fn round_to_tick(&self, price: Price) -> Price {
         let tick = self.tick_size.raw();
-        if tick <= 0 {
-            return price;
+        let mut raw = price.raw();
+        if tick > 0 {
+            raw -= raw % tick;
         }
-        Price::from_raw(price.raw() - price.raw() % tick)
+        if let PriceRule::SignificantFigures {
+            significant_figures,
+            ..
+        } = self.price_rule
+        {
+            raw = truncate_to_significant_figures(raw, significant_figures);
+        }
+        Price::from_raw(raw)
     }
 
     /// How far a set of outcome prices is from summing to one.
@@ -315,6 +402,59 @@ impl Instrument {
         let sum: i64 = prices.iter().map(|p| p.raw()).sum();
         Ok(Price::from_raw(sum - SCALE))
     }
+}
+
+/// Whether a price is a whole number of units.
+///
+/// Venues that cap significant figures exempt integers, because otherwise a
+/// price of 123456 would carry six of them and be untradeable.
+fn is_whole(price: Price) -> bool {
+    price.raw() % SCALE == 0
+}
+
+/// How many significant digits a fixed-point price carries.
+///
+/// Leading zeros after the point do not count and trailing zeros are not
+/// significant, so `0.0012` has two and `1.2000` has two. Computed on the
+/// raw integer rather than on a formatted string: the string form of a
+/// binary float is where this kind of check usually goes wrong.
+fn count_significant_figures(price: Price) -> u8 {
+    let mut raw = price.raw().unsigned_abs();
+    if raw == 0 {
+        return 0;
+    }
+    while raw % 10 == 0 {
+        raw /= 10;
+    }
+    let mut digits = 0_u8;
+    while raw > 0 {
+        raw /= 10;
+        digits += 1;
+    }
+    digits
+}
+
+/// Drop the digits past `figures` significant ones, towards zero.
+fn truncate_to_significant_figures(raw: i64, figures: u8) -> i64 {
+    if figures == 0 || raw == 0 {
+        return raw;
+    }
+    let magnitude = raw.unsigned_abs();
+    // A whole number keeps every digit: that is the venue's carve-out.
+    if magnitude % (SCALE as u64) == 0 {
+        return raw;
+    }
+    let mut digits = 0_u32;
+    let mut scan = magnitude;
+    while scan > 0 {
+        scan /= 10;
+        digits += 1;
+    }
+    if digits <= figures as u32 {
+        return raw;
+    }
+    let drop = 10_i64.pow(digits - figures as u32);
+    raw - raw % drop
 }
 
 /// Split one unit across `outcomes` as evenly as fixed point allows.
@@ -502,6 +642,124 @@ mod tests {
             Price::from_f64(0.05).unwrap()
         );
         assert!(market.completeness_error(&exact[..2]).is_err());
+    }
+
+    /// A Hyperliquid perp: five significant figures, and decimals capped at
+    /// `6 - szDecimals`. This is BTC, whose `szDecimals` is five.
+    fn hyperliquid_perp() -> Instrument {
+        Instrument::perpetual("BTC-PERP", "hyperliquid")
+            .unwrap()
+            .with_price_rule(PriceRule::SignificantFigures {
+                significant_figures: 5,
+                max_decimals: 1,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn significant_figures_widen_the_grid_as_the_price_rises() {
+        // The whole point of the rule: one tick cannot express it. At 0.5 a
+        // tenth is legal; at 50000 it is not, because five figures are
+        // already spent.
+        let perp = Instrument::perpetual("KPEPE-PERP", "hyperliquid")
+            .unwrap()
+            .with_price_rule(PriceRule::SignificantFigures {
+                significant_figures: 5,
+                max_decimals: 6,
+            })
+            .unwrap();
+        // Near zero the six-decimal budget is the only binding constraint,
+        // so four significant digits fit inside it.
+        assert!(perp.check_price(Price::from_f64(0.001234).unwrap()).is_ok());
+        // The same six decimals at a price of one carry seven significant
+        // figures, which the venue will not quote.
+        assert!(
+            perp.check_price(Price::from_f64(1.001234).unwrap())
+                .is_err(),
+            "seven significant figures is more than the venue accepts"
+        );
+        assert!(perp.check_price(Price::from_f64(1.0012).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn a_whole_number_is_always_a_legal_price() {
+        // Without the carve-out a six-figure price would be untradeable,
+        // which would make most of the BTC book unquotable.
+        let perp = hyperliquid_perp();
+        assert!(
+            perp.check_price(Price::from_units(123_456).unwrap())
+                .is_ok()
+        );
+        assert!(
+            perp.check_price(Price::from_f64(50_000.5).unwrap())
+                .is_err()
+        );
+        assert!(perp.check_price(Price::from_units(50_001).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn the_decimal_cap_still_applies_under_a_figure_rule() {
+        // szDecimals five leaves one decimal place, so a hundredth is off
+        // the grid however few figures it carries.
+        let perp = hyperliquid_perp();
+        assert_eq!(perp.tick_size, Price::from_f64(0.1).unwrap());
+        assert!(perp.check_price(Price::from_f64(1.05).unwrap()).is_err());
+        assert!(perp.check_price(Price::from_f64(1.1).unwrap()).is_ok());
+    }
+
+    #[test]
+    fn rounding_drops_the_digits_the_venue_would_refuse() {
+        let perp = Instrument::perpetual("ETH-PERP", "hyperliquid")
+            .unwrap()
+            .with_price_rule(PriceRule::SignificantFigures {
+                significant_figures: 5,
+                max_decimals: 4,
+            })
+            .unwrap();
+        let rounded = perp.round_to_tick(Price::from_f64(1234.5678).unwrap());
+        assert_eq!(rounded, Price::from_f64(1234.5).unwrap());
+        assert!(perp.check_price(rounded).is_ok());
+        // Already legal prices are left alone.
+        let legal = Price::from_f64(0.1234).unwrap();
+        assert_eq!(perp.round_to_tick(legal), legal);
+    }
+
+    #[test]
+    fn significant_figures_are_counted_on_the_integer_not_a_float_string() {
+        for (value, expected) in [
+            (0.0012, 2_u8),
+            (1.2, 2),
+            (1.0012345, 8),
+            (12.345, 5),
+            (0.5, 1),
+        ] {
+            assert_eq!(
+                count_significant_figures(Price::from_f64(value).unwrap()),
+                expected,
+                "{value}"
+            );
+        }
+        assert_eq!(count_significant_figures(Price::ZERO), 0);
+    }
+
+    #[test]
+    fn a_price_rule_that_cannot_be_represented_is_refused() {
+        let perp = Instrument::perpetual("p", "v").unwrap();
+        assert!(
+            perp.clone()
+                .with_price_rule(PriceRule::SignificantFigures {
+                    significant_figures: 0,
+                    max_decimals: 2
+                })
+                .is_err()
+        );
+        assert!(
+            perp.with_price_rule(PriceRule::SignificantFigures {
+                significant_figures: 5,
+                max_decimals: 12
+            })
+            .is_err()
+        );
     }
 
     #[test]

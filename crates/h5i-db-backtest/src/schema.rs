@@ -163,6 +163,10 @@ pub fn instruments() -> SchemaRef {
         // that cannot be minted is only a missing capability, whereas a
         // market wrongly believed mintable creates cash.
         Field::new("neg_risk", DataType::Boolean, true),
+        // A significant-figure price cap, where the venue has one. Absent
+        // means the tick grid is the whole rule, which is the common case.
+        Field::new("price_significant_figures", DataType::UInt8, true),
+        Field::new("price_max_decimals", DataType::UInt8, true),
     ]))
 }
 

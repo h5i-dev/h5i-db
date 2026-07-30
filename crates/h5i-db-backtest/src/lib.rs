@@ -62,8 +62,8 @@ pub use error::{BacktestError, Result};
 pub use event::{MarketEvent, Record};
 pub use execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
 pub use instrument::{
-    Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId, normalise_to_one,
-    uniform_prices,
+    Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId, PriceRule,
+    normalise_to_one, uniform_prices,
 };
 pub use l3::{L3Book, MboMessage};
 pub use models::{

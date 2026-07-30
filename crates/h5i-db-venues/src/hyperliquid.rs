@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use h5i_db_backtest::error::{BacktestError, Result};
 use h5i_db_backtest::event::{MarketEvent, Record};
-use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId};
+use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId, PriceRule};
 use h5i_db_backtest::types::{Price, Qty, Stamps, UnixNanos};
 
 /// Mainnet info endpoint.
@@ -68,7 +68,134 @@ pub fn l2_book_request(coin: &str) -> String {
     serde_json::json!({ "type": "l2Book", "coin": coin }).to_string()
 }
 
-/// A perpetual instrument for a Hyperliquid coin.
+/// Body for the perpetual universe request.
+pub fn meta_request() -> String {
+    serde_json::json!({ "type": "meta" }).to_string()
+}
+
+/// Body for the universe plus its live contexts (mark, oracle, funding).
+pub fn meta_and_asset_ctxs_request() -> String {
+    serde_json::json!({ "type": "metaAndAssetCtxs" }).to_string()
+}
+
+/// Hyperliquid's own limit on a perpetual price's significant figures.
+pub const MAX_SIGNIFICANT_FIGURES: u8 = 5;
+/// Decimal places available to a perpetual price before `szDecimals`.
+pub const PERP_MAX_DECIMALS: u8 = 6;
+/// The same budget for spot, which gets two more places.
+pub const SPOT_MAX_DECIMALS: u8 = 8;
+
+/// One coin's entry in the perpetual universe.
+///
+/// These are the fields that decide what a strategy may even *send*, and
+/// they are per coin rather than per venue. Hard-coding a tick and a
+/// leverage across a universe -- which is what
+/// [`instrument`] leaves a caller to do -- gets both wrong for most of it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AssetMeta {
+    pub name: String,
+    /// Decimal places a *size* may carry. It also sets the price grid:
+    /// a price gets `6 - sz_decimals` decimals on a perpetual.
+    pub sz_decimals: u8,
+    /// The most leverage the venue will grant on this coin.
+    pub max_leverage: u32,
+    /// Whether the venue refuses cross margin here.
+    pub only_isolated: bool,
+    pub is_delisted: bool,
+}
+
+impl AssetMeta {
+    /// How many decimal places a price on this coin may carry.
+    ///
+    /// Hyperliquid spends one budget on both sides of the pair: a coin whose
+    /// size is fine-grained gets a coarse price, and vice versa. A universal
+    /// tick cannot express that, which is why this is derived per coin.
+    pub fn price_decimals(&self) -> u8 {
+        PERP_MAX_DECIMALS.saturating_sub(self.sz_decimals)
+    }
+
+    /// The canonical instrument for this coin.
+    pub fn instrument(&self) -> Result<Instrument> {
+        let lot = 10_f64.powi(-(self.sz_decimals as i32));
+        Ok(
+            Instrument::perpetual(format!("{}-PERP", self.name), "hyperliquid")?
+                .with_lot_size(Qty::from_f64(lot)?)
+                .with_price_rule(PriceRule::SignificantFigures {
+                    significant_figures: MAX_SIGNIFICANT_FIGURES,
+                    max_decimals: self.price_decimals(),
+                })?,
+        )
+    }
+}
+
+/// Parse a `meta` (or the first half of a `metaAndAssetCtxs`) response.
+///
+/// A delisted coin is kept rather than dropped: a backtest over a window in
+/// which it still traded needs its instrument, and refusing to load it
+/// would be survivorship bias applied at ingestion, which is the hardest
+/// place to notice it.
+pub fn parse_meta(body: &str) -> Result<Vec<AssetMeta>> {
+    parse_meta_value(&parse_json(body)?)
+}
+
+fn parse_meta_value(json: &Value) -> Result<Vec<AssetMeta>> {
+    let universe = json
+        .get("universe")
+        .and_then(Value::as_array)
+        .ok_or(BacktestError::Parse {
+            what: "meta.universe",
+            value: "missing".to_string(),
+        })?;
+    let mut out = Vec::with_capacity(universe.len());
+    for entry in universe {
+        let name = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or(BacktestError::Parse {
+                what: "meta.universe[].name",
+                value: "missing".to_string(),
+            })?;
+        let sz_decimals =
+            entry
+                .get("szDecimals")
+                .and_then(Value::as_u64)
+                .ok_or(BacktestError::Parse {
+                    what: "meta.universe[].szDecimals",
+                    value: "missing".to_string(),
+                })?;
+        if sz_decimals > PERP_MAX_DECIMALS as u64 {
+            return Err(BacktestError::invalid(format!(
+                "{name}: szDecimals {sz_decimals} would leave a perpetual \
+                 price no decimal places at all"
+            )));
+        }
+        let max_leverage = entry
+            .get("maxLeverage")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .max(1);
+        out.push(AssetMeta {
+            name: name.to_string(),
+            sz_decimals: sz_decimals as u8,
+            max_leverage: max_leverage as u32,
+            only_isolated: entry
+                .get("onlyIsolated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            is_delisted: entry
+                .get("isDelisted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+    Ok(out)
+}
+
+/// A perpetual instrument for a Hyperliquid coin, with a hand-supplied grid.
+///
+/// Prefer [`parse_meta`] and [`AssetMeta::instrument`]: the venue publishes
+/// the grid per coin, and a hand-supplied tick is a guess that the venue
+/// will disagree with on most of the universe.
 pub fn instrument(coin: &str, tick_size: f64, lot_size: f64) -> Result<Instrument> {
     Ok(
         Instrument::perpetual(format!("{coin}-PERP"), "hyperliquid")?
@@ -404,5 +531,78 @@ mod tests {
         assert_eq!(btc.venue, "hyperliquid");
         assert_eq!(btc.outcome_count(), 1, "a perp has one outcome");
         assert_eq!(btc.tick_size, Price::from_f64(0.5).unwrap());
+    }
+
+    const META: &str = r#"{"universe":[
+        {"name":"BTC","szDecimals":5,"maxLeverage":40},
+        {"name":"ETH","szDecimals":4,"maxLeverage":25,"onlyIsolated":false},
+        {"name":"KPEPE","szDecimals":0,"maxLeverage":10,"onlyIsolated":true,
+         "isDelisted":true}
+    ]}"#;
+
+    #[test]
+    fn the_universe_carries_a_grid_per_coin_not_per_venue() {
+        let universe = parse_meta(META).unwrap();
+        assert_eq!(universe.len(), 3);
+        // The budget is shared between size and price: BTC's fine size
+        // leaves one decimal on the price, KPEPE's whole-unit size leaves
+        // six. One tick across the venue is wrong for both.
+        assert_eq!(universe[0].price_decimals(), 1);
+        assert_eq!(universe[1].price_decimals(), 2);
+        assert_eq!(universe[2].price_decimals(), 6);
+        assert_eq!(universe[0].max_leverage, 40);
+        assert!(universe[2].only_isolated);
+    }
+
+    #[test]
+    fn an_instrument_from_metadata_accepts_what_the_venue_accepts() {
+        let universe = parse_meta(META).unwrap();
+        let btc = universe[0].instrument().unwrap();
+        assert_eq!(btc.id.as_str(), "BTC-PERP");
+        assert_eq!(btc.lot_size, Qty::from_f64(0.00001).unwrap());
+        assert_eq!(btc.tick_size, Price::from_f64(0.1).unwrap());
+        // Five figures spent on the integer part, so a tenth is refused
+        // here and accepted on a cheaper coin.
+        assert!(btc.check_price(Price::from_f64(50_000.5).unwrap()).is_err());
+        assert!(btc.check_price(Price::from_units(50_001).unwrap()).is_ok());
+
+        let kpepe = universe[2].instrument().unwrap();
+        assert!(
+            kpepe
+                .check_price(Price::from_f64(0.001234).unwrap())
+                .is_ok()
+        );
+        assert!(
+            kpepe
+                .check_price(Price::from_f64(1.001234).unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_delisted_coin_is_kept_rather_than_dropped() {
+        // Dropping it would be survivorship bias applied at ingestion,
+        // where it is hardest to notice.
+        let universe = parse_meta(META).unwrap();
+        assert!(universe[2].is_delisted);
+        assert!(universe[2].instrument().is_ok());
+    }
+
+    #[test]
+    fn malformed_universe_entries_are_refused() {
+        assert!(parse_meta(r#"{"universe":[{"szDecimals":2}]}"#).is_err());
+        assert!(parse_meta(r#"{"universe":[{"name":"X"}]}"#).is_err());
+        assert!(parse_meta(r#"{}"#).is_err());
+        // szDecimals larger than the price budget would leave no price grid.
+        assert!(parse_meta(r#"{"universe":[{"name":"X","szDecimals":9}]}"#).is_err());
+    }
+
+    #[test]
+    fn the_metadata_request_bodies_match_the_documented_wire_format() {
+        assert_eq!(meta_request(), r#"{"type":"meta"}"#);
+        assert_eq!(
+            meta_and_asset_ctxs_request(),
+            r#"{"type":"metaAndAssetCtxs"}"#
+        );
     }
 }

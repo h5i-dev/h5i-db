@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use h5i_db_backtest::book::BookDelta;
 use h5i_db_backtest::engine::{OrderRequest, SignalReplay};
 use h5i_db_backtest::event::{MarketEvent, Record};
-use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId};
+use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId, PriceRule};
 use h5i_db_backtest::models::PredictionMarketFees;
 use h5i_db_backtest::position::Portfolio;
 use h5i_db_backtest::run::{RunSpec, run_in_fork, run_in_place};
@@ -136,6 +136,33 @@ async fn instruments_survive_the_round_trip() {
          non-set market back as true would let a run create cash"
     );
     assert!(!read.get(&id()).unwrap().neg_risk);
+}
+
+#[tokio::test]
+async fn a_venues_price_rule_survives_the_round_trip() {
+    // A perpetual whose legal prices are not a flat grid. Reading the rule
+    // back as a tick would accept prices the venue refuses at the top of
+    // its range and refuse ones it accepts at the bottom.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("p.db")).await.unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+
+    let perp = Instrument::perpetual("BTC-PERP", "hyperliquid")
+        .unwrap()
+        .with_price_rule(PriceRule::SignificantFigures {
+            significant_figures: 5,
+            max_decimals: 1,
+        })
+        .unwrap();
+    store::write_instruments(&db, &[perp.clone()], ts(0))
+        .await
+        .unwrap();
+
+    let read = store::read_instruments(&db, ReadAt::Latest).await.unwrap();
+    let restored = read.get(&InstrumentId::new("BTC-PERP").unwrap()).unwrap();
+    assert_eq!(restored, &perp);
+    assert!(restored.check_price(price(50_000.5)).is_err());
+    assert!(restored.check_price(price(50_001.0)).is_ok());
 }
 
 #[tokio::test]
