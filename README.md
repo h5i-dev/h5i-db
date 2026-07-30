@@ -5,27 +5,27 @@
 **A fast, agent-native time-series *d*atabase and *b*acktesting engine for quant research.
 Embedded, written in Rust.**
 
-- (DB) **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
+- **Fast for time-series shape:** over 4.5× faster than DuckDB and Polars
   on OHLCV+VWAP rollups over 20M rows.
-- (DB) **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
+- **Native time-series SQL:** ASOF join, timezone-aware `time_bucket`,
   gapfill/resample, rolling windows, `vwap`, `ewma`.
-- (DB) **Point-in-time reads:** pin a decision time and the frame that reaches
+- **Point-in-time reads:** pin a decision time and the frame that reaches
   pandas cannot contain rows from after it. No lookahead bias, by construction.
-- (BT) **Efficient event-driven backtester:** 3.05M events/s through
+- **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- (BT) **Native support for popular markets:** Kalshi, Polymarket and Hyperliquid
+- **Native support for popular markets:** Kalshi, Polymarket and Hyperliquid
   payloads decode into one canonical set of tables, each with the venue's real fee
   curve and funding.
-- (BT) **Professional statistical analysis:** factor and performance metrics at
+- **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.
-- (AI) **Fork a database in milliseconds:** forks share data instead of copying it. 
+- **Fork a database in milliseconds:** forks share data instead of copying it. 
   Agents can run wide trial-and-error loops (fork, mutate, evaluate, discard) 
   at almost zero cost.
-- (AI) **Every write is an atomic, versioned commit:** any past version reads in
+- **Every write is an atomic, versioned commit:** any past version reads in
   O(1), so a bad ingest (human or agent) is one `restore` away from undone.
-- (AI) **Safety policies for agent writes:** previewable mutations, policy gates,
+- **Safety policies for agent writes:** previewable mutations, policy gates,
   fail-closed constraints that block destructive operations, and an audit
   trail of what changed and why.
 
@@ -156,28 +156,22 @@ npx skills add h5i-dev/h5i-db        # installs the h5i-db skill from skills/h5i
 - **Reproducible inputs:** every read resolves to a version, so "which data did
 this run see" has an answer, and re-running against that version is O(1) rather
 than an archaeology project.
-
 - **Don't let a result destroy the context window.** `H5I_DB_PROFILE=agent` caps
 every query and spills the rest to Parquet, reporting the true row count and
 where the withheld rows live.
-
 - **Errors that can be acted on:** the stderr envelope carries `next_actions`
 (runnable commands), `did_you_mean` for typos, and a `retryable` flag.
-
 - **Branch without copying.** `fork` opens a writable workspace over a pinned
 view of every table and duplicates no data, so an edit or an experiment costs
 one small file and is as cheap to discard as to keep.
-
 - **Privilege control.** Mutations preview through `plan`/`apply` and policy can
-require that gate; `--idempotency-key` makes a retried ingest replay instead of
-double-appending; an opt-in `data-policy` rejects malformed rows fail-closed.
-
+require that gate; `--idempotency-key` makes a retried ingest replay; an opt-in 
+`data-policy` rejects malformed rows fail-closed.
 - **A backtest run is a branch.** Each run executes inside its own
 fork and writes its orders, fills, positions and equity curve there as ordinary
 tables. So two runs diff at fill level with `fork_diff`, a whole sweep aggregates
 in one cross-fork query, the one worth keeping is `promote`d and the rest are
 dropped.
-
 - **The review surface routes attention rather than ranking.** `h5i-db ui` orders
 trials by what needs a human next: decision required, then failed or warned, then
 finished and unseen, then running, then seen. Scanning a list does not mark work

@@ -6,29 +6,29 @@
 nativos para agentes, pensados para la investigación cuantitativa. Embebidos y
 escritos en Rust.**
 
-- (DB) **Rápida en la forma de las series temporales:** más de 4,5× más rápida que
+- **Rápida en la forma de las series temporales:** más de 4,5× más rápida que
   DuckDB y Polars en agregaciones OHLCV+VWAP sobre 20 M de filas.
-- (DB) **SQL nativo de series temporales:** ASOF join, `time_bucket` con zonas
+- **SQL nativo de series temporales:** ASOF join, `time_bucket` con zonas
   horarias, gapfill/resample, ventanas móviles, `vwap`, `ewma`.
-- (DB) **Lecturas point-in-time:** fija un instante de decisión y el marco de datos
+- **Lecturas point-in-time:** fija un instante de decisión y el marco de datos
   que llega a pandas no podrá contener filas posteriores a él. Sin sesgo de
   anticipación, por construcción.
-- (BT) **Backtester orientado a eventos y eficiente:** 3,05 M de eventos/s a través
+- **Backtester orientado a eventos y eficiente:** 3,05 M de eventos/s a través
   del núcleo de replay, 11,7× NautilusTrader y 31× LEAN en una carga compartida
   sobre el tope del libro.
-- (BT) **Soporte nativo de los mercados más usados:** los payloads de Kalshi,
+- **Soporte nativo de los mercados más usados:** los payloads de Kalshi,
   Polymarket e Hyperliquid se decodifican en un único conjunto canónico de tablas,
   cada uno con la curva de comisiones y el funding reales del venue.
-- (BT) **Análisis estadístico profesional:** métricas de factores y de rendimiento
+- **Análisis estadístico profesional:** métricas de factores y de rendimiento
   con paridad `alphalens` y `empyrical`, además de Sharpe deflactado y detección de
   la probabilidad de sobreajuste.
-- (AI) **Bifurca una base de datos en milisegundos:** los forks comparten los datos
+- **Bifurca una base de datos en milisegundos:** los forks comparten los datos
   en lugar de copiarlos. Un agente puede recorrer ciclos amplios de ensayo y
   error (bifurcar, mutar, evaluar, descartar) a un coste casi nulo.
-- (AI) **Cada escritura es un commit atómico y versionado:** cualquier versión
+- **Cada escritura es un commit atómico y versionado:** cualquier versión
   pasada se lee en O(1), así que una ingesta defectuosa (humana o de un agente)
   se deshace con un solo `restore`.
-- (AI) **Políticas de seguridad para las escrituras de agentes:** mutaciones
+- **Políticas de seguridad para las escrituras de agentes:** mutaciones
   previsualizables, controles por política, restricciones que fallan en cerrado
   y bloquean las operaciones destructivas, y un registro de auditoría de qué
   cambió y por qué.
@@ -164,31 +164,25 @@ npx skills add h5i-dev/h5i-db        # instala la skill de h5i-db desde skills/h
 - **Entradas reproducibles:** cada lectura se resuelve a una versión, de modo
 que "qué datos vio esta ejecución" tiene respuesta, y repetirla contra esa
 versión es O(1) en lugar de un trabajo de arqueología.
-
 - **Que un resultado no arrase la ventana de contexto.** `H5I_DB_PROFILE=agent`
 limita cada consulta y vuelca el resto a Parquet, informando del número real de
 filas y de dónde quedaron las que se retuvieron.
-
 - **Errores sobre los que se puede actuar:** el sobre de stderr lleva
 `next_actions` (comandos ejecutables), `did_you_mean` para las erratas y un
 indicador `retryable`.
-
 - **Bifurcar sin copiar.** `fork` abre un espacio de trabajo escribible sobre una
 vista fijada de todas las tablas y no duplica ningún dato, así que una edición o
 un experimento cuestan un archivo pequeño y descartarlos sale tan barato como
 conservarlos.
-
 - **Control de privilegios.** Las mutaciones se previsualizan con `plan`/`apply`
 y la política puede exigir ese paso; `--idempotency-key` hace que una ingesta
-reintentada se repita en lugar de duplicar filas; una `data-policy` opcional
-rechaza en cerrado las filas mal formadas.
-
+reintentada se repita; una `data-policy` opcional rechaza en cerrado las filas
+mal formadas.
 - **Una ejecución de backtest es una rama.** Cada ejecución corre dentro de su
 propio fork y escribe allí sus órdenes, ejecuciones, posiciones y curva
 de patrimonio como tablas normales. Así, dos ejecuciones se comparan al nivel de
 ejecución con `fork_diff`, un barrido entero se agrega en una sola consulta entre
 forks, la que merece la pena se `promote` y el resto se descarta.
-
 - **La superficie de revisión reparte atención en vez de clasificar.** `h5i-db ui`
 ordena las pruebas por lo que necesita a una persona a continuación: decisión
 requerida, luego fallidas o con avisos, luego terminadas y no vistas, luego en
