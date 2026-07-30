@@ -2514,6 +2514,37 @@ offers. `read_archive_lz4` reads the hourly files; `parse_ws_message`
 handles a live capture, dispatching `l2Book` and `trades` by the coin in the
 payload so one call covers a capture spanning many markets.
 
+`s3://hyperliquid-archive` is a **Requester Pays** bucket: anonymous reads
+get a 403 whatever headers you send, and you need an AWS account and pay the
+transfer.
+
+```bash
+aws s3 ls s3://hyperliquid-archive/market_data/20250101/0/l2Book/ \
+    --request-payer requester
+aws s3 cp s3://hyperliquid-archive/market_data/20250101/0/l2Book/BTC.lz4 . \
+    --request-payer requester
+```
+
+The live endpoints need no credentials, which is where
+`tests/fixtures/hyperliquid` came from. Refresh them with:
+
+```bash
+curl -sX POST https://api.hyperliquid.xyz/info \
+  -H 'Content-Type: application/json' -d '{"type":"metaAndAssetCtxs"}'
+```
+
+Fixtures captured from the venue are worth the bytes. A hand-written one
+tests that a parser matches what its author believed; a real one tests that
+it matches what the venue sends. The `fundingHistory` request shape here was
+wrong -- it nested its arguments under `req`, which the API rejects with a
+422 that names no field -- for exactly as long as only the first kind
+existed.
+
+Two shapes to know, both caught this way: `fundingHistory` takes its
+arguments flat while `candleSnapshot` nests them under `req`, and funding
+timestamps carry tens of milliseconds of jitter around the hour rather than
+landing on it exactly.
+
 `ArchiveRead` counts what produced nothing and `require_yield` refuses a
 file that is mostly junk -- usually the wrong channel or the wrong
 decompression, and worse to replay as a thin book than to refuse outright.

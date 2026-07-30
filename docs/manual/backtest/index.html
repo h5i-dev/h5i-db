@@ -470,6 +470,31 @@ it is right now, so the archive is the only source of book history the venue
 offers. <code>read_archive_lz4</code> reads the hourly files; <code>parse_ws_message</code>
 handles a live capture, dispatching <code>l2Book</code> and <code>trades</code> by the coin in the
 payload so one call covers a capture spanning many markets.</p>
+<p><code>s3://hyperliquid-archive</code> is a <strong>Requester Pays</strong> bucket: anonymous reads
+get a 403 whatever headers you send, and you need an AWS account and pay the
+transfer.</p>
+<div class="highlight"><pre><span></span><code>aws<span class="w"> </span>s3<span class="w"> </span>ls<span class="w"> </span>s3://hyperliquid-archive/market_data/20250101/0/l2Book/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--request-payer<span class="w"> </span>requester
+aws<span class="w"> </span>s3<span class="w"> </span>cp<span class="w"> </span>s3://hyperliquid-archive/market_data/20250101/0/l2Book/BTC.lz4<span class="w"> </span>.<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--request-payer<span class="w"> </span>requester
+</code></pre></div>
+
+<p>The live endpoints need no credentials, which is where
+<code>tests/fixtures/hyperliquid</code> came from. Refresh them with:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sX<span class="w"> </span>POST<span class="w"> </span>https://api.hyperliquid.xyz/info<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s1">&#39;Content-Type: application/json&#39;</span><span class="w"> </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;type&quot;:&quot;metaAndAssetCtxs&quot;}&#39;</span>
+</code></pre></div>
+
+<p>Fixtures captured from the venue are worth the bytes. A hand-written one
+tests that a parser matches what its author believed; a real one tests that
+it matches what the venue sends. The <code>fundingHistory</code> request shape here was
+wrong -- it nested its arguments under <code>req</code>, which the API rejects with a
+422 that names no field -- for exactly as long as only the first kind
+existed.</p>
+<p>Two shapes to know, both caught this way: <code>fundingHistory</code> takes its
+arguments flat while <code>candleSnapshot</code> nests them under <code>req</code>, and funding
+timestamps carry tens of milliseconds of jitter around the hour rather than
+landing on it exactly.</p>
 <p><code>ArchiveRead</code> counts what produced nothing and <code>require_yield</code> refuses a
 file that is mostly junk -- usually the wrong channel or the wrong
 decompression, and worse to replay as a thin book than to refuse outright.</p>

@@ -56,12 +56,21 @@ pub fn candles_request(coin: &str, interval: &str, start_ms: i64, end_ms: i64) -
 }
 
 /// Body for a funding history request.
+/// Note the shape: `fundingHistory` takes its arguments **flat**, unlike
+/// `candleSnapshot`, which nests them under `req`. The API rejects the
+/// nested form with a 422 that says only "Failed to deserialize the JSON
+/// body into the target type", which is why this is spelled out here and
+/// pinned by a test against a live capture.
 pub fn funding_request(coin: &str, start_ms: i64, end_ms: Option<i64>) -> String {
-    let mut req = serde_json::json!({ "coin": coin, "startTime": start_ms });
+    let mut body = serde_json::json!({
+        "type": "fundingHistory",
+        "coin": coin,
+        "startTime": start_ms,
+    });
     if let Some(end) = end_ms {
-        req["endTime"] = Value::from(end);
+        body["endTime"] = Value::from(end);
     }
-    serde_json::json!({ "type": "fundingHistory", "req": req }).to_string()
+    body.to_string()
 }
 
 /// Body for an L2 book snapshot request.
@@ -706,12 +715,17 @@ mod tests {
         assert_eq!(parsed["req"]["startTime"], 1640995200000i64);
         assert_eq!(parsed["req"]["endTime"], 1641002400000i64);
 
+        // `fundingHistory` takes its arguments flat, unlike `candleSnapshot`.
+        // Nesting them under `req` -- which this emitted until a live capture
+        // caught it -- gets a 422 whose message names no field.
         let funding: Value = serde_json::from_str(&funding_request("BTC", 1, None)).unwrap();
         assert_eq!(funding["type"], "fundingHistory");
-        assert!(
-            funding["req"].get("endTime").is_none(),
-            "omitted when absent"
-        );
+        assert_eq!(funding["coin"], "BTC");
+        assert_eq!(funding["startTime"], 1i64);
+        assert!(funding.get("req").is_none(), "not nested");
+        assert!(funding.get("endTime").is_none(), "omitted when absent");
+        let bounded: Value = serde_json::from_str(&funding_request("BTC", 1, Some(9))).unwrap();
+        assert_eq!(bounded["endTime"], 9i64);
 
         let book: Value = serde_json::from_str(&l2_book_request("ETH")).unwrap();
         assert_eq!(book["type"], "l2Book");
