@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/#article","headline":"The DataFrame builder: queries as Python objects","name":"The DataFrame builder: queries as Python objects","description":"db.table(...) starts a lazy query that you assemble with method calls instead of a SQL string. Nothing runs until a terminal call such as .collect().","url":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"The DataFrame builder: queries as Python objects","item":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/#article","headline":"The DataFrame builder: queries as Python objects","name":"The DataFrame builder: queries as Python objects","description":"db.table(...) starts a lazy query that you assemble with method calls instead of a SQL string. Nothing runs until a terminal call such as .collect().","url":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"The DataFrame builder: queries as Python objects","item":"https://db.h5i.dev/cookbook/00_fundamentals/09_dataframe_builder/"}]}]}</script>
 </head>
 <body>
 
@@ -88,10 +88,51 @@ sweeps windows and columns in a loop builds SQL with f-strings today, and that
 is where quoting bugs and <code>'</code> injection live. Here the identifiers are quoted
 at one site, and a partially-built pipeline is an ordinary Python value you
 can pass around, extend and reuse.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span><span class="p">,</span> <span class="n">when</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>lazy</td>
+<td>nothing executes until a terminal call such as <code>.collect()</code></td>
+</tr>
+<tr>
+<td>verb</td>
+<td>one builder method, e.g. <code>.filter()</code> or <code>.group_by()</code>, that extends the query</td>
+</tr>
+<tr>
+<td>CTE</td>
+<td>a named subquery introduced by <code>WITH</code>, so a multi-step query stays readable</td>
+</tr>
+<tr>
+<td>ASOF join</td>
+<td>join each left row to the most recent right row at or before its timestamp</td>
+</tr>
+<tr>
+<td>gapfill</td>
+<td>put an irregular series onto a regular time grid</td>
+</tr>
+<tr>
+<td>panel</td>
+<td>a dataset with one row per asset per date</td>
+</tr>
+<tr>
+<td>z-score</td>
+<td>how many standard deviations a value sits from its rolling mean</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span><span class="p">,</span> <span class="n">when</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_dataframe_builder&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -459,37 +500,37 @@ WHERE &quot;price&quot; &gt; 0 AND &quot;size&quot; &gt;= 100</pre></div></div>
   <tbody>
     <tr>
       <th>0</th>
-      <td>2026-06-01 19:43:31.725041+00:00</td>
-      <td>MSFT</td>
-      <td>371.50</td>
-      <td>37150.0</td>
-      <td>1.0</td>
-      <td>1</td>
+      <td>2026-06-02 13:53:43.548327+00:00</td>
+      <td>NVDA</td>
+      <td>317.02</td>
+      <td>95106.0</td>
+      <td>3.0</td>
+      <td>-1</td>
     </tr>
     <tr>
       <th>1</th>
-      <td>2026-06-01 19:43:31.806613+00:00</td>
-      <td>MSFT</td>
-      <td>371.51</td>
-      <td>37151.0</td>
-      <td>1.0</td>
-      <td>1</td>
-    </tr>
-    <tr>
-      <th>2</th>
-      <td>2026-06-01 19:43:31.906285+00:00</td>
+      <td>2026-06-02 13:53:43.792285+00:00</td>
       <td>AAPL</td>
-      <td>267.47</td>
-      <td>26747.0</td>
+      <td>267.76</td>
+      <td>26776.0</td>
       <td>1.0</td>
       <td>-1</td>
     </tr>
     <tr>
-      <th>3</th>
-      <td>2026-06-01 19:43:32.388267+00:00</td>
+      <th>2</th>
+      <td>2026-06-02 13:53:43.894350+00:00</td>
       <td>AAPL</td>
-      <td>267.51</td>
-      <td>26751.0</td>
+      <td>267.75</td>
+      <td>187425.0</td>
+      <td>7.0</td>
+      <td>-1</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-02 13:53:44.009965+00:00</td>
+      <td>NVDA</td>
+      <td>317.17</td>
+      <td>31717.0</td>
       <td>1.0</td>
       <td>1</td>
     </tr>
@@ -788,7 +829,7 @@ aliases are the contract for reaching a specific side. Together they make the
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_trades</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">,</span> <span class="s2">&quot;NVDA&quot;</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="s2">&quot;2026-06-04&quot;</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">8</span><span class="p">))</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">per_symbol</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">per_symbol</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span>
         <span class="n">count_star</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;n&quot;</span><span class="p">),</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;last_ts&quot;</span><span class="p">)</span>
     <span class="p">)</span>
@@ -889,39 +930,39 @@ WHERE &quot;symbol&quot; = &#x27;AAPL&#x27;</pre></div></div>
   <tbody>
     <tr>
       <th>0</th>
-      <td>2026-06-01 18:49:25.682786+00:00</td>
+      <td>2026-06-01 19:32:36.653721+00:00</td>
       <td>AAPL</td>
-      <td>263.23</td>
-      <td>268.26</td>
-      <td>268.29</td>
-      <td>268.275</td>
+      <td>265.71</td>
+      <td>269.82</td>
+      <td>269.88</td>
+      <td>269.850</td>
     </tr>
     <tr>
       <th>1</th>
-      <td>2026-06-01 18:49:28.862195+00:00</td>
+      <td>2026-06-01 19:32:36.741885+00:00</td>
       <td>AAPL</td>
-      <td>263.13</td>
-      <td>268.33</td>
-      <td>268.37</td>
-      <td>268.350</td>
+      <td>265.71</td>
+      <td>269.82</td>
+      <td>269.88</td>
+      <td>269.850</td>
     </tr>
     <tr>
       <th>2</th>
-      <td>2026-06-01 18:49:31.289757+00:00</td>
+      <td>2026-06-01 19:32:37.762202+00:00</td>
       <td>AAPL</td>
-      <td>263.26</td>
-      <td>268.27</td>
-      <td>268.30</td>
-      <td>268.285</td>
+      <td>265.73</td>
+      <td>269.82</td>
+      <td>269.88</td>
+      <td>269.850</td>
     </tr>
     <tr>
       <th>3</th>
-      <td>2026-06-01 18:49:31.955769+00:00</td>
+      <td>2026-06-01 19:32:38.705971+00:00</td>
       <td>AAPL</td>
-      <td>263.26</td>
-      <td>268.28</td>
-      <td>268.31</td>
-      <td>268.295</td>
+      <td>265.75</td>
+      <td>269.83</td>
+      <td>269.88</td>
+      <td>269.855</td>
     </tr>
   </tbody>
 </table>
@@ -1080,13 +1121,13 @@ two read points into one labelled result is the everyday example:</p>
   <tbody>
     <tr>
       <th>0</th>
-      <td>version 1</td>
-      <td>195277</td>
+      <td>latest</td>
+      <td>256223</td>
     </tr>
     <tr>
       <th>1</th>
-      <td>latest</td>
-      <td>256223</td>
+      <td>version 1</td>
+      <td>195277</td>
     </tr>
   </tbody>
 </table>
@@ -1113,7 +1154,7 @@ two read points into one labelled result is the everyday example:</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/00_fundamentals/08_maintenance/"><span class="dir">← Previous</span><span class="pn-title">Maintenance: verify, compact, vacuum</span></a><a class="next" href="/cookbook/01_market_data_engineering/01_ohlcv_bars/"><span class="dir">Next →</span><span class="pn-title">OHLCV bars from tick data</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-data">The data</a></li><li><a href="#1-a-frame-is-a-query-that-has-not-run">1. A frame is a query that has not run</a></li><li><a href="#2-expressions">2. Expressions</a></li><li><a href="#3-how-a-pipeline-becomes-sql">3. How a pipeline becomes SQL</a></li><li><a href="#4-the-payoff-queries-you-generate">4. The payoff: queries you generate</a></li><li><a href="#5-version-pins-and-joins">5. Version pins and joins</a></li><li><a href="#6-the-escape-hatch-and-the-door-back-to-sql">6. The escape hatch, and the door back to SQL</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#the-data">The data</a></li><li><a href="#1-a-frame-is-a-query-that-has-not-run">1. A frame is a query that has not run</a></li><li><a href="#2-expressions">2. Expressions</a></li><li><a href="#3-how-a-pipeline-becomes-sql">3. How a pipeline becomes SQL</a></li><li><a href="#4-the-payoff-queries-you-generate">4. The payoff: queries you generate</a></li><li><a href="#5-version-pins-and-joins">5. Version pins and joins</a></li><li><a href="#6-the-escape-hatch-and-the-door-back-to-sql">6. The escape hatch, and the door back to SQL</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

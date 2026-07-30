@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/#article","headline":"Quickstart: your first h5i-db market database","name":"Quickstart: your first h5i-db market database","description":"h5i-db is an embedded, versioned time-series database for quant workloads. There is no server to run.","url":"https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"Quickstart: your first h5i-db market database","item":"https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/#article","headline":"Quickstart: your first h5i-db market database","name":"Quickstart: your first h5i-db market database","description":"h5i-db is an embedded, versioned time-series database for quant workloads. There is no server to run.","url":"https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"Quickstart: your first h5i-db market database","item":"https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/"}]}]}</script>
 </head>
 <body>
 
@@ -90,15 +90,56 @@ commit that produces an immutable, still-queryable version. And the SQL layer
 <li>compute minute bars with VWAP in one query,</li>
 <li>read the table as it was before the last load.</li>
 </ol>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tick</td>
+<td>one event on a market data feed, usually a trade or a quote update</td>
+</tr>
+<tr>
+<td>tape</td>
+<td>the stream of trades in time order</td>
+</tr>
+<tr>
+<td>OHLCV bar</td>
+<td>ticks aggregated into a fixed interval: open, high, low, close, volume</td>
+</tr>
+<tr>
+<td>VWAP</td>
+<td>volume-weighted average price, the average price the whole market paid</td>
+</tr>
+<tr>
+<td>commit</td>
+<td>one atomic write, which produces a new version of the table</td>
+</tr>
+<tr>
+<td>version</td>
+<td>the state of a table after a commit; versions are immutable and stay readable</td>
+</tr>
+<tr>
+<td>time travel</td>
+<td>reading a table as it was at an earlier version</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;h5i-db version:&quot;</span><span class="p">,</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">__version__</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">h5i-db version: 0.1.0</pre></div></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">h5i-db version: 0.1.1</pre></div></div>
 <h2 id="1-the-data">1. The data<a class="headerlink" href="#1-the-data" title="Permanent link">#</a></h2>
 <p>Recipes in this cookbook get their market data from <code>cookbook_utils</code>, a set of
 synthetic generators that are deterministic given a seed. <code>cu.make_trades</code>
@@ -249,7 +290,7 @@ and the row and segment totals after the commit.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785195679591045088}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785437843353495594}</pre></div></div>
 <h2 id="3-query-it">3. Query it<a class="headerlink" href="#3-query-it" title="Permanent link">#</a></h2>
 <p>There are two query surfaces on one engine. <code>db.table(...)</code> starts a <strong>lazy
 query</strong> that you build with method calls; nothing runs until you collect it.
@@ -398,7 +439,7 @@ default and drops to SQL where a string reads better.</p>
 FROM &quot;trades&quot;
 GROUP BY &quot;bar&quot;, &quot;symbol&quot;
 ORDER BY &quot;bar&quot;, &quot;symbol&quot;</pre></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 <span class="k">for</span> <span class="n">sym</span><span class="p">,</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">bars</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">):</span>
@@ -438,7 +479,7 @@ latest:    256,223 rows</pre></div></div>
 can meet in one statement. Pass a read point to <code>db.table(...)</code> and it lowers
 to the <code>h5i()</code> table function. Since the query is a Python value, write it once
 as a function of the version and call it twice:</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">per_symbol</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">per_symbol</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
         <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
@@ -505,7 +546,7 @@ as a function of the version and call it twice:</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/"><span class="dir">← Previous</span><span class="pn-title">Cookbook</span></a><a class="next" href="/cookbook/00_fundamentals/02_designing_market_data_schemas/"><span class="dir">Next →</span><span class="pn-title">Designing market data schemas</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-create-a-database-and-load-it">2. Create a database and load it</a></li><li><a href="#3-query-it">3. Query it</a></li><li><a href="#4-versions-and-time-travel">4. Versions and time travel</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-create-a-database-and-load-it">2. Create a database and load it</a></li><li><a href="#3-query-it">3. Query it</a></li><li><a href="#4-versions-and-time-travel">4. Versions and time travel</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

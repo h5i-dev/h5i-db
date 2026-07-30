@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/#article","headline":"arrival-delta: which of last night's backtests actually held up?","name":"arrival-delta: which of last night's backtests actually held up?","description":"A research agent runs forty backtests overnight. So does a parameter sweep, or a junior with a for-loop. In the morning there are forty Sharpes.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"arrival-delta: which of last night's backtests actually held up?","item":"https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/#article","headline":"arrival-delta: which of last night's backtests actually held up?","name":"arrival-delta: which of last night's backtests actually held up?","description":"A research agent runs forty backtests overnight. So does a parameter sweep, or a junior with a for-loop. In the morning there are forty Sharpes.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"arrival-delta: which of last night's backtests actually held up?","item":"https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/"}]}]}</script>
 </head>
 <body>
 
@@ -91,13 +91,54 @@ evaporates in production.</p>
 <p>This recipe measures a real one, then spends equal time on the two ways the
 check can mislead you: a <em>vacuous</em> result, and an event-time leak it is blind
 to by construction. A diagnostic you trust incorrectly is worse than none.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>arrival_delta</code></td>
+<td>run one query at the head and at a past decision point, and report the difference</td>
+</tr>
+<tr>
+<td>decision instant</td>
+<td>the moment the trade would have been placed, and so the only data you may use</td>
+</tr>
+<tr>
+<td>arrival axis</td>
+<td>lookahead from rows that landed late or were restated after the decision</td>
+</tr>
+<tr>
+<td>event-time axis</td>
+<td>lookahead from a window overrunning forward inside one snapshot</td>
+</tr>
+<tr>
+<td>lookahead bias</td>
+<td>using information the strategy could not have had at the time</td>
+</tr>
+<tr>
+<td>selection</td>
+<td>picking the best of many runs, which promotes whichever one leaked the most</td>
+</tr>
+<tr>
+<td>embargo</td>
+<td>a gap between decision time and data time, so nothing leaks across the boundary</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_leakage&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">11</span><span class="p">)</span>
@@ -242,7 +283,7 @@ split, and a late adjustment.</p>
 <p>A range replacement rewrites the whole window, so the replacement frame has to
 carry the innocent rows of that day through unchanged. The helper below reads
 the window, patches it, and hands the full window back.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">restate</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">,</span> <span class="n">symbol</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">factor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">note</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">restate</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">,</span> <span class="n">symbol</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">factor</span><span class="p">:</span> <span class="nb">float</span><span class="p">,</span> <span class="n">note</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Replace one trading day, correcting a single symbol&#39;s close.&quot;&quot;&quot;</span>
     <span class="n">start_us</span> <span class="o">=</span> <span class="n">day</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1_000</span>
     <span class="n">end_us</span> <span class="o">=</span> <span class="p">(</span><span class="n">day</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1_000</span>
@@ -270,8 +311,7 @@ the window, patches it, and hands the full window back.</p>
 <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">):</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  v</span><span class="si">{</span><span class="n">v</span><span class="p">[</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&gt;2</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">v</span><span class="p">[</span><span class="s1">&#39;op&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&lt;13</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">v</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;note&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">v2: missed 2:1 split on 2024-10-07 (STK003)
-v3: fat-finger print, vendor corrected on 2024-10-28 (STK011)
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">v2: missed 2:1 split on 2024-10-07 (STK003)</pre><pre class="">v3: fat-finger print, vendor corrected on 2024-10-28 (STK011)
 v4: late dividend adjustment on 2024-11-14 (STK007)
   v 0 create        
   v 1 append        vendor delivery, first publication
@@ -365,7 +405,7 @@ and time to examine three.</p>
 <h2 id="6-triage-across-a-sweep">6. Triage across a sweep<a class="headerlink" href="#6-triage-across-a-sweep" title="Permanent link">#</a></h2>
 <p>This is the actual workflow. Run the same check across every variant that came
 out of the overnight sweep, and sort by exposure rather than by Sharpe.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">with_lookback</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">with_lookback</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Same book, different momentum window. Asserted so a silent no-op in the</span>
 <span class="sd">    substitution cannot quietly turn the sweep into three copies of one query.&quot;&quot;&quot;</span>
     <span class="n">sql</span> <span class="o">=</span> <span class="n">SHARPE_SQL</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;lag(close, 22)&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;lag(close, </span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span><span class="s2">&quot;prev22&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;prev</span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
@@ -533,7 +573,7 @@ are caused by the world learning something after you did.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/10_performance_tuning/"><span class="dir">← Previous</span><span class="pn-title">Performance tuning: pruning, projection, commit granularity, caches</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-a-panel-with-an-arrival-history">2. A panel with an arrival history</a></li><li><a href="#3-the-corrections-arrive">3. The corrections arrive</a></li><li><a href="#4-the-metric-written-once-as-a-single-query">4. The metric, written once, as a single query</a></li><li><a href="#5-the-check-itself">5. The check itself</a></li><li><a href="#6-triage-across-a-sweep">6. Triage across a sweep</a></li><li><a href="#7-failure-mode-1-a-zero-that-means-nothing">7. Failure mode 1: a zero that means nothing</a></li><li><a href="#8-failure-mode-2-the-leak-it-cannot-see">8. Failure mode 2: the leak it cannot see</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-a-panel-with-an-arrival-history">2. A panel with an arrival history</a></li><li><a href="#3-the-corrections-arrive">3. The corrections arrive</a></li><li><a href="#4-the-metric-written-once-as-a-single-query">4. The metric, written once, as a single query</a></li><li><a href="#5-the-check-itself">5. The check itself</a></li><li><a href="#6-triage-across-a-sweep">6. Triage across a sweep</a></li><li><a href="#7-failure-mode-1-a-zero-that-means-nothing">7. Failure mode 1: a zero that means nothing</a></li><li><a href="#8-failure-mode-2-the-leak-it-cannot-see">8. Failure mode 2: the leak it cannot see</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

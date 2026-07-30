@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/#article","headline":"Point-in-time fundamentals: killing lookahead bias with ASOF joins","name":"Point-in-time fundamentals: killing lookahead bias with ASOF joins","description":"Fundamentals have two timestamps. periodend is the fiscal date the numbers describe.","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"Point-in-time fundamentals: killing lookahead bias with ASOF joins","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/#article","headline":"Point-in-time fundamentals: killing lookahead bias with ASOF joins","name":"Point-in-time fundamentals: killing lookahead bias with ASOF joins","description":"Fundamentals have two timestamps. periodend is the fiscal date the numbers describe.","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"Point-in-time fundamentals: killing lookahead bias with ASOF joins","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/"}]}]}</script>
 </head>
 <body>
 
@@ -90,13 +90,58 @@ bug in equity research.</p>
    signal,</li>
 <li>use version pinning to keep a study reproducible after a restatement lands.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fundamentals</td>
+<td>accounting figures such as earnings and book value, reported quarterly</td>
+</tr>
+<tr>
+<td><code>period_end</code></td>
+<td>the fiscal date the numbers describe</td>
+</tr>
+<tr>
+<td>report date</td>
+<td>the date the market actually learned them, typically 25 to 55 days later</td>
+</tr>
+<tr>
+<td>reporting lag</td>
+<td>the gap between those two dates</td>
+</tr>
+<tr>
+<td>point-in-time</td>
+<td>data stored and queried as it was known at each moment</td>
+</tr>
+<tr>
+<td>lookahead bias</td>
+<td>using information the strategy could not have had; the most flattering bug there is</td>
+</tr>
+<tr>
+<td>EPS</td>
+<td>earnings per share</td>
+</tr>
+<tr>
+<td>ASOF join</td>
+<td>join each left row to the most recent right row at or before its timestamp</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;mde_pit&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -314,7 +359,7 @@ ended.</p>
 quarter's numbers sit in limbo for the length of the grey bar. A
 <code>period_end</code>-keyed join hands your backtest the numbers at the <em>left</em> end of
 the bar. The market only saw them at the <em>right</em> end.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">11</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 <span class="n">f0</span> <span class="o">=</span> <span class="n">funda</span><span class="p">[</span><span class="n">funda</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;STK000&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -383,7 +428,7 @@ point-in-time by default.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785195720263372276}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785437894025514287}</pre></div></div>
 <p>Our study rebalances monthly, so the research panel is the month-end cross
 section: one <code>time_bucket('1mo', ...)</code> rollup, materialized as its own table.</p>
 <p>Deriving compact, purpose-built tables from the canonical daily store is the
@@ -684,7 +729,7 @@ remains queryable.</p>
 <span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">FUNDA_SCHEMA</span><span class="p">)</span>
 <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;fundamentals&quot;</span><span class="p">,</span> <span class="n">restated</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;STK003 EPS restated +35% (audit adjustment)&quot;</span><span class="p">)</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">latest_report</span><span class="p">(</span><span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">latest_report</span><span class="p">(</span><span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;fundamentals&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
         <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;STK003&quot;</span><span class="p">)</span>
@@ -766,7 +811,7 @@ or <code>h5i(...)</code> in SQL, and join against that.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/01_market_data_engineering/05_corporate_actions/"><span class="dir">← Previous</span><span class="pn-title">Corporate actions: split adjustment without losing the tape</span></a><a class="next" href="/cookbook/01_market_data_engineering/07_tick_data_cleaning/"><span class="dir">Next →</span><span class="pn-title">Tick data cleaning: find it, preview the fix, keep the audit trail</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-store-both-tables-keyed-by-the-right-clock">2. Store both tables, keyed by the right clock</a></li><li><a href="#3-the-point-in-time-join">3. The point-in-time join</a></li><li><a href="#4-the-wrong-join-and-what-it-costs">4. The wrong join, and what it costs</a></li><li><a href="#5-restatements-reproducing-the-original-study">5. Restatements: reproducing the original study</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-store-both-tables-keyed-by-the-right-clock">2. Store both tables, keyed by the right clock</a></li><li><a href="#3-the-point-in-time-join">3. The point-in-time join</a></li><li><a href="#4-the-wrong-join-and-what-it-costs">4. The wrong join, and what it costs</a></li><li><a href="#5-restatements-reproducing-the-original-study">5. Restatements: reproducing the original study</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

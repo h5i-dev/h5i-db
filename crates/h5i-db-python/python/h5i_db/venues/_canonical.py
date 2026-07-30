@@ -74,14 +74,27 @@ INSTRUMENTS_SCHEMA = pa.schema(
         pa.field("lot_size", pa.float64(), nullable=False),
         pa.field("expiration_ns", pa.int64()),
         pa.field("settlement_observable_ns", pa.int64()),
+        # Whether the venue exchanges a complete set of these outcomes for
+        # one unit of cash. Polymarket calls it negative risk.
+        pa.field("neg_risk", pa.bool_()),
     ]
 )
 
+# A market does not always pick a winner. `kind` says which of the three
+# things happened, so no row has to be read in the light of another's
+# absence:
+#
+#   winner  one outcome took the dollar; `outcome` names it
+#   split   one row per outcome, each carrying its `payout`
+#   void    a complete set refunded at cost across `outcome_count` outcomes
 RESOLUTIONS_SCHEMA = pa.schema(
     [
         pa.field("ts_init", pa.timestamp("ns"), nullable=False),
         pa.field("instrument_id", pa.string(), nullable=False),
-        pa.field("winner_outcome", pa.uint16(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("outcome", pa.uint16()),
+        pa.field("payout", pa.float64()),
+        pa.field("outcome_count", pa.uint16()),
     ]
 )
 
@@ -111,7 +124,14 @@ _SORT_KEYS: Mapping[str, tuple[tuple[str, str], ...]] = {
         ("instrument_id", "ascending"),
         ("outcome", "ascending"),
     ),
-    "resolutions": (("ts_init", "ascending"), ("instrument_id", "ascending")),
+    # `outcome` is the third key so a split market's per-outcome rows stay in
+    # index order; the reader places them by index anyway, but a stable order
+    # keeps a stored table readable.
+    "resolutions": (
+        ("ts_init", "ascending"),
+        ("instrument_id", "ascending"),
+        ("outcome", "ascending"),
+    ),
 }
 
 

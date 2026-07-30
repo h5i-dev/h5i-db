@@ -162,6 +162,138 @@ the last mark, `settled_pnl` is what it became at resolution, and the
 difference is reported as an explicit adjustment rather than folded in
 silently.
 
+### Not every market picks a winner
+
+A `Resolution` carries a `Payout`, which is one of three things:
+
+| Payout | What happened |
+|---|---|
+| `Winner(outcome)` | one outcome took the whole dollar |
+| `Split(payouts)` | a scalar or partial settlement, payouts summing to one |
+| `Void { outcomes }` | the question was unanswerable; a complete set refunds at cost |
+
+The last two are not edge cases worth skipping. A voided binary pays both
+sides fifty cents; recording it as a winner is wrong by the full notional on
+each side, in opposite directions. `Resolution::split` refuses a payout
+vector that does not sum to exactly one, because a settlement that does not
+conserve a complete set mints or burns cash.
+
+## Trading stops before resolving
+
+A market's `expiration` is when trading stops, and the engine enforces it:
+an order submitted after it is rejected, an order whose latency carries it
+past it is rejected on arrival, and a resting order is cancelled at the
+bell rather than left working against a book that no longer exists.
+
+Data keeps arriving after a market closes -- late prints, a book teardown,
+the settlement itself -- and observing it is fine. Filling against it is not.
+
+## Outcomes cannot be borrowed
+
+There is no stock loan for a share of "YES". A venue will not let you sell
+an outcome you do not hold, so neither will the engine: a sell beyond the
+held position is rejected with a message naming the trade that expresses the
+same view. To be short YES, buy NO. It costs `1 - p` and pays the same.
+
+This matters twice over. A short's worst case is `1 - p`, not `p`, so
+collateralising it at the mark understates the requirement by up to the
+whole notional -- selling a three-cent longshot posts three cents against
+ninety-seven cents of risk. `CashMargin` charges the complement on a
+probability short for that reason.
+
+`EngineBuilder::allow_naked_shorts(true)` lifts the constraint. It is for
+measuring what the constraint costs, not for producing a result to act on.
+
+## Complete sets
+
+Prediction-market venues will exchange a complete set of outcomes against
+one unit of cash, in both directions. That is the contract that makes the
+sum-to-one relationship *transactable* rather than merely observable, and
+without it complete-set market making and the arbitrage that pins a book to
+a dollar are both unreachable.
+
+```rust
+ctx.mint(&market, sets);    // pay one per set, receive one of every outcome
+ctx.redeem(&market, sets);  // hand the set back, receive one per set
+```
+
+A Python callback strategy returns the same operations as actions:
+
+```python
+return [
+    {"action": "mint", "instrument_id": market, "quantity": 100.0},
+    {"action": "redeem", "instrument_id": market, "quantity": 100.0},
+    {"action": "convert", "instrument_id": market,
+     "outcomes": [0, 1], "quantity": 50.0},
+]
+```
+
+Three things about how this is modelled:
+
+- **Legs are fills.** A mint emits one fill per outcome, priced so the legs
+  sum to exactly one per set. `Portfolio::replay` rebuilds every position
+  from `bt_fills` alone, and a position that moved without a fill to explain
+  it is a run whose stored result and audit disagree.
+- **It is not instant.** Set operations queue behind the same insertion
+  latency as an order. A mint that lands immediately is an arbitrage nobody
+  could have taken.
+- **It costs a flat fee, not a rate.** `SetOperationCosts` is charged once
+  per operation, because a mint is one chain transaction. That is what makes
+  a one-cent complete-set edge unprofitable at small size and profitable at
+  large; a model without it reports every such edge as free money.
+
+Minting is allowed only where the venue actually offers it:
+`Instrument::supports_complete_set` is true for any two-outcome market, and
+for a wider one only when `neg_risk` says the venue wired the outcomes into
+a single exclusive set. A group of independent conditions displayed under
+one heading is several instruments here, not one with many outcomes, and
+minting across them would create a dollar out of nothing.
+
+### Negative-risk conversion
+
+`ctx.convert(market, held, quantity)` is Polymarket's conversion, addressed
+the way its adapter is: `held` names the outcomes whose NO side you hold.
+
+In this crate's N-outcome model it is provably a redemption. NO(i) is
+"everything except i", so a basket of NO over `k` outcomes holds each named
+outcome `k - 1` times and each unnamed one `k` times -- that is `k - 1`
+complete sets plus the residual. The venue hands back `k - 1` in cash and
+keeps the residual, which is exactly what redeeming `k - 1` sets does. The
+primitive is offered under its own name because strategies reason in NO
+contracts and the derivation is not obvious; a test pins the equivalence.
+
+## Scoring a forecast
+
+A market price on a prediction market *is* a forecast, so the natural
+question about a strategy is whether it forecast better. Fills cannot answer
+it: they record what a strategy did, not what it believed.
+
+```rust
+ctx.record_forecast(&market, outcome, Price::from_f64(0.65)?)?;
+```
+
+```python
+return [{"action": "forecast", "instrument_id": market,
+         "outcome": 0, "probability": 0.65}]
+```
+
+`RunReport::calibration_samples()` joins those statements to the market's
+own price at the same instant and to what the outcome actually paid, giving
+the triples a Brier score, a reliability curve or an advantage-over-market
+series is computed from. The Python report returns them as
+`calibration_samples`, ready for `h5i_db.quant.calibration`.
+
+Two kinds of forecast are dropped rather than scored, and both are reported
+by `unscored_forecasts()` so the sample is never quietly smaller than it
+looks: a market with no known resolution, and a market that paid every
+outcome the same. Against a void, every forecast scores identically --
+including a confidently wrong one -- so including it does not measure a
+forecaster, it dilutes the sample that does.
+
+The market's own probabilities are sampled onto the equity curve's clock as
+`mark_curve`, for the comparison series. Turn it off with
+`record_mark_curve(false)` on a run spanning thousands of markets.
+
 ## Venue models
 
 Four small traits carry every behavioural variation:

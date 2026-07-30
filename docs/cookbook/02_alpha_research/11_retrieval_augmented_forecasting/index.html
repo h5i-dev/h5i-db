@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/#article","headline":"Retrieval-augmented forecasting: historical analogs as a knowledge base","name":"Retrieval-augmented forecasting: historical analogs as a knowledge base","description":"\"What happened the last twenty times the tape looked like this?\" Analog forecasting is one of the oldest ideas in the business. Retrieval-augmented\u2026","url":"https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Alpha research"},{"@type":"ListItem","position":4,"name":"Retrieval-augmented forecasting: historical analogs as a knowledge base","item":"https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/#article","headline":"Retrieval-augmented forecasting: historical analogs as a knowledge base","name":"Retrieval-augmented forecasting: historical analogs as a knowledge base","description":"\"What happened the last twenty times the tape looked like this?\" Analog forecasting is one of the oldest ideas in the business. Retrieval-augmented\u2026","url":"https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Alpha research"},{"@type":"ListItem","position":4,"name":"Retrieval-augmented forecasting: historical analogs as a knowledge base","item":"https://db.h5i.dev/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/"}]}]}</script>
 </head>
 <body>
 
@@ -100,13 +100,58 @@ out to be worth an information coefficient of 1.00.</p>
 <li>pin the knowledge base to a version, because event time is only one of the
    two clocks.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RAG</td>
+<td>retrieval-augmented generation: search a knowledge base, then condition on what came back</td>
+</tr>
+<tr>
+<td>encoder</td>
+<td>the step that turns a window of data into a fixed-size vector</td>
+</tr>
+<tr>
+<td>embedding</td>
+<td>that vector, stored here as an ordinary list column</td>
+</tr>
+<tr>
+<td>knowledge base</td>
+<td>the stored vectors, each next to the outcome that followed it</td>
+</tr>
+<tr>
+<td>retriever</td>
+<td>the search that finds the nearest neighbours of a query vector</td>
+</tr>
+<tr>
+<td><code>array_distance</code></td>
+<td>the SQL function that measures distance between two vectors</td>
+</tr>
+<tr>
+<td>leakage</td>
+<td>a neighbour whose outcome was not yet knowable, so the retriever hands you the answer</td>
+</tr>
+<tr>
+<td>IC</td>
+<td>information coefficient: correlation between a forecast and the return that followed</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">LOOKBACK</span><span class="p">,</span> <span class="n">HORIZON</span><span class="p">,</span> <span class="n">TOP_K</span> <span class="o">=</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">25</span>
 
@@ -325,7 +370,7 @@ drift and a violent one with the same shape retrieve each other. Volatility is
 not noise though. We return it alongside the vector and put it back at
 prediction time, because a 5-day move borrowed from a 40-vol analog means
 something different in a 12-vol market.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">encode</span><span class="p">(</span><span class="n">window</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">encode</span><span class="p">(</span><span class="n">window</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="nb">float</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Z-score a return window. Returns the shape vector and the scale it dropped.&quot;&quot;&quot;</span>
     <span class="n">sd</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">window</span><span class="o">.</span><span class="n">std</span><span class="p">())</span>
     <span class="n">vec</span> <span class="o">=</span> <span class="p">(</span><span class="n">window</span> <span class="o">-</span> <span class="n">window</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span> <span class="o">/</span> <span class="n">sd</span> <span class="k">if</span> <span class="n">sd</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">window</span><span class="p">)</span>
@@ -481,7 +526,7 @@ length, which is exactly how a stack of vectors already sits in memory.</p>
     <span class="p">]</span>
 <span class="p">)</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">kb_arrow</span><span class="p">(</span><span class="n">frame</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">kb_arrow</span><span class="p">(</span><span class="n">frame</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="p">:</span>
     <span class="n">flat</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">frame</span><span class="p">[</span><span class="s2">&quot;emb&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">())</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;float32&quot;</span><span class="p">),</span> <span class="nb">type</span><span class="o">=</span><span class="n">pa</span><span class="o">.</span><span class="n">float32</span><span class="p">())</span>
     <span class="k">return</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">(</span>
         <span class="p">{</span>
@@ -522,7 +567,7 @@ window per symbol per calendar year.</p>
 in 19 of 20 returns, so an undeduplicated top-25 is often one market episode
 counted 25 times, and the neighbour average inherits its variance rather than
 averaging it away.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">retrieve</span><span class="p">(</span><span class="n">qvec</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">exclude_symbol</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="n">TOP_K</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">retrieve</span><span class="p">(</span><span class="n">qvec</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">exclude_symbol</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="n">TOP_K</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Top-k analogs of `qvec`, optionally bounded to what was knowable at `as_of`.&quot;&quot;&quot;</span>
     <span class="n">literal</span> <span class="o">=</span> <span class="s2">&quot;[&quot;</span> <span class="o">+</span> <span class="s2">&quot;, &quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">v</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">qvec</span><span class="p">)</span> <span class="o">+</span> <span class="s2">&quot;]&quot;</span>
     <span class="n">q</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;analogs&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
@@ -546,7 +591,7 @@ averaging it away.</p>
         <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;knowable_at&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;window_end&quot;</span><span class="p">,</span> <span class="s2">&quot;d&quot;</span><span class="p">,</span> <span class="s2">&quot;window_sd&quot;</span><span class="p">,</span> <span class="s2">&quot;fwd_ret&quot;</span><span class="p">)</span>
     <span class="p">)</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">predict</span><span class="p">(</span><span class="n">neighbours</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">query_sd</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">predict</span><span class="p">(</span><span class="n">neighbours</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">query_sd</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Distance-weighted mean of the neighbours&#39; forward moves, rescaled to the query&#39;s vol.&quot;&quot;&quot;</span>
     <span class="n">in_sigmas</span> <span class="o">=</span> <span class="n">neighbours</span><span class="p">[</span><span class="s2">&quot;fwd_ret&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">neighbours</span><span class="p">[</span><span class="s2">&quot;window_sd&quot;</span><span class="p">]</span>
     <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">query_sd</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">average</span><span class="p">(</span><span class="n">in_sigmas</span><span class="p">,</span> <span class="n">weights</span><span class="o">=</span><span class="mf">1.0</span> <span class="o">/</span> <span class="p">(</span><span class="n">neighbours</span><span class="p">[</span><span class="s2">&quot;d&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="mf">1e-6</span><span class="p">)))</span>
@@ -678,11 +723,11 @@ demeaned and divided by the window's volatility, then accumulated. That is
 literally the vector the retriever minimized distance against. The horizon
 keeps the same sigma units but no demeaning, because the future drift is the
 thing being predicted.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">by_symbol</span> <span class="o">=</span> <span class="p">{</span><span class="n">s</span><span class="p">:</span> <span class="n">g</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span> <span class="k">for</span> <span class="n">s</span><span class="p">,</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">returns</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)}</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">analog_path</span><span class="p">(</span><span class="n">symbol</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">window_end</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">,</span> <span class="n">sd</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">analog_path</span><span class="p">(</span><span class="n">symbol</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">window_end</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">,</span> <span class="n">sd</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Encoded context then realized horizon, in window sigmas, zeroed at the window end.&quot;&quot;&quot;</span>
     <span class="n">g</span> <span class="o">=</span> <span class="n">by_symbol</span><span class="p">[</span><span class="n">symbol</span><span class="p">]</span>
     <span class="n">t</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">g</span><span class="o">.</span><span class="n">index</span><span class="p">[</span><span class="n">g</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">window_end</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span>
@@ -732,7 +777,7 @@ printed.</p>
 anything once the clock is right.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">query_idx</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">aapl</span><span class="p">)</span> <span class="o">-</span> <span class="mi">750</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">aapl</span><span class="p">)</span> <span class="o">-</span> <span class="n">HORIZON</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">backtest</span><span class="p">(</span><span class="n">leakfree</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">exclude_self</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">backtest</span><span class="p">(</span><span class="n">leakfree</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span> <span class="n">exclude_self</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
     <span class="n">preds</span><span class="p">,</span> <span class="n">actuals</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">query_idx</span><span class="p">:</span>
         <span class="n">d</span> <span class="o">=</span> <span class="n">aapl</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">i</span><span class="p">]</span>
@@ -903,7 +948,7 @@ bounded candidate set to whatever computes the distances.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/02_alpha_research/10_portfolio_rebalancing/"><span class="dir">← Previous</span><span class="pn-title">Portfolio rebalancing with versioned holdings</span></a><a class="next" href="/cookbook/03_risk_and_production/01_var_expected_shortfall/"><span class="dir">Next →</span><span class="pn-title">VaR and Expected Shortfall with an auditable risk table</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-corpus">1. The corpus</a></li><li><a href="#2-the-encoder">2. The encoder</a></li><li><a href="#3-the-knowledge-base-and-the-field-that-makes-it-honest">3. The knowledge base, and the field that makes it honest</a></li><li><a href="#4-retrieval">4. Retrieval</a></li><li><a href="#5-pricing-the-leak">5. Pricing the leak</a></li><li><a href="#6-the-other-clock">6. The other clock</a></li><li><a href="#scaling-past-brute-force">Scaling past brute force</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-corpus">1. The corpus</a></li><li><a href="#2-the-encoder">2. The encoder</a></li><li><a href="#3-the-knowledge-base-and-the-field-that-makes-it-honest">3. The knowledge base, and the field that makes it honest</a></li><li><a href="#4-retrieval">4. Retrieval</a></li><li><a href="#5-pricing-the-leak">5. Pricing the leak</a></li><li><a href="#6-the-other-clock">6. The other clock</a></li><li><a href="#scaling-past-brute-force">Scaling past brute force</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

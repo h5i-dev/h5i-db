@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/06_previewable_mutations/#article","headline":"Previewable mutations: fix bad ticks without fearing the delete key","name":"Previewable mutations: fix bad ticks without fearing the delete key","description":"Deleting or rewriting rows in a shared tick store is the scariest routine operation on a quant desk.","url":"https://db.h5i.dev/cookbook/00_fundamentals/06_previewable_mutations/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/06_previewable_mutations/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"Previewable mutations: fix bad ticks without fearing the delete key","item":"https://db.h5i.dev/cookbook/00_fundamentals/06_previewable_mutations/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/06_previewable_mutations/#article","headline":"Previewable mutations: fix bad ticks without fearing the delete key","name":"Previewable mutations: fix bad ticks without fearing the delete key","description":"Deleting or rewriting rows in a shared tick store is the scariest routine operation on a quant desk.","url":"https://db.h5i.dev/cookbook/00_fundamentals/06_previewable_mutations/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/06_previewable_mutations/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"Previewable mutations: fix bad ticks without fearing the delete key","item":"https://db.h5i.dev/cookbook/00_fundamentals/06_previewable_mutations/"}]}]}</script>
 </head>
 <body>
 
@@ -93,12 +93,45 @@ review it, and only then apply it, as a new version with the old one intact.</p>
    raise <code>PolicyError</code>.</li>
 </ol>
 <p>That last step is the safety story for shared and agent-operated databases.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tick</td>
+<td>one event on a market data feed, usually a trade or a quote update</td>
+</tr>
+<tr>
+<td>plan / apply</td>
+<td>stage a delete or replace, review its row counts and samples, then commit it</td>
+</tr>
+<tr>
+<td>mutation policy</td>
+<td>a database-level setting that blocks direct destructive writes</td>
+</tr>
+<tr>
+<td>version</td>
+<td>the state of a table after a commit; versions are immutable and stay readable</td>
+</tr>
+<tr>
+<td><code>restore</code></td>
+<td>roll back by committing an old version forward, so history grows rather than shrinks</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_mutations&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -251,7 +284,7 @@ side.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">DAY</span> <span class="o">=</span> <span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;1d&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">outliers</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">outliers</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="n">src</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
     <span class="n">med</span> <span class="o">=</span> <span class="n">src</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">DAY</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;day&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span>
         <span class="n">med_px</span><span class="o">=</span><span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;approx_percentile_cont(price, 0.5)&quot;</span><span class="p">)</span>
@@ -405,8 +438,7 @@ healthy \$200-ish prints mixed in with the 10x garbage.</p>
 <span class="n">commit</span> <span class="o">=</span> <span class="n">tight</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;applied as version&quot;</span><span class="p">,</span> <span class="n">commit</span><span class="p">[</span><span class="s2">&quot;sequence&quot;</span><span class="p">],</span> <span class="s2">&quot;op:&quot;</span><span class="p">,</span> <span class="n">commit</span><span class="p">[</span><span class="s2">&quot;op&quot;</span><span class="p">])</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rows_affected: 18  (bad prints: 18 )
-applied as version 2 op: delete_range</pre></div></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">rows_affected: 18  (bad prints: 18 )</pre><pre class="">applied as version 2 op: delete_range</pre></div></div>
 <p><code>apply()</code> re-checks the table head first. If anyone committed after the plan
 was staged, it raises <code>ConflictError</code> rather than publishing a mutation
 computed against a stale base. That is the same optimistic concurrency as
@@ -535,9 +567,9 @@ archaeology project. Recipe 05 covers that comparison.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">msft_window</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">msft_window</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
         <span class="o">.</span><span class="n">filter</span><span class="p">(</span>
@@ -606,7 +638,7 @@ Plans expire after a 7-day TTL, and their staged segments are protected from
 <span class="n">pending</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
 <span class="n">db</span><span class="o">.</span><span class="n">set_policy</span><span class="p">(</span><span class="n">direct_write</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">direct_delete</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">direct_restore</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">plan c6d6d67b…  note=&#x27;staged under restrictive policy&#x27;  rows_affected=30  ttl=7d</pre><pre>{&#x27;direct_append&#x27;: True,
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">plan 75ca9a91…  note=&#x27;staged under restrictive policy&#x27;  rows_affected=30  ttl=7d</pre><pre>{&#x27;direct_append&#x27;: True,
  &#x27;direct_write&#x27;: True,
  &#x27;direct_replace&#x27;: True,
  &#x27;direct_delete&#x27;: True,
@@ -634,7 +666,7 @@ Plans expire after a 7-day TTL, and their staged segments are protected from
     <nav class="page-nav"><a class="prev" href="/cookbook/00_fundamentals/05_time_travel_and_versioning/"><span class="dir">← Previous</span><span class="pn-title">Time travel and versioning: which version did my backtest see?</span></a><a class="next" href="/cookbook/00_fundamentals/07_streaming_appends_and_tail/"><span class="dir">Next →</span><span class="pn-title">Streaming appends and tail(): a live feed on a versioned store</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-inject-two-pathologies">2. Inject two pathologies</a></li><li><a href="#3-find-the-damage">3. Find the damage</a></li><li><a href="#4-stage-a-delete-and-catch-the-over-delete-before-it-happens">4. Stage a delete, and catch the over-delete before it happens</a></li><li><a href="#5-repair-in-place-with-plan_replace_range">5. Repair in place with plan_replace_range</a></li><li><a href="#6-mutation-policy-make-the-safe-path-the-only-path">6. Mutation policy: make the safe path the only path</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-inject-two-pathologies">2. Inject two pathologies</a></li><li><a href="#3-find-the-damage">3. Find the damage</a></li><li><a href="#4-stage-a-delete-and-catch-the-over-delete-before-it-happens">4. Stage a delete, and catch the over-delete before it happens</a></li><li><a href="#5-repair-in-place-with-plan_replace_range">5. Repair in place with plan_replace_range</a></li><li><a href="#6-mutation-policy-make-the-safe-path-the-only-path">6. Mutation policy: make the safe path the only path</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/07_tick_data_cleaning/#article","headline":"Tick data cleaning: find it, preview the fix, keep the audit trail","name":"Tick data cleaning: find it, preview the fix, keep the audit trail","description":"Raw vendor tick files arrive dirty. Fat-finger prints 10x off, zero prices from feed glitches, duplicated blocks from replayed packets, after-hours junk.","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/07_tick_data_cleaning/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/07_tick_data_cleaning/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"Tick data cleaning: find it, preview the fix, keep the audit trail","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/07_tick_data_cleaning/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/07_tick_data_cleaning/#article","headline":"Tick data cleaning: find it, preview the fix, keep the audit trail","name":"Tick data cleaning: find it, preview the fix, keep the audit trail","description":"Raw vendor tick files arrive dirty. Fat-finger prints 10x off, zero prices from feed glitches, duplicated blocks from replayed packets, after-hours junk.","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/07_tick_data_cleaning/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/07_tick_data_cleaning/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"Tick data cleaning: find it, preview the fix, keep the audit trail","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/07_tick_data_cleaning/"}]}]}</script>
 </head>
 <body>
 
@@ -91,13 +91,50 @@ atomic commit with a note, and reversible via <code>restore()</code>.</p>
 <li>lock the table down so direct, unreviewed mutations become policy
    violations.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tick</td>
+<td>one event on a market data feed, usually a trade or a quote update</td>
+</tr>
+<tr>
+<td>fat-finger print</td>
+<td>a trade recorded at an obviously wrong price, e.g. 10x off</td>
+</tr>
+<tr>
+<td>outlier</td>
+<td>an observation far enough from the rest to be suspected bad rather than rare</td>
+</tr>
+<tr>
+<td>plan / apply</td>
+<td>stage a delete or replace, review its row counts and samples, then commit it</td>
+</tr>
+<tr>
+<td>mutation policy</td>
+<td>a database-level setting that blocks direct destructive writes</td>
+</tr>
+<tr>
+<td><code>restore</code></td>
+<td>roll back by committing an old version forward, so history grows rather than shrinks</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;mde_cleaning&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -546,7 +583,7 @@ the blast radius before anything changes.</p>
  &#x27;segments_total&#x27;: 2,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 1,
- &#x27;committed_at_ns&#x27;: 1785195725357713161}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785437896264884278}</pre></div></div>
 <h2 id="4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2: replace the polluted window with repaired data<a class="headerlink" href="#4-fix-2-replace-the-polluted-window-with-repaired-data" title="Permanent link">#</a></h2>
 <p>For the 15:00-15:15 window we do not want a delete. We want the <em>corrected</em>
 prints: fat fingers scaled back by 10, zero prices dropped, duplicates
@@ -762,9 +799,9 @@ an archaeology project.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">aapl_window</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">aapl_window</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
         <span class="o">.</span><span class="n">filter</span><span class="p">(</span>
@@ -848,7 +885,7 @@ never applied. Vacuum will not collect segments a live plan references.</p>
 <span class="n">pending</span><span class="o">.</span><span class="n">discard</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;after discard:&quot;</span><span class="p">,</span> <span class="n">db</span><span class="o">.</span><span class="n">list_plans</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">))</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">[(&#x27;c62ef5a7-66dc-4b27-acf5-19b39808108c&#x27;, &#x27;for review: is 14:00-14:10 real?&#x27;)]
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">[(&#x27;f4f64cef-6a64-409a-822c-c404e1658bf4&#x27;, &#x27;for review: is 14:00-14:10 real?&#x27;)]
 after discard: []</pre></div></div>
 <h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
 <ul>
@@ -871,7 +908,7 @@ after discard: []</pre></div></div>
     <nav class="page-nav"><a class="prev" href="/cookbook/01_market_data_engineering/06_point_in_time_fundamentals/"><span class="dir">← Previous</span><span class="pn-title">Point-in-time fundamentals: killing lookahead bias with ASOF joins</span></a><a class="next" href="/cookbook/01_market_data_engineering/08_nbbo_consolidation/"><span class="dir">Next →</span><span class="pn-title">NBBO consolidation: best bid/offer across fragmented venues</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-detection-one-query-per-defect-class">2. Detection, one query per defect class</a></li><li><a href="#3-fix-1-delete-the-after-hours-block-with-a-preview">3. Fix 1: delete the after-hours block, with a preview</a></li><li><a href="#4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2: replace the polluted window with repaired data</a></li><li><a href="#5-the-audit-trail-every-correction-is-a-version">5. The audit trail: every correction is a version</a></li><li><a href="#6-over-cleaned-restore-is-the-undo-button">6. Over-cleaned? restore() is the undo button</a></li><li><a href="#7-lock-the-table-down-plans-only">7. Lock the table down: plans only</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-detection-one-query-per-defect-class">2. Detection, one query per defect class</a></li><li><a href="#3-fix-1-delete-the-after-hours-block-with-a-preview">3. Fix 1: delete the after-hours block, with a preview</a></li><li><a href="#4-fix-2-replace-the-polluted-window-with-repaired-data">4. Fix 2: replace the polluted window with repaired data</a></li><li><a href="#5-the-audit-trail-every-correction-is-a-version">5. The audit trail: every correction is a version</a></li><li><a href="#6-over-cleaned-restore-is-the-undo-button">6. Over-cleaned? restore() is the undo button</a></li><li><a href="#7-lock-the-table-down-plans-only">7. Lock the table down: plans only</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

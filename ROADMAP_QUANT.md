@@ -587,6 +587,41 @@ stack's gaps:
 - **Curved fee models** (`fee = q * rate * p * (1-p)` and venue
   variants, maker rebates as negative commission) as `FeeModel` impls
   with venue-documented rounding.
+- **Resolution is a payout vector, not a winner.** `Payout` is
+  `Winner`, `Split` (scalar and partial settlements) or `Void` (a
+  refunded complete set), validated to sum to one. A voided binary pays
+  both sides half; recording it as a winner is wrong by the full
+  notional on each side in opposite directions, and the studied stack
+  carries a dedicated `is_50_50_outcome` flag precisely because that
+  case is common enough to distort a sample.
+- **Outcomes cannot be borrowed.** There is no lending market for a
+  share of YES, so a sell beyond the held position is refused and the
+  bearish trade is buying the complement at `1 - p`. The collateral
+  consequence is the sharper one: a short's worst case is `1 - p`, so
+  charging the mark understates a tail short by up to the whole
+  notional. `EngineBuilder::allow_naked_shorts` exists only to measure
+  what the constraint costs.
+- **Complete sets are transactable, not just observable.** `mint`,
+  `redeem` and negative-risk `convert`, gated on
+  `Instrument::supports_complete_set`, subject to insertion latency and
+  a flat per-operation cost (a mint is one chain transaction, so the
+  cost does not scale with size -- which is exactly what makes a
+  one-cent complete-set edge unprofitable small and profitable large).
+  Legs are emitted as fills so `bt_fills` still rebuilds every
+  position. In the N-outcome model, conversion is provably a redemption
+  of `k - 1` sets; it keeps its own name because strategies reason in NO
+  contracts, and a test pins the equivalence.
+- **Trading stops before resolving.** `expiration` is enforced: orders
+  submitted or arriving after it are rejected and resting orders are
+  cancelled. Data after the close is still observable -- only filling
+  against it is not.
+- **Forecasts are recorded, not inferred.** A strategy states a
+  probability and the run report joins it to the market's price at that
+  instant and to the realized payout, which is what `quant.calibration`
+  scores. The studied stack proxies the forecast with a rolling mean of
+  the market price; asking the strategy is strictly better and is the
+  differentiated version. Uninformative resolutions are dropped from
+  the sample and reported rather than silently diluting it.
 - **Data:** canonical book-delta and trade tables (schema per §8.6) with
   Polymarket historical data as the reference ingestion; Kalshi
   instrument/fee support lands with whatever historical book data is
@@ -938,6 +973,33 @@ Three deviations, each recorded because the plan above asserted otherwise:
   The reference stack needs the isolation because its trials run arbitrary
   Python; buying it here would cost process overhead for a hazard the API has
   already excluded.
+
+### 8b.6 Venue-mechanics gaps closed (2026-07-30)
+
+A second pass over the same reference stack, this time on venue mechanics
+rather than tooling. Six gaps, each of which produced a plausible-looking
+number that was wrong in a specific direction:
+
+| Gap | Was | Now |
+|---|---|---|
+| Naked outcome shorts | filled, collateralised at the mark | refused; `CashMargin` charges `1 - p` on a probability short |
+| Complete-set mint/redeem | absent | `Context::mint` / `redeem`, legs emitted as fills, latency and flat cost |
+| Negative-risk conversion | absent | `Context::convert`, gated on `Instrument::neg_risk` |
+| Resolution payouts | one winner only | `Payout::{Winner, Split, Void}`, validated to sum to one |
+| Calibration inputs | `quant.calibration` had no producer | `record_forecast` plus `RunReport::calibration_samples` |
+| Expiration | `Instrument::expiration` never read | orders refused after the close, resting orders cancelled |
+
+Two things worth recording beyond the table:
+
+- **Conversion did not need its own mechanics.** In the N-outcome model a
+  negative-risk conversion over `k` outcomes is exactly a redemption of
+  `k - 1` complete sets. The primitive is still offered under the venue's
+  name, because strategies reason in NO contracts, but the equivalence is
+  a test rather than a coincidence.
+- **The look-ahead posture held up.** The studied stack has to *redact*
+  resolution fields from instrument metadata after the fact; here they were
+  already routed to a separate table the strategy path cannot reach, so
+  widening `Resolution` to a payout vector needed no new guard.
 
 One design choice worth carrying forward: `ArchiveLayout` makes a vendor dialect
 data rather than a code path, so a third vendor is a literal (column names,

@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance/#article","headline":"Order flow imbalance: does signed volume predict returns?","name":"Order flow imbalance: does signed volume predict returns?","description":"Order flow imbalance is the excess of buyer-initiated over seller-initiated volume, and it is the workhorse microstructure signal.","url":"https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Alpha research"},{"@type":"ListItem","position":4,"name":"Order flow imbalance: does signed volume predict returns?","item":"https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance/#article","headline":"Order flow imbalance: does signed volume predict returns?","name":"Order flow imbalance: does signed volume predict returns?","description":"Order flow imbalance is the excess of buyer-initiated over seller-initiated volume, and it is the workhorse microstructure signal.","url":"https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Alpha research"},{"@type":"ListItem","position":4,"name":"Order flow imbalance: does signed volume predict returns?","item":"https://db.h5i.dev/cookbook/02_alpha_research/07_order_flow_imbalance/"}]}]}</script>
 </head>
 <body>
 
@@ -90,13 +90,58 @@ mildly predictive of the next move.</p>
 <li>an honest look at contemporaneous versus <em>predictive</em> correlation with
    1-minute returns.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>order flow imbalance</td>
+<td>buyer-initiated volume minus seller-initiated volume over a window</td>
+</tr>
+<tr>
+<td>buyer-initiated</td>
+<td>the buyer crossed the spread to make the trade happen; feeds rarely say, so it is inferred</td>
+</tr>
+<tr>
+<td>signed volume</td>
+<td>trade volume carrying that sign</td>
+</tr>
+<tr>
+<td>Lee-Ready</td>
+<td>the standard signing rule: compare the trade price to the prevailing mid</td>
+</tr>
+<tr>
+<td>tick test</td>
+<td>the fallback rule: compare the trade to the previous trade price</td>
+</tr>
+<tr>
+<td>quote OFI</td>
+<td>book pressure from changes in best bid and ask prices and sizes</td>
+</tr>
+<tr>
+<td>contemporaneous</td>
+<td>measured over the same window as the return, so it explains rather than predicts</td>
+</tr>
+<tr>
+<td>predictive</td>
+<td>measured over the window before the return, which is the only useful kind</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">when</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;alpha_ofi&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -326,7 +371,7 @@ attached quotes against <code>pandas.merge_asof</code>.</p>
 <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;quotes_qa&quot;</span><span class="p">,</span> <span class="n">quotes_w</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;midday QA window + run-up&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;QA window: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">trades_w</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> trades, </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">quotes_w</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> quotes&quot;</span><span class="p">)</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">sign_of</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">prev</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">sign_of</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">prev</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;+1 uptick, -1 downtick, 0 unchanged - the tick test.&quot;&quot;&quot;</span>
     <span class="k">return</span> <span class="n">when</span><span class="p">(</span><span class="n">x</span> <span class="o">&gt;</span> <span class="n">prev</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">when</span><span class="p">(</span><span class="n">x</span> <span class="o">&lt;</span> <span class="n">prev</span><span class="p">)</span><span class="o">.</span><span class="n">then</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">))</span><span class="o">.</span><span class="n">otherwise</span><span class="p">(</span><span class="n">lit</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
 
@@ -424,7 +469,7 @@ enough that you want it done once, committed and versioned.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785195744295665157}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785437917252440045}</pre></div></div>
 <h2 id="4-trade-ofi-per-minute">4. Trade OFI per minute<a class="headerlink" href="#4-trade-ofi-per-minute" title="Permanent link">#</a></h2>
 <p>One <code>time_bucket</code> aggregation gives signed buy and sell volume, the normalized
 imbalance <code>(buys - sells) / total</code>, and the bucket's closing print via the
@@ -524,7 +569,7 @@ growing at an unchanged bid, adds buy pressure. The mirror on the ask side
 subtracts.</p>
 <p>That is four <code>lag()</code> comparisons per quote, pure SQL window machinery, summed
 per minute, with the bucket's closing mid for returns.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">prev</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">prev</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">sql_expr</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;lag(</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
 
 
@@ -602,7 +647,7 @@ would be alpha?</p>
 <p>We compute both correlations per symbol, per estimator. Returns are
 within-session only, with the <code>shift</code> taken inside each symbol and day, so
 there are no overnight artifacts.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">bucket_corrs</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">ofi_col</span><span class="p">,</span> <span class="n">px_col</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">bucket_corrs</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">ofi_col</span><span class="p">,</span> <span class="n">px_col</span><span class="p">):</span>
     <span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="n">frame</span> <span class="o">=</span> <span class="n">frame</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
     <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;bar&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">date</span>
@@ -696,7 +741,7 @@ there are no overnight artifacts.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">sym</span> <span class="o">=</span> <span class="s2">&quot;AAPL&quot;</span>
 <span class="n">g</span> <span class="o">=</span> <span class="n">trade_ofi</span><span class="p">[</span><span class="n">trade_ofi</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">sym</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
@@ -764,7 +809,7 @@ standalone strategies.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/02_alpha_research/06_event_study/"><span class="dir">← Previous</span><span class="pn-title">Event studies: CARs with ASOF-aligned announcement dates</span></a><a class="next" href="/cookbook/02_alpha_research/08_intraday_seasonality/"><span class="dir">Next →</span><span class="pn-title">Intraday seasonality: volume U-shape, volatility smile, spread decay</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-audit-the-signing-rules-on-a-qa-window">2. Audit the signing rules on a QA window</a></li><li><a href="#3-sign-the-full-tape">3. Sign the full tape</a></li><li><a href="#4-trade-ofi-per-minute">4. Trade OFI per minute</a></li><li><a href="#5-quote-ofi-cont-et-al">5. Quote OFI (Cont et al.)</a></li><li><a href="#6-contemporaneous-vs-predictive">6. Contemporaneous vs predictive</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-audit-the-signing-rules-on-a-qa-window">2. Audit the signing rules on a QA window</a></li><li><a href="#3-sign-the-full-tape">3. Sign the full tape</a></li><li><a href="#4-trade-ofi-per-minute">4. Trade OFI per minute</a></li><li><a href="#5-quote-ofi-cont-et-al">5. Quote OFI (Cont et al.)</a></li><li><a href="#6-contemporaneous-vs-predictive">6. Contemporaneous vs predictive</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

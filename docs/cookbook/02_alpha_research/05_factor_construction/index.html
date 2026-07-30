@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/02_alpha_research/05_factor_construction/#article","headline":"Building a point-in-time factor library","name":"Building a point-in-time factor library","description":"Equity factors die by lookahead. A B/P ratio computed with a book value the market had not seen yet will backtest beautifully and trade terribly.","url":"https://db.h5i.dev/cookbook/02_alpha_research/05_factor_construction/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/02_alpha_research/05_factor_construction/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Alpha research"},{"@type":"ListItem","position":4,"name":"Building a point-in-time factor library","item":"https://db.h5i.dev/cookbook/02_alpha_research/05_factor_construction/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/02_alpha_research/05_factor_construction/#article","headline":"Building a point-in-time factor library","name":"Building a point-in-time factor library","description":"Equity factors die by lookahead. A B/P ratio computed with a book value the market had not seen yet will backtest beautifully and trade terribly.","url":"https://db.h5i.dev/cookbook/02_alpha_research/05_factor_construction/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/02_alpha_research/05_factor_construction/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Alpha research"},{"@type":"ListItem","position":4,"name":"Building a point-in-time factor library","item":"https://db.h5i.dev/cookbook/02_alpha_research/05_factor_construction/"}]}]}</script>
 </head>
 <body>
 
@@ -88,14 +88,63 @@ market had not seen yet will backtest beautifully and trade terribly.</p>
 </ol>
 <p>That last step is the "factor library" pattern, where every rebuild is a
 commit you can diff and pin.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">scipy</span><span class="w"> </span><span class="kn">import</span> <span class="n">stats</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>factor</td>
+<td>a characteristic shared across assets that explains returns, e.g. value or momentum</td>
+</tr>
+<tr>
+<td>value (B/P)</td>
+<td>book value divided by price; high means cheap relative to accounting worth</td>
+</tr>
+<tr>
+<td>quality</td>
+<td>a profitability or stability measure; here revenue-growth stability</td>
+</tr>
+<tr>
+<td>momentum (12-1)</td>
+<td>the return over the last twelve months, excluding the most recent one</td>
+</tr>
+<tr>
+<td>panel</td>
+<td>a dataset with one row per asset per date</td>
+</tr>
+<tr>
+<td>point-in-time</td>
+<td>data stored and queried as it was known at each moment</td>
+</tr>
+<tr>
+<td>lookahead bias</td>
+<td>using information the strategy could not have had; the bug that kills factors</td>
+</tr>
+<tr>
+<td>IC</td>
+<td>information coefficient: correlation between a signal and the return that followed</td>
+</tr>
+<tr>
+<td>quintile spread</td>
+<td>top fifth minus bottom fifth by signal, a model-free readout of whether it works</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">from</span> <span class="nn">scipy</span> <span class="kn">import</span> <span class="n">stats</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;alpha_factors&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -372,14 +421,14 @@ like everything else.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785195739854692414}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785437911305642491}</pre></div></div>
 <h2 id="3-month-end-price-panel-with-momentum">3. Month-end price panel with momentum<a class="headerlink" href="#3-month-end-price-panel-with-momentum" title="Permanent link">#</a></h2>
 <p>Same pattern as the momentum recipe: <code>lag(21)/lag(252)</code> per symbol for 12-1
 momentum, sampled on the last trading day of each month via
 <code>time_bucket('1mo', ...)</code>.</p>
 <p>This panel also gets stored. <code>asof_join</code> operates on tables, and month-end
 observation dates are exactly the left side we want fundamentals attached to.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">lag_close</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">lag_close</span><span class="p">(</span><span class="n">n</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">sql_expr</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;lag(close, </span><span class="si">{</span><span class="n">n</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
 
 
@@ -535,7 +584,7 @@ makes them comparable and combinable.</p>
 <span class="n">FACTORS</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">,</span> <span class="s2">&quot;momentum&quot;</span><span class="p">,</span> <span class="s2">&quot;quality&quot;</span><span class="p">]</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">zscore_by_month</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">field</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">zscore_by_month</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">field</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
     <span class="n">g</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)[</span><span class="n">field</span><span class="p">]</span>
     <span class="k">return</span> <span class="p">((</span><span class="n">df</span><span class="p">[</span><span class="n">field</span><span class="p">]</span> <span class="o">-</span> <span class="n">g</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;mean&quot;</span><span class="p">))</span> <span class="o">/</span> <span class="n">g</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="s2">&quot;std&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="o">-</span><span class="mi">3</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
 
@@ -601,7 +650,7 @@ predicts something".</p>
 <span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">monthly_ic</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">field</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">monthly_ic</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">field</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
     <span class="n">out</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">for</span> <span class="n">ts</span><span class="p">,</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="n">field</span><span class="p">,</span> <span class="s2">&quot;fwd_ret&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">):</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">g</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">20</span><span class="p">:</span>
@@ -664,7 +713,7 @@ predicts something".</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">7</span><span class="p">),</span> <span class="n">sharex</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">sharey</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="k">for</span> <span class="n">ax</span><span class="p">,</span> <span class="n">f</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">axes</span><span class="p">,</span> <span class="n">FACTORS</span><span class="p">):</span>
@@ -682,7 +731,7 @@ predicts something".</p>
 <p>Quintile spreads give the same information in return space. Sort into five
 10-name buckets each month, hold equal-weight for one month, and look at
 Q5 minus Q1.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">quintile_spread</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">field</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">quintile_spread</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">field</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
     <span class="n">out</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">for</span> <span class="n">ts</span><span class="p">,</span> <span class="n">g</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">dropna</span><span class="p">(</span><span class="n">subset</span><span class="o">=</span><span class="p">[</span><span class="n">field</span><span class="p">,</span> <span class="s2">&quot;fwd_ret&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">):</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">g</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">25</span><span class="p">:</span>
@@ -848,7 +897,7 @@ or a production model to the snapshot it was trained on.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/02_alpha_research/04_realized_volatility/"><span class="dir">← Previous</span><span class="pn-title">Realized volatility from ticks: signature plots, jumps, overnight risk</span></a><a class="next" href="/cookbook/02_alpha_research/06_event_study/"><span class="dir">Next →</span><span class="pn-title">Event studies: CARs with ASOF-aligned announcement dates</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-derived-fundamental-signals-per-report-date">2. Derived fundamental signals, per report date</a></li><li><a href="#3-month-end-price-panel-with-momentum">3. Month-end price panel with momentum</a></li><li><a href="#4-the-point-in-time-join">4. The point-in-time join</a></li><li><a href="#5-assemble-the-three-factors">5. Assemble the three factors</a></li><li><a href="#6-evaluation-information-coefficients-and-quintile-spreads">6. Evaluation: information coefficients and quintile spreads</a></li><li><a href="#7-persist-the-panel-the-factor-library-pattern">7. Persist the panel: the factor library pattern</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-derived-fundamental-signals-per-report-date">2. Derived fundamental signals, per report date</a></li><li><a href="#3-month-end-price-panel-with-momentum">3. Month-end price panel with momentum</a></li><li><a href="#4-the-point-in-time-join">4. The point-in-time join</a></li><li><a href="#5-assemble-the-three-factors">5. Assemble the three factors</a></li><li><a href="#6-evaluation-information-coefficients-and-quintile-spreads">6. Evaluation: information coefficients and quintile spreads</a></li><li><a href="#7-persist-the-panel-the-factor-library-pattern">7. Persist the panel: the factor library pattern</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

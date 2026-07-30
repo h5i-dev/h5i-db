@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/cli/#article","headline":"CLI reference","name":"CLI reference","description":"Every command, flag, output format, and exit code of the h5i-db command-line tool.","url":"https://db.h5i.dev/manual/cli/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/cli/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"CLI reference","item":"https://db.h5i.dev/manual/cli/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/cli/#article","headline":"CLI reference","name":"CLI reference","description":"Every command, flag, output format, and exit code of the h5i-db command-line tool.","url":"https://db.h5i.dev/manual/cli/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/cli/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"CLI reference","item":"https://db.h5i.dev/manual/cli/"}]}]}</script>
 </head>
 <body>
 
@@ -840,9 +840,15 @@ cannot read past its decision instant. Takes about a second.</p>
 </tr>
 </tbody>
 </table></div>
-<p>The UI shows pending plans with previews, a live fork monitor, the version
-timeline with audit badges, version diffs, and an SQL scratchpad that reports
-pruning per query.</p>
+<p>The UI shows pending plans with previews, agent backtest experiments, a live
+fork monitor, the version timeline with audit badges, version diffs, and an
+SQL scratchpad that reports pruning per query.</p>
+<p>The <strong>Experiments</strong> tab routes attention using the state recorded on each
+<code>bt-*</code> run fork: <code>needs-decision</code> &gt; <code>failed/warned</code> &gt; <code>finished-unseen</code> &gt;
+<code>running</code> &gt; <code>seen</code>. Experiments inherit their most urgent trial. Opening a
+trial detail—not scanning a list—marks it seen in the browser; the tab badge
+counts unseen warnings. Attention, all-trials, and leaderboard views remain
+separate so a best score cannot hide a blocked or suspicious run.</p>
 <p>The <strong>Forks</strong> tab renders the fork lineage as a tree that updates itself over
 a server-sent event stream: each fork carries one glanceable status —
 <code>conflict</code> (the base moved under a shadowed table, so promote will refuse),

@@ -154,6 +154,40 @@ impl PythonStrategy {
                 let at: i64 = required(command, "ts")?;
                 ctx.set_timer(name, UnixNanos::new(at));
             }
+            // The venue's set contract: pay a dollar for one of every
+            // outcome, or hand the set back for a dollar.
+            "mint" | "redeem" => {
+                let instrument = InstrumentId::new(required::<String>(command, "instrument_id")?)?;
+                let sets = Qty::from_f64(required::<f64>(command, "quantity")?)?;
+                if action == "mint" {
+                    ctx.mint(&instrument, sets);
+                } else {
+                    ctx.redeem(&instrument, sets);
+                }
+            }
+            "convert" => {
+                let instrument = InstrumentId::new(required::<String>(command, "instrument_id")?)?;
+                let quantity = Qty::from_f64(required::<f64>(command, "quantity")?)?;
+                let held: Vec<u16> = required(command, "outcomes")?;
+                ctx.convert(
+                    &instrument,
+                    held.into_iter().map(OutcomeId).collect(),
+                    quantity,
+                );
+            }
+            // Not an instruction to the venue: a statement of belief, kept
+            // so the run can be scored against it afterwards.
+            "forecast" => {
+                let instrument = InstrumentId::new(required::<String>(command, "instrument_id")?)?;
+                let outcome = OutcomeId(optional(command, "outcome")?.unwrap_or(0_u16));
+                let probability = Price::from_f64(required::<f64>(command, "probability")?)?;
+                ctx.record_tagged_forecast(
+                    &instrument,
+                    outcome,
+                    probability,
+                    optional::<String>(command, "tag")?,
+                )?;
+            }
             other => {
                 return Err(BacktestError::invalid(format!(
                     "unknown callback action {other:?}"

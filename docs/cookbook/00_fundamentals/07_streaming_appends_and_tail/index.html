@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail/#article","headline":"Streaming appends and tail(): a live feed on a versioned store","name":"Streaming appends and tail(): a live feed on a versioned store","description":"An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that\u2026","url":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"Streaming appends and tail(): a live feed on a versioned store","item":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail/#article","headline":"Streaming appends and tail(): a live feed on a versioned store","name":"Streaming appends and tail(): a live feed on a versioned store","description":"An h5i-db table with an append-only history doubles as a message log. Every append is one commit, commits are strictly ordered, and a reader that\u2026","url":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"Streaming appends and tail(): a live feed on a versioned store","item":"https://db.h5i.dev/cookbook/00_fundamentals/07_streaming_appends_and_tail/"}]}]}</script>
 </head>
 <body>
 
@@ -92,12 +92,49 @@ into "the research database <em>is</em> the feed consumer".</p>
    newest chunk touched,</li>
 <li>break the pure-append chain on purpose and read the error.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tick</td>
+<td>one event on a market data feed, usually a trade or a quote update</td>
+</tr>
+<tr>
+<td>append-only</td>
+<td>a table only ever extended at the end, never rewritten</td>
+</tr>
+<tr>
+<td><code>tail</code></td>
+<td>read exactly the rows committed after a version you name</td>
+</tr>
+<tr>
+<td>high-water mark</td>
+<td>the last version a consumer processed, stored so it can resume</td>
+</tr>
+<tr>
+<td>OHLCV bar</td>
+<td>ticks aggregated into a fixed interval: open, high, low, close, volume</td>
+</tr>
+<tr>
+<td><code>time_bucket</code></td>
+<td>truncate timestamps to a grid, optionally in a named timezone</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_streaming&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -245,7 +282,7 @@ buckets the new batch touched. The first affected bucket is the minute
 containing the batch's earliest row, and everything before that is closed and
 never recomputed. <code>read(time_start=...)</code>, in raw microseconds, prunes the
 re-read to that tail of the table.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">consume_new</span><span class="p">(</span><span class="n">last_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">rows_seen</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">consume_new</span><span class="p">(</span><span class="n">last_version</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">rows_seen</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Fetch exactly the rows committed after `last_version`, or None.&quot;&quot;&quot;</span>
     <span class="n">head</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
     <span class="n">available</span> <span class="o">=</span> <span class="n">head</span><span class="p">[</span><span class="s2">&quot;rows&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">rows_seen</span>
@@ -256,7 +293,7 @@ re-read to that tail of the table.</p>
     <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">recompute_bars</span><span class="p">(</span><span class="n">bars</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">batch</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">recompute_bars</span><span class="p">(</span><span class="n">bars</span><span class="p">:</span> <span class="nb">dict</span><span class="p">,</span> <span class="n">batch</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Recompute 1m bars from the first bucket `batch` touches, in place.&quot;&quot;&quot;</span>
     <span class="n">first_bucket</span> <span class="o">=</span> <span class="n">batch</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">min</span><span class="p">()</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;1min&quot;</span><span class="p">)</span>
     <span class="n">part</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">time_start</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">first_bucket</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1000</span><span class="p">))</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
@@ -291,10 +328,8 @@ re-read to that tail of the table.</p>
 <span class="k">assert</span> <span class="n">rows_seen</span> <span class="o">==</span> <span class="n">n</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">reader consumed all </span><span class="si">{</span><span class="n">rows_seen</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows; cursor at version </span><span class="si">{</span><span class="n">last_version</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">chunk 0: consumed 4,872 rows (13:30:00 -&gt; 13:52:09), recomputed  46 of 46 bars
-chunk 1: consumed 4,872 rows (13:52:09 -&gt; 14:19:08), recomputed  56 of 100 bars
-chunk 2: consumed 4,872 rows (14:19:10 -&gt; 15:16:46), recomputed 116 of 214 bars</pre><pre class="">chunk 3: consumed 4,872 rows (15:16:49 -&gt; 17:50:28), recomputed 310 of 522 bars</pre><pre class="">chunk 4: consumed 4,872 rows (17:50:33 -&gt; 19:23:06), recomputed 188 of 708 bars
-chunk 5: consumed 4,873 rows (19:23:06 -&gt; 19:59:59), recomputed  74 of 780 bars
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">chunk 0: consumed 4,872 rows (13:30:00 -&gt; 13:52:09), recomputed  46 of 46 bars</pre><pre class="">chunk 1: consumed 4,872 rows (13:52:09 -&gt; 14:19:08), recomputed  56 of 100 bars</pre><pre class="">chunk 2: consumed 4,872 rows (14:19:10 -&gt; 15:16:46), recomputed 116 of 214 bars</pre><pre class="">chunk 3: consumed 4,872 rows (15:16:49 -&gt; 17:50:28), recomputed 310 of 522 bars
+chunk 4: consumed 4,872 rows (17:50:33 -&gt; 19:23:06), recomputed 188 of 708 bars</pre><pre class="">chunk 5: consumed 4,873 rows (19:23:06 -&gt; 19:59:59), recomputed  74 of 780 bars
 
 reader consumed all 29,233 rows; cursor at version 6</pre></div></div>
 <p>The incremental bars have to equal a from-scratch rollup. One <code>time_bucket</code>
@@ -421,7 +456,7 @@ budget is therefore commits per second, not rows per commit.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/00_fundamentals/06_previewable_mutations/"><span class="dir">← Previous</span><span class="pn-title">Previewable mutations: fix bad ticks without fearing the delete key</span></a><a class="next" href="/cookbook/00_fundamentals/08_maintenance/"><span class="dir">Next →</span><span class="pn-title">Maintenance: verify, compact, vacuum</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-writer-appends-reader-tails">2. Writer appends, reader tails</a></li><li><a href="#3-tail-is-unbounded-so-respect-the-limit">3. tail is unbounded, so respect the LIMIT</a></li><li><a href="#4-the-high-water-mark-pattern-no-tail-required">4. The high-water-mark pattern (no tail required)</a></li><li><a href="#5-breaking-the-pure-append-chain">5. Breaking the pure-append chain</a></li><li><a href="#batch-size-guidance">Batch-size guidance</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-writer-appends-reader-tails">2. Writer appends, reader tails</a></li><li><a href="#3-tail-is-unbounded-so-respect-the-limit">3. tail is unbounded, so respect the LIMIT</a></li><li><a href="#4-the-high-water-mark-pattern-no-tail-required">4. The high-water-mark pattern (no tail required)</a></li><li><a href="#5-breaking-the-pure-append-chain">5. Breaking the pure-append chain</a></li><li><a href="#batch-size-guidance">Batch-size guidance</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

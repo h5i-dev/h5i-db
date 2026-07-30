@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts/#article","headline":"Multi-writer coordination: optimistic locking, conflicts, and retries","name":"Multi-writer coordination: optimistic locking, conflicts, and retries","description":"An h5i-db database is a directory, and nothing stops two processes from opening it at the same time: a feed handler and a corrections job, or two\u2026","url":"https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Multi-writer coordination: optimistic locking, conflicts, and retries","item":"https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts/#article","headline":"Multi-writer coordination: optimistic locking, conflicts, and retries","name":"Multi-writer coordination: optimistic locking, conflicts, and retries","description":"An h5i-db database is a directory, and nothing stops two processes from opening it at the same time: a feed handler and a corrections job, or two\u2026","url":"https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Multi-writer coordination: optimistic locking, conflicts, and retries","item":"https://db.h5i.dev/cookbook/03_risk_and_production/06_multi_writer_conflicts/"}]}]}</script>
 </head>
 <body>
 
@@ -91,12 +91,49 @@ is a silent P&amp;L error. A <code>ConflictError</code> is a retry.</p>
 <li>scale up to three threads racing to ingest a chunked feed,</li>
 <li>hit the same conflict machinery through the plan/apply mutation flow.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">threading</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>optimistic concurrency</td>
+<td>writers do not lock; a commit is rejected if the head moved under it</td>
+</tr>
+<tr>
+<td><code>expected_version</code></td>
+<td>the version a commit believes it is extending</td>
+</tr>
+<tr>
+<td><code>ConflictError</code></td>
+<td>the rejection raised when it was not; a retry, not a lost update</td>
+</tr>
+<tr>
+<td>lost update</td>
+<td>two writers interleaving so one silently overwrites the other's rows</td>
+</tr>
+<tr>
+<td>retry</td>
+<td>re-reading the new head and reapplying the write against it</td>
+</tr>
+<tr>
+<td>plan / apply</td>
+<td>stage a delete or replace, review it, then commit it; conflicts apply here too</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">threading</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">path</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_writers&quot;</span><span class="p">)</span>
 <span class="n">writer_a</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -234,7 +271,7 @@ row per print.</p>
  &#x27;segments_total&#x27;: 0,
  &#x27;segments_added&#x27;: 0,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785195773830604369}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785437976208262883}</pre></div></div>
 <h2 id="2-two-handles-one-database">2. Two handles, one database<a class="headerlink" href="#2-two-handles-one-database" title="Permanent link">#</a></h2>
 <p><code>writer_b</code> opens the <em>same</em> directory. Think of it as a second process.</p>
 <p>Commits made through one handle are immediately visible through the other.
@@ -282,7 +319,7 @@ with A's, and nobody would know until reconciliation.</p>
 append against it, and give up after a few attempts.</p>
 <p>This is the same CAS-retry loop you would write against any
 optimistic-concurrency store.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">append_with_retry</span><span class="p">(</span><span class="n">handle</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">append_with_retry</span><span class="p">(</span><span class="n">handle</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">max_attempts</span><span class="o">=</span><span class="mi">5</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Append with optimistic locking; retry on conflict.&quot;&quot;&quot;</span>
     <span class="k">for</span> <span class="n">attempt</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_attempts</span> <span class="o">+</span> <span class="mi">1</span><span class="p">):</span>
         <span class="n">head</span> <span class="o">=</span> <span class="n">handle</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="n">table</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span>
@@ -321,7 +358,7 @@ and no queue: the version chain is the queue.</p>
 <span class="n">stats</span> <span class="o">=</span> <span class="p">{}</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">feed_worker</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">feed_worker</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
     <span class="n">handle</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>  <span class="c1"># per-thread handle, like a separate process</span>
     <span class="n">wins</span> <span class="o">=</span> <span class="n">conflicts</span> <span class="o">=</span> <span class="mi">0</span>
     <span class="k">try</span><span class="p">:</span>
@@ -349,9 +386,9 @@ and no queue: the version chain is the queue.</p>
 
 <span class="n">stats</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">9 chunks x 1,520 rows for the race</pre><pre>{&#x27;writer-0&#x27;: {&#x27;commits&#x27;: 9, &#x27;conflicts&#x27;: 0},
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">9 chunks x 1,520 rows for the race</pre><pre>{&#x27;writer-1&#x27;: {&#x27;commits&#x27;: 9, &#x27;conflicts&#x27;: 0},
  &#x27;writer-2&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1},
- &#x27;writer-1&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1}}</pre></div></div>
+ &#x27;writer-0&#x27;: {&#x27;commits&#x27;: 0, &#x27;conflicts&#x27;: 1}}</pre></div></div>
 <p>Which thread lands which chunk varies run to run. The <em>outcome</em> is
 deterministic: every chunk committed exactly once, in order, with a linear
 version chain. Below we verify no rows were lost or duplicated.</p>
@@ -376,10 +413,10 @@ version chain: v0..v12, strictly linear</pre></div></div>
     <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">writer_a</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">4</span><span class="p">:]</span>
 <span class="p">]</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre>[{&#x27;sequence&#x27;: 9, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 15120, &#x27;note&#x27;: &#x27;writer-0: chunk 5&#x27;},
- {&#x27;sequence&#x27;: 10, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 16640, &#x27;note&#x27;: &#x27;writer-0: chunk 6&#x27;},
- {&#x27;sequence&#x27;: 11, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 18160, &#x27;note&#x27;: &#x27;writer-0: chunk 7&#x27;},
- {&#x27;sequence&#x27;: 12, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 19680, &#x27;note&#x27;: &#x27;writer-0: chunk 8&#x27;}]</pre></div></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[{&#x27;sequence&#x27;: 9, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 15120, &#x27;note&#x27;: &#x27;writer-1: chunk 5&#x27;},
+ {&#x27;sequence&#x27;: 10, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 16640, &#x27;note&#x27;: &#x27;writer-1: chunk 6&#x27;},
+ {&#x27;sequence&#x27;: 11, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 18160, &#x27;note&#x27;: &#x27;writer-1: chunk 7&#x27;},
+ {&#x27;sequence&#x27;: 12, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 19680, &#x27;note&#x27;: &#x27;writer-1: chunk 8&#x27;}]</pre></div></div>
 <h2 id="6-planapply-hits-the-same-wall">6. Plan/apply hits the same wall<a class="headerlink" href="#6-planapply-hits-the-same-wall" title="Permanent link">#</a></h2>
 <p>The previewable-mutation flow, <code>plan_delete_range</code> then inspect then <code>apply</code>,
 is CAS-guarded too. A plan is built against a specific base version, and
@@ -424,7 +461,7 @@ blindly mutating a table that changed under you.</p>
     <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">writer_a</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">3</span><span class="p">:]</span>
 <span class="p">]</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">re-planned and applied as v14 (delete_range), rows_total=21,022</pre><pre>[{&#x27;sequence&#x27;: 12, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 19680, &#x27;note&#x27;: &#x27;writer-0: chunk 8&#x27;},
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">re-planned and applied as v14 (delete_range), rows_total=21,022</pre><pre>[{&#x27;sequence&#x27;: 12, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 19680, &#x27;note&#x27;: &#x27;writer-1: chunk 8&#x27;},
  {&#x27;sequence&#x27;: 13, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;rows&#x27;: 21180, &#x27;note&#x27;: &#x27;B: late chunk&#x27;},
  {&#x27;sequence&#x27;: 14,
   &#x27;op&#x27;: &#x27;delete_range&#x27;,
@@ -454,7 +491,7 @@ blindly mutating a table that changed under you.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/05_live_paper_trading_loop/"><span class="dir">← Previous</span><span class="pn-title">A crash-safe paper-trading loop with full order attribution</span></a><a class="next" href="/cookbook/03_risk_and_production/07_options_iv_surface/"><span class="dir">Next →</span><span class="pn-title">Options: implied-vol surfaces as versioned marks</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-two-handles-one-database">2. Two handles, one database</a></li><li><a href="#3-a-stale-expected_version-fails-loudly">3. A stale expected_version fails loudly</a></li><li><a href="#4-the-retry-pattern">4. The retry pattern</a></li><li><a href="#5-three-threads-racing-on-one-feed">5. Three threads racing on one feed</a></li><li><a href="#6-planapply-hits-the-same-wall">6. Plan/apply hits the same wall</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-two-handles-one-database">2. Two handles, one database</a></li><li><a href="#3-a-stale-expected_version-fails-loudly">3. A stale expected_version fails loudly</a></li><li><a href="#4-the-retry-pattern">4. The retry pattern</a></li><li><a href="#5-three-threads-racing-on-one-feed">5. Three threads racing on one feed</a></li><li><a href="#6-planapply-hits-the-same-wall">6. Plan/apply hits the same wall</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/03_eod_snapshots_audit/#article","headline":"EOD snapshots and the audit trail regulators actually ask for","name":"EOD snapshots and the audit trail regulators actually ask for","description":"The question that arrives eighteen months later is never \"what is the price now\". \".","url":"https://db.h5i.dev/cookbook/03_risk_and_production/03_eod_snapshots_audit/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/03_eod_snapshots_audit/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"EOD snapshots and the audit trail regulators actually ask for","item":"https://db.h5i.dev/cookbook/03_risk_and_production/03_eod_snapshots_audit/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/03_eod_snapshots_audit/#article","headline":"EOD snapshots and the audit trail regulators actually ask for","name":"EOD snapshots and the audit trail regulators actually ask for","description":"The question that arrives eighteen months later is never \"what is the price now\". \".","url":"https://db.h5i.dev/cookbook/03_risk_and_production/03_eod_snapshots_audit/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/03_eod_snapshots_audit/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"EOD snapshots and the audit trail regulators actually ask for","item":"https://db.h5i.dev/cookbook/03_risk_and_production/03_eod_snapshots_audit/"}]}]}</script>
 </head>
 <body>
 
@@ -92,12 +92,49 @@ table manifest, O(1) to create, addressable forever from SQL as
 <li>close with integrity attestation via <code>verify(deep=True)</code> and retention via
    <code>vacuum</code>.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>EOD</td>
+<td>end of day: the official daily cut of prices, positions and marks</td>
+</tr>
+<tr>
+<td>snapshot</td>
+<td>a named, checksummed pin of table versions; O(1) because it copies nothing</td>
+</tr>
+<tr>
+<td>audit trail</td>
+<td>the record of what was known when, in a form someone else can check</td>
+</tr>
+<tr>
+<td><code>verify(deep=True)</code></td>
+<td>re-checksum every stored byte, as an integrity attestation</td>
+</tr>
+<tr>
+<td><code>vacuum</code></td>
+<td>reclaim unreferenced storage; it never removes committed version history</td>
+</tr>
+<tr>
+<td>retention</td>
+<td>how long records must be kept before they may be discarded</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_eod&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -258,7 +295,7 @@ named snapshot and a log row follow.</p>
 checksum. That is cryptographic evidence of exactly what the name refers to.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">all_trades</span><span class="p">[</span><span class="s2">&quot;day&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">all_trades</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">date</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">eod_checks</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="k">def</span> <span class="nf">eod_checks</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
     <span class="n">row</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
         <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T00:00:00Z&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T23:59:59Z&quot;</span><span class="p">)</span>
@@ -302,19 +339,19 @@ checksum. That is cryptographic evidence of exactly what the name refers to.</p>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">: appended </span><span class="si">{</span><span class="n">data</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows as v</span><span class="si">{</span><span class="n">commit</span><span class="p">[</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">, &quot;</span>
           <span class="sa">f</span><span class="s2">&quot;checks </span><span class="si">{</span><span class="n">checks</span><span class="si">}</span><span class="s2">, snapshot &#39;eod-</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">2026-06-01: appended 62,504 rows as v1, checks {&#x27;rows&#x27;: 62504, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-01&#x27;</pre><pre class="">2026-06-02: appended 64,059 rows as v2, checks {&#x27;rows&#x27;: 64059, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-02&#x27;
-2026-06-03: appended 68,714 rows as v3, checks {&#x27;rows&#x27;: 68714, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-03&#x27;</pre></div></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">2026-06-01: appended 62,504 rows as v1, checks {&#x27;rows&#x27;: 62504, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-01&#x27;
+2026-06-02: appended 64,059 rows as v2, checks {&#x27;rows&#x27;: 64059, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-02&#x27;</pre><pre class="">2026-06-03: appended 68,714 rows as v3, checks {&#x27;rows&#x27;: 68714, &#x27;symbols_ok&#x27;: True, &#x27;prices_ok&#x27;: True, &#x27;nonempty&#x27;: True}, snapshot &#x27;eod-2026-06-03&#x27;</pre></div></div>
 <p>Here is the snapshot dict itself: name, creation time, and per-table pins with
 checksums. This is what lands in the log.</p>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">last_snap</span>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;name&#x27;: &#x27;eod-2026-06-03&#x27;,
- &#x27;created_at_ns&#x27;: 1785195765299951331,
+ &#x27;created_at_ns&#x27;: 1785437965942427825,
  &#x27;note&#x27;: &#x27;EOD risk cut 2026-06-03&#x27;,
- &#x27;entries&#x27;: {&#x27;56fc3c58-8e0b-4b29-b7bc-07aa97ca3d3c&#x27;: {&#x27;table_name&#x27;: &#x27;trades&#x27;,
+ &#x27;entries&#x27;: {&#x27;7b3870fd-c978-44b3-a937-e767e1f8be97&#x27;: {&#x27;table_name&#x27;: &#x27;trades&#x27;,
    &#x27;sequence&#x27;: 3,
-   &#x27;manifest_checksum&#x27;: &#x27;201c594478718ee1348c0c116ffc8342a6efa937db2ff6cacb7f7955b368c76a&#x27;}},
- &#x27;checksum&#x27;: &#x27;e426b71fe2f600771eeee8393201e4cb9b6e617f6c265e067878da361ec96971&#x27;}</pre></div></div>
+   &#x27;manifest_checksum&#x27;: &#x27;0ee35656e1af06141e9ce514ca17a1d5d090c6a596535185a1ca6759ccc3e540&#x27;}},
+ &#x27;checksum&#x27;: &#x27;a9ca968d9660bb706aa10f6218e6cf142d5dc5bddfea8c5a8d3e5b7bfc3ff76c&#x27;}</pre></div></div>
 <div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="p">(</span>
     <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;snapshot_log&quot;</span><span class="p">)</span>
     <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;snapshot_name&quot;</span><span class="p">,</span> <span class="s2">&quot;pinned_sequence&quot;</span><span class="p">,</span>
@@ -338,24 +375,24 @@ checksums. This is what lands in the log.</p>
   <tbody>
     <tr>
       <th>0</th>
-      <td>2026-07-27 23:42:45.158267+00:00</td>
+      <td>2026-07-30 18:59:25.712986+00:00</td>
       <td>eod-2026-06-01</td>
       <td>1</td>
-      <td>82d41af350ff</td>
+      <td>2842021a8ba0</td>
     </tr>
     <tr>
       <th>1</th>
-      <td>2026-07-27 23:42:45.228459+00:00</td>
+      <td>2026-07-30 18:59:25.821898+00:00</td>
       <td>eod-2026-06-02</td>
       <td>2</td>
-      <td>76b06da49622</td>
+      <td>8cb1914410ce</td>
     </tr>
     <tr>
       <th>2</th>
-      <td>2026-07-27 23:42:45.299951+00:00</td>
+      <td>2026-07-30 18:59:25.942427+00:00</td>
       <td>eod-2026-06-03</td>
       <td>3</td>
-      <td>201c59447871</td>
+      <td>0ee35656e1af</td>
     </tr>
   </tbody>
 </table>
@@ -422,12 +459,12 @@ checksums. This is what lands in the log.</p>
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">by snapshot name: 126,563 rows
 by version 2:     126,563 rows
-by as_of 2026-07-27T23:42:45.206670066+00:00: 126,563 rows</pre></div></div>
+by as_of 2026-07-30T18:59:25.789163156+00:00: 126,563 rows</pre></div></div>
 <h2 id="5-diff-two-eod-cuts-in-one-sql-statement">5. Diff two EOD cuts in one SQL statement<a class="headerlink" href="#5-diff-two-eod-cuts-in-one-sql-statement" title="Permanent link">#</a></h2>
 <p>Because snapshots are relations, "what changed between the 2nd and the 3rd"
 is a join rather than an ETL job. Per symbol, it gives rows added and where
 the last print moved.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">per_symbol</span><span class="p">(</span><span class="n">snapshot</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">per_symbol</span><span class="p">(</span><span class="n">snapshot</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="n">snapshot</span><span class="p">)</span>
         <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
@@ -548,7 +585,7 @@ oldest EOD cut still readable: 62,504 rows</pre></div></div>
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/02_reproducible_backtests/"><span class="dir">← Previous</span><span class="pn-title">Reproducible backtests: pin the data, not just the code</span></a><a class="next" href="/cookbook/03_risk_and_production/04_data_quality_gates/"><span class="dir">Next →</span><span class="pn-title">Data-quality gates: staging, policy, and previewable remediation</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-tables-the-feed-and-our-own-snapshot-log">2. Tables: the feed, and our own snapshot log</a></li><li><a href="#3-the-eod-pipeline-append-check-snapshot-log">3. The EOD pipeline: append, check, snapshot, log</a></li><li><a href="#4-what-did-you-know-on-2026-06-02-three-ways-to-answer">4. "What did you know on 2026-06-02?" Three ways to answer</a></li><li><a href="#5-diff-two-eod-cuts-in-one-sql-statement">5. Diff two EOD cuts in one SQL statement</a></li><li><a href="#6-integrity-attestation">6. Integrity attestation</a></li><li><a href="#7-retention-vacuum-respects-history-and-snapshots">7. Retention: vacuum respects history and snapshots</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-tables-the-feed-and-our-own-snapshot-log">2. Tables: the feed, and our own snapshot log</a></li><li><a href="#3-the-eod-pipeline-append-check-snapshot-log">3. The EOD pipeline: append, check, snapshot, log</a></li><li><a href="#4-what-did-you-know-on-2026-06-02-three-ways-to-answer">4. "What did you know on 2026-06-02?" Three ways to answer</a></li><li><a href="#5-diff-two-eod-cuts-in-one-sql-statement">5. Diff two EOD cuts in one SQL statement</a></li><li><a href="#6-integrity-attestation">6. Integrity attestation</a></li><li><a href="#7-retention-vacuum-respects-history-and-snapshots">7. Retention: vacuum respects history and snapshots</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/#article","headline":"Fixed income: versioned curve marks, restatements, carry & rolldown","name":"Fixed income: versioned curve marks, restatements, carry & rolldown","description":"A rates desk's core dataset is small but unforgiving. One par curve per mark date, and every number on it feeds risk, P&L and client marks.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Fixed income: versioned curve marks, restatements, carry & rolldown","item":"https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/#article","headline":"Fixed income: versioned curve marks, restatements, carry & rolldown","name":"Fixed income: versioned curve marks, restatements, carry & rolldown","description":"A rates desk's core dataset is small but unforgiving. One par curve per mark date, and every number on it feeds risk, P&L and client marks.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Fixed income: versioned curve marks, restatements, carry & rolldown","item":"https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/"}]}]}</script>
 </head>
 <body>
 
@@ -91,14 +91,63 @@ contributor slips through.</p>
 <li><em>find</em> the bad mark in SQL and restate it with <code>plan_replace_range</code>,</li>
 <li>prove the pre-restatement view is still queryable forever.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>yield curve</td>
+<td>interest rate plotted against maturity</td>
+</tr>
+<tr>
+<td>par curve</td>
+<td>the curve quoted as the coupon that prices a bond at 100</td>
+</tr>
+<tr>
+<td>tenor</td>
+<td>the maturity point on the curve, e.g. 2y or 10y</td>
+</tr>
+<tr>
+<td>long format</td>
+<td>one row per <code>(date, tenor, yield)</code> rather than one column per tenor</td>
+</tr>
+<tr>
+<td>slope</td>
+<td>a long tenor's yield minus a short one's, e.g. 10y minus 2y</td>
+</tr>
+<tr>
+<td>curvature</td>
+<td>the middle of the curve against its ends, also called a butterfly</td>
+</tr>
+<tr>
+<td>carry</td>
+<td>what a position earns from time passing, if the curve does not move</td>
+</tr>
+<tr>
+<td>rolldown</td>
+<td>the gain from a bond aging into a lower point on an upward sloping curve</td>
+</tr>
+<tr>
+<td>mark</td>
+<td>an official price for a position, set once per day or more often</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">when</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">when</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_curves&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -583,7 +632,7 @@ carry + roll:          -48.0 bp per year, curve unchanged</pre></div></div>
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/08_fx_crypto_24_7/"><span class="dir">← Previous</span><span class="pn-title">FX and crypto: 24/7 data without an exchange session</span></a><a class="next" href="/cookbook/03_risk_and_production/10_performance_tuning/"><span class="dir">Next →</span><span class="pn-title">Performance tuning: pruning, projection, commit granularity, caches</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-one-mark-date-is-one-commit">2. One mark date is one commit</a></li><li><a href="#3-curve-analytics-as-sql-pivots">3. Curve analytics as SQL pivots</a></li><li><a href="#4-find-the-bad-mark-with-a-window-function">4. Find the bad mark with a window function</a></li><li><a href="#5-restate-it-with-a-preview-a-note-and-full-history">5. Restate it, with a preview, a note, and full history</a></li><li><a href="#6-point-in-time-what-did-risk-run-on-that-night">6. Point-in-time: what did risk run on that night?</a></li><li><a href="#7-carry-and-rolldown-from-the-latest-curve">7. Carry and rolldown from the latest curve</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-one-mark-date-is-one-commit">2. One mark date is one commit</a></li><li><a href="#3-curve-analytics-as-sql-pivots">3. Curve analytics as SQL pivots</a></li><li><a href="#4-find-the-bad-mark-with-a-window-function">4. Find the bad mark with a window function</a></li><li><a href="#5-restate-it-with-a-preview-a-note-and-full-history">5. Restate it, with a preview, a note, and full history</a></li><li><a href="#6-point-in-time-what-did-risk-run-on-that-night">6. Point-in-time: what did risk run on that night?</a></li><li><a href="#7-carry-and-rolldown-from-the-latest-curve">7. Carry and rolldown from the latest curve</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/04_data_quality_gates/#article","headline":"Data-quality gates: staging, policy, and previewable remediation","name":"Data-quality gates: staging, policy, and previewable remediation","description":"The worst place to discover a broken vendor file is in the P&L meeting.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/04_data_quality_gates/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/04_data_quality_gates/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Data-quality gates: staging, policy, and previewable remediation","item":"https://db.h5i.dev/cookbook/03_risk_and_production/04_data_quality_gates/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/04_data_quality_gates/#article","headline":"Data-quality gates: staging, policy, and previewable remediation","name":"Data-quality gates: staging, policy, and previewable remediation","description":"The worst place to discover a broken vendor file is in the P&L meeting.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/04_data_quality_gates/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/04_data_quality_gates/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Data-quality gates: staging, policy, and previewable remediation","item":"https://db.h5i.dev/cookbook/03_risk_and_production/04_data_quality_gates/"}]}]}</script>
 </head>
 <body>
 
@@ -85,13 +85,46 @@ a staging version, which is evidence rather than embarrassment. The fix goes
 through a previewable plan/apply mutation with before and after samples. And a
 database-level policy makes direct destructive writes <em>impossible to do
 casually</em>, for humans and pipeline agents alike.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">when</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>staging table</td>
+<td>where a delivery lands first, so a broken file never touches production</td>
+</tr>
+<tr>
+<td>gate</td>
+<td>a check that a delivery must pass before it is promoted</td>
+</tr>
+<tr>
+<td>promotion</td>
+<td>moving validated data from staging into the production table</td>
+</tr>
+<tr>
+<td>plan / apply</td>
+<td>stage a delete or replace, review its row counts and samples, then commit it</td>
+</tr>
+<tr>
+<td>mutation policy</td>
+<td>a database-level setting that blocks direct destructive writes</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">when</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_dq&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -366,7 +399,7 @@ average in production. That last one is a cheap but effective "did the vendor
 send half a file" alarm.</p>
 <p>Every check reads the <em>staging table's current version</em>, so the gate result is
 reproducible against that version forever.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">run_gate</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">run_gate</span><span class="p">(</span><span class="n">day</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
     <span class="n">stat</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;vendor_staging&quot;</span><span class="p">)</span>
         <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T00:00:00Z&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">day</span><span class="si">}</span><span class="s2">T23:59:59Z&quot;</span><span class="p">)</span>
@@ -555,7 +588,7 @@ previewed fix, gated promotion.</p>
   &#x27;rows&#x27;: 5000,
   &#x27;note&#x27;: &#x27;promoted gated delivery 2023-12-15&#x27;}]</pre></div></div>
 <h2 id="8-the-gate-report-dashboard-style">8. The gate report, dashboard-style<a class="headerlink" href="#8-the-gate-report-dashboard-style" title="Permanent link">#</a></h2>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mf">2.8</span><span class="p">))</span>
 <span class="n">ax</span><span class="o">.</span><span class="n">axis</span><span class="p">(</span><span class="s2">&quot;off&quot;</span><span class="p">)</span>
@@ -601,7 +634,7 @@ previewed fix, gated promotion.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/03_eod_snapshots_audit/"><span class="dir">← Previous</span><span class="pn-title">EOD snapshots and the audit trail regulators actually ask for</span></a><a class="next" href="/cookbook/03_risk_and_production/05_live_paper_trading_loop/"><span class="dir">Next →</span><span class="pn-title">A crash-safe paper-trading loop with full order attribution</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-lock-the-database-down-first">2. Lock the database down first</a></li><li><a href="#3-todays-delivery-is-broken-four-ways">3. Today's delivery is broken four ways</a></li><li><a href="#4-the-gate-five-checks-all-sql-on-staging">4. The gate: five checks, all SQL on staging</a></li><li><a href="#5-the-shortcut-that-policy-makes-impossible">5. The shortcut that policy makes impossible</a></li><li><a href="#6-remediation-the-sanctioned-way-plan-inspect-apply">6. Remediation the sanctioned way: plan, inspect, apply</a></li><li><a href="#7-re-run-the-gate-then-promote">7. Re-run the gate, then promote</a></li><li><a href="#8-the-gate-report-dashboard-style">8. The gate report, dashboard-style</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-lock-the-database-down-first">2. Lock the database down first</a></li><li><a href="#3-todays-delivery-is-broken-four-ways">3. Today's delivery is broken four ways</a></li><li><a href="#4-the-gate-five-checks-all-sql-on-staging">4. The gate: five checks, all SQL on staging</a></li><li><a href="#5-the-shortcut-that-policy-makes-impossible">5. The shortcut that policy makes impossible</a></li><li><a href="#6-remediation-the-sanctioned-way-plan-inspect-apply">6. Remediation the sanctioned way: plan, inspect, apply</a></li><li><a href="#7-re-run-the-gate-then-promote">7. Re-run the gate, then promote</a></li><li><a href="#8-the-gate-report-dashboard-style">8. The gate report, dashboard-style</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

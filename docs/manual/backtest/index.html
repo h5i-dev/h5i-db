@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/backtest/#article","headline":"Backtesting","name":"Backtesting","description":"Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.","url":"https://db.h5i.dev/manual/backtest/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/backtest/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Backtesting","item":"https://db.h5i.dev/manual/backtest/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/backtest/#article","headline":"Backtesting","name":"Backtesting","description":"Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.","url":"https://db.h5i.dev/manual/backtest/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/backtest/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Backtesting","item":"https://db.h5i.dev/manual/backtest/"}]}]}</script>
 </head>
 <body>
 
@@ -134,18 +134,27 @@ grid to confirm it rather than assuming.</p>
 final one. Applying half a snapshot would leave a crossed or hollow book, so
 a reader that meets a truncated one refuses it instead of reconstructing
 something plausible from the fragment.</p>
+<p>One event is one book: every row under an <code>event_index</code> must carry the same
+<code>instrument_id</code> and <code>outcome</code>. A feed that puts two outcomes under one event is
+refused for the same reason a truncated snapshot is. The alternative is worse
+than an error, because the levels would merge into a single book whose best ask
+belongs to the other side of the market, and a buy would fill against it
+without complaint.</p>
+<p>The index values themselves only have to <em>change</em> between events. They are not
+required to increase with <code>ts_init</code>, since grouping follows row order and ends
+at <code>is_last</code>, so a recorder that writes instrument-major is fine.</p>
 <h2 id="a-run">A run<a class="headerlink" href="#a-run" title="Permanent link">#</a></h2>
-<div class="highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">h5i_db_backtest</span><span class="p">::{</span><span class="n">run_in_fork</span><span class="p">,</span><span class="w"> </span><span class="n">RunSpec</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span><span class="p">};</span>
+<div class="highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">h5i_db_backtest</span>::<span class="p">{</span><span class="n">run_in_fork</span><span class="p">,</span><span class="w"> </span><span class="n">RunSpec</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span><span class="p">};</span>
 
-<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SignalReplay</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">intents</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SignalReplay</span>::<span class="n">new</span><span class="p">(</span><span class="n">intents</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">report</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">run_in_fork</span><span class="p">(</span>
 <span class="w">    </span><span class="o">&amp;</span><span class="n">db</span><span class="p">,</span>
-<span class="w">    </span><span class="n">RunSpec</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;momentum-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span><span class="p">::</span><span class="n">from_units</span><span class="p">(</span><span class="mi">10_000</span><span class="p">)</span><span class="o">?</span><span class="p">)</span>
+<span class="w">    </span><span class="n">RunSpec</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;momentum-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span>::<span class="n">from_units</span><span class="p">(</span><span class="mi">10_000</span><span class="p">)</span><span class="o">?</span><span class="p">)</span>
 <span class="w">        </span><span class="p">.</span><span class="n">window</span><span class="p">(</span><span class="n">window</span><span class="p">)</span>
-<span class="w">        </span><span class="p">.</span><span class="n">read_at</span><span class="p">(</span><span class="n">ReadAt</span><span class="p">::</span><span class="n">Snapshot</span><span class="p">(</span><span class="s">&quot;2024-q1&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">()))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">read_at</span><span class="p">(</span><span class="n">ReadAt</span>::<span class="n">Snapshot</span><span class="p">(</span><span class="s">&quot;2024-q1&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">()))</span>
 <span class="w">        </span><span class="p">.</span><span class="n">minimum_coverage</span><span class="p">(</span><span class="mf">0.95</span><span class="p">),</span>
 <span class="w">    </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">strategy</span><span class="p">,</span>
-<span class="w">    </span><span class="o">|</span><span class="n">engine</span><span class="o">|</span><span class="w"> </span><span class="n">engine</span><span class="p">.</span><span class="n">fee_model</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">PredictionMarketFees</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="mf">0.07</span><span class="p">)</span><span class="o">?</span><span class="p">)),</span>
+<span class="w">    </span><span class="o">|</span><span class="n">engine</span><span class="o">|</span><span class="w"> </span><span class="n">engine</span><span class="p">.</span><span class="n">fee_model</span><span class="p">(</span><span class="nb">Box</span>::<span class="n">new</span><span class="p">(</span><span class="n">PredictionMarketFees</span>::<span class="n">new</span><span class="p">(</span><span class="mf">0.07</span><span class="p">)</span><span class="o">?</span><span class="p">)),</span>
 <span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 </code></pre></div>
 
@@ -187,7 +196,7 @@ disposes of the rest.</p>
 <p><code>bt_fills</code> is authoritative. Positions are a fold over it and nothing else,
 so a stored run can be rebuilt and checked rather than trusted.</p>
 <h2 id="from-a-run-to-a-tearsheet">From a run to a tearsheet<a class="headerlink" href="#from-a-run-to-a-tearsheet" title="Permanent link">#</a></h2>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">quant</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">quant</span>
 
 <span class="n">fork</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="s2">&quot;bt-momentum-001&quot;</span><span class="p">)</span>
 <span class="n">series</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">from_levels</span><span class="p">(</span><span class="n">fork</span><span class="p">,</span> <span class="s2">&quot;bt_equity&quot;</span><span class="p">)</span>
@@ -196,6 +205,63 @@ so a stored run can be rebuilt and checked rather than trusted.</p>
 
 <p>The statistics are the same empyrical-parity set documented in
 <a href="/manual/quant/">Quant workflows</a>; nothing about them is backtest-specific.</p>
+<h2 id="from-the-shell">From the shell<a class="headerlink" href="#from-the-shell" title="Permanent link">#</a></h2>
+<p>The Python bindings carry a typed configuration, <code>BacktestConfig</code>, whose
+sections are <code>data</code>, <code>execution</code>, <code>portfolio</code>, <code>risk</code> and <code>output</code>. It
+round-trips through JSON, so a config file is a complete reproduction recipe
+and the same contract drives both <code>backtest.execute(db, config)</code> and a
+command line:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>h5i_db.backtest<span class="w"> </span>inspect<span class="w"> </span>market.db<span class="w"> </span>config.json
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.backtest<span class="w"> </span>run<span class="w">     </span>market.db<span class="w"> </span>config.json
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.backtest<span class="w"> </span>list<span class="w">    </span>market.db
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.backtest<span class="w"> </span>report<span class="w">  </span>market.db<span class="w"> </span>momentum-001<span class="w"> </span>--output<span class="w"> </span>run.html
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.backtest<span class="w"> </span>verify<span class="w">  </span>market.db<span class="w"> </span>momentum-001
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Verb</th>
+<th>Prints</th>
+<th>Exit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>inspect</code></td>
+<td>the preflight inspection: replay fidelity, per-table stats, errors and warnings</td>
+<td><code>2</code> when the config is refused</td>
+</tr>
+<tr>
+<td><code>run</code></td>
+<td>the run summary, after refusing on preflight errors</td>
+<td></td>
+</tr>
+<tr>
+<td><code>list</code></td>
+<td>one run summary per <code>bt-</code> fork, in fork-name order</td>
+<td></td>
+</tr>
+<tr>
+<td><code>report</code></td>
+<td>the path it wrote</td>
+<td></td>
+</tr>
+<tr>
+<td><code>verify</code></td>
+<td>whether re-executing the stored config reproduced it</td>
+<td><code>3</code> when it did not</td>
+</tr>
+</tbody>
+</table></div>
+<p>Two flags are worth knowing. <code>run --allow-preflight-errors</code> records the
+findings and runs anyway, for the case where you know why the data is thin.
+<code>report --execution-only</code> renders the execution manifest instead of an equity
+tearsheet; <code>report</code> falls back to it on its own when a run produced no equity
+curve, because a tearsheet of nothing is worse than a manifest.</p>
+<p>Exit codes are distinct on purpose: a refused config (<code>2</code>) and a run that
+failed to reproduce (<code>3</code>) call for different responses, and a script should not
+have to parse stdout to tell them apart.</p>
 <h2 id="settlement">Settlement<a class="headerlink" href="#settlement" title="Permanent link">#</a></h2>
 <p>Settlement is not an event in the replay stream. It is a policy applied
 after the run, gated on one question: did the run reach the instant the
@@ -209,6 +275,128 @@ stands and the report says why.</p>
 the last mark, <code>settled_pnl</code> is what it became at resolution, and the
 difference is reported as an explicit adjustment rather than folded in
 silently.</p>
+<h3 id="not-every-market-picks-a-winner">Not every market picks a winner<a class="headerlink" href="#not-every-market-picks-a-winner" title="Permanent link">#</a></h3>
+<p>A <code>Resolution</code> carries a <code>Payout</code>, which is one of three things:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Payout</th>
+<th>What happened</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Winner(outcome)</code></td>
+<td>one outcome took the whole dollar</td>
+</tr>
+<tr>
+<td><code>Split(payouts)</code></td>
+<td>a scalar or partial settlement, payouts summing to one</td>
+</tr>
+<tr>
+<td><code>Void { outcomes }</code></td>
+<td>the question was unanswerable; a complete set refunds at cost</td>
+</tr>
+</tbody>
+</table></div>
+<p>The last two are not edge cases worth skipping. A voided binary pays both
+sides fifty cents; recording it as a winner is wrong by the full notional on
+each side, in opposite directions. <code>Resolution::split</code> refuses a payout
+vector that does not sum to exactly one, because a settlement that does not
+conserve a complete set mints or burns cash.</p>
+<h2 id="trading-stops-before-resolving">Trading stops before resolving<a class="headerlink" href="#trading-stops-before-resolving" title="Permanent link">#</a></h2>
+<p>A market's <code>expiration</code> is when trading stops, and the engine enforces it:
+an order submitted after it is rejected, an order whose latency carries it
+past it is rejected on arrival, and a resting order is cancelled at the
+bell rather than left working against a book that no longer exists.</p>
+<p>Data keeps arriving after a market closes -- late prints, a book teardown,
+the settlement itself -- and observing it is fine. Filling against it is not.</p>
+<h2 id="outcomes-cannot-be-borrowed">Outcomes cannot be borrowed<a class="headerlink" href="#outcomes-cannot-be-borrowed" title="Permanent link">#</a></h2>
+<p>There is no stock loan for a share of "YES". A venue will not let you sell
+an outcome you do not hold, so neither will the engine: a sell beyond the
+held position is rejected with a message naming the trade that expresses the
+same view. To be short YES, buy NO. It costs <code>1 - p</code> and pays the same.</p>
+<p>This matters twice over. A short's worst case is <code>1 - p</code>, not <code>p</code>, so
+collateralising it at the mark understates the requirement by up to the
+whole notional -- selling a three-cent longshot posts three cents against
+ninety-seven cents of risk. <code>CashMargin</code> charges the complement on a
+probability short for that reason.</p>
+<p><code>EngineBuilder::allow_naked_shorts(true)</code> lifts the constraint. It is for
+measuring what the constraint costs, not for producing a result to act on.</p>
+<h2 id="complete-sets">Complete sets<a class="headerlink" href="#complete-sets" title="Permanent link">#</a></h2>
+<p>Prediction-market venues will exchange a complete set of outcomes against
+one unit of cash, in both directions. That is the contract that makes the
+sum-to-one relationship <em>transactable</em> rather than merely observable, and
+without it complete-set market making and the arbitrage that pins a book to
+a dollar are both unreachable.</p>
+<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">mint</span><span class="p">(</span><span class="o">&amp;</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">sets</span><span class="p">);</span><span class="w">    </span><span class="c1">// pay one per set, receive one of every outcome</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">redeem</span><span class="p">(</span><span class="o">&amp;</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">sets</span><span class="p">);</span><span class="w">  </span><span class="c1">// hand the set back, receive one per set</span>
+</code></pre></div>
+
+<p>A Python callback strategy returns the same operations as actions:</p>
+<div class="highlight"><pre><span></span><code><span class="k">return</span> <span class="p">[</span>
+    <span class="p">{</span><span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;mint&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">market</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">100.0</span><span class="p">},</span>
+    <span class="p">{</span><span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;redeem&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">market</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">100.0</span><span class="p">},</span>
+    <span class="p">{</span><span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;convert&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">market</span><span class="p">,</span>
+     <span class="s2">&quot;outcomes&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">50.0</span><span class="p">},</span>
+<span class="p">]</span>
+</code></pre></div>
+
+<p>Three things about how this is modelled:</p>
+<ul>
+<li><strong>Legs are fills.</strong> A mint emits one fill per outcome, priced so the legs
+  sum to exactly one per set. <code>Portfolio::replay</code> rebuilds every position
+  from <code>bt_fills</code> alone, and a position that moved without a fill to explain
+  it is a run whose stored result and audit disagree.</li>
+<li><strong>It is not instant.</strong> Set operations queue behind the same insertion
+  latency as an order. A mint that lands immediately is an arbitrage nobody
+  could have taken.</li>
+<li><strong>It costs a flat fee, not a rate.</strong> <code>SetOperationCosts</code> is charged once
+  per operation, because a mint is one chain transaction. That is what makes
+  a one-cent complete-set edge unprofitable at small size and profitable at
+  large; a model without it reports every such edge as free money.</li>
+</ul>
+<p>Minting is allowed only where the venue actually offers it:
+<code>Instrument::supports_complete_set</code> is true for any two-outcome market, and
+for a wider one only when <code>neg_risk</code> says the venue wired the outcomes into
+a single exclusive set. A group of independent conditions displayed under
+one heading is several instruments here, not one with many outcomes, and
+minting across them would create a dollar out of nothing.</p>
+<h3 id="negative-risk-conversion">Negative-risk conversion<a class="headerlink" href="#negative-risk-conversion" title="Permanent link">#</a></h3>
+<p><code>ctx.convert(market, held, quantity)</code> is Polymarket's conversion, addressed
+the way its adapter is: <code>held</code> names the outcomes whose NO side you hold.</p>
+<p>In this crate's N-outcome model it is provably a redemption. NO(i) is
+"everything except i", so a basket of NO over <code>k</code> outcomes holds each named
+outcome <code>k - 1</code> times and each unnamed one <code>k</code> times -- that is <code>k - 1</code>
+complete sets plus the residual. The venue hands back <code>k - 1</code> in cash and
+keeps the residual, which is exactly what redeeming <code>k - 1</code> sets does. The
+primitive is offered under its own name because strategies reason in NO
+contracts and the derivation is not obvious; a test pins the equivalence.</p>
+<h2 id="scoring-a-forecast">Scoring a forecast<a class="headerlink" href="#scoring-a-forecast" title="Permanent link">#</a></h2>
+<p>A market price on a prediction market <em>is</em> a forecast, so the natural
+question about a strategy is whether it forecast better. Fills cannot answer
+it: they record what a strategy did, not what it believed.</p>
+<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">record_forecast</span><span class="p">(</span><span class="o">&amp;</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Price</span>::<span class="n">from_f64</span><span class="p">(</span><span class="mf">0.65</span><span class="p">)</span><span class="o">?</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">return</span> <span class="p">[{</span><span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;forecast&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">market</span><span class="p">,</span>
+         <span class="s2">&quot;outcome&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;probability&quot;</span><span class="p">:</span> <span class="mf">0.65</span><span class="p">}]</span>
+</code></pre></div>
+
+<p><code>RunReport::calibration_samples()</code> joins those statements to the market's
+own price at the same instant and to what the outcome actually paid, giving
+the triples a Brier score, a reliability curve or an advantage-over-market
+series is computed from. The Python report returns them as
+<code>calibration_samples</code>, ready for <code>h5i_db.quant.calibration</code>.</p>
+<p>Two kinds of forecast are dropped rather than scored, and both are reported
+by <code>unscored_forecasts()</code> so the sample is never quietly smaller than it
+looks: a market with no known resolution, and a market that paid every
+outcome the same. Against a void, every forecast scores identically --
+including a confidently wrong one -- so including it does not measure a
+forecaster, it dilutes the sample that does.</p>
+<p>The market's own probabilities are sampled onto the equity curve's clock as
+<code>mark_curve</code>, for the comparison series. Turn it off with
+<code>record_mark_curve(false)</code> on a run spanning thousands of markets.</p>
 <h2 id="venue-models">Venue models<a class="headerlink" href="#venue-models" title="Permanent link">#</a></h2>
 <p>Four small traits carry every behavioural variation:</p>
 <div class="table-wrap"><table>
@@ -245,6 +433,39 @@ synthetic depth all reuse one matching path.</p>
 charge, <code>rate · quantity · p · (1 - p)</code>, which peaks at even odds and
 vanishes at certainty. A flat <code>notional × rate</code> is the wrong shape and
 overcharges the tails, which is where these markets trade most.</p>
+<h2 id="kalshi-data">Kalshi data<a class="headerlink" href="#kalshi-data" title="Permanent link">#</a></h2>
+<p><code>h5i-db-venues::kalshi</code> converts Kalshi market metadata, REST order-book
+snapshots, websocket snapshots and deltas, trades, and candlesticks into the
+canonical tables above. It normalises NO bids into YES asks, so strategies see
+one binary-contract book. The stateful websocket decoder enforces sequence
+numbers, emits a <code>Gap</code> when one is missing, and refuses further deltas until a
+new snapshot arrives.</p>
+<p>An exact queue-aware Kalshi backtest requires data captured prospectively from
+the authenticated <code>orderbook_delta</code> websocket:</p>
+<ol>
+<li>use one decoder per market ticker;</li>
+<li>record local receipt time separately from exchange event time;</li>
+<li>persist the initial snapshot and every ordered delta;</li>
+<li>on a gap, persist the gap, resubscribe or request a snapshot, and do not
+   treat the stale interval as continuous coverage.</li>
+</ol>
+<p>Kalshi's historical API supplies trades and minute-or-coarser candlesticks, not
+historical L2 deltas. Those records support trade-driven or bar research, but
+cannot reconstruct queue position and must not be presented as exact L2
+replay. REST snapshots likewise describe only the instant at which they were
+requested.</p>
+<p>Use <code>KalshiFees</code> (or Python's <code>fee_kind="kalshi"</code>) with rates pinned from the
+applicable series fee schedule. It implements the quadratic curve, centicent
+trade-fee rounding, whole-cent cash movement, and per-order partial-fill
+rounding accumulator. The adapter accepts uniform tick schedules and rejects
+variable or tapered schedules rather than silently snapping them to the wrong
+grid.</p>
+<p>See Kalshi's
+<a href="https://docs.kalshi.com/websockets/orderbook-updates">order-book websocket</a>,
+<a href="https://docs.kalshi.com/getting_started/historical_data">historical-data</a>,
+<a href="https://docs.kalshi.com/getting_started/fixed_point_migration">fixed-point</a>,
+and <a href="https://docs.kalshi.com/getting_started/fee_rounding">fee-rounding</a>
+documentation before operating a recorder.</p>
 <h2 id="strategies">Strategies<a class="headerlink" href="#strategies" title="Permanent link">#</a></h2>
 <p><strong>Tier 1, signal replay</strong> is the strategy as data: a list of timestamped
 order intents replayed through the full matching, fee and latency path. It
@@ -261,14 +482,202 @@ and nothing else. There is no route from it to a resolution.</p>
   produced them, which removes reentrancy and makes latency a property of
   the queue rather than of every call site.</li>
 </ul>
+<h3 id="stamp-a-signal-after-the-quote-it-came-from">Stamp a signal after the quote it came from<a class="headerlink" href="#stamp-a-signal-after-the-quote-it-came-from" title="Permanent link">#</a></h3>
+<p>Market data is merged on the total order <code>(ts_init, stream priority, stream,
+arrival)</code>, and the priorities are explicit: gaps before corporate actions
+before snapshots before deltas before prints. Signals are not part of that
+order. An intent is released on the first record whose timestamp reaches it,
+which puts one detail in the analyst's hands.</p>
+<p>A signal timestamped <em>exactly</em> on a book instant is released while the venue is
+partway through that instant. Whether its own instrument has been updated yet
+depends on where that instrument falls among the records sharing the timestamp,
+so with one market the signal sees the new book and with sixty it may match
+against the previous one. The replay stays deterministic, because the merge
+order is total and the same data always produces the same answer; what varies
+is which book a same-timestamp signal meets, and that varies with the shape of
+the panel rather than with anything the strategy did.</p>
+<p>Stamp the intent strictly after the quote it was decided from and the question
+disappears:</p>
+<div class="highlight"><pre><span></span><code><span class="n">signals</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">signal_table</span><span class="p">([</span>
+    <span class="p">{</span><span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">decision_ts</span> <span class="o">+</span> <span class="n">datetime</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">microseconds</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span>
+     <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">market</span><span class="p">,</span> <span class="s2">&quot;outcome&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;buy&quot;</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">20.0</span><span class="p">},</span>
+<span class="p">])</span>
+</code></pre></div>
+
+<p>The order then fills at exactly the bid or ask carried by the decision
+snapshot, stamped at the next event. That is also the honest reading of a
+backtest: you transacted at a price that was knowable when you chose to trade.
+Tier 2 strategies are unaffected, because a callback is already invoked after
+the venue has processed the record it is reacting to.</p>
+<h2 id="agent-trial-ledger">Agent trial ledger<a class="headerlink" href="#agent-trial-ledger" title="Permanent link">#</a></h2>
+<p><code>backtest.execute(db, config)</code> treats every pinned, declarative
+<code>BacktestConfig</code> as one score-producing trial. Its <code>trial_digest</code> hashes every
+replay input but excludes <code>run_id</code> and descriptive <code>metadata</code>. Re-submitting
+the same semantic config returns the recorded result with
+<code>result["cached"] == True</code>; it does not create another fork or increase
+<code>backtest.trial_count(db)</code>. Lookup plus creation is serialized per database,
+including across local agent processes.</p>
+<p>Unpinned configs and Python callback strategies still create normal recorded
+runs, but are not reused: current table heads and callback implementations do
+not have a complete identity in the typed config. Use a snapshot, version, or
+as-of pin and a signals/commands strategy when retry-safe deduplication matters.</p>
+<p>The <code>h5i-db-ui</code> experiments view is an attention router rather than a
+leaderboard wrapper. Its default tab orders trials as:</p>
+<ol>
+<li>human decision required;</li>
+<li>failed or warned;</li>
+<li>finished and unseen;</li>
+<li>running;</li>
+<li>seen.</li>
+</ol>
+<p>The experiment sidebar rolls up the maximum child priority and counts unseen
+warnings. Merely scanning a list does not mark work reviewed:
+<code>StudyResult.open_trial(n)</code> marks in-process state, while <code>h5i-db-ui</code> marks a
+trial seen only when its detail is opened and persists that review state in
+the browser. The leaderboard remains a separate tab.</p>
 <h2 id="what-is-not-here">What is not here<a class="headerlink" href="#what-is-not-here" title="Permanent link">#</a></h2>
 <p>No live order routing, no brokerage adapters, no portfolio optimisation, no
 plotting API. The boundary is simulation and evaluation; see
 <code>ROADMAP_QUANT.md</code> §11 for the full list and the reasoning.</p>
+<h2 id="bringing-your-own-data">Bringing your own data<a class="headerlink" href="#bringing-your-own-data" title="Permanent link">#</a></h2>
+<p><code>h5i_db.venues</code> turns vendor archives already on disk into the canonical
+tables. It does not fetch: downloading belongs in a script, where credentials
+and rate limits belong, and this layer is the part that must be testable
+offline and byte-reproducible.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">venues</span>
+
+<span class="n">specs</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">polymarket_markets_from_json</span><span class="p">(</span><span class="n">payloads</span><span class="p">)</span>   <span class="c1"># slug -&gt; outcomes, tokens</span>
+<span class="n">venues</span><span class="o">.</span><span class="n">write_markets</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">specs</span><span class="p">)</span>                         <span class="c1"># instruments, resolutions</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>                         <span class="c1"># book_deltas, trades</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">files</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">discover</span><span class="p">(</span><span class="s2">&quot;/mnt/pmxt&quot;</span><span class="p">),</span>
+    <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">PMXT_LAYOUT</span><span class="p">,</span>
+    <span class="n">window</span><span class="o">=</span><span class="p">(</span><span class="n">start_ns</span><span class="p">,</span> <span class="n">end_ns</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">report</span><span class="o">.</span><span class="n">coverage</span><span class="p">,</span> <span class="n">report</span><span class="o">.</span><span class="n">gaps</span><span class="p">,</span> <span class="n">report</span><span class="o">.</span><span class="n">replayed</span>
+</code></pre></div>
+
+<p>The same three steps run from a shell, with market definitions travelling as a
+JSON file rather than as flags:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>h5i_db.venues<span class="w"> </span>markets<span class="w"> </span>market.db<span class="w"> </span>specs.json
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.venues<span class="w"> </span>ingest<span class="w">  </span>market.db<span class="w"> </span>specs.json<span class="w"> </span>--root<span class="w"> </span>/mnt/pmxt<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--start-ns<span class="w"> </span><span class="m">1777000000000000000</span><span class="w"> </span>--end-ns<span class="w"> </span><span class="m">1777003600000000000</span><span class="w"> </span>--min-coverage<span class="w"> </span><span class="m">0</span>.95
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.venues<span class="w"> </span>inspect<span class="w"> </span>market.db
+</code></pre></div>
+
+<p>Four properties are worth knowing before pointing it at a mirror.</p>
+<p><strong>Re-running is a replay, not a duplicate.</strong> Every commit is keyed by the hash
+of the normalised rows it carries, so identical inputs produce identical keys
+and h5i-db recognises them. An interrupted backfill is safe to restart, and two
+sources serving the same hour converge on one commit rather than two.</p>
+<p><strong>Requested and loaded windows stay separate facts.</strong> <code>report.coverage</code> is the
+loaded span over the requested one, and it is <code>None</code> when no window was asked
+for, because a ratio against an unbounded request would be meaningless.
+<code>--min-coverage</code> exits non-zero rather than letting a short load pass quietly.</p>
+<p><strong>A vendor dialect is data, not a code path.</strong> <code>ArchiveLayout</code> carries the
+column names, event vocabulary, timestamp unit and level shape.
+<code>PMXT_LAYOUT</code> and <code>TELONEX_LAYOUT</code> are literals of that type, and a third
+vendor is a new literal. An event type present in the file but absent from the
+layout is counted and reported, never guessed at.</p>
+<p><strong>Outcome order is positional and refused when ambiguous.</strong> A market spec pairs
+<code>outcome_labels</code> with <code>tokens</code> by index, a token claimed by two markets is an
+error, and a resolution with no observability instant is an error too, since
+settlement is gated on when the result became knowable.</p>
+<h2 id="searching-without-fooling-yourself">Searching without fooling yourself<a class="headerlink" href="#searching-without-fooling-yourself" title="Permanent link">#</a></h2>
+<p><code>backtest.study</code> runs a grid by default. Three additions make the search
+shape explicit when it matters.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span>
+
+<span class="n">result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">study</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">study_id</span><span class="o">=</span><span class="s2">&quot;threshold&quot;</span><span class="p">,</span>
+    <span class="n">base</span><span class="o">=</span><span class="n">config</span><span class="p">,</span>
+    <span class="n">parameters</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;execution.fee_rate&quot;</span><span class="p">:</span> <span class="n">backtest</span><span class="o">.</span><span class="n">Range</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.08</span><span class="p">)},</span>
+    <span class="n">search</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">RandomSearch</span><span class="p">(</span><span class="n">trials</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span><span class="p">),</span>
+    <span class="n">validation</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">WalkForward</span><span class="o">.</span><span class="n">of</span><span class="p">(</span><span class="n">fold_one</span><span class="p">,</span> <span class="n">fold_two</span><span class="p">,</span> <span class="n">fold_three</span><span class="p">),</span>
+    <span class="n">selection</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">TopK</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">metric</span><span class="o">=</span><span class="s2">&quot;final_cash&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">result</span><span class="o">.</span><span class="n">ranked</span><span class="p">()</span>          <span class="c1"># holdout median, train score as the tie-break</span>
+<span class="n">result</span><span class="o">.</span><span class="n">selected</span>          <span class="c1"># only the trials that reached the holdout</span>
+</code></pre></div>
+
+<p><code>WalkForward</code> scores a candidate on several folds and reports the median, so one
+lucky window cannot carry it; per-fold columns are <code>fold{i}_train_*</code> and
+<code>fold{i}_holdout_*</code>, with <code>train_median_*</code> and <code>holdout_median_*</code> alongside. A
+single <code>ValidationWindows</code> keeps the flat <code>train_*</code> / <code>holdout_*</code> names.</p>
+<p><code>TopK</code> makes the holdout a second stage: candidates are ranked on train, only
+<code>k</code> are run out of sample, and nothing else ever touches it. A holdout every
+candidate touched is a second training set with a different name.</p>
+<p><code>RandomSearch</code> beats a grid when the space is wide and most axes do not matter.
+<code>TPESearch</code> needs the optional <code>optuna</code> extra and runs sequentially, because
+each point is proposed from the results so far. Duplicate draws are kept rather
+than resampled: dropping them would change the trial count that the
+deflated-Sharpe correction in <code>quant.deflated_sharpe</code> depends on.</p>
+<p>Subprocess isolation per trial is deliberately absent. A study refuses callback
+strategies, so a trial is a declarative config that cannot crash the driver;
+the isolation the reference stacks need is buying safety this API already has.</p>
+<h2 id="comparing-many-runs-at-once">Comparing many runs at once<a class="headerlink" href="#comparing-many-runs-at-once" title="Permanent link">#</a></h2>
+<p>A sweep produces one fork per trial, and opening twenty tearsheets is not
+comparing them. <code>quant.basket_report</code> assembles one document from stored tables
+only, with no re-simulation:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">quant</span>
+
+<span class="n">quant</span><span class="o">.</span><span class="n">basket_report</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="p">{</span><span class="s2">&quot;th50&quot;</span><span class="p">:</span> <span class="n">result_a</span><span class="p">,</span> <span class="s2">&quot;th60&quot;</span><span class="p">:</span> <span class="n">result_b</span><span class="p">},</span>
+    <span class="n">path</span><span class="o">=</span><span class="s2">&quot;basket.html&quot;</span><span class="p">,</span>
+    <span class="n">panels</span><span class="o">=</span><span class="n">quant</span><span class="o">.</span><span class="n">PORTFOLIO_PANELS</span> <span class="o">+</span> <span class="p">(</span><span class="s2">&quot;equity&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">),</span>
+    <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;panel-v1&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>Portfolio panels (<code>total_equity</code>, <code>total_drawdown</code>, <code>total_rolling_sharpe</code>,
+<code>total_cash_equity</code>, <code>periodic_pnl</code>, <code>leaderboard</code>) are safe at any size.
+Per-run panels draw one series each and are dropped, with a reason recorded in
+<code>report.skipped</code>, once the basket exceeds <code>per_run_limit</code>: silently thinning
+lines to fit would misrepresent the basket. The <code>price</code> panel puts fill markers
+on the book the fills actually met, read at the same pin the runs used.</p>
+<p>The charts are inline SVG with no external requests, because a report that needs
+a plotting library installed to be <em>read</em> is not a report.</p>
+<p><code>brier_advantage</code> is the one panel that needs an input the report cannot
+derive: your strategy's own probability. <code>market_brier - strategy_brier</code> says
+whether the forecast beat the price it paid, which is a comparison an equity
+curve cannot make and which cannot be inflated by sizing.</p>
+<h2 id="a-pack-of-strategies-as-data">A pack of strategies, as data<a class="headerlink" href="#a-pack-of-strategies-as-data" title="Permanent link">#</a></h2>
+<p><code>backtest.strategies</code> ships the standard rules as signal <em>generators</em>: each
+takes a quote panel and returns a signals table, so the trial ledger can
+identify it and <code>verify()</code> can reproduce it.</p>
+<div class="highlight"><pre><span></span><code><span class="n">panel</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">quote_panel</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;panel-v1&quot;</span><span class="p">)</span>
+<span class="n">plan</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">strategies</span><span class="o">.</span><span class="n">late_favorite_hold</span><span class="p">(</span><span class="n">panel</span><span class="p">,</span> <span class="n">min_price</span><span class="o">=</span><span class="mf">0.75</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="n">plan</span><span class="o">.</span><span class="n">signals</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>quote_panel</code> stops at <code>expiration_ns</code>, so no rule can read the resolution jump
+as a price move. Every generator stamps its orders a microsecond after the quote
+they were decided from. <code>STRATEGIES</code> maps name to generator for sweeping the
+pack itself; <code>pair_arbitrage</code> is outside it because it reads both outcomes from
+the database rather than one side's panel.</p>
+<h2 id="replaying-an-accounts-ledger">Replaying an account's ledger<a class="headerlink" href="#replaying-an-accounts-ledger" title="Permanent link">#</a></h2>
+<p>The strictest realism question available: given the trades an account actually
+took, does the engine reproduce the same portfolio? Usually not, and that is the
+point. <code>venues.commands_from_ledger</code> compiles a ledger into <em>intent</em> rather than
+into fills, so the historical book accepts or refuses each order on its merits:
+limit orders at the ledger's own price, immediate-or-cancel, and sells as
+<code>reduce_only</code> so a replay cannot invent short exposure the ledger never showed.</p>
+<div class="highlight"><pre><span></span><code><span class="n">commands</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">commands_from_ledger</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="n">specs</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;commands&quot;</span><span class="p">,</span> <span class="n">commands</span><span class="p">)</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>          <span class="c1"># data=DataConfig(commands=&quot;commands&quot;, ...)</span>
+<span class="n">venues</span><span class="o">.</span><span class="n">compare_to_ledger</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">typed_rows</span><span class="p">)</span>   <span class="c1"># per-market reconciliation</span>
+</code></pre></div>
+
+<p>A forced-fill simulator would reproduce the ledger by construction and test
+nothing. The comparison reports per-market shortfalls rather than one
+pass/fail, because <em>where</em> the book refused is the finding.</p>
     <nav class="page-nav"><a class="prev" href="/manual/operations/"><span class="dir">← Previous</span><span class="pn-title">Operations guide</span></a><a class="next" href="/api/"><span class="dir">Next →</span><span class="pn-title">Overview</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-tearsheet">From a run to a tearsheet</a></li><li><a href="#settlement">Settlement</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#strategies">Strategies</a></li><li><a href="#what-is-not-here">What is not here</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-tearsheet">From a run to a tearsheet</a></li><li><a href="#from-the-shell">From the shell</a></li><li><a href="#settlement">Settlement</a><ul><li><a href="#not-every-market-picks-a-winner">Not every market picks a winner</a></li></ul></li><li><a href="#trading-stops-before-resolving">Trading stops before resolving</a></li><li><a href="#outcomes-cannot-be-borrowed">Outcomes cannot be borrowed</a></li><li><a href="#complete-sets">Complete sets</a><ul><li><a href="#negative-risk-conversion">Negative-risk conversion</a></li></ul></li><li><a href="#scoring-a-forecast">Scoring a forecast</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#kalshi-data">Kalshi data</a></li><li><a href="#strategies">Strategies</a><ul><li><a href="#stamp-a-signal-after-the-quote-it-came-from">Stamp a signal after the quote it came from</a></li></ul></li><li><a href="#agent-trial-ledger">Agent trial ledger</a></li><li><a href="#what-is-not-here">What is not here</a></li><li><a href="#bringing-your-own-data">Bringing your own data</a></li><li><a href="#searching-without-fooling-yourself">Searching without fooling yourself</a></li><li><a href="#comparing-many-runs-at-once">Comparing many runs at once</a></li><li><a href="#a-pack-of-strategies-as-data">A pack of strategies, as data</a></li><li><a href="#replaying-an-accounts-ledger">Replaying an account's ledger</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

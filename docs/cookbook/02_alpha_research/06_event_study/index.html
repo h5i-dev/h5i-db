@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/02_alpha_research/06_event_study/#article","headline":"Event studies: CARs with ASOF-aligned announcement dates","name":"Event studies: CARs with ASOF-aligned announcement dates","description":"The classic event-study pipeline computes market-model abnormal returns and cumulative abnormal returns around announcements.","url":"https://db.h5i.dev/cookbook/02_alpha_research/06_event_study/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/02_alpha_research/06_event_study/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Alpha research"},{"@type":"ListItem","position":4,"name":"Event studies: CARs with ASOF-aligned announcement dates","item":"https://db.h5i.dev/cookbook/02_alpha_research/06_event_study/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/02_alpha_research/06_event_study/#article","headline":"Event studies: CARs with ASOF-aligned announcement dates","name":"Event studies: CARs with ASOF-aligned announcement dates","description":"The classic event-study pipeline computes market-model abnormal returns and cumulative abnormal returns around announcements.","url":"https://db.h5i.dev/cookbook/02_alpha_research/06_event_study/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/02_alpha_research/06_event_study/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Alpha research"},{"@type":"ListItem","position":4,"name":"Event studies: CARs with ASOF-aligned announcement dates","item":"https://db.h5i.dev/cookbook/02_alpha_research/06_event_study/"}]}]}</script>
 </head>
 <body>
 
@@ -92,13 +92,62 @@ symbol, with a staleness tolerance.</p>
 <li>estimate market-model betas and compute CAR[-10,+10], treated against
    control, with confidence bands.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>event study</td>
+<td>measuring abnormal returns in a window around a dated event</td>
+</tr>
+<tr>
+<td>estimation window</td>
+<td>the earlier period used to fit the market model</td>
+</tr>
+<tr>
+<td>event window</td>
+<td>the period around the event where the effect is measured, here [-10, +10] days</td>
+</tr>
+<tr>
+<td>market model</td>
+<td>the regression <code>r_asset = alpha + beta * r_market + e</code></td>
+</tr>
+<tr>
+<td>beta</td>
+<td>how much an asset moves for a one-unit move in the market</td>
+</tr>
+<tr>
+<td>abnormal return</td>
+<td>what is left of a return after removing the market model prediction</td>
+</tr>
+<tr>
+<td>CAR</td>
+<td>cumulative abnormal return, summed over the event window</td>
+</tr>
+<tr>
+<td>treated / control</td>
+<td>the events carrying the injected shock, against those that do not</td>
+</tr>
+<tr>
+<td>ASOF join</td>
+<td>used here with <code>'forward'</code>, to find the first session at or after an announcement</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;alpha_events&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -553,7 +602,7 @@ to the effective session, then cumulate abnormal returns
     <span class="n">ci</span> <span class="o">=</span> <span class="mf">1.96</span> <span class="o">*</span> <span class="n">g</span><span class="p">[</span><span class="n">rel_days</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">g</span><span class="p">))</span>
     <span class="n">summary</span><span class="p">[</span><span class="s2">&quot;treated&quot;</span> <span class="k">if</span> <span class="n">grp</span> <span class="k">else</span> <span class="s2">&quot;control&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">m</span><span class="p">,</span> <span class="n">ci</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">g</span><span class="p">))</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">group_diff_t</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">group_diff_t</span><span class="p">(</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="o">-</span> <span class="n">b</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span> <span class="o">/</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="n">a</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">a</span><span class="p">)</span> <span class="o">+</span> <span class="n">b</span><span class="o">.</span><span class="n">var</span><span class="p">()</span> <span class="o">/</span> <span class="nb">len</span><span class="p">(</span><span class="n">b</span><span class="p">))</span>
 
 <span class="n">t_end</span><span class="p">,</span> <span class="n">c_end</span> <span class="o">=</span> <span class="n">car</span><span class="p">[</span><span class="n">car</span><span class="p">[</span><span class="s2">&quot;treated&quot;</span><span class="p">]][</span><span class="n">rel_days</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]],</span> <span class="n">car</span><span class="p">[</span><span class="o">~</span><span class="n">car</span><span class="p">[</span><span class="s2">&quot;treated&quot;</span><span class="p">]][</span><span class="n">rel_days</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]]</span>
@@ -570,7 +619,7 @@ to the effective session, then cumulate abnormal returns
 </pre></div>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">mean CAR[+10]  treated +3.36%   control +0.45%   diff t-stat 2.0
 mean day-0 AR  treated +1.85%   control -0.22%   diff t-stat 6.6</pre></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mf">4.5</span><span class="p">))</span>
 <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">color</span> <span class="ow">in</span> <span class="p">((</span><span class="s2">&quot;treated&quot;</span><span class="p">,</span> <span class="s2">&quot;tab:red&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;control&quot;</span><span class="p">,</span> <span class="s2">&quot;tab:blue&quot;</span><span class="p">)):</span>
@@ -619,7 +668,7 @@ onward.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/02_alpha_research/05_factor_construction/"><span class="dir">← Previous</span><span class="pn-title">Building a point-in-time factor library</span></a><a class="next" href="/cookbook/02_alpha_research/07_order_flow_imbalance/"><span class="dir">Next →</span><span class="pn-title">Order flow imbalance: does signed volume predict returns?</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-store-prices-events-and-the-trading-calendar-itself">2. Store prices, events, and the trading calendar itself</a></li><li><a href="#3-align-announcements-to-trading-sessions-with-a-forward-asof-join">3. Align announcements to trading sessions with a forward ASOF join</a></li><li><a href="#4-returns-and-the-market-factor">4. Returns and the market factor</a></li><li><a href="#5-market-model-and-car-1010">5. Market model and CAR[-10,+10]</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-store-prices-events-and-the-trading-calendar-itself">2. Store prices, events, and the trading calendar itself</a></li><li><a href="#3-align-announcements-to-trading-sessions-with-a-forward-asof-join">3. Align announcements to trading sessions with a forward ASOF join</a></li><li><a href="#4-returns-and-the-market-factor">4. Returns and the market factor</a></li><li><a href="#5-market-model-and-car-1010">5. Market model and CAR[-10,+10]</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">
