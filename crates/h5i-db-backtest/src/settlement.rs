@@ -642,7 +642,10 @@ mod tests {
             Resolution::new(instrument(), OutcomeId(1), ts(1)).winner(),
             Some(OutcomeId(1))
         );
-        assert_eq!(Resolution::void(instrument(), 2, ts(1)).unwrap().winner(), None);
+        assert_eq!(
+            Resolution::void(instrument(), 2, ts(1)).unwrap().winner(),
+            None
+        );
         let scalar = Resolution::split(
             instrument(),
             vec![
@@ -693,10 +696,7 @@ mod tests {
         // A payout vector of the wrong arity.
         let wrong_arity = Resolution::split(
             instrument(),
-            vec![
-                Price::from_f64(0.6).unwrap(),
-                Price::from_f64(0.4).unwrap(),
-            ],
+            vec![Price::from_f64(0.6).unwrap(), Price::from_f64(0.4).unwrap()],
             ts(1),
         )
         .unwrap();

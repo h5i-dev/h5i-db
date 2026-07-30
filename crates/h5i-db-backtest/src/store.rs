@@ -845,7 +845,9 @@ pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolutio
                              outcome or payout"
                         )));
                     }
-                    let entry = splits.entry(id.to_string()).or_insert((at.get(), BTreeMap::new()));
+                    let entry = splits
+                        .entry(id.to_string())
+                        .or_insert((at.get(), BTreeMap::new()));
                     entry
                         .1
                         .insert(outcome.value(row), Price::from_f64(payout.value(row))?);

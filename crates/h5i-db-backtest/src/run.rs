@@ -273,12 +273,14 @@ impl RunReport {
         }
         grouped
             .into_iter()
-            .map(|((instrument, outcome), (reason, count))| UnscoredForecast {
-                instrument,
-                outcome,
-                reason,
-                count,
-            })
+            .map(
+                |((instrument, outcome), (reason, count))| UnscoredForecast {
+                    instrument,
+                    outcome,
+                    reason,
+                    count,
+                },
+            )
             .collect()
     }
 

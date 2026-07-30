@@ -348,7 +348,9 @@ pub fn uniform_prices(outcomes: u16) -> Result<Vec<Price>> {
 /// choice is the same on every run.
 pub fn normalise_to_one(prices: &[Price]) -> Result<Vec<Price>> {
     if prices.is_empty() {
-        return Err(BacktestError::invalid("cannot normalise an empty price set"));
+        return Err(BacktestError::invalid(
+            "cannot normalise an empty price set",
+        ));
     }
     let total: i128 = prices.iter().map(|price| price.raw() as i128).sum();
     if total <= 0 || prices.iter().any(|price| price.is_negative()) {
@@ -506,14 +508,21 @@ mod tests {
     fn a_binary_market_is_always_set_exchangeable() {
         // YES and NO of one condition are two halves of a dollar on every
         // venue that lists them, whether or not it says "neg risk".
-        assert!(Instrument::binary("m", "polymarket").unwrap().supports_complete_set());
+        assert!(
+            Instrument::binary("m", "polymarket")
+                .unwrap()
+                .supports_complete_set()
+        );
     }
 
     #[test]
     fn a_wide_market_needs_the_venue_to_say_the_set_is_tradable() {
-        let market =
-            Instrument::prediction_market("m", "polymarket", vec!["A".into(), "B".into(), "C".into()])
-                .unwrap();
+        let market = Instrument::prediction_market(
+            "m",
+            "polymarket",
+            vec!["A".into(), "B".into(), "C".into()],
+        )
+        .unwrap();
         assert!(
             !market.supports_complete_set(),
             "three grouped conditions are not a set until the venue wires them into one"
@@ -557,7 +566,10 @@ mod tests {
             Price::from_f64(0.20).unwrap(),
         ];
         let normalised = normalise_to_one(&raw).unwrap();
-        assert_eq!(normalised.iter().map(|price| price.raw()).sum::<i64>(), SCALE);
+        assert_eq!(
+            normalised.iter().map(|price| price.raw()).sum::<i64>(),
+            SCALE
+        );
         // Order is preserved and the largest stays largest.
         assert!(normalised[0] > normalised[1] && normalised[1] > normalised[2]);
         // A set already summing to one is left alone.

@@ -459,10 +459,11 @@ impl<'a> Context<'a> {
     /// set operation is a chain transaction, and one that lands instantly is
     /// an arbitrage nobody could have taken.
     pub fn mint(&mut self, instrument: &InstrumentId, sets: Qty) {
-        self.commands.push_back(Command::Set(SetOperationRequest::mint(
-            instrument.clone(),
-            sets,
-        )));
+        self.commands
+            .push_back(Command::Set(SetOperationRequest::mint(
+                instrument.clone(),
+                sets,
+            )));
     }
 
     /// Surrender one contract on every outcome per set and receive one unit
@@ -899,6 +900,21 @@ impl SetOperationCosts {
     }
 }
 
+/// Everything about a fill that is decided before it is booked.
+///
+/// Grouped rather than passed loose because the commission is already
+/// settled by the time this is built -- the fee model priced a trade, or a
+/// set operation charged its flat cost -- and a signature that takes a
+/// price, a quantity and a commission side by side invites passing them in
+/// the wrong order.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FillTerms {
+    price: Price,
+    quantity: Qty,
+    origin: FillOrigin,
+    commission: Money,
+}
+
 /// Where a fill came from, which decides how it is priced and counted.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum FillOrigin {
@@ -1016,7 +1032,8 @@ impl Engine {
     /// order that can never fill and never terminates is indistinguishable
     /// in a report from one still working.
     fn expire_due(&mut self, ts: UnixNanos) -> Result<()> {
-        while self.next_expiry < self.expiries.len() && self.expiries[self.next_expiry].0 <= ts.get()
+        while self.next_expiry < self.expiries.len()
+            && self.expiries[self.next_expiry].0 <= ts.get()
         {
             let (at, instrument) = self.expiries[self.next_expiry].clone();
             self.next_expiry += 1;
@@ -1038,8 +1055,7 @@ impl Engine {
                     && order.is_open()
                 {
                     order.status = OrderStatus::Cancelled;
-                    order.reject_reason =
-                        Some(format!("{instrument} stopped trading at {at}"));
+                    order.reject_reason = Some(format!("{instrument} stopped trading at {at}"));
                 }
                 self.remove_resting(id);
             }
@@ -1637,10 +1653,7 @@ impl Engine {
         self.metrics.orders_submitted += 1;
         if let Some(at) = self.has_expired(&order.instrument, now) {
             order.status = OrderStatus::Rejected;
-            order.reject_reason = Some(format!(
-                "{} stopped trading at {at}",
-                order.instrument
-            ));
+            order.reject_reason = Some(format!("{} stopped trading at {at}", order.instrument));
             self.orders.insert(id, order);
             self.metrics.orders_rejected_expired += 1;
             return Ok(());
@@ -1691,7 +1704,10 @@ impl Engine {
             return None;
         }
         let instrument = self.instruments.get(&order.instrument).ok()?;
-        if !matches!(instrument.kind, crate::instrument::InstrumentKind::PredictionMarket) {
+        if !matches!(
+            instrument.kind,
+            crate::instrument::InstrumentKind::PredictionMarket
+        ) {
             return None;
         }
         let held = self
@@ -2287,12 +2303,14 @@ impl Engine {
                 Side::Buy => cash_delta.checked_add(leg)?,
                 Side::Sell => cash_delta.checked_sub(leg)?,
             };
-            self.execute_with_commission(
+            self.book_fill(
                 id,
-                *price,
-                sets,
-                FillOrigin::CompleteSet,
-                commission,
+                FillTerms {
+                    price: *price,
+                    quantity: sets,
+                    origin: FillOrigin::CompleteSet,
+                    commission,
+                },
                 ts,
                 strategy,
             )?;
@@ -2385,27 +2403,32 @@ impl Engine {
             quantity,
             is_taker,
         })?;
-        self.execute_with_commission(
+        self.book_fill(
             id,
-            price,
-            quantity,
-            FillOrigin::Trade { is_taker },
-            commission,
+            FillTerms {
+                price,
+                quantity,
+                origin: FillOrigin::Trade { is_taker },
+                commission,
+            },
             ts,
             strategy,
         )
     }
 
-    fn execute_with_commission(
+    fn book_fill(
         &mut self,
         id: OrderId,
-        price: Price,
-        quantity: Qty,
-        origin: FillOrigin,
-        commission: Money,
+        terms: FillTerms,
         ts: UnixNanos,
         strategy: &mut dyn Strategy,
     ) -> Result<()> {
+        let FillTerms {
+            price,
+            quantity,
+            origin,
+            commission,
+        } = terms;
         let order = self.orders.get(&id).cloned().expect("order exists");
         let instrument = self.instruments.get(&order.instrument)?.clone();
         let is_taker = matches!(origin, FillOrigin::Trade { is_taker: true });

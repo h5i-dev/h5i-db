@@ -160,7 +160,7 @@ async fn every_shape_a_resolution_can_take_survives_the_round_trip() {
     store::write_resolutions(&db, &written).await.unwrap();
 
     let mut read = store::read_resolutions(&db, ReadAt::Latest).await.unwrap();
-    read.sort_by(|left, right| left.observable_at.cmp(&right.observable_at));
+    read.sort_by_key(|resolution| resolution.observable_at);
     assert_eq!(read.len(), 3);
     assert_eq!(read[0], written[0]);
     assert_eq!(read[1], written[1]);

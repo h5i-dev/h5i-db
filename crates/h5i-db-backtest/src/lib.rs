@@ -54,9 +54,9 @@ pub use clock::{Clock, TimeEvent};
 pub use corporate::{CorporateAction, SymbolRegistry, Universe};
 pub use currency::{Currency, FxBook, Haircuts};
 pub use engine::{
-    CommandReplay, Context, Engine, EngineBuilder, Forecast, MarkPoint, OrderRequest, ReplayCommand,
-    RiskLimits, RunResult, SetOperation, SetOperationCosts, SetOperationKind, SetOperationRequest,
-    SignalReplay, Strategy,
+    CommandReplay, Context, Engine, EngineBuilder, Forecast, MarkPoint, OrderRequest,
+    ReplayCommand, RiskLimits, RunResult, SetOperation, SetOperationCosts, SetOperationKind,
+    SetOperationRequest, SignalReplay, Strategy,
 };
 pub use error::{BacktestError, Result};
 pub use event::{MarketEvent, Record};
@@ -73,9 +73,7 @@ pub use models::{
 pub use order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 pub use position::{Portfolio, Position};
 pub use replay::{Replay, ReplayBuilder};
-pub use run::{
-    CalibrationSample, RunReport, RunSpec, UnscoredForecast, run_in_fork, run_in_place,
-};
+pub use run::{CalibrationSample, RunReport, RunSpec, UnscoredForecast, run_in_fork, run_in_place};
 pub use settlement::{Payout, Resolution, SettlementReport, validate_resolutions};
 pub use types::{Money, Price, Qty, SCALE, Side, Stamps, UnixNanos, notional};
 pub use window::{Coverage, TimeWindow};

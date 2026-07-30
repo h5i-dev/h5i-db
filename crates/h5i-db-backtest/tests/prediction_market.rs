@@ -127,15 +127,18 @@ fn run_configured(
     engine.run(&mut replay, strategy)
 }
 
+/// What a scripted strategy does on one record.
+type Step = Box<dyn Fn(&mut Context<'_>) -> Result<()>>;
+
 /// Runs one closure per replayed record, so a test can say what happens on
 /// step one and what happens on step two without a state machine.
 struct Script {
-    steps: Vec<Box<dyn Fn(&mut Context<'_>) -> Result<()>>>,
+    steps: Vec<Step>,
     seen: usize,
 }
 
 impl Script {
-    fn new(steps: Vec<Box<dyn Fn(&mut Context<'_>) -> Result<()>>>) -> Self {
+    fn new(steps: Vec<Step>) -> Self {
         Self { steps, seen: 0 }
     }
 }
@@ -176,7 +179,11 @@ fn selling_an_outcome_you_do_not_hold_is_refused() {
 
     assert!(result.fills.is_empty(), "a naked short must not fill");
     assert_eq!(result.metrics.orders_rejected_naked_short, 1);
-    assert_eq!(result.final_cash, money(1_000.0), "no proceeds were credited");
+    assert_eq!(
+        result.final_cash,
+        money(1_000.0),
+        "no proceeds were credited"
+    );
     assert_eq!(result.orders[0].status, OrderStatus::Rejected);
     let reason = result.orders[0].reject_reason.clone().unwrap();
     assert!(
@@ -406,7 +413,12 @@ fn an_order_that_arrives_after_the_close_is_refused() {
         // Sent at 1, released at 501, and the market shut at 50.
         vec![yes_book(1, 0.40, 0.42), yes_book(1_000, 0.40, 0.42)],
         1_000.0,
-        |builder| builder.latency_model(Box::new(ConstantLatency { insert: 500, cancel: 0 })),
+        |builder| {
+            builder.latency_model(Box::new(ConstantLatency {
+                insert: 500,
+                cancel: 0,
+            }))
+        },
     )
     .unwrap();
 
@@ -559,7 +571,12 @@ fn a_mint_is_visible_in_the_fills_a_position_is_rebuilt_from() {
     .unwrap();
 
     assert_eq!(result.fills.len(), 2, "one leg per outcome");
-    assert!(result.fills.iter().all(|fill| fill.tag.as_deref() == Some("mint")));
+    assert!(
+        result
+            .fills
+            .iter()
+            .all(|fill| fill.tag.as_deref() == Some("mint"))
+    );
     let mut legs = Money::ZERO;
     for fill in &result.fills {
         legs = legs
@@ -613,9 +630,7 @@ fn a_set_operation_costs_a_flat_fee_charged_once() {
         &mut strategy,
         vec![yes_book(1, 0.40, 0.42), yes_book(2, 0.40, 0.42)],
         1_000.0,
-        |builder| {
-            builder.set_operation_costs(SetOperationCosts::flat(money(0.25)).unwrap())
-        },
+        |builder| builder.set_operation_costs(SetOperationCosts::flat(money(0.25)).unwrap()),
     )
     .unwrap();
 
@@ -702,10 +717,7 @@ fn a_market_that_does_not_trade_as_a_set_cannot_be_minted() {
         1_000.0,
     )
     .unwrap_err();
-    assert!(
-        error.to_string().contains("complete set"),
-        "{error}"
-    );
+    assert!(error.to_string().contains("complete set"), "{error}");
 }
 
 #[test]
@@ -740,7 +752,12 @@ fn a_set_operation_waits_out_its_latency() {
         &mut strategy,
         vec![yes_book(1, 0.40, 0.42), yes_book(1_000, 0.40, 0.42)],
         1_000.0,
-        |builder| builder.latency_model(Box::new(ConstantLatency { insert: 500, cancel: 0 })),
+        |builder| {
+            builder.latency_model(Box::new(ConstantLatency {
+                insert: 500,
+                cancel: 0,
+            }))
+        },
     )
     .unwrap();
 
@@ -987,7 +1004,11 @@ fn a_forecast_on_an_unresolved_market_is_reported_not_silently_lost() {
     let report = report(result, vec![]);
 
     assert!(report.calibration_samples().is_empty());
-    assert!(report.unscored_forecasts()[0].reason.contains("no known resolution"));
+    assert!(
+        report.unscored_forecasts()[0]
+            .reason
+            .contains("no known resolution")
+    );
 }
 
 #[test]
@@ -1002,9 +1023,7 @@ fn a_partial_settlement_scores_against_the_fraction_it_paid() {
     .unwrap();
     let report = report(
         result,
-        vec![
-            Resolution::split(market_id(), vec![price(0.7), price(0.3)], ts(9)).unwrap(),
-        ],
+        vec![Resolution::split(market_id(), vec![price(0.7), price(0.3)], ts(9)).unwrap()],
     );
 
     assert_eq!(report.calibration_samples()[0].realized, price(0.7));
