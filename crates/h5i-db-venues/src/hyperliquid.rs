@@ -816,6 +816,50 @@ pub fn asset_context_records(
     Ok(out)
 }
 
+/// Wrap one websocket message in the archive's own line format.
+///
+/// The archive has **no trades**: `market_data/<date>/<hour>/` contains
+/// `l2Book/` and nothing else. Prints therefore have to come from a live
+/// capture, and without them the queue-position fill model has nothing to
+/// consume the size ahead of a resting order -- every touched limit fills
+/// immediately, which is the most flattering assumption a market-making
+/// backtest can make.
+///
+/// So a recorder should write this shape, and then one reader handles both
+/// sources. `received_at` is when the capture saw the message: it becomes
+/// `ts_init`, keeping a recording as honest about knowability as the
+/// venue's own archive is.
+///
+/// ```no_run
+/// # use h5i_db_venues::hyperliquid::archive_line;
+/// # use h5i_db_backtest::types::UnixNanos;
+/// // In a recorder loop, for each frame off the socket:
+/// let line = archive_line(UnixNanos::new(1_735_689_602_238_437_296), r#"{"channel":"trades","data":[]}"#)?;
+/// # Ok::<(), h5i_db_backtest::BacktestError>(())
+/// ```
+pub fn archive_line(received_at: UnixNanos, message: &str) -> Result<String> {
+    let raw: Value = serde_json::from_str(message).map_err(|error| BacktestError::Parse {
+        what: "websocket message",
+        value: error.to_string(),
+    })?;
+    Ok(serde_json::json!({
+        "time": format_archive_time(received_at),
+        "ver_num": 1,
+        "raw": raw,
+    })
+    .to_string())
+}
+
+/// The inverse of [`parse_archive_time`], so a recording and a download are
+/// byte-comparable.
+pub fn format_archive_time(at: UnixNanos) -> String {
+    let seconds = at.get().div_euclid(1_000_000_000);
+    let nanos = at.get().rem_euclid(1_000_000_000);
+    let stamp = chrono::DateTime::from_timestamp(seconds, nanos as u32)
+        .unwrap_or_else(chrono::DateTime::<chrono::Utc>::default);
+    format!("{}{:09}", stamp.format("%Y-%m-%dT%H:%M:%S."), nanos)
+}
+
 /// Read a decompressed archive stream: one JSON envelope per line.
 ///
 /// Hyperliquid publishes its history as hourly LZ4 files of newline-
