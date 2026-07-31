@@ -231,6 +231,195 @@ pub fn margin_from_meta(universe: &[AssetMeta]) -> Result<PerInstrumentMargin> {
     Ok(margin)
 }
 
+/// One token in the spot universe.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SpotToken {
+    pub name: String,
+    /// Decimal places a *size* may carry, which also sets the price grid.
+    pub sz_decimals: u8,
+    pub index: u32,
+}
+
+/// One spot pair.
+///
+/// Named two ways, and both matter. A canonical pair is addressed by
+/// `BASE/QUOTE` (`PURR/USDC`); everything else is addressed by its index
+/// (`@1`). The websocket and the archive use whichever the venue uses, so
+/// [`SpotPair::wire_name`] is what a payload's `coin` will say.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SpotPair {
+    pub name: String,
+    pub index: u32,
+    pub base: u32,
+    pub quote: u32,
+    pub is_canonical: bool,
+}
+
+impl SpotPair {
+    /// What a payload's `coin` field says for this pair.
+    pub fn wire_name(&self) -> String {
+        if self.is_canonical {
+            self.name.clone()
+        } else {
+            format!("@{}", self.index)
+        }
+    }
+}
+
+/// The spot universe: pairs and the tokens they are built from.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SpotMeta {
+    pub tokens: Vec<SpotToken>,
+    pub universe: Vec<SpotPair>,
+}
+
+impl SpotMeta {
+    pub fn token(&self, index: u32) -> Option<&SpotToken> {
+        self.tokens.iter().find(|token| token.index == index)
+    }
+
+    pub fn pair(&self, wire_name: &str) -> Option<&SpotPair> {
+        self.universe
+            .iter()
+            .find(|pair| pair.wire_name() == wire_name)
+    }
+
+    /// The canonical instrument for a spot pair.
+    ///
+    /// Spot gets **eight** decimal places to spend rather than a
+    /// perpetual's six, and the base token's `szDecimals` eats into it the
+    /// same way. Reusing the perpetual budget here would refuse prices the
+    /// venue quotes all day.
+    pub fn instrument(&self, pair: &SpotPair) -> Result<Instrument> {
+        let base = self.token(pair.base).ok_or_else(|| {
+            BacktestError::invalid(format!(
+                "spot pair {} names base token {} which the universe does \
+                 not describe",
+                pair.name, pair.base
+            ))
+        })?;
+        if base.sz_decimals > SPOT_MAX_DECIMALS {
+            return Err(BacktestError::invalid(format!(
+                "{}: szDecimals {} would leave a spot price no decimal \
+                 places at all",
+                base.name, base.sz_decimals
+            )));
+        }
+        let lot = 10_f64.powi(-(base.sz_decimals as i32));
+        let mut instrument = Instrument::perpetual(
+            spot_instrument_id(&pair.wire_name())?.as_str(),
+            "hyperliquid",
+        )?;
+        instrument.kind = h5i_db_backtest::instrument::InstrumentKind::Spot;
+        instrument
+            .with_lot_size(Qty::from_f64(lot)?)
+            .with_price_rule(PriceRule::SignificantFigures {
+                significant_figures: MAX_SIGNIFICANT_FIGURES,
+                max_decimals: SPOT_MAX_DECIMALS.saturating_sub(base.sz_decimals),
+            })
+    }
+}
+
+/// Body for the spot universe request.
+pub fn spot_meta_request() -> String {
+    serde_json::json!({ "type": "spotMeta" }).to_string()
+}
+
+/// Parse a `spotMeta` response.
+pub fn parse_spot_meta(body: &str) -> Result<SpotMeta> {
+    let json = parse_json(body)?;
+    let tokens = json
+        .get("tokens")
+        .and_then(Value::as_array)
+        .ok_or(BacktestError::Parse {
+            what: "spotMeta.tokens",
+            value: "missing".to_string(),
+        })?;
+    let mut parsed_tokens = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        parsed_tokens.push(SpotToken {
+            name: token
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or(BacktestError::Parse {
+                    what: "spotMeta.tokens[].name",
+                    value: "missing".to_string(),
+                })?
+                .to_string(),
+            sz_decimals: token.get("szDecimals").and_then(Value::as_u64).ok_or(
+                BacktestError::Parse {
+                    what: "spotMeta.tokens[].szDecimals",
+                    value: "missing".to_string(),
+                },
+            )? as u8,
+            index: token
+                .get("index")
+                .and_then(Value::as_u64)
+                .ok_or(BacktestError::Parse {
+                    what: "spotMeta.tokens[].index",
+                    value: "missing".to_string(),
+                })? as u32,
+        });
+    }
+
+    let universe = json
+        .get("universe")
+        .and_then(Value::as_array)
+        .ok_or(BacktestError::Parse {
+            what: "spotMeta.universe",
+            value: "missing".to_string(),
+        })?;
+    let mut parsed_pairs = Vec::with_capacity(universe.len());
+    for pair in universe {
+        let indices = pair
+            .get("tokens")
+            .and_then(Value::as_array)
+            .ok_or(BacktestError::Parse {
+                what: "spotMeta.universe[].tokens",
+                value: "missing".to_string(),
+            })?;
+        if indices.len() != 2 {
+            return Err(BacktestError::invalid(format!(
+                "a spot pair has a base and a quote; got {} token indices",
+                indices.len()
+            )));
+        }
+        parsed_pairs.push(SpotPair {
+            name: pair
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or(BacktestError::Parse {
+                    what: "spotMeta.universe[].name",
+                    value: "missing".to_string(),
+                })?
+                .to_string(),
+            index: pair
+                .get("index")
+                .and_then(Value::as_u64)
+                .ok_or(BacktestError::Parse {
+                    what: "spotMeta.universe[].index",
+                    value: "missing".to_string(),
+                })? as u32,
+            base: indices[0].as_u64().ok_or(BacktestError::Parse {
+                what: "spotMeta.universe[].tokens[0]",
+                value: "not an index".to_string(),
+            })? as u32,
+            quote: indices[1].as_u64().ok_or(BacktestError::Parse {
+                what: "spotMeta.universe[].tokens[1]",
+                value: "not an index".to_string(),
+            })? as u32,
+            is_canonical: pair
+                .get("isCanonical")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+    Ok(SpotMeta {
+        tokens: parsed_tokens,
+        universe: parsed_pairs,
+    })
+}
+
 /// Parse a `metaAndAssetCtxs` response into the universe and its reference
 /// prices.
 ///
@@ -561,6 +750,31 @@ pub fn perp_instrument_id(coin: &str) -> Result<InstrumentId> {
     InstrumentId::new(format!("{coin}-PERP"))
 }
 
+/// The same for a spot pair, whose `coin` is `BASE/QUOTE` or `@index`.
+pub fn spot_instrument_id(coin: &str) -> Result<InstrumentId> {
+    InstrumentId::new(format!("{coin}-SPOT"))
+}
+
+/// Whether a `coin` field names a spot pair rather than a perpetual.
+///
+/// The venue's own naming is the discriminator and it is unambiguous: a
+/// perpetual is a bare ticker, a canonical spot pair carries a slash, and
+/// everything else on spot is `@index`. Guessing wrong would attribute a
+/// spot book to a perpetual instrument, which is two different markets with
+/// two different price grids.
+pub fn is_spot_coin(coin: &str) -> bool {
+    coin.starts_with('@') || coin.contains('/')
+}
+
+/// Route a payload's `coin` to the instrument it belongs to.
+pub fn instrument_id_for(coin: &str) -> Result<InstrumentId> {
+    if is_spot_coin(coin) {
+        spot_instrument_id(coin)
+    } else {
+        perp_instrument_id(coin)
+    }
+}
+
 /// Parse one websocket message into records, or nothing for a channel this
 /// module does not model.
 ///
@@ -600,7 +814,8 @@ fn records_from_envelope(json: &Value) -> Result<Vec<Record>> {
     let Some(coin) = payload_coin(data) else {
         return Ok(Vec::new());
     };
-    let id = perp_instrument_id(coin)?;
+    // A capture can span both universes; the venue's naming says which.
+    let id = instrument_id_for(coin)?;
     let mut records = match channel {
         "l2Book" => vec![book_from_value(data, &id)?],
         "trades" => trades_from_value(data, &id)?,

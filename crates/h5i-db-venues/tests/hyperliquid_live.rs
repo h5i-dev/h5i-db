@@ -11,7 +11,7 @@
 //! Refresh them with the recipe in `docs-src/manual/backtest.md`.
 
 use h5i_db_backtest::event::MarketEvent;
-use h5i_db_backtest::instrument::PriceRule;
+use h5i_db_backtest::instrument::{InstrumentKind, PriceRule};
 use h5i_db_backtest::types::{Price, UnixNanos};
 use h5i_db_venues::hyperliquid;
 
@@ -293,6 +293,76 @@ fn an_asset_ctxs_file_whose_columns_moved_is_refused() {
     let error = hyperliquid::parse_asset_ctxs_csv(shuffled).unwrap_err();
     assert!(error.to_string().contains("expected"), "{error}");
     assert!(hyperliquid::parse_asset_ctxs_csv("").is_err());
+}
+
+#[test]
+fn the_real_spot_universe_is_addressed_two_ways_and_priced_differently() {
+    let spot = hyperliquid::parse_spot_meta(&fixture("spot_meta.json")).unwrap();
+    assert!(spot.universe.len() >= 3 && spot.tokens.len() >= 3);
+
+    // A canonical pair is addressed by name and everything else by index.
+    // Getting that wrong means subscribing to a market that does not exist.
+    let purr = spot.pair("PURR/USDC").expect("canonical pair by name");
+    assert!(purr.is_canonical);
+    assert_eq!(purr.wire_name(), "PURR/USDC");
+    let indexed = spot.pair("@1").expect("non-canonical pair by index");
+    assert!(!indexed.is_canonical);
+    assert_eq!(indexed.name, "@1");
+
+    // Spot spends an eight-decimal budget where a perpetual spends six, so
+    // reusing the perpetual rule here would refuse prices quoted all day.
+    let instrument = spot.instrument(purr).unwrap();
+    assert_eq!(instrument.id.as_str(), "PURR/USDC-SPOT");
+    assert!(matches!(instrument.kind, InstrumentKind::Spot));
+    assert!(matches!(
+        instrument.price_rule,
+        PriceRule::SignificantFigures {
+            significant_figures: 5,
+            max_decimals: 8
+        }
+    ));
+
+    // HFUN's two size decimals leave six for the price, mirroring the way
+    // the perpetual budget is shared.
+    let hfun = spot.pair("@1").unwrap();
+    assert!(matches!(
+        spot.instrument(hfun).unwrap().price_rule,
+        PriceRule::SignificantFigures {
+            max_decimals: 6,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_coin_is_routed_to_spot_or_perpetual_by_the_venues_own_naming() {
+    // A capture spans both universes, and attributing a spot book to a
+    // perpetual would be two different markets with two different grids.
+    assert!(!hyperliquid::is_spot_coin("BTC"));
+    assert!(hyperliquid::is_spot_coin("PURR/USDC"));
+    assert!(hyperliquid::is_spot_coin("@1"));
+    assert_eq!(
+        hyperliquid::instrument_id_for("BTC").unwrap().as_str(),
+        "BTC-PERP"
+    );
+    assert_eq!(
+        hyperliquid::instrument_id_for("@1").unwrap().as_str(),
+        "@1-SPOT"
+    );
+
+    let spot_book = r#"{"channel":"l2Book","data":{"coin":"@1","time":1700000000000,
+        "levels":[[{"px":"1.5","sz":"10","n":1}],[{"px":"1.6","sz":"10","n":1}]]}}"#;
+    let records = hyperliquid::parse_ws_message(spot_book).unwrap();
+    assert_eq!(records[0].instrument.as_str(), "@1-SPOT");
+}
+
+#[test]
+fn a_spot_pair_naming_a_token_the_universe_lacks_is_refused() {
+    let orphan = r#"{"tokens":[{"name":"USDC","szDecimals":8,"index":0}],
+        "universe":[{"name":"X/USDC","index":0,"tokens":[9,0],"isCanonical":true}]}"#;
+    let spot = hyperliquid::parse_spot_meta(orphan).unwrap();
+    assert!(spot.instrument(&spot.universe[0]).is_err());
+    assert!(hyperliquid::parse_spot_meta(r#"{"tokens":[]}"#).is_err());
 }
 
 #[test]
