@@ -1,27 +1,59 @@
 # h5i-db Roadmap
 
-Living roadmap. Last full update 2026-07-22 (branch `improve-performance`);
-Parts III–IV added 2026-07-23 (branch `improve-tests`); Part V (agent-facing
-surfaces, from a 2024–26 AI-agent×DB paper survey) added 2026-07-23.
-Part IV addendum + Part VI (agent ergonomics & competitive positioning) added
-2026-07-24 (branch `agentic-features`) from a codebase-grounded agent-UX
-review, a three-track web survey of the 2025–26 "agentic database" landscape,
-and an external cross-check of the performance program against production
-engines and recent papers. Part VI's build order supersedes Part V's.
-Part VII (quant data-layer features, from a source-level study of
-`~/Ref/zipline` and `~/Ref/qlib`) added 2026-07-25 (branch `quant-features`).
+Eleven parts, added as the work that motivated them happened. Each carries its
+own date and provenance in its heading, so this preamble no longer repeats
+them.
 
-This document merges the former `ROADMAP_PERFORMANCE.md` into the
-production-readiness roadmap; the separate file is gone. Part I tracks
-production readiness, Part II the structural performance program, Part III a
-fresh production-grade gap analysis against DuckDB, Part IV a
-QuestDB-inspired performance program, and Part V the agent-facing surface layer
-(no-RAG/no-vector/no-local-model features mined from 2024–26 top-conference
-papers, with per-item paper attribution). Statuses in the 2026-07-22 update were
-re-verified against the source (grep/tests/benchmarks), not carried forward
-from earlier revisions; Parts III–IV were sourced from a source-level study of
-`~/Ref/duckdb` and `~/Ref/questdb` cross-checked against a full inventory of
-`crates/h5i-db-core` and `crates/h5i-db-query`.
+**Read this file in two modes.** *Open now* below is the whole of what is not
+done, and it is where to start. Everything after it is the reasoning: what was tried, what
+was rejected and why, and the constraints a future change has to respect. That
+reasoning is the point of keeping delivered parts around. The code says what
+shipped; only this says what was deliberately not built, and those paragraphs
+are the ones worth not re-deriving.
+
+| Part | Subject | State |
+|---|---|---|
+| I | Production readiness | 6 open, listed below |
+| II | Structural performance program | P0–P1 done, P2–P3 prototype, P4 planned, P5 partial |
+| III | Gap analysis vs DuckDB | T3.4 (corruption *recovery*) open |
+| IV | QuestDB-inspired performance | 6 of 9 done; C1 / A1 / B2 staged as format- or read-path work |
+| V | Agent-facing surfaces | V-A1, V-B1 delivered. **Build order superseded by Part VI** |
+| VI | Agent ergonomics & positioning | batch 1 delivered (all ten) |
+| VII | Quant data-layer features | delivered |
+| VIII | Lazy DataFrame builder (Python) | delivered |
+| IX | Fork: multi-agent workspaces | IX-A1 … IX-A5 delivered |
+| X | Fork at agentic scale | delivered |
+| XI | Live execution without a backtest tax | **design only**, nothing built |
+
+## Open now
+
+Everything not done, in one place. The Part column is where the reasoning
+lives; this table is an index, not a replacement for it.
+
+| Part | Item | Note |
+|---|---|---|
+| I | Bloom filters for high-cardinality entity columns (2.8b) | Only exact ≤128-distinct sets ship |
+| I | Manifest deltas / compact encoding / WAL (2.10) | Every commit rewrites the full segment list |
+| I | Generic-scan overhead ~20% vs raw DataFusion | Ledger goal was ≤10%; re-measure before optimizing |
+| I | SQL-native `ASOF JOIN` syntax | UDTF + planner exist; bare-SQL parity unverified |
+| I | Fuzz smoke in CI (3.11b) | Delivered, then deliberately disabled 2026-07-22; re-enable by uncommenting |
+| I | Benchmark methodology debt | Bare-metal rerun, scaling curves |
+| II | P2 graduation | Predicate cache is a prototype |
+| II | P4 — `LayoutSpec`, layout health, previewable reclustering | Planned |
+| II | P5 — ingest tiers, adaptive encoding | Partial, evidence-gated |
+| III | T3.4 — corruption *recovery* | Detection is strong; recovery is thin |
+| IV | C1 column byte-range / metadata sidecar | Analyzed: cannot be additive, belongs with the read-path tier |
+| IV | A1 global symbol dictionary | Format-breaking |
+| IV | B2 out-of-order Parquet merge | Ingest-path, higher risk |
+| XI | Live execution | Design only; see the part before removing its seams |
+
+Two more, measured 2026-07-31 and written up in
+`benchmarks/backtest_compare/RESULTS.md` rather than given a part here,
+because both are sweep features rather than optimizations: decode shared
+across study trials (23% of a four-trial study) and trials run
+concurrently across forks. They are the only remaining backtest-performance
+items that are multiplier-class; the rest are percent-class and the machine's
+own noise floor is now comparable to them.
 
 ---
 
@@ -404,8 +436,7 @@ A1 is the keystone: A2 and A3 (and B1) build on the global dictionary.
 
 ## Part IV implementation status (2026-07-23, branch `improve-tests`)
 
-Delivered incrementally, each additively (opt-in where it touches the hot path)
-with serial tests and no regression to existing suites:
+Delivered incrementally, each additively, opt-in where it touches the hot path:
 
 | Item | Status | Notes |
 |------|--------|-------|
@@ -464,6 +495,11 @@ algorithm papers appeared in 2024–26; production engines lead this area.
 ---
 
 # Part V — Agent-facing surfaces (2026-07-23)
+
+> **Build order superseded by Part VI.** V-A1 and V-B1 shipped; the rest of
+> this part's sequencing was replaced by Part VI's, which was written against
+> the codebase rather than against the paper survey. Read it for the item
+> definitions and their paper attributions, not for what to do next.
 
 Sourced from a survey of 2024–2026 top-conference papers on **AI-agent × database /
 data-analysis** (VLDB, SIGMOD, CIDR, ICLR, NeurIPS, EuroSys, and preprints),
@@ -643,10 +679,10 @@ Publishing fodder to prove the wins above, not features to implement:
 
 | Item | Status | Notes |
 |------|--------|-------|
-| V-A1 `leakage-delta` | ✅ done | `H5iSession::new_at` pins every table at a `ReadAt` (generalizes the latest-only registration); `arrival::arrival_delta` runs a query at head vs an as-of point and diffs (numeric columns cast to f64 for per-cell delta, others string-compared, plus per-table withheld-version deltas). CLI `arrival-delta <db> <sql> --as-of <ts\|version> [--tolerance]`. **Additive & default-path-neutral**: a new opt-in surface; the normal query path is untouched. Tests: 4 query integration (restatement delta, time-bounded no-leak, as-of-timestamp ≡ version pin, row-count change) + 1 CLI e2e. Confirmed the required primitive already existed: `ReadAt::AsOf` resolves by `committed_at_ns` (availability), exactly the look-ahead-free axis. |
-| V-B1 DFC data-safety policy | ✅ done | Opt-in, per-table `DataPolicy` (sidecar `tables/<uuid>/DATA_POLICY.json`) with a small fuzz-safe typed grammar (NotNull / Compare / InSet + And/Or/Not, OnFail Reject\|Warn), evaluated over Arrow arrays in `core` (no DataFusion in the kernel). Enforced at every write path (`stage_write`/`stage_append`/`replace_range_impl`) **and at plan time** (`plan_write`/`plan_replace_range`); a violating mutation is refused before it can be applied. Fail-closed (NULL never satisfies a comparison; corrupt policy errors). `Error::DataPolicyViolation` (exit 2, not retryable). CLI `data-policy get\|set\|clear` (JSON docs). **Opt-in / read-path-neutral**: a table without a policy pays only one metadata lookup on the *write* path; reads are never touched. Tests: 11 unit + 6 core integration + 1 CLI e2e. Row-dropping (DFC `REMOVE`) deliberately deferred. Scoped projection of DFC onto the explicit-row write path; full cross-table lineage rewriting remains future work. |
+| V-A1 `leakage-delta` | ✅ done | `H5iSession::new_at` pins every table at a `ReadAt` (generalizes the latest-only registration); `arrival::arrival_delta` runs a query at head vs an as-of point and diffs (numeric columns cast to f64 for per-cell delta, others string-compared, plus per-table withheld-version deltas). CLI `arrival-delta <db> <sql> --as-of <ts\|version> [--tolerance]`. **Additive & default-path-neutral**: a new opt-in surface; the normal query path is untouched. Confirmed the required primitive already existed: `ReadAt::AsOf` resolves by `committed_at_ns` (availability), exactly the look-ahead-free axis. |
+| V-B1 DFC data-safety policy | ✅ done | Opt-in, per-table `DataPolicy` (sidecar `tables/<uuid>/DATA_POLICY.json`) with a small fuzz-safe typed grammar (NotNull / Compare / InSet + And/Or/Not, OnFail Reject\|Warn), evaluated over Arrow arrays in `core` (no DataFusion in the kernel). Enforced at every write path (`stage_write`/`stage_append`/`replace_range_impl`) **and at plan time** (`plan_write`/`plan_replace_range`); a violating mutation is refused before it can be applied. Fail-closed (NULL never satisfies a comparison; corrupt policy errors). `Error::DataPolicyViolation` (exit 2, not retryable). CLI `data-policy get\|set\|clear` (JSON docs). **Opt-in / read-path-neutral**: a table without a policy pays only one metadata lookup on the *write* path; reads are never touched. Row-dropping (DFC `REMOVE`) deliberately deferred. Scoped projection of DFC onto the explicit-row write path; full cross-table lineage rewriting remains future work. |
 
-Delivered (additive, opt-in, tested, fmt + clippy `-D warnings` clean): **V-A1, V-B1**,
+Delivered: **V-A1, V-B1**,
 the two highest-ROI Part V items. Neither changes the default read path.
 
 ---
@@ -1875,7 +1911,7 @@ bitmap representation; none is a dependency.
 
 **X-A1: delivered.** `crates/h5i-db-core/src/fork_index.rs`, consumed by
 `retention.rs` (floor check), `database.rs` (`drop_table` guard, vacuum
-roots). 11 integration tests in `tests/fork_index.rs`. Measured: the
+roots). Measured: the
 drop guard reads 2 objects at 6 forks where the full scan read 7, and
 the count no longer grows with fork count.
 
@@ -2012,3 +2048,148 @@ reads as at depth 2 (asserted with `assert_eq!`, not a bound). That is
 the property BranchBench found every system missing (Dolt's reads
 degrade 5-4000x with depth), and it holds here because a shadow manifest
 names its segments by path, so there is no chain to walk.
+
+---
+
+# Part XI. Live execution without a backtest tax (2026-07-31)
+
+Live execution is a stated non-goal today (`README.md`: "the backtester never
+routes a real order"). This part does not change that. It records what the
+2026-07-31 measurement work established about *whether the goal could be
+adopted later without giving up the kernel*, so that the answer is written
+down rather than re-derived, and so the seams that already exist are not
+removed by someone who does not know why they are there.
+
+## The finding that motivates it
+
+Splitting NautilusTrader the same way we split ourselves decomposed the gap.
+Their control arm is a strategy that never subscribes: the engine streams
+every quote through its message bus and venue, and never calls Python.
+
+| | engine, no Python | strategy boundary | total |
+|---|---:|---:|---:|
+| h5i | **0.329 µs/event** | ~0.77 | ~1.10 |
+| NautilusTrader | **3.593 µs/event** | 0.771 | 4.364 |
+
+The engine term is 10.9×, and it is the whole of our path-dependent
+advantage: our boundary is no better than theirs and possibly worse. The
+composition inverts. Nautilus spends 82% of a run in the engine and 18%
+crossing into Python; we spend roughly a quarter and three quarters.
+
+The 3.593 µs is what their engine costs with zero callbacks attached.
+That is not waste. It is the price of a message bus: events are published to
+a topic, components subscribe handlers at runtime, and dispatch is a lookup
+plus a handler walk plus dynamic dispatch, on every event. It buys the thing
+we do not have: the same strategy code running live and in backtest, with
+components addable without touching the engine.
+
+So our 10.9× says we are solving a smaller job, not that we are faster at the
+same one.
+
+## Why the tax is avoidable
+
+Because live is not throughput-bound.
+
+```text
+  h5i kernel                      3,000,000 events/s
+  Nautilus engine (bus, no Python)  278,000 events/s
+  a real venue feed, all symbols     10,000 – 100,000 events/s
+```
+
+At 100k events/s a 3.6 µs dispatch is a third of one core. The bus is cheap
+in live and expensive only in backtest, where the point is to replay 200k
+events as fast as the machine allows. The cost is therefore not inherent to
+having live execution; it is inherent to using **one dispatch mechanism for
+both modes**, which is the choice Nautilus made in exchange for code
+identity.
+
+The alternative is to share everything except dispatch.
+
+```text
+                backtest                          live
+                ────────                          ────
+  inbound  Parquet → decode → RecordSource   socket → adapter → RecordSource
+                          │                                   │
+                          └─────────────┬─────────────────────┘
+                                        ▼
+                    ┌────────────────────────────────────┐
+                    │  Replay (k-way merge)              │  shared
+                    ├────────────────────────────────────┤
+                    │  Engine::step()                    │  shared
+                    │  books · order lifecycle · risk    │
+                    │  · portfolio · settlement          │
+                    ├────────────────────────────────────┤
+                    │  strategy.on_event()               │  shared, direct call
+                    └────────────────┬───────────────────┘
+                                     ▼ intent only
+                    ┌────────────────────────────────────┐
+                    │  ExecutionClient                   │  the seam
+                    └───────┬────────────────────┬───────┘
+                            ▼                    ▼
+                  SimulatedExecution        LiveExecution → venue
+                  fills made by engine      fills return from venue
+```
+
+## Seams that already exist
+
+Two of the three edges are in the codebase, and both were built for this.
+
+**Outbound.** `ExecutionClient` (`execution.rs`) is documented as the live
+seam: "The simulator implements it; a live adapter would implement the same
+one … if simulation and production reach the venue through different code,
+they diverge, and nothing detects it because there is no shared surface to
+compare." It carries *intent* (submit, cancel, amend) and deliberately never
+a fill, because in production fills can only come the other way.
+
+**Inbound.** `RecordSource` is `Box<dyn Iterator<Item = Result<Record>>>`. A
+channel receiver is an `Iterator`, so a live feed is a `RecordSource` with no
+engine change at all. Ordering also survives: the merge keys on `ts_init`,
+"when this system could first have known it", which for a live receiver is
+arrival order and therefore monotonic by construction.
+
+## What is actually hard, none of it performance
+
+1. **Fills reverse direction.** The engine produces fills today, in
+   `match_resting`. Live must accept them from the venue instead. This is the
+   large change: a mode distinction in the middle of the engine rather than at
+   its edges. A seam existing for the outbound half does not make it small.
+2. **`step()` is synchronous.** A strategy that takes 10 ms blocks the loop
+   for 10 ms. Backtest does not care; live needs a stated backpressure policy
+   (drop, queue, or block). A design decision, not an optimization.
+3. **Throughput and tail latency are different objectives.** The kernel is
+   tuned for the former. Anything that batches to help throughput can hurt
+   p99, so the hot path needs auditing against a latency budget rather than
+   an events/s number.
+4. **Single-threaded stays correct, and is normal.** One thread owning state,
+   fed by queues, is how most execution systems are built. Determinism in
+   backtest comes from the total order key, which live has no need to
+   enforce.
+
+## The divergence risk, and the test that answers it
+
+Sharing everything is precisely why Nautilus put both modes on one bus. Two
+dispatch paths can drift, and a bug in one that is absent in the other is the
+worst kind: it appears only in production.
+
+Three mitigations, in order of strength. The engine, order lifecycle, risk,
+portfolio and settlement stay one implementation. Only dispatch differs, and
+dispatch is small enough to review as a unit. `ExecutionClient` keeps a
+shared surface at the venue edge, which is what it was for. And the
+divergence becomes testable: record a live session into the canonical
+tables, replay it through the backtest path, and assert the strategy's
+decisions are identical. That is the shape `result.verify()` already has.
+
+A live session recorded this way is a fork, so live-to-backtest
+reproducibility falls out of the storage design rather than needing to be
+built.
+
+## Status
+
+Design only. Nothing here is implemented or measured, and the 0.329 µs figure
+holds under the assumption that there is no live path. Whether it survives one
+is not knowable until there is one to measure. What is established is that a
+design exists in which backtest pays nothing for live's flexibility, and that
+half of its seams already carry weight in the current code.
+
+Do not remove `ExecutionClient`'s intent-only contract, or narrow
+`RecordSource` to a concrete type, without reading this part first.
