@@ -80,7 +80,10 @@ impl Position {
             self.average_price = if total == 0 {
                 Price::ZERO
             } else {
-                Price::from_raw(((existing + incoming) / total) as i64)
+                Price::from_raw(crate::types::narrow(
+                    (existing + incoming) / total,
+                    "Position::average_price",
+                )?)
             };
         } else {
             // Reducing, closing, or reversing.

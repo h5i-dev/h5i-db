@@ -7,6 +7,11 @@ repository.workspace = true
 rust-version.workspace = true
 description = "Deterministic event-driven backtesting on versioned h5i-db data"
 
+[features]
+default = []
+# 128-bit fixed point: range only, the scale does not move. See `types::Raw`.
+wide = []
+
 [dependencies]
 h5i-db-core = { workspace = true }
 arrow = { workspace = true }

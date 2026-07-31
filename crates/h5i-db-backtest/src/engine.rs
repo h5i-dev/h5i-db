@@ -32,7 +32,7 @@ use crate::instrument::{InstrumentId, InstrumentSet, OutcomeId};
 use crate::models::{BookFills, FeeContext, FeeModel, FillModel, LatencyModel, NoFees, NoLatency};
 use crate::order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 use crate::position::Portfolio;
-use crate::types::{Money, Price, Qty, Side, UnixNanos, notional};
+use crate::types::{Money, Price, Qty, Raw, Side, UnixNanos, notional};
 
 /// A key identifying one tradable book.
 ///
@@ -148,8 +148,8 @@ impl Slots {
 
 #[derive(Default)]
 struct QueueLevels {
-    buys: BTreeMap<i64, Vec<OrderId>>,
-    sells: BTreeMap<i64, Vec<OrderId>>,
+    buys: BTreeMap<Raw, Vec<OrderId>>,
+    sells: BTreeMap<Raw, Vec<OrderId>>,
 }
 
 #[derive(Default)]
@@ -2587,7 +2587,7 @@ impl Engine {
             .position(&order.instrument, order.outcome)
             .map(|position| position.quantity.raw())
             .unwrap_or(0);
-        let pending: i64 = self
+        let pending: Raw = self
             .live_orders
             .iter()
             .filter_map(|id| self.orders.get(id))

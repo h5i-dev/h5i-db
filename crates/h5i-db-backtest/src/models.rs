@@ -12,7 +12,7 @@ use crate::book::OrderBook;
 use crate::error::Result;
 use crate::instrument::Instrument;
 use crate::order::{Order, OrderId};
-use crate::types::{Money, Price, Qty, SCALE, Side, UnixNanos, notional};
+use crate::types::{Money, Price, Qty, Raw, SCALE, Side, UnixNanos, notional};
 
 /// What a fee model needs to price a fill.
 #[derive(Clone, Copy, Debug)]
@@ -163,7 +163,7 @@ impl KalshiFees {
         let pq = notional(price, Qty::from_raw(complement.raw()))?;
         let scaled = notional(Price::from_raw(pq.raw()), quantity)?;
         let raw = notional(rate, Qty::from_raw(scaled.raw()))?.raw();
-        const CENTICENT: i64 = SCALE / 10_000;
+        const CENTICENT: Raw = SCALE / 10_000;
         let rounded =
             raw.checked_add(CENTICENT - 1)
                 .ok_or(crate::error::BacktestError::Overflow {
@@ -197,7 +197,7 @@ impl FeeModel for KalshiFees {
                 .ok_or(crate::error::BacktestError::Overflow {
                     what: "applying Kalshi trade fee",
                 })?;
-        const CENT: i64 = SCALE / 100;
+        const CENT: Raw = SCALE / 100;
         let cent_aligned = after_trade_fee.div_euclid(CENT) * CENT;
         let rounding_fee = after_trade_fee - cent_aligned;
 

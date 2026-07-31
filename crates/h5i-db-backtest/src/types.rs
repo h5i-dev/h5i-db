@@ -17,37 +17,80 @@ use std::fmt;
 
 use crate::error::{BacktestError, Result};
 
-/// Fixed-point scale: nine decimal places.
+/// The integer every fixed-point value is stored in.
+///
+/// `i64` by default. The `wide` feature makes it `i128`, which buys range and
+/// nothing else: the scale below does not move, so the tick grid, the `f64`
+/// conversion and every value already written stay exactly as they were.
+///
+/// That is the opposite of NautilusTrader's choice, and deliberately. They
+/// widen the scale with the integer (9 decimals to 16) because 18-decimal wei
+/// needs the precision, which makes the two modes incompatible on disk and
+/// cost them a catalog migration. Our ceiling is *range* -- a yen book, or a
+/// meme-coin quantity -- so moving the scale would buy precision nobody asked
+/// for and break the one thing that must not break.
+#[cfg(feature = "wide")]
+pub type Raw = i128;
+
+/// See [`Raw`].
+#[cfg(not(feature = "wide"))]
+pub type Raw = i64;
+
+/// Whether this build widened [`Raw`].
+///
+/// A compile-time choice is invisible to a caller holding a compiled
+/// artifact, and reading a value at the wrong width is silent corruption
+/// rather than an error. NautilusTrader exports the same fact as a linker
+/// symbol for its FFI boundary; ours is reached through the Python module
+/// and the run record, so a constant is enough.
+pub const WIDE: bool = cfg!(feature = "wide");
+
+/// Fixed-point scale: nine decimal places, in every mode.
 ///
 /// Chosen to cover both ends of the venue roadmap without a per-venue
 /// scale: prediction-market ticks are 1e-4, crypto quantities run to 1e-8,
-/// and `i64` at 1e-9 still reaches ±9.2e9 units.
-pub const SCALE: i64 = 1_000_000_000;
+/// and `i64` at 1e-9 still reaches ±9.2e9 units. Under `wide` the reach
+/// becomes ±1.7e29 at the same nine decimals.
+pub const SCALE: Raw = 1_000_000_000;
 const SCALE_I128: i128 = SCALE as i128;
+
+/// The largest magnitude [`Raw`] holds, as a float, for range checks at the
+/// `f64` boundary.
+const RAW_MAX_F64: f64 = Raw::MAX as f64;
+
+// `notional`'s wide path splits both factors at the scale so the pieces
+// multiply without a 256-bit type. That is only sound while the largest
+// possible remainder squared still fits, which is a property of the scale,
+// not of the inputs, so it is checked once at compile time.
+const _: () = {
+    assert!(SCALE > 0);
+    let max_remainder = SCALE - 1;
+    assert!(max_remainder.checked_mul(max_remainder).is_some());
+};
 
 macro_rules! fixed_point {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-        pub struct $name(pub i64);
+        pub struct $name(pub Raw);
 
         impl $name {
             pub const ZERO: Self = Self(0);
 
             /// From raw scaled units.
             #[inline]
-            pub const fn from_raw(raw: i64) -> Self {
+            pub const fn from_raw(raw: Raw) -> Self {
                 Self(raw)
             }
 
             /// Raw scaled units.
             #[inline]
-            pub const fn raw(self) -> i64 {
+            pub const fn raw(self) -> Raw {
                 self.0
             }
 
             /// From a whole number of units.
-            pub fn from_units(units: i64) -> Result<Self> {
+            pub fn from_units(units: Raw) -> Result<Self> {
                 units
                     .checked_mul(SCALE)
                     .map(Self)
@@ -67,12 +110,12 @@ macro_rules! fixed_point {
                     });
                 }
                 let scaled = value * SCALE as f64;
-                if scaled.abs() >= i64::MAX as f64 {
+                if scaled.abs() >= RAW_MAX_F64 {
                     return Err(BacktestError::Overflow {
                         what: concat!(stringify!($name), "::from_f64"),
                     });
                 }
-                Ok(Self(scaled.round() as i64))
+                Ok(Self(scaled.round() as Raw))
             }
 
             /// As a float. Lossy by construction; for display and reports.
@@ -130,8 +173,8 @@ macro_rules! fixed_point {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 let negative = self.0 < 0;
                 let magnitude = (self.0 as i128).unsigned_abs();
-                let whole = magnitude / SCALE as u128;
-                let frac = magnitude % SCALE as u128;
+                let whole = magnitude / SCALE_I128 as u128;
+                let frac = magnitude % SCALE_I128 as u128;
                 if negative {
                     write!(f, "-")?;
                 }
@@ -172,11 +215,25 @@ impl Price {
     }
 }
 
+/// Narrow a wide intermediate back to [`Raw`], refusing rather than wrapping.
+///
+/// Fixed-point arithmetic promotes to `i128` to hold a product, then has to
+/// come back. Writing that as `as Raw` wraps on overflow, which is how a
+/// position silently becomes its own negation. Every narrowing in this crate
+/// goes through here.
+///
+/// Under `wide` the conversion cannot fail and compiles to nothing.
+#[inline]
+pub fn narrow(value: i128, what: &'static str) -> Result<Raw> {
+    Raw::try_from(value).map_err(|_| BacktestError::Overflow { what })
+}
+
 /// `price * qty`, rounded half away from zero.
 ///
 /// Computed through `i128` because the intermediate product of two values
 /// scaled by 1e9 overflows `i64` well inside the range either factor can
 /// legitimately take.
+#[cfg(not(feature = "wide"))]
 pub fn notional(price: Price, qty: Qty) -> Result<Money> {
     let product = (price.0 as i128) * (qty.0 as i128);
     let rounded = if product >= 0 {
@@ -184,9 +241,53 @@ pub fn notional(price: Price, qty: Qty) -> Result<Money> {
     } else {
         (product - SCALE_I128 / 2) / SCALE_I128
     };
-    i64::try_from(rounded)
-        .map(Money)
-        .map_err(|_| BacktestError::Overflow { what: "notional" })
+    narrow(rounded, "notional").map(Money)
+}
+
+/// `price * qty`, rounded half away from zero.
+///
+/// The narrow build promotes to `i128` and divides. That is not available
+/// here, because `Raw` already *is* `i128` and the product of two of them
+/// does not fit one. Rather than reach for a 256-bit type, split each factor
+/// at the scale and recombine, which is the shape NautilusTrader uses
+/// (`fixed.rs::checked_mul_div_fixed`):
+///
+/// ```text
+///   a = aw·S + ar        a·b / S  =  aw·bw·S + aw·br + ar·bw + (ar·br)/S
+///   b = bw·S + br
+/// ```
+///
+/// Every partial product is bounded: `ar` and `br` are remainders below `S`,
+/// so `ar·br` fits whatever `Raw` is, which the const assertion by `SCALE`
+/// checks once at compile time.
+///
+/// Theirs truncates. Ours rounds half away from zero, so the final term keeps
+/// its remainder and rounds on it rather than discarding it.
+#[cfg(feature = "wide")]
+pub fn notional(price: Price, qty: Qty) -> Result<Money> {
+    let (a, b) = (price.0, qty.0);
+    let (aw, ar) = (a / SCALE, a % SCALE);
+    let (bw, br) = (b / SCALE, b % SCALE);
+
+    let overflow = || BacktestError::Overflow { what: "notional" };
+    let whole = aw
+        .checked_mul(bw)
+        .and_then(|v| v.checked_mul(SCALE))
+        .ok_or_else(overflow)?;
+    let cross = aw
+        .checked_mul(br)
+        .and_then(|v| v.checked_add(ar.checked_mul(bw)?))
+        .ok_or_else(overflow)?;
+    let sum = whole.checked_add(cross).ok_or_else(overflow)?;
+
+    // `ar * br` is the only term with a fractional part left to round.
+    let fine = ar * br;
+    let rounded = if fine >= 0 {
+        (fine + SCALE / 2) / SCALE
+    } else {
+        (fine - SCALE / 2) / SCALE
+    };
+    sum.checked_add(rounded).map(Money).ok_or_else(overflow)
 }
 
 /// Nanoseconds since the Unix epoch.

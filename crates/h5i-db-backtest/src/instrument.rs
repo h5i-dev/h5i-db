@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::error::{BacktestError, Result};
-use crate::types::{Price, Qty, SCALE, UnixNanos};
+use crate::types::{Price, Qty, Raw, SCALE, UnixNanos};
 
 /// A venue-qualified instrument identifier.
 ///
@@ -399,7 +399,7 @@ impl Instrument {
                 prices.len()
             )));
         }
-        let sum: i64 = prices.iter().map(|p| p.raw()).sum();
+        let sum: Raw = prices.iter().map(|p| p.raw()).sum();
         Ok(Price::from_raw(sum - SCALE))
     }
 }
@@ -500,9 +500,15 @@ pub fn normalise_to_one(prices: &[Price]) -> Result<Vec<Price>> {
     }
     let mut scaled: Vec<Price> = prices
         .iter()
-        .map(|price| Price::from_raw(((price.raw() as i128) * (SCALE as i128) / total) as i64))
-        .collect();
-    let residual = SCALE - scaled.iter().map(|price| price.raw()).sum::<i64>();
+        .map(|price| {
+            crate::types::narrow(
+                (price.raw() as i128) * (SCALE as i128) / total,
+                "normalise_to_one",
+            )
+            .map(Price::from_raw)
+        })
+        .collect::<Result<_>>()?;
+    let residual = SCALE - scaled.iter().map(|price| price.raw()).sum::<Raw>();
     if residual != 0 {
         let largest = scaled
             .iter()
