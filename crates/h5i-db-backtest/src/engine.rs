@@ -1229,8 +1229,14 @@ impl Engine {
         //     being tradable now, before the strategy gets another turn.
         self.expire_due(ts)?;
 
+        // The book key is built once and passed down. Cloning an
+        // `InstrumentId` is an atomic bump, and rebuilding the same key in
+        // each of the three consumers pays it three times on the hottest
+        // path in the engine.
+        let key: BookKey = (record.instrument.clone(), record.outcome);
+
         // 2. The venue sees the data before anyone else.
-        self.apply_to_books(record)?;
+        self.apply_to_books(record, &key)?;
 
         // 3. A print works through the passive queue before anything else
         //    gets to react to it.
@@ -1244,7 +1250,7 @@ impl Engine {
         }
 
         // 4. Resting orders the new book crosses.
-        self.match_resting(record, strategy)?;
+        self.match_resting(record, &key, strategy)?;
 
         // 4b. A mark that moved may have made the account insolvent. The
         //     venue acts before the strategy gets another turn, which is
@@ -1934,18 +1940,20 @@ impl Engine {
         Ok(out)
     }
 
-    fn apply_to_books(&mut self, record: &Record) -> Result<()> {
-        let key = (record.instrument.clone(), record.outcome);
-        if !self.instruments.contains(&record.instrument) {
-            return Err(BacktestError::UnknownInstrument(
-                record.instrument.to_string(),
-            ));
-        }
+    fn apply_to_books(&mut self, record: &Record, key: &BookKey) -> Result<()> {
+        // One lookup, not two: `contains` followed by `get` hashes the
+        // instrument name twice for every record replayed.
         self.instruments
-            .get(&record.instrument)?
+            .get(&record.instrument)
+            .map_err(|_| BacktestError::UnknownInstrument(record.instrument.to_string()))?
             .check_outcome(record.outcome)?;
         let ts = record.stamps.ts_init;
-        let book = self.books.entry(key.clone()).or_default();
+        // Almost every record lands on a book that already exists, so look
+        // it up before paying for the key clone `entry` needs.
+        let book = match self.books.get_mut(key) {
+            Some(book) => book,
+            None => self.books.entry(key.clone()).or_default(),
+        };
         match &record.event {
             MarketEvent::BookSnapshot { bids, asks } => {
                 book.apply_snapshot(bids, asks, ts)?;
@@ -1958,10 +1966,10 @@ impl Engine {
                 self.metrics.book_gaps += 1;
             }
             MarketEvent::Trade { price, .. } => {
-                self.book_marks.insert(key.clone(), *price);
+                self.set_book_mark(key, *price);
             }
             MarketEvent::Bar { close, .. } => {
-                self.book_marks.insert(key.clone(), *close);
+                self.set_book_mark(key, *close);
             }
             MarketEvent::Reference { mark, oracle } => {
                 if let Some(price) = mark {
@@ -1978,11 +1986,46 @@ impl Engine {
                 self.apply_corporate_action(&record.instrument, *action, ts)?;
             }
         }
-        if let Some(mid) = self.books.get(&key).and_then(|b| b.mid()) {
-            self.book_marks.insert(key.clone(), mid);
+        if let Some(mid) = self.books.get(key).and_then(|book| book.mid()) {
+            self.set_book_mark(key, mid);
+        } else {
+            self.refresh_mark(key);
         }
-        self.refresh_mark(&key);
         Ok(())
+    }
+
+    /// Store a price under `key`, without cloning the key when it is
+    /// already there.
+    ///
+    /// Every record updates a mark, and after the first one for a book the
+    /// entry always exists -- so the clone `insert` needs is paid on every
+    /// record to be used once.
+    fn upsert(map: &mut BTreeMap<BookKey, Price>, key: &BookKey, price: Price) {
+        match map.get_mut(key) {
+            Some(slot) => *slot = price,
+            None => {
+                map.insert(key.clone(), price);
+            }
+        }
+    }
+
+    /// Record what the book says, and derive the effective mark from it.
+    ///
+    /// Folded together because it runs on every record: computing the
+    /// effective mark separately meant looking the book-derived price back
+    /// up immediately after storing it.
+    fn set_book_mark(&mut self, key: &BookKey, price: Price) {
+        Self::upsert(&mut self.book_marks, key, price);
+        // Most venues publish no mark at all, so the lookup that would
+        // override this one is skipped outright rather than missing.
+        let effective = match self.mark_source {
+            MarkSource::VenueMark if !self.venue_marks.is_empty() => {
+                self.venue_marks.get(key).copied().unwrap_or(price)
+            }
+            MarkSource::VenueMark => price,
+            MarkSource::BookMid => price,
+        };
+        Self::upsert(&mut self.marks, key, effective);
     }
 
     /// Recompute the mark this run values positions at.
@@ -2002,7 +2045,7 @@ impl Engine {
             MarkSource::BookMid => self.book_marks.get(key).copied(),
         };
         if let Some(price) = effective {
-            self.marks.insert(key.clone(), price);
+            Self::upsert(&mut self.marks, key, price);
         }
     }
 
@@ -2628,9 +2671,13 @@ impl Engine {
         Ok(())
     }
 
-    fn match_resting(&mut self, record: &Record, strategy: &mut dyn Strategy) -> Result<()> {
-        let key = (record.instrument.clone(), record.outcome);
-        let Some(book) = self.books.get(&key) else {
+    fn match_resting(
+        &mut self,
+        record: &Record,
+        key: &BookKey,
+        strategy: &mut dyn Strategy,
+    ) -> Result<()> {
+        let Some(book) = self.books.get(key) else {
             return Ok(());
         };
         let best_bid = book.best_bid().map(|(price, _)| price);
@@ -2649,14 +2696,14 @@ impl Engine {
             }));
         } else if self.fill_model.preserves_book_prices() {
             self.resting_index
-                .crossing_top(&key, best_bid, best_ask, &mut candidates);
+                .crossing_top(key, best_bid, best_ask, &mut candidates);
             // The old matcher used submission order. Keep that observable
             // liquidity-consumption order even though the index is priced.
             candidates.sort_unstable();
         } else {
             // A custom model may synthesize prices, so every order in this
             // market must still be offered to it.
-            self.resting_index.all_for_market(&key, &mut candidates);
+            self.resting_index.all_for_market(key, &mut candidates);
             candidates.sort_unstable();
         }
         if candidates.is_empty() {
