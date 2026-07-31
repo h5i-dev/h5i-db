@@ -24,6 +24,7 @@ are the ones worth not re-deriving.
 | IX | Fork: multi-agent workspaces | IX-A1 … IX-A5 delivered |
 | X | Fork at agentic scale | delivered |
 | XI | Live execution without a backtest tax | **design only**, nothing built |
+| XII | Optional 128-bit fixed point | not planned; one doc fix falls out of it |
 
 ## Open now
 
@@ -46,6 +47,7 @@ lives; this table is an index, not a replacement for it.
 | IV | A1 global symbol dictionary | Format-breaking |
 | IV | B2 out-of-order Parquet merge | Ingest-path, higher risk |
 | XI | Live execution | Design only; see the part before removing its seams |
+| XII | `store.rs` overclaims f64 exactness | Doc says the whole `i64` range; the real bound is 9,007,199 units. Small, independent of the rest of XII |
 
 Two more, measured 2026-07-31 and written up in
 `benchmarks/backtest_compare/RESULTS.md` rather than given a part here,
@@ -2193,3 +2195,142 @@ half of its seams already carry weight in the current code.
 
 Do not remove `ExecutionClient`'s intent-only contract, or narrow
 `RecordSource` to a concrete type, without reading this part first.
+
+---
+
+# Part XII. Optional 128-bit fixed point (2026-07-31)
+
+`Price`, `Qty` and `Money` are `i64` scaled by `1e-9` (`types.rs:25`). This
+part records what that costs, what NautilusTrader does about the same problem,
+and why copying their fix would not be enough here. Nothing is implemented.
+
+## There are two limits, and they are 1024x apart
+
+The one that gets quoted is arithmetic overflow at `i64::MAX / 1e9`:
+
+```text
+  9,223,372,036.854775807   largest representable value
+              0.000000001   smallest tick
+```
+
+Overflow is refused rather than wrapped. `checked_add`, `checked_sub`,
+`from_f64` and `notional` all return `Result`, so a run stops with
+`BacktestError::Overflow { what }` naming the operation. A silently negative
+balance is not a failure mode this has.
+
+The limit that binds first is exactness in storage. Canonical tables hold
+`f64` columns and `store.rs` converts at the boundary, so the usable range is
+capped by the 53-bit mantissa, not by `i64`:
+
+```text
+  2^53 / 1e9  =      9,007,199.25   above this, raw values stop surviving
+  i64  / 1e9  =  9,223,372,036.85   overflow
+```
+
+Above roughly nine million units, half of adjacent raw values do not survive a
+write-then-read cycle. Sampling 100 consecutive raws either side of 1e16
+(about 1e7 units), 50 come back changed.
+
+### The module doc overclaims this
+
+`store.rs:10` says the conversion "is exact for everything the fixed-point
+type can represent" and cites `float_storage_round_trips_exactly` as proof.
+The test does not reach that far: its largest case is `9_999_999.999999999`,
+and it passes for a reason that does not generalise. The test starts from a
+float literal, which is already a value `f64` can hold, so the trip back is
+trivially identity. Arbitrary raw values at the same magnitude fail half the
+time.
+
+The claim is true for every price a prediction market or an equity quotes, and
+`round_trip_holds_across_the_whole_tick_grid` covers that grid exhaustively.
+It is not true to the top of the type's range, and the doc should say nine
+million rather than imply nine billion. Fixing the sentence is smaller than
+fixing the range and should not wait for it.
+
+## Where the limits are actually reached
+
+Denomination first. JPY 9,223,372,036 is about USD 60M, so a yen-denominated
+book hits the arithmetic ceiling two orders of magnitude sooner than a dollar
+one, and the exactness ceiling at JPY 9,007,199 (about USD 60k) sooner still.
+
+Quantity second. Meme-coin units run to the trillions; 9.2e9 is reached by a
+position of ten billion tokens, which is a few hundred dollars of SHIB.
+Hyperliquid already works around this by quoting `kPEPE` in thousands, and the
+instrument tests carry `KPEPE-PERP`, so the venues most exposed to it have
+often scaled the unit themselves.
+
+Price is not a realistic case. Nine billion is four orders above the most
+expensive instrument anyone quotes.
+
+## How Nautilus does it
+
+A `cfg`-switched type alias, with every use site naming the alias:
+
+```rust
+#[cfg(feature = "high-precision")]     pub type PriceRaw = i128;
+#[cfg(not(feature = "high-precision"))] pub type PriceRaw = i64;
+
+pub struct Price { pub raw: PriceRaw, pub precision: u8 }
+```
+
+`Quantity` uses `u128`/`u64`, unsigned because quantities do not go negative.
+Five constants move together: `FIXED_PRECISION` (9 or 16), `FIXED_SCALAR` (1e9
+or 1e16), `PRECISION_BYTES` (8 or 16), the Arrow schema string
+`FixedSizeBinary(8)` or `(16)`, and `PRICE_MAX`. The feature is off by default
+(`default = []`), and `defi` turns it on because 18-decimal wei needs it.
+
+Two details are worth copying regardless of whether the rest is.
+
+They export the build mode as a symbol:
+
+```rust
+#[unsafe(no_mangle)]
+pub static HIGH_PRECISION_MODE: u8 = cfg!(feature = "high-precision") as u8;
+```
+
+A compile-time choice is invisible across an FFI boundary otherwise, and
+Python reading 8 bytes where the binary wrote 16 is a silent corruption rather
+than an error.
+
+And they carry a scar from the migration, documented at `fixed.rs:34`.
+Catalogs written before December 2025 used `int(value * FIXED_SCALAR)` instead
+of `round(value * 10^precision) * scale`, so the decode path now runs
+correction functions on every read, with a note that the overhead will become
+opt-in "once catalogs have been repaired or migrated". The hazard in widening
+a fixed-point type is the scale conversion, not the integer.
+
+## Why the alias alone would not work here
+
+Nautilus stores raw integers as `FixedSizeBinary`, so widening the integer
+widens the column and the value survives. We store `f64` and convert at the
+boundary. Widening `i64` to `i128` while the column stays `f64` moves the
+overflow ceiling and leaves the exactness ceiling at 9,007,199 units, which is
+the one that binds. Worse, raising `SCALE` to `1e16` to buy precision would
+drop the exactness ceiling to `2^53 / 1e16`, which is 0.9 units.
+
+So the change is not "swap the integer". It is:
+
+1. A `cfg`-switched raw type and a scale that moves with it, following the
+   Nautilus shape, including the exported mode symbol.
+2. A storage representation that can hold what the wider type represents.
+   `Decimal128` is the natural Arrow answer and Parquet supports it.
+3. A read path that keeps existing `f64` segments readable. Segments are
+   immutable and cannot be rewritten in place, so both encodings have to
+   coexist behind the schema, which is the same problem the fork work solved
+   for shadowed tables.
+4. A rounding contract that is pinned by test before anything is written with
+   it, given what the conversion cost Nautilus.
+
+Item 3 is the reason this is not a small change. Items 1 and 2 are mechanical.
+
+## Status and recommendation
+
+Not planned. The default `i64` path should stay the default whatever happens,
+because it is what the 0.329 µs/event kernel is measured on, and `i128` does
+not fit a register.
+
+The one thing that should happen soon is independent of all of it: correct the
+`store.rs` doc claim, and extend `float_storage_round_trips_exactly` to assert
+the boundary at 9,007,199 rather than imply there is not one. A test that
+passes because its input was already a float is not testing what its name
+says.
