@@ -335,22 +335,30 @@ pub struct MarginRequirement {
 }
 
 /// Total margin required across a set of positions.
+/// Margin for a set of positions, priced by `mark`.
+///
+/// `mark` is a lookup rather than a map because the engine keys its marks by
+/// a dense slot: handing this a `BTreeMap<(InstrumentId, OutcomeId), _>`
+/// would mean building one on every margin check, and margin is checked once
+/// per record. What the caller is asked for is the question, not the
+/// container it answers it from.
 pub fn margin_requirement<'a>(
     model: &dyn MarginModel,
     positions: impl Iterator<Item = &'a Position>,
     instruments: &crate::instrument::InstrumentSet,
-    marks: &BTreeMap<(InstrumentId, OutcomeId), Price>,
+    mark: impl Fn(&InstrumentId, OutcomeId) -> Option<Price>,
 ) -> Result<MarginRequirement> {
     let mut out = MarginRequirement::default();
     for position in positions {
         if position.is_flat() {
             continue;
         }
-        let key = (position.instrument.clone(), position.outcome);
-        let Some(mark) = marks.get(&key) else {
-            out.unmarked.push(key);
+        let Some(found) = mark(&position.instrument, position.outcome) else {
+            out.unmarked
+                .push((position.instrument.clone(), position.outcome));
             continue;
         };
+        let mark = &found;
         let instrument = instruments.get(&position.instrument)?;
         out.initial = out.initial.checked_add(model.initial_margin(
             instrument,
@@ -650,7 +658,7 @@ mod tests {
             &model,
             portfolio.open_positions(),
             &instruments(),
-            &marks(100.0),
+            |id, outcome| marks(100.0).get(&(id.clone(), outcome)).copied(),
         )
         .unwrap();
         assert_eq!(with_mark.initial, money(20.0));
@@ -660,7 +668,7 @@ mod tests {
             &model,
             portfolio.open_positions(),
             &instruments(),
-            &BTreeMap::new(),
+            |_, _| None,
         )
         .unwrap();
         assert_eq!(without.initial, Money::ZERO);
