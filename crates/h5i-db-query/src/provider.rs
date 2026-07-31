@@ -11,7 +11,7 @@ pub use crate::metrics::{ScanMetrics, ScanMetricsCollector};
 use crate::predicate_cache::{
     PredicateCache, PredicateCacheMode, PredicateCacheStats, eligible_predicate,
 };
-use crate::pruning::ManifestPruningStats;
+use crate::pruning::{ManifestPruningStats, json_stat_to_scalar};
 use arrow::datatypes::{DataType, SchemaRef};
 use async_trait::async_trait;
 use datafusion::catalog::Session;
@@ -29,45 +29,6 @@ use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr, expressions};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_pruning::PruningPredicate;
 use h5i_db_core::{ResolvedTable, SegmentMeta};
-
-/// Typed Arrow scalar from a manifest JSON stat (mirrors the conversion in
-/// `pruning.rs`, restricted to the types manifest stats are recorded for).
-fn json_stat_to_scalar(v: &serde_json::Value, data_type: &DataType) -> Option<ScalarValue> {
-    use arrow::datatypes::TimeUnit;
-    match data_type {
-        DataType::Int8 => v.as_i64().map(|x| ScalarValue::Int8(Some(x as i8))),
-        DataType::Int16 => v.as_i64().map(|x| ScalarValue::Int16(Some(x as i16))),
-        DataType::Int32 => v.as_i64().map(|x| ScalarValue::Int32(Some(x as i32))),
-        DataType::Int64 => v.as_i64().map(|x| ScalarValue::Int64(Some(x))),
-        DataType::UInt8 => v.as_u64().map(|x| ScalarValue::UInt8(Some(x as u8))),
-        DataType::UInt16 => v.as_u64().map(|x| ScalarValue::UInt16(Some(x as u16))),
-        DataType::UInt32 => v.as_u64().map(|x| ScalarValue::UInt32(Some(x as u32))),
-        DataType::UInt64 => v.as_u64().map(|x| ScalarValue::UInt64(Some(x))),
-        DataType::Float32 => v.as_f64().map(|x| ScalarValue::Float32(Some(x as f32))),
-        DataType::Float64 => v.as_f64().map(|x| ScalarValue::Float64(Some(x))),
-        DataType::Boolean => v.as_bool().map(|x| ScalarValue::Boolean(Some(x))),
-        DataType::Utf8 => v.as_str().map(|s| ScalarValue::Utf8(Some(s.to_string()))),
-        DataType::LargeUtf8 => v
-            .as_str()
-            .map(|s| ScalarValue::LargeUtf8(Some(s.to_string()))),
-        DataType::Date32 => v.as_i64().map(|x| ScalarValue::Date32(Some(x as i32))),
-        DataType::Date64 => v.as_i64().map(|x| ScalarValue::Date64(Some(x))),
-        DataType::Timestamp(unit, tz) => {
-            let x = v.as_i64()?;
-            Some(match unit {
-                TimeUnit::Second => ScalarValue::TimestampSecond(Some(x), tz.clone()),
-                TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(Some(x), tz.clone()),
-                TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(Some(x), tz.clone()),
-                TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(Some(x), tz.clone()),
-            })
-        }
-        // Dictionary-encoded strings: stats were computed over values.
-        DataType::Dictionary(_, value) if **value == DataType::Utf8 => {
-            v.as_str().map(|s| ScalarValue::Utf8(Some(s.to_string())))
-        }
-        _ => None,
-    }
-}
 
 /// Fold manifest segment stats into planner `Statistics` (DESIGN §7 Tier 1):
 /// exact row counts always; per-column min/max/null-count exact when every

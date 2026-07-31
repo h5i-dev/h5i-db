@@ -40,6 +40,13 @@ enum ScalarStat {
     Float(f64),
     Str(String),
     Bool(bool),
+    /// A `Decimal128` value, as its unscaled backing integer.
+    ///
+    /// The scale is *not* carried: a column has exactly one, fixed in its
+    /// schema and unable to change under evolution (`is_widening` admits no
+    /// decimal widening), and the reader has the schema in hand. Storing it
+    /// would only create a second place for it to be wrong.
+    Decimal(i128),
 }
 
 impl ScalarStat {
@@ -50,6 +57,14 @@ impl ScalarStat {
             ScalarStat::Float(v) => serde_json::json!(v),
             ScalarStat::Str(v) => serde_json::json!(v),
             ScalarStat::Bool(v) => serde_json::json!(v),
+            // A decimal string, not a JSON number, because an `i128` does not
+            // fit one: `serde_json::Number` tops out at i64/u64 without the
+            // `arbitrary_precision` feature, and `Decimal128(38, 9)` -- what
+            // the backtest crate writes -- routinely exceeds that. The string
+            // also gives older readers the graceful path: they fail to parse
+            // it as a number, return no stat, and prune nothing, which is the
+            // fail-open behaviour they already have for unknown types.
+            ScalarStat::Decimal(v) => serde_json::json!(v.to_string()),
         }
     }
 
@@ -60,6 +75,11 @@ impl ScalarStat {
             (ScalarStat::Float(a), ScalarStat::Float(b)) => a < b,
             (ScalarStat::Str(a), ScalarStat::Str(b)) => a < b,
             (ScalarStat::Bool(a), ScalarStat::Bool(b)) => !a & b,
+            // Unscaled integers compare directly: one column, one scale.
+            (ScalarStat::Decimal(a), ScalarStat::Decimal(b)) => a < b,
+            // Mixed variants cannot arise -- a column has one type for the
+            // life of a segment -- and answering "not less than" keeps an
+            // accumulator that somehow saw two from inventing a bound.
             _ => false,
         }
     }
@@ -255,6 +275,14 @@ fn array_minmax(array: &ArrayRef) -> Option<(Option<ScalarStat>, Option<ScalarSt
             let arr = arr.as_any().downcast_ref::<StringArray>().unwrap();
             let min = arrow::compute::min_string(arr).map(|s| ScalarStat::Str(s.to_string()));
             let max = arrow::compute::max_string(arr).map(|s| ScalarStat::Str(s.to_string()));
+            (min, max)
+        }
+        // Not the `minmax_primitive!` macro: that casts through an `i64`,
+        // which is the one thing a 128-bit stat must not do.
+        DataType::Decimal128(_, _) => {
+            let arr = array.as_any().downcast_ref::<Decimal128Array>().unwrap();
+            let min = arrow::compute::min(arr).map(ScalarStat::Decimal);
+            let max = arrow::compute::max(arr).map(ScalarStat::Decimal);
             (min, max)
         }
         _ => return None,

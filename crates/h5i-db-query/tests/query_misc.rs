@@ -5,8 +5,8 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
-    UInt64Array,
+    Array, Decimal128Array, Float64Array, Int64Array, RecordBatch, StringArray,
+    TimestampNanosecondArray, UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion::common::stats::Precision;
@@ -1373,4 +1373,323 @@ async fn latest_by_store_reuses_cached_segments_across_appends() {
         .downcast_ref::<Float64Array>()
         .unwrap();
     assert_eq!(price.values(), &[999.0, 102.0]);
+}
+
+// ---------------------------------------------------------------------------
+// Decimal128 min/max pruning
+// ---------------------------------------------------------------------------
+
+fn decimal_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+        // 38/9 is what h5i-db-backtest writes for a fixed-point column, and
+        // the width that does not fit a JSON number.
+        Field::new("price", DataType::Decimal128(38, 9), false),
+    ]))
+}
+
+fn decimal_batch(ts: &[i64], raws: &[i128]) -> RecordBatch {
+    RecordBatch::try_new(
+        decimal_schema(),
+        vec![
+            Arc::new(TimestampNanosecondArray::from(ts.to_vec()).with_timezone("UTC".to_string())),
+            Arc::new(
+                Decimal128Array::from(raws.to_vec())
+                    .with_precision_and_scale(38, 9)
+                    .unwrap(),
+            ),
+        ],
+    )
+    .unwrap()
+}
+
+/// A raw unscaled value as an exact decimal literal for SQL.
+///
+/// Two traps here, and both read as a pruning bug when hit.
+///
+/// `Decimal128Array::value` hands back the *unscaled* integer; the logical
+/// value is that over 10^9. Writing the raw integer into a predicate compares
+/// against a number a billion times too large.
+///
+/// And a bare decimal literal is typed `Float64`, so comparing one against a
+/// `Decimal128` column coerces the column to `f64` and stops being exact past
+/// 2^53 -- precisely the range a decimal column exists to serve. The `CAST`
+/// keeps the comparison in decimal;
+/// `decimal_literals_are_float64_and_lose_the_range` pins the hazard.
+fn as_literal(raw: i128) -> String {
+    let (sign, magnitude) = if raw < 0 { ("-", -raw) } else { ("", raw) };
+    const SCALE: i128 = 1_000_000_000;
+    format!(
+        "CAST('{sign}{}.{:09}' AS DECIMAL(38,9))",
+        magnitude / SCALE,
+        magnitude % SCALE
+    )
+}
+
+/// Three segments, disjoint price bands, one row each side of every boundary.
+async fn decimal_db() -> (tempfile::TempDir, Arc<Database>) {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("prices", decimal_schema(), time_options())
+        .await
+        .unwrap();
+    // Bands are far above 2^53 raw units, which is the range an f64 column
+    // could not have carried exactly in the first place -- the whole reason
+    // a decimal column exists, and so the range its pruning must work over.
+    const BASE: i128 = 9_007_199_254_740_993;
+    for (seg, ts) in [(0i128, 0i64), (1, 10), (2, 20)] {
+        db.append(
+            "prices",
+            vec![decimal_batch(
+                &[ts, ts + 1],
+                &[BASE + seg * 1_000, BASE + seg * 1_000 + 500],
+            )],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    (dir, db)
+}
+
+/// The property that makes pruning safe to turn on: it changes how much is
+/// read, never what comes back.
+///
+/// A wrong bound here does not fail loudly -- it silently returns fewer rows,
+/// which is why this compares against the same query with pruning disabled
+/// rather than against hand-written expectations.
+#[tokio::test(flavor = "multi_thread")]
+async fn decimal_pruning_never_changes_the_answer() {
+    let (_dir, db) = decimal_db().await;
+    const BASE: i128 = 9_007_199_254_740_993;
+
+    let rows = |batches: &[RecordBatch]| -> Vec<i128> {
+        let mut out: Vec<i128> = batches
+            .iter()
+            .flat_map(|b| {
+                let a = b
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Decimal128Array>()
+                    .unwrap();
+                (0..b.num_rows()).map(|i| a.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    };
+
+    // The control arm. An unfiltered scan cannot prune on `price`, so this
+    // reads every row; the predicate is then applied in Rust. Deliberately a
+    // second implementation rather than the same engine with pruning turned
+    // off -- a bug in the bound would otherwise have to be absent from both
+    // arms to be caught.
+    let all = {
+        let s = session(&db).await;
+        rows(
+            &s.sql("SELECT price FROM prices")
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap(),
+        )
+    };
+    assert_eq!(all.len(), 6, "control arm must see every row");
+
+    // Boundaries, interiors, and both open ends -- including predicates that
+    // fall exactly on a segment's min and max, and two that match nothing.
+    #[allow(clippy::type_complexity)]
+    let cases: Vec<(String, Box<dyn Fn(i128) -> bool>)> = vec![
+        (
+            format!("price < {}", as_literal(BASE)),
+            Box::new(|p| p < BASE),
+        ),
+        (
+            format!("price = {}", as_literal(BASE)),
+            Box::new(|p| p == BASE),
+        ),
+        (
+            format!("price = {}", as_literal(BASE + 500)),
+            Box::new(|p| p == BASE + 500),
+        ),
+        (
+            format!("price > {}", as_literal(BASE + 500)),
+            Box::new(|p| p > BASE + 500),
+        ),
+        (
+            format!("price >= {}", as_literal(BASE + 1_000)),
+            Box::new(|p| p >= BASE + 1_000),
+        ),
+        (
+            format!("price <= {}", as_literal(BASE + 1_500)),
+            Box::new(|p| p <= BASE + 1_500),
+        ),
+        (
+            format!(
+                "price > {} AND price < {}",
+                as_literal(BASE + 400),
+                as_literal(BASE + 2_100)
+            ),
+            Box::new(|p| p > BASE + 400 && p < BASE + 2_100),
+        ),
+        (
+            format!("price > {}", as_literal(BASE + 2_500)),
+            Box::new(|p| p > BASE + 2_500),
+        ),
+    ];
+
+    let mut pruned_at_least_once = false;
+    for (predicate, matches) in cases {
+        let s = session(&db).await;
+        let got = rows(
+            &s.sql(&format!("SELECT price FROM prices WHERE {predicate}"))
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap(),
+        );
+        let metrics = s.take_scan_metrics();
+
+        let expected: Vec<i128> = all.iter().copied().filter(|p| matches(*p)).collect();
+        assert_eq!(got, expected, "`{predicate}` returned the wrong rows");
+
+        // Pruning must never drop a segment that holds a matching row. That
+        // is the failure this whole test exists for, and it is silent.
+        let scanned: usize = metrics.iter().map(|m| m.segments_scanned).sum();
+        if !expected.is_empty() {
+            assert!(
+                scanned > 0,
+                "`{predicate}` matches rows but scanned nothing"
+            );
+        }
+        if metrics.iter().any(|m| m.segments_pruned > 0) {
+            pruned_at_least_once = true;
+        }
+    }
+
+    // And the stats must actually be doing work, or every assertion above
+    // would pass just as well with no decimal pruning at all.
+    assert!(
+        pruned_at_least_once,
+        "no predicate pruned a segment, so this proves nothing"
+    );
+}
+
+/// The stat has to survive the manifest round trip as an exact integer.
+///
+/// `Decimal128(38, 9)` values do not fit a JSON number, so they are written
+/// as strings. A silent narrowing through `f64` or `i64` would land inside
+/// the real range and prune away rows that match.
+#[tokio::test(flavor = "multi_thread")]
+async fn decimal_stats_survive_the_manifest_exactly() {
+    let (_dir, db) = decimal_db().await;
+    let resolved = db
+        .resolve("prices", h5i_db_core::database::ReadAt::Latest)
+        .await
+        .unwrap();
+    const BASE: i128 = 9_007_199_254_740_993;
+
+    let mut seen = 0;
+    for segment in &resolved.manifest.segments {
+        let stats = segment.columns.get("price").expect("price has stats");
+        let min = stats.min.as_ref().expect("a min was recorded");
+        let max = stats.max.as_ref().expect("a max was recorded");
+        let parse = |v: &serde_json::Value| v.as_str().unwrap().parse::<i128>().unwrap();
+        assert_eq!(parse(max) - parse(min), 500, "band width per segment");
+        assert!(parse(min) >= BASE, "min is past what an f64 holds exactly");
+        seen += 1;
+    }
+    assert_eq!(seen, 3, "every segment recorded stats");
+}
+
+/// A bare decimal literal is `Float64`, and that is lossy for a decimal
+/// column past 2^53.
+///
+/// Not caused by pruning and not fixed by it -- the coercion happens in
+/// planning, so a full scan gets the same wrong answer. It is pinned here
+/// because it lands exactly on the range `Decimal128` columns exist to serve:
+/// a user who moves to decimals for exactness and then filters with an
+/// ordinary literal is quietly back on `f64`.
+///
+/// `SessionConfig`'s `sql_parser.parse_float_as_decimal` would type these
+/// literals as decimals instead. That is a change to every query's literal
+/// handling, so it is a decision rather than a fix to make in passing. Until
+/// then, `CAST(... AS DECIMAL(p, s))` is the exact form.
+///
+/// If this test starts failing, the coercion was fixed: delete it and drop
+/// the `CAST` from `as_literal`.
+#[tokio::test(flavor = "multi_thread")]
+async fn decimal_literals_are_float64_and_lose_the_range() {
+    let (_dir, db) = decimal_db().await;
+    let s = session(&db).await;
+
+    let typed = s
+        .sql("SELECT arrow_typeof(9007199.254740993)")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        typed[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap()
+            .value(0),
+        "Float64",
+        "if this is now a decimal, the hazard below is gone"
+    );
+
+    let count = |sql: &'static str| {
+        let s = &s;
+        async move {
+            s.sql(sql)
+                .await
+                .unwrap()
+                .collect()
+                .await
+                .unwrap()
+                .iter()
+                .map(|b| b.num_rows())
+                .sum::<usize>()
+        }
+    };
+
+    // The row is present and equal, but the f64 round trip disagrees.
+    assert_eq!(
+        count("SELECT price FROM prices WHERE price = 9007199.254740993").await,
+        0,
+        "equality against an f64 literal misses the row it names"
+    );
+    // And the same value compares as strictly less than itself.
+    assert_eq!(
+        count("SELECT price FROM prices WHERE price < 9007199.254740993").await,
+        1,
+        "a value equal to the literal is reported as less than it"
+    );
+
+    // The exact form gets both right.
+    assert_eq!(
+        count(
+            "SELECT price FROM prices \
+             WHERE price = CAST('9007199.254740993' AS DECIMAL(38,9))"
+        )
+        .await,
+        1,
+    );
+    assert_eq!(
+        count(
+            "SELECT price FROM prices \
+             WHERE price < CAST('9007199.254740993' AS DECIMAL(38,9))"
+        )
+        .await,
+        0,
+    );
 }

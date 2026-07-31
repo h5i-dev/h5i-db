@@ -107,10 +107,27 @@ changes meaning and there is nothing to migrate.
 The middle row is the one worth knowing about. On an ordinary build, decimal
 storage is exact across the entire range the default arithmetic can produce,
 and costs nothing at run time because the kernel never sees a column. What it
-does cost is on disk: sixteen bytes a value instead of eight, and a decimal
-column carries no min/max statistics yet, so a query filtering on one scans
-segments a `Float64` column would have skipped. Filtering on time is
-unaffected, which is the path a replay takes.
+does cost is disk: sixteen bytes a value instead of eight.
+
+### Filtering a decimal column in SQL
+
+Write the comparison value as a cast, not a bare literal:
+
+```sql
+-- exact
+SELECT * FROM trades WHERE price > CAST('9007199.254740993' AS DECIMAL(38,9));
+
+-- lossy above ~9e6: the literal is Float64, so the column is coerced to f64
+SELECT * FROM trades WHERE price > 9007199.254740993;
+```
+
+A bare decimal literal is typed `Float64`, so comparing a decimal column
+against one converts the column to `f64` for the comparison and gives up the
+exactness the column was chosen for. It is exact below about nine million,
+which is where a `Float64` column would have been fine anyway; past that,
+equality can miss the row it names. The cast keeps the comparison in decimal.
+
+Filtering on time is unaffected, which is the path a replay takes.
 
 Reach for `wide` only when you need to *compute* past 9.2e9 units -- a
 yen-denominated book, or token quantities in the trillions. It buys range and
