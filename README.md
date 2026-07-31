@@ -14,9 +14,8 @@ Embedded, written in Rust.**
 - **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- **Native support for popular markets:** Kalshi, Polymarket and Hyperliquid
-  payloads decode into one canonical set of tables, each with the venue's real fee
-  curve and funding.
+- **Native venue support:** Hyperliquid, Polymarket and Kalshi, plus anything
+  else that writes the [canonical tables](crates/h5i-db-venues/README.md).
 - **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.
@@ -239,15 +238,17 @@ Full methodology and results in [benchmarks](benchmarks).
 | engine | measured boundary | median | throughput |
 |---|---|---:|---:|
 | **h5i-db** | decoded records through the replay kernel | **65.7 ms** | **3.05 M events/s** |
-| **h5i-db** | full persisted run: scan, decode, fork, replay, write | 331 ms | 605 k events/s |
+| **h5i-db** | same kernel, strategy as a Python callback per event | 278 ms⁶ | 719 k events/s⁶ |
+| **h5i-db** | full persisted run: scan, decode, fork, replay, write | 280 ms | 713 k events/s |
 | NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
 | LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
 
-Medians of three fresh-process runs after one warm-up, each adapter verifying it
+Medians of three fresh-process runs after one warm-up; each adapter verifies it
 saw all 200k events and submitted all 200 orders. The measured boundaries differ,
-as the column says: the benchmark checks event and order counts rather than PnL
-equivalence, and Nautilus invokes a Python strategy callback per quote where the
-other two run native code.
+as the column says, and the benchmark checks counts rather than PnL equivalence.
+⁶ The other rows never call Python; this one crosses into it per event, as
+Nautilus does. Callback against callback the gap is 3.1×, not 13×. Derived
+(native kernel plus measured boundary cost), not timed directly.
 
 ---
 

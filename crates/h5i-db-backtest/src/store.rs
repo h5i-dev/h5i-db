@@ -118,6 +118,54 @@ fn opt_i64(array: &Int64Array, row: usize) -> Option<i64> {
     array.is_valid(row).then(|| array.value(row))
 }
 
+/// The `instrument_id` column of one batch, resolved to ids without one
+/// allocation per row.
+///
+/// A batch holds thousands of rows and a handful of distinct instruments, so
+/// `InstrumentId::new` per row allocates the same `Arc<str>` over and over --
+/// 200k times for a single-instrument day. The archive reader took this fix
+/// already (c4a5860b); the decode path is where the same waste was left.
+///
+/// The last hit is checked before the map because market data arrives grouped
+/// by instrument far more often than not, which makes the common case a
+/// pointer comparison rather than a hash.
+struct Instruments<'a> {
+    values: &'a StringArray,
+    last: Option<(&'a str, InstrumentId)>,
+    seen: std::collections::HashMap<&'a str, InstrumentId>,
+}
+
+impl<'a> Instruments<'a> {
+    fn new(batch: &'a RecordBatch) -> Result<Self> {
+        Ok(Self {
+            values: column::<StringArray>(batch, "instrument_id")?,
+            last: None,
+            seen: std::collections::HashMap::new(),
+        })
+    }
+
+    fn get(&mut self, row: usize) -> Result<InstrumentId> {
+        // Bound to the batch, not to `&mut self`, so the cached keys outlive
+        // this call.
+        let name: &'a str = self.values.value(row);
+        if let Some((cached, id)) = &self.last
+            && *cached == name
+        {
+            return Ok(id.clone());
+        }
+        let id = match self.seen.get(name) {
+            Some(id) => id.clone(),
+            None => {
+                let id = InstrumentId::new(name)?;
+                self.seen.insert(name, id.clone());
+                id
+            }
+        };
+        self.last = Some((name, id.clone()));
+        Ok(id)
+    }
+}
+
 /// Scan a table that may legitimately not exist at this read point.
 ///
 /// Two absences are facts rather than failures. A venue that publishes no
@@ -134,12 +182,9 @@ async fn scan_optional(
     table: &str,
     at: ReadAt,
     window: Option<TimeWindow>,
+    columns: Option<&[&str]>,
 ) -> Result<Vec<RecordBatch>> {
-    let options = ScanOptions {
-        time_start: window.map(|w| w.start().get()),
-        time_end: window.map(|w| w.end().get()),
-        ..Default::default()
-    };
+    let options = scan_options(window, columns);
     match db.scan(table, at, options).await {
         Ok((batches, _report)) => Ok(batches),
         Err(error) if matches!(error.code(), "table_not_found" | "version_not_found") => {
@@ -154,16 +199,68 @@ async fn scan(
     table: &str,
     at: ReadAt,
     window: Option<TimeWindow>,
+    columns: Option<&[&str]>,
 ) -> Result<Vec<RecordBatch>> {
-    let options = ScanOptions {
+    let (batches, _report) = db
+        .scan(table, at, scan_options(window, columns))
+        .await
+        .map_err(core_err)?;
+    Ok(batches)
+}
+
+/// Time bounds plus the columns the caller will actually read.
+///
+/// `columns` is `None` where a reader wants the whole row. Where it is set,
+/// storage never decompresses the rest: `source_vendor` and `trade_id` are
+/// carried for provenance and read by nobody on the replay path, and a scan
+/// that materialises them pays for them on every run. A projection that
+/// omits a column the decoder needs fails loudly in `column`, so the list
+/// cannot silently drift away from the decoder it belongs to.
+/// Exactly what [`read_book_events`] reads. `source_vendor` is not in it.
+const BOOK_COLUMNS: &[&str] = &[
+    "ts_init",
+    "ts_event",
+    "instrument_id",
+    "outcome",
+    "action",
+    "side",
+    "price",
+    "size",
+    "event_index",
+    "is_last",
+];
+
+/// Exactly what the trade decoders read: no `trade_id`, no `source_vendor`.
+const TRADE_COLUMNS: &[&str] = &[
+    "ts_init",
+    "ts_event",
+    "instrument_id",
+    "outcome",
+    "price",
+    "size",
+    "aggressor",
+];
+
+const FUNDING_COLUMNS: &[&str] = &["ts_init", "ts_event", "instrument_id", "rate"];
+
+const REFERENCE_COLUMNS: &[&str] = &[
+    "ts_init",
+    "ts_event",
+    "instrument_id",
+    "outcome",
+    "mark",
+    "oracle",
+];
+
+fn scan_options(window: Option<TimeWindow>, columns: Option<&[&str]>) -> ScanOptions {
+    ScanOptions {
         time_start: window.map(|w| w.start().get()),
         // ScanOptions::time_end is exclusive, which is exactly what a
         // half-open window means. No adjustment, and none to get wrong.
         time_end: window.map(|w| w.end().get()),
+        projection: columns.map(|c| c.iter().map(|name| (*name).to_string()).collect()),
         ..Default::default()
-    };
-    let (batches, _report) = db.scan(table, at, options).await.map_err(core_err)?;
-    Ok(batches)
+    }
 }
 
 // -- instruments ------------------------------------------------------------
@@ -263,7 +360,7 @@ fn parse_kind(text: &str) -> Result<InstrumentKind> {
 
 /// Read instruments back, reassembling outcomes into whole instruments.
 pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet> {
-    let batches = scan(db, schema::INSTRUMENTS, at, None).await?;
+    let batches = scan(db, schema::INSTRUMENTS, at, None, None).await?;
     // Outcome rows arrive in whatever order the segments hold them, so
     // collect by (instrument, outcome index) and assemble in index order.
     let mut collected: BTreeMap<String, InstrumentDraft> = BTreeMap::new();
@@ -494,7 +591,7 @@ pub async fn read_book_events(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<Vec<Record>> {
-    let batches = scan_optional(db, schema::BOOK_DELTAS, at, window).await?;
+    let batches = scan_optional(db, schema::BOOK_DELTAS, at, window, Some(BOOK_COLUMNS)).await?;
     let mut out: Vec<Record> = Vec::new();
     // Snapshot levels accumulate here until their `is_last` row arrives.
     type PendingSnapshot = (
@@ -510,7 +607,7 @@ pub async fn read_book_events(
     for batch in &batches {
         let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
         let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
-        let instrument = column::<StringArray>(batch, "instrument_id")?;
+        let mut instruments = Instruments::new(batch)?;
         let outcome = column::<UInt16Array>(batch, "outcome")?;
         let action = column::<StringArray>(batch, "action")?;
         let side = column::<StringArray>(batch, "side")?;
@@ -524,7 +621,7 @@ pub async fn read_book_events(
                 UnixNanos::new(ts_event.value(row)),
                 UnixNanos::new(ts_init.value(row)),
             )?;
-            let id = InstrumentId::new(instrument.value(row))?;
+            let id = instruments.get(row)?;
             let out_id = OutcomeId(outcome.value(row));
 
             match action.value(row) {
@@ -682,12 +779,12 @@ pub async fn read_trades(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<Vec<Record>> {
-    let batches = scan_optional(db, schema::TRADES, at, window).await?;
+    let batches = scan_optional(db, schema::TRADES, at, window, Some(TRADE_COLUMNS)).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
         let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
-        let instrument = column::<StringArray>(batch, "instrument_id")?;
+        let mut instruments = Instruments::new(batch)?;
         let outcome = column::<UInt16Array>(batch, "outcome")?;
         let price = column::<Float64Array>(batch, "price")?;
         let size = column::<Float64Array>(batch, "size")?;
@@ -698,7 +795,7 @@ pub async fn read_trades(
                     UnixNanos::new(ts_event.value(row)),
                     UnixNanos::new(ts_init.value(row)),
                 )?,
-                InstrumentId::new(instrument.value(row))?,
+                instruments.get(row)?,
                 OutcomeId(outcome.value(row)),
                 MarketEvent::Trade {
                     price: Price::from_f64(price.value(row))?,
@@ -749,12 +846,12 @@ pub async fn read_funding(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<Vec<Record>> {
-    let batches = scan_optional(db, schema::FUNDING, at, window).await?;
+    let batches = scan_optional(db, schema::FUNDING, at, window, Some(FUNDING_COLUMNS)).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
         let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
-        let instrument = column::<StringArray>(batch, "instrument_id")?;
+        let mut instruments = Instruments::new(batch)?;
         let rate = column::<Float64Array>(batch, "rate")?;
         for row in 0..batch.num_rows() {
             out.push(Record::new(
@@ -762,7 +859,7 @@ pub async fn read_funding(
                     UnixNanos::new(ts_event.value(row)),
                     UnixNanos::new(ts_init.value(row)),
                 )?,
-                InstrumentId::new(instrument.value(row))?,
+                instruments.get(row)?,
                 OutcomeId::FIRST,
                 MarketEvent::Funding {
                     rate: Price::from_f64(rate.value(row))?,
@@ -837,7 +934,7 @@ pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Res
 /// with the payouts placed by their outcome index rather than by arrival
 /// order, because segments hold rows in whatever order they were written.
 pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolution>> {
-    let batches = scan_optional(db, schema::RESOLUTIONS, at, None).await?;
+    let batches = scan_optional(db, schema::RESOLUTIONS, at, None, None).await?;
     let mut out = Vec::new();
     // Split rows, gathered by instrument until every outcome has arrived.
     let mut splits: BTreeMap<String, (i64, BTreeMap<u16, Price>)> = BTreeMap::new();
@@ -936,7 +1033,7 @@ pub async fn read_signals(
     use crate::engine::OrderRequest;
     use crate::order::TimeInForce;
 
-    let batches = scan(db, table, at, window).await?;
+    let batches = scan(db, table, at, window, None).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts = column::<TimestampNanosecondArray>(batch, "ts")?;
@@ -1025,7 +1122,7 @@ pub async fn read_commands(
     use crate::engine::{OrderRequest, ReplayCommand};
     use crate::order::TimeInForce;
 
-    let batches = scan(db, table, at, window).await?;
+    let batches = scan(db, table, at, window, None).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts = column::<TimestampNanosecondArray>(batch, "ts")?;
@@ -1194,7 +1291,7 @@ pub async fn trade_source(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<crate::replay::RecordSource> {
-    let batches = scan_optional(db, schema::TRADES, at, window).await?;
+    let batches = scan_optional(db, schema::TRADES, at, window, Some(TRADE_COLUMNS)).await?;
     Ok(Box::new(BatchDecoder {
         batches: batches.into_iter(),
         buffer: Default::default(),
@@ -1205,7 +1302,7 @@ pub async fn trade_source(
 fn decode_trades(batch: &RecordBatch, out: &mut std::collections::VecDeque<Record>) -> Result<()> {
     let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
     let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
-    let instrument = column::<StringArray>(batch, "instrument_id")?;
+    let mut instruments = Instruments::new(batch)?;
     let outcome = column::<UInt16Array>(batch, "outcome")?;
     let price = column::<Float64Array>(batch, "price")?;
     let size = column::<Float64Array>(batch, "size")?;
@@ -1216,7 +1313,7 @@ fn decode_trades(batch: &RecordBatch, out: &mut std::collections::VecDeque<Recor
                 UnixNanos::new(ts_event.value(row)),
                 UnixNanos::new(ts_init.value(row)),
             )?,
-            InstrumentId::new(instrument.value(row))?,
+            instruments.get(row)?,
             OutcomeId(outcome.value(row)),
             MarketEvent::Trade {
                 price: Price::from_f64(price.value(row))?,
@@ -1233,7 +1330,7 @@ fn decode_trades(batch: &RecordBatch, out: &mut std::collections::VecDeque<Recor
 /// Counting rows off the Arrow batches costs nothing, and lets a caller
 /// report volume without draining the stream it is about to replay.
 pub async fn count_trades(db: &Database, at: ReadAt, window: Option<TimeWindow>) -> Result<usize> {
-    let batches = scan_optional(db, schema::TRADES, at, window).await?;
+    let batches = scan_optional(db, schema::TRADES, at, window, Some(TRADE_COLUMNS)).await?;
     Ok(batches.iter().map(|batch| batch.num_rows()).sum())
 }
 
@@ -1243,7 +1340,7 @@ pub async fn funding_source(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<crate::replay::RecordSource> {
-    let batches = scan_optional(db, schema::FUNDING, at, window).await?;
+    let batches = scan_optional(db, schema::FUNDING, at, window, Some(FUNDING_COLUMNS)).await?;
     Ok(Box::new(BatchDecoder {
         batches: batches.into_iter(),
         buffer: Default::default(),
@@ -1257,7 +1354,8 @@ pub async fn reference_source(
     at: ReadAt,
     window: Option<TimeWindow>,
 ) -> Result<crate::replay::RecordSource> {
-    let batches = scan_optional(db, schema::REFERENCES, at, window).await?;
+    let batches =
+        scan_optional(db, schema::REFERENCES, at, window, Some(REFERENCE_COLUMNS)).await?;
     Ok(Box::new(BatchDecoder {
         batches: batches.into_iter(),
         buffer: Default::default(),
@@ -1271,7 +1369,7 @@ fn decode_reference(
 ) -> Result<()> {
     let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
     let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
-    let instrument = column::<StringArray>(batch, "instrument_id")?;
+    let mut instruments = Instruments::new(batch)?;
     let outcome = column::<UInt16Array>(batch, "outcome")?;
     let mark = column::<Float64Array>(batch, "mark")?;
     let oracle = column::<Float64Array>(batch, "oracle")?;
@@ -1281,7 +1379,7 @@ fn decode_reference(
                 UnixNanos::new(ts_event.value(row)),
                 UnixNanos::new(ts_init.value(row)),
             )?,
-            InstrumentId::new(instrument.value(row))?,
+            instruments.get(row)?,
             OutcomeId(outcome.value(row)),
             MarketEvent::Reference {
                 mark: opt_price(mark, row)?,
@@ -1350,7 +1448,7 @@ pub async fn write_references(db: &Database, records: &[Record]) -> Result<()> {
 fn decode_funding(batch: &RecordBatch, out: &mut std::collections::VecDeque<Record>) -> Result<()> {
     let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
     let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
-    let instrument = column::<StringArray>(batch, "instrument_id")?;
+    let mut instruments = Instruments::new(batch)?;
     let rate = column::<Float64Array>(batch, "rate")?;
     for row in 0..batch.num_rows() {
         out.push_back(Record::new(
@@ -1358,7 +1456,7 @@ fn decode_funding(batch: &RecordBatch, out: &mut std::collections::VecDeque<Reco
                 UnixNanos::new(ts_event.value(row)),
                 UnixNanos::new(ts_init.value(row)),
             )?,
-            InstrumentId::new(instrument.value(row))?,
+            instruments.get(row)?,
             OutcomeId::FIRST,
             MarketEvent::Funding {
                 rate: Price::from_f64(rate.value(row))?,
@@ -1398,7 +1496,7 @@ pub async fn write_ingest_log(db: &Database, entry: IngestEntry) -> Result<()> {
 }
 
 pub async fn read_ingest_log(db: &Database) -> Result<Vec<IngestEntry>> {
-    let batches = scan_optional(db, schema::INGEST_LOG, ReadAt::Latest, None).await?;
+    let batches = scan_optional(db, schema::INGEST_LOG, ReadAt::Latest, None, None).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts = column::<TimestampNanosecondArray>(batch, "ts")?;
@@ -1657,7 +1755,7 @@ fn fills_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
 /// Read `bt_fills` back as [`Fill`]s, so a stored run can be re-folded into
 /// positions and checked against what it claimed.
 pub async fn read_fills(db: &Database, at: ReadAt) -> Result<Vec<crate::order::Fill>> {
-    let batches = scan(db, schema::FILLS, at, None).await?;
+    let batches = scan(db, schema::FILLS, at, None, None).await?;
     let mut out = Vec::new();
     for batch in &batches {
         let ts = column::<TimestampNanosecondArray>(batch, "ts")?;
@@ -1870,7 +1968,7 @@ async fn backfill(
 ) -> Result<()> {
     let (start, end) = time_bounds(&incoming, time_column)?;
     let window = TimeWindow::new(UnixNanos::new(start), UnixNanos::new(end))?;
-    let existing = scan_optional(db, table, ReadAt::Latest, Some(window)).await?;
+    let existing = scan_optional(db, table, ReadAt::Latest, Some(window), None).await?;
 
     let mut batches = existing;
     batches.push(incoming);

@@ -3,6 +3,23 @@
 //! Declarative signal/command replays remain the fast default. This adapter
 //! deliberately reacquires the GIL for each callback and is therefore for
 //! path-dependent research where Python flexibility is worth that cost.
+//!
+//! What that cost is made of was measured rather than assumed
+//! (`benchmarks/backtest_compare/h5i_callback_boundary.py`): most of it was
+//! not the call, it was building argument dictionaries the strategy never
+//! read. Two decisions follow.
+//!
+//! **Callbacks the strategy did not override are not called.** `EventStrategy`
+//! defines all four as no-ops, so `hasattr` is always true and a strategy that
+//! only wants fills was still paying a full crossing per market event to be
+//! told `None`. The bound methods are resolved once, at construction.
+//!
+//! **Arguments are mappings that build Python objects on demand.** A market
+//! event carried thirteen entries, three of them book and portfolio lookups,
+//! whether or not the callback touched one. [`View`] owns a Rust snapshot and
+//! converts per key, so an untouched field costs nothing. It owns rather than
+//! borrows deliberately: a strategy that keeps an event past its callback
+//! keeps a valid snapshot, which is what a plain dict gave it before.
 
 use std::collections::BTreeMap;
 
@@ -17,41 +34,82 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 pub(crate) struct PythonStrategy {
-    object: Py<PyAny>,
+    /// Bound callbacks, resolved once. `None` means "do not call": either the
+    /// strategy has no such method, or it left `EventStrategy`'s do-nothing
+    /// version in place, and crossing the boundary to be handed `None` back
+    /// is the most expensive way to learn nothing.
+    on_start: Option<Py<PyAny>>,
+    on_event: Option<Py<PyAny>>,
+    on_timer: Option<Py<PyAny>>,
+    on_fill: Option<Py<PyAny>>,
+    on_stop: Option<Py<PyAny>>,
     order_ids: BTreeMap<String, OrderId>,
 }
 
 impl PythonStrategy {
     pub(crate) fn new(object: Py<PyAny>) -> Self {
-        Self {
-            object,
-            order_ids: BTreeMap::new(),
-        }
+        Python::attach(|py| {
+            let bound = object.bind(py);
+            // The base class is only used to recognise an unoverridden
+            // method. If it cannot be imported the strategy is some other
+            // duck-typed object, and every method it defines gets called --
+            // the behaviour before any of this existed.
+            let base = py
+                .import("h5i_db.backtest")
+                .and_then(|module| module.getattr("EventStrategy"))
+                .ok();
+            Self {
+                on_start: resolve(bound, base.as_ref(), "on_start"),
+                on_event: resolve(bound, base.as_ref(), "on_event"),
+                on_timer: resolve(bound, base.as_ref(), "on_timer"),
+                on_fill: resolve(bound, base.as_ref(), "on_fill"),
+                on_stop: resolve(bound, base.as_ref(), "on_stop"),
+                order_ids: BTreeMap::new(),
+            }
+        })
     }
 
     fn invoke(
         &mut self,
-        method: &str,
+        method: Callback,
         ctx: &mut Context<'_>,
         event: Option<CallbackEvent<'_>>,
     ) -> Result<()> {
+        // Checked before the GIL is taken: a strategy that does not want this
+        // callback should not pay for an attach to find that out.
+        if self.callback(method).is_none() {
+            return Ok(());
+        }
         Python::attach(|py| {
-            let object = self.object.bind(py);
-            if !object.hasattr(method).map_err(py_error)? {
-                return Ok(());
-            }
-            let context = context_dict(py, ctx).map_err(py_error)?;
+            let callable = match self.callback(method) {
+                Some(callable) => callable.bind(py).clone(),
+                None => return Ok(()),
+            };
+            let context = context_view(ctx);
             let returned = match event {
                 Some(event) => {
-                    let payload = event.to_dict(py, ctx).map_err(py_error)?;
-                    object
-                        .call_method1(method, (context, payload))
-                        .map_err(py_error)?
+                    let payload = event.to_view(ctx);
+                    let context = Py::new(py, context).map_err(py_error)?;
+                    let payload = Py::new(py, payload).map_err(py_error)?;
+                    callable.call1((context, payload)).map_err(py_error)?
                 }
-                None => object.call_method1(method, (context,)).map_err(py_error)?,
+                None => {
+                    let context = Py::new(py, context).map_err(py_error)?;
+                    callable.call1((context,)).map_err(py_error)?
+                }
             };
             self.apply_actions(ctx, &returned)
         })
+    }
+
+    fn callback(&self, method: Callback) -> Option<&Py<PyAny>> {
+        match method {
+            Callback::Start => self.on_start.as_ref(),
+            Callback::Event => self.on_event.as_ref(),
+            Callback::Timer => self.on_timer.as_ref(),
+            Callback::Fill => self.on_fill.as_ref(),
+            Callback::Stop => self.on_stop.as_ref(),
+        }
     }
 
     fn apply_actions(&mut self, ctx: &mut Context<'_>, returned: &Bound<'_, PyAny>) -> Result<()> {
@@ -247,25 +305,59 @@ impl PythonStrategy {
     }
 }
 
+/// Which callback, resolved to a slot rather than looked up by name.
+#[derive(Clone, Copy)]
+enum Callback {
+    Start,
+    Event,
+    Timer,
+    Fill,
+    Stop,
+}
+
+/// The bound method to call, or `None` where calling it would be a crossing
+/// spent to learn nothing.
+fn resolve(
+    object: &Bound<'_, PyAny>,
+    base: Option<&Bound<'_, PyAny>>,
+    name: &str,
+) -> Option<Py<PyAny>> {
+    let bound = object.getattr(name).ok()?;
+    if let Some(base) = base
+        && let Ok(inherited) = base.getattr(name)
+        // Compare the *function* the lookup landed on, not the bound method:
+        // attribute access builds a fresh bound method every time, so two of
+        // them are never the same object. Going through `__func__` also keeps
+        // a method assigned on the instance rather than the class an
+        // override -- it has no `__func__`, so it never matches, and the one
+        // thing this must not do is quietly stop calling something.
+        && let Ok(found) = bound.getattr("__func__")
+        && found.is(&inherited)
+    {
+        return None;
+    }
+    Some(bound.unbind())
+}
+
 impl Strategy for PythonStrategy {
     fn on_start(&mut self, ctx: &mut Context<'_>) -> Result<()> {
-        self.invoke("on_start", ctx, None)
+        self.invoke(Callback::Start, ctx, None)
     }
 
     fn on_event(&mut self, ctx: &mut Context<'_>, record: &Record) -> Result<()> {
-        self.invoke("on_event", ctx, Some(CallbackEvent::Market(record)))
+        self.invoke(Callback::Event, ctx, Some(CallbackEvent::Market(record)))
     }
 
     fn on_timer(&mut self, ctx: &mut Context<'_>, event: &TimeEvent) -> Result<()> {
-        self.invoke("on_timer", ctx, Some(CallbackEvent::Timer(event)))
+        self.invoke(Callback::Timer, ctx, Some(CallbackEvent::Timer(event)))
     }
 
     fn on_fill(&mut self, ctx: &mut Context<'_>, fill: &Fill) -> Result<()> {
-        self.invoke("on_fill", ctx, Some(CallbackEvent::Fill(fill)))
+        self.invoke(Callback::Fill, ctx, Some(CallbackEvent::Fill(fill)))
     }
 
     fn on_stop(&mut self, ctx: &mut Context<'_>) -> Result<()> {
-        self.invoke("on_stop", ctx, None)
+        self.invoke(Callback::Stop, ctx, None)
     }
 }
 
@@ -276,86 +368,255 @@ enum CallbackEvent<'a> {
 }
 
 impl CallbackEvent<'_> {
-    fn to_dict<'py>(&self, py: Python<'py>, ctx: &Context<'_>) -> PyResult<Bound<'py, PyDict>> {
-        let out = PyDict::new(py);
+    fn to_view(&self, ctx: &Context<'_>) -> View {
+        let mut out = View::with_capacity(13);
         match self {
             Self::Market(record) => {
-                out.set_item("type", "market")?;
-                out.set_item("kind", record.event.kind())?;
-                out.set_item("ts_init", record.stamps.ts_init.get())?;
-                out.set_item("ts_event", record.stamps.ts_event.get())?;
-                out.set_item("instrument_id", record.instrument.as_str())?;
-                out.set_item("outcome", record.outcome.0)?;
-                out.set_item(
+                out.put("type", Val::Static("market"));
+                out.put("kind", Val::Static(record.event.kind()));
+                out.put("ts_init", Val::Int(record.stamps.ts_init.get()));
+                out.put("ts_event", Val::Int(record.stamps.ts_event.get()));
+                out.put("instrument_id", Val::Instrument(record.instrument.clone()));
+                out.put("outcome", Val::Int(record.outcome.0 as i64));
+                // Three lookups the old dict paid on every event. Cheap
+                // enough to take now (they are map reads of `Copy` values);
+                // it is the Python floats they became that were not.
+                out.put(
                     "best_bid",
-                    ctx.best_bid(&record.instrument, record.outcome)
-                        .map(Price::to_f64),
-                )?;
-                out.set_item(
+                    Val::OptFloat(
+                        ctx.best_bid(&record.instrument, record.outcome)
+                            .map(Price::to_f64),
+                    ),
+                );
+                out.put(
                     "best_ask",
-                    ctx.best_ask(&record.instrument, record.outcome)
-                        .map(Price::to_f64),
-                )?;
-                out.set_item(
+                    Val::OptFloat(
+                        ctx.best_ask(&record.instrument, record.outcome)
+                            .map(Price::to_f64),
+                    ),
+                );
+                out.put(
                     "position",
-                    ctx.position_quantity(&record.instrument, record.outcome)
-                        .to_f64(),
-                )?;
-                add_market_fields(&out, &record.event)?;
+                    Val::Float(
+                        ctx.position_quantity(&record.instrument, record.outcome)
+                            .to_f64(),
+                    ),
+                );
+                add_market_fields(&mut out, &record.event);
             }
             Self::Timer(event) => {
-                out.set_item("type", "timer")?;
-                out.set_item("name", &event.name)?;
-                out.set_item("scheduled_for", event.scheduled_for.get())?;
-                out.set_item("sequence", event.sequence)?;
+                out.put("type", Val::Static("timer"));
+                out.put("name", Val::Text(event.name.clone()));
+                out.put("scheduled_for", Val::Int(event.scheduled_for.get()));
+                out.put("sequence", Val::Int(event.sequence as i64));
             }
             Self::Fill(fill) => {
-                out.set_item("type", "fill")?;
-                out.set_item("ts", fill.ts.get())?;
-                out.set_item("order_id", fill.order_id.0)?;
-                out.set_item("instrument_id", fill.instrument.as_str())?;
-                out.set_item("outcome", fill.outcome.0)?;
-                out.set_item("side", fill.side.as_str())?;
-                out.set_item("price", fill.price.to_f64())?;
-                out.set_item("quantity", fill.quantity.to_f64())?;
-                out.set_item("commission", fill.commission.to_f64())?;
-                out.set_item("is_taker", fill.is_taker)?;
-                out.set_item("tag", fill.tag.as_deref())?;
+                out.put("type", Val::Static("fill"));
+                out.put("ts", Val::Int(fill.ts.get()));
+                out.put("order_id", Val::Int(fill.order_id.0 as i64));
+                out.put("instrument_id", Val::Instrument(fill.instrument.clone()));
+                out.put("outcome", Val::Int(fill.outcome.0 as i64));
+                out.put("side", Val::Static(fill.side.as_str()));
+                out.put("price", Val::Float(fill.price.to_f64()));
+                out.put("quantity", Val::Float(fill.quantity.to_f64()));
+                out.put("commission", Val::Float(fill.commission.to_f64()));
+                out.put("is_taker", Val::Bool(fill.is_taker));
+                out.put("tag", Val::OptText(fill.tag.clone()));
             }
         }
+        out
+    }
+}
+
+/// A position as the callback sees it, before it is any Python object.
+struct PositionRow {
+    instrument: InstrumentId,
+    outcome: u16,
+    quantity: f64,
+    realized_pnl: f64,
+}
+
+/// One field, still in Rust.
+enum Val {
+    Int(i64),
+    Float(f64),
+    OptFloat(Option<f64>),
+    Bool(bool),
+    Static(&'static str),
+    Text(String),
+    OptText(Option<String>),
+    Instrument(InstrumentId),
+    Positions(Vec<PositionRow>),
+}
+
+impl Val {
+    fn to_py(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        use pyo3::IntoPyObjectExt;
+        match self {
+            Self::Int(value) => value.into_py_any(py),
+            Self::Float(value) => value.into_py_any(py),
+            Self::OptFloat(value) => value.into_py_any(py),
+            Self::Bool(value) => value.into_py_any(py),
+            Self::Static(value) => value.into_py_any(py),
+            Self::Text(value) => value.as_str().into_py_any(py),
+            Self::OptText(value) => value.as_deref().into_py_any(py),
+            Self::Instrument(value) => value.as_str().into_py_any(py),
+            Self::Positions(rows) => {
+                let out = PyList::empty(py);
+                for row in rows {
+                    let entry = PyDict::new(py);
+                    entry.set_item("instrument_id", row.instrument.as_str())?;
+                    entry.set_item("outcome", row.outcome)?;
+                    entry.set_item("quantity", row.quantity)?;
+                    entry.set_item("realized_pnl", row.realized_pnl)?;
+                    out.append(entry)?;
+                }
+                out.into_py_any(py)
+            }
+        }
+    }
+}
+
+/// The mapping a callback is handed.
+///
+/// A `dict` in all the ways a strategy uses one -- subscript, `get`, `in`,
+/// `len`, iteration, and `dict(...)` -- but the values are Rust until asked
+/// for. The lookup is a linear scan because the widest event carries
+/// thirteen keys, and comparing thirteen static strings costs less than the
+/// hashing a map would need.
+#[pyclass(mapping, module = "h5i_db", name = "CallbackMapping")]
+pub(crate) struct View {
+    fields: Vec<(&'static str, Val)>,
+}
+
+impl View {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            fields: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn put(&mut self, key: &'static str, value: Val) {
+        self.fields.push((key, value));
+    }
+
+    fn lookup(&self, key: &str) -> Option<&Val> {
+        self.fields
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| value)
+    }
+}
+
+#[pymethods]
+impl View {
+    fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<Py<PyAny>> {
+        match self.lookup(key) {
+            Some(value) => value.to_py(py),
+            None => Err(pyo3::exceptions::PyKeyError::new_err(key.to_string())),
+        }
+    }
+
+    #[pyo3(signature = (key, default=None))]
+    fn get(
+        &self,
+        py: Python<'_>,
+        key: &str,
+        default: Option<Py<PyAny>>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        match self.lookup(key) {
+            Some(value) => value.to_py(py).map(Some),
+            None => Ok(default),
+        }
+    }
+
+    fn __contains__(&self, key: &str) -> bool {
+        self.lookup(key).is_some()
+    }
+
+    fn __len__(&self) -> usize {
+        self.fields.len()
+    }
+
+    fn keys(&self) -> Vec<&'static str> {
+        self.fields.iter().map(|(name, _)| *name).collect()
+    }
+
+    fn values(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        self.fields
+            .iter()
+            .map(|(_, value)| value.to_py(py))
+            .collect()
+    }
+
+    fn items(&self, py: Python<'_>) -> PyResult<Vec<(&'static str, Py<PyAny>)>> {
+        self.fields
+            .iter()
+            .map(|(name, value)| Ok((*name, value.to_py(py)?)))
+            .collect()
+    }
+
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        use pyo3::IntoPyObjectExt;
+        PyList::new(py, self.keys())?.into_py_any(py)
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let mut out = String::from("{");
+        for (index, (name, value)) in self.fields.iter().enumerate() {
+            if index > 0 {
+                out.push_str(", ");
+            }
+            let rendered = value.to_py(py)?;
+            out.push_str(&format!("{name:?}: {}", rendered.bind(py).repr()?));
+        }
+        out.push('}');
         Ok(out)
     }
 }
 
-fn context_dict<'py>(py: Python<'py>, ctx: &Context<'_>) -> PyResult<Bound<'py, PyDict>> {
-    let out = PyDict::new(py);
-    out.set_item("now", ctx.now().get())?;
-    out.set_item("cash", ctx.cash().to_f64())?;
-    let positions = PyList::empty(py);
-    for position in ctx.portfolio().positions() {
-        let row = PyDict::new(py);
-        row.set_item("instrument_id", position.instrument.as_str())?;
-        row.set_item("outcome", position.outcome.0)?;
-        row.set_item("quantity", position.quantity.to_f64())?;
-        row.set_item("realized_pnl", position.realized_pnl.to_f64())?;
-        positions.append(row)?;
-    }
-    out.set_item("positions", positions)?;
-    Ok(out)
+/// The context a callback is handed.
+///
+/// `positions` used to be a `PyDict` per open position on every event, read
+/// or not. It is a Rust row per position now -- one `Arc` bump and three
+/// `Copy` fields each -- and becomes Python objects only if the callback
+/// asks for them.
+fn context_view(ctx: &Context<'_>) -> View {
+    let mut out = View::with_capacity(3);
+    out.put("now", Val::Int(ctx.now().get()));
+    out.put("cash", Val::Float(ctx.cash().to_f64()));
+    out.put(
+        "positions",
+        Val::Positions(
+            ctx.portfolio()
+                .positions()
+                .map(|position| PositionRow {
+                    instrument: position.instrument.clone(),
+                    outcome: position.outcome.0,
+                    quantity: position.quantity.to_f64(),
+                    realized_pnl: position.realized_pnl.to_f64(),
+                })
+                .collect(),
+        ),
+    );
+    out
 }
 
-fn add_market_fields(out: &Bound<'_, PyDict>, event: &MarketEvent) -> PyResult<()> {
+fn add_market_fields(out: &mut View, event: &MarketEvent) {
     match event {
         MarketEvent::Trade {
             price,
             size,
             aggressor,
         } => {
-            out.set_item("price", price.to_f64())?;
-            out.set_item("size", size.to_f64())?;
-            out.set_item("aggressor", aggressor.map(Side::as_str))?;
+            out.put("price", Val::Float(price.to_f64()));
+            out.put("size", Val::Float(size.to_f64()));
+            out.put(
+                "aggressor",
+                Val::OptText(aggressor.map(|side| side.as_str().to_string())),
+            );
         }
-        MarketEvent::Funding { rate } => out.set_item("rate", rate.to_f64())?,
+        MarketEvent::Funding { rate } => out.put("rate", Val::Float(rate.to_f64())),
         MarketEvent::Bar {
             open,
             high,
@@ -363,29 +624,31 @@ fn add_market_fields(out: &Bound<'_, PyDict>, event: &MarketEvent) -> PyResult<(
             close,
             volume,
         } => {
-            out.set_item("open", open.to_f64())?;
-            out.set_item("high", high.to_f64())?;
-            out.set_item("low", low.to_f64())?;
-            out.set_item("close", close.to_f64())?;
-            out.set_item("volume", volume.to_f64())?;
+            out.put("open", Val::Float(open.to_f64()));
+            out.put("high", Val::Float(high.to_f64()));
+            out.put("low", Val::Float(low.to_f64()));
+            out.put("close", Val::Float(close.to_f64()));
+            out.put("volume", Val::Float(volume.to_f64()));
         }
         MarketEvent::BookDelta(delta) => {
-            out.set_item("action", format!("{:?}", delta.action).to_lowercase())?;
-            out.set_item("side", delta.side.as_str())?;
-            out.set_item("price", delta.price.to_f64())?;
-            out.set_item("size", delta.size.to_f64())?;
+            out.put(
+                "action",
+                Val::Text(format!("{:?}", delta.action).to_lowercase()),
+            );
+            out.put("side", Val::Static(delta.side.as_str()));
+            out.put("price", Val::Float(delta.price.to_f64()));
+            out.put("size", Val::Float(delta.size.to_f64()));
         }
         MarketEvent::BookSnapshot { bids, asks } => {
-            out.set_item("bid_levels", bids.len())?;
-            out.set_item("ask_levels", asks.len())?;
+            out.put("bid_levels", Val::Int(bids.len() as i64));
+            out.put("ask_levels", Val::Int(asks.len() as i64));
         }
         MarketEvent::Reference { mark, oracle } => {
-            out.set_item("mark", mark.map(|price| price.to_f64()))?;
-            out.set_item("oracle", oracle.map(|price| price.to_f64()))?;
+            out.put("mark", Val::OptFloat(mark.map(|price| price.to_f64())));
+            out.put("oracle", Val::OptFloat(oracle.map(|price| price.to_f64())));
         }
         MarketEvent::Gap | MarketEvent::Corporate(_) => {}
     }
-    Ok(())
 }
 
 fn required<'py, T>(dict: &Bound<'py, PyDict>, key: &str) -> Result<T>

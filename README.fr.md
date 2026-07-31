@@ -17,9 +17,8 @@ et pensés pour les agents, au service de la recherche quantitative. Embarqués,
 - **Un backtester événementiel efficace :** 3,05 M d'événements/s à travers le
   noyau de rejeu, soit 11,7× NautilusTrader et 31× LEAN sur une charge partagée
   portant sur le haut du carnet.
-- **Prise en charge native des marchés courants :** les payloads Kalshi,
-  Polymarket et Hyperliquid se décodent en un unique jeu de tables canoniques,
-  chacun avec la vraie courbe de frais et le funding du venue.
+- **Prise en charge native des places :** Hyperliquid, Polymarket, Kalshi, et
+  tout ce qui écrit les [tables canoniques](crates/h5i-db-venues/README.md).
 - **Analyse statistique professionnelle :** métriques de facteurs et de
   performance à parité `alphalens` et `empyrical`, plus le Sharpe dégonflé et la
   détection de la probabilité de surapprentissage.
@@ -258,16 +257,19 @@ Méthodologie et résultats complets dans [benchmarks](benchmarks).
 | moteur | frontière mesurée | médiane | débit |
 |---|---|---:|---:|
 | **h5i-db** | enregistrements décodés à travers le noyau de rejeu | **65,7 ms** | **3,05 M évén./s** |
-| **h5i-db** | exécution persistée complète : balayage, décodage, fork, rejeu, écriture | 331 ms | 605 k évén./s |
+| **h5i-db** | même noyau, stratégie en callback Python par événement | 278 ms⁶ | 719 k évén./s⁶ |
+| **h5i-db** | exécution persistée complète : balayage, décodage, fork, rejeu, écriture | 280 ms | 713 k évén./s |
 | NautilusTrader 1.230.0 | objets en mémoire à travers `BacktestEngine.run()` | 767 ms | 261 k évén./s |
 | LEAN `11ba019f6` | du premier callback `Slice` à `OnEndOfAlgorithm`, alimenté par disque | 2033 ms | 98,4 k évén./s |
 
-Médianes de trois exécutions en processus neufs après un échauffement, chaque
-adaptateur vérifiant qu'il a vu les 200 k événements et soumis les 200 ordres. Les
-frontières mesurées diffèrent, comme l'indique la colonne : le benchmark vérifie des
-comptages d'événements et d'ordres, pas une équivalence de PnL, et Nautilus appelle
-un callback de stratégie Python à chaque cotation là où les deux autres exécutent du
-code natif.
+Médianes de trois exécutions en processus neufs après un échauffement ; chaque
+adaptateur vérifie qu'il a vu les 200 k événements et soumis les 200 ordres. Les
+frontières mesurées diffèrent, comme l'indique la colonne, et le benchmark vérifie
+des comptages plutôt qu'une équivalence de PnL.
+⁶ Les autres lignes n'appellent jamais Python ; celle-ci y passe à chaque
+événement, comme Nautilus. Callback contre callback, l'écart est de 3,1× et
+non de 13×. Chiffre dérivé (noyau natif plus coût de frontière mesuré), non
+chronométré directement.
 
 ---
 

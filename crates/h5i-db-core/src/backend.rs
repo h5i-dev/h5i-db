@@ -52,6 +52,18 @@ pub struct HeadState {
     pub tag: HeadTag,
 }
 
+/// One table's move in a batched HEAD swap.
+///
+/// `expected` is what [`HeadStore::commit`] means by it: `None` is "this
+/// table has no HEAD yet", which is the table-creation case.
+#[derive(Clone, Debug)]
+pub struct HeadSwap {
+    pub table_id: Uuid,
+    pub table_name: String,
+    pub expected: Option<HeadTag>,
+    pub new_head: Head,
+}
+
 #[async_trait]
 pub trait HeadStore: Send + Sync + std::fmt::Debug {
     /// Read a table's HEAD. `None` when the table has no committed version.
@@ -72,6 +84,42 @@ pub trait HeadStore: Send + Sync + std::fmt::Debug {
         new_head: &Head,
         publish: BoxFuture<'_, Result<()>>,
     ) -> Result<HeadTag>;
+
+    /// Swap several HEADs under one durability barrier.
+    ///
+    /// Every critical section is entered, every expectation revalidated, then
+    /// `publish` runs *once*, then the swaps happen. That is the ordering
+    /// [`commit`] gives one table, shared across a batch instead of repeated
+    /// per table: with N tables it turns N manifest barriers into one, and
+    /// lets the HEAD flushes themselves be issued together.
+    ///
+    /// Callers must already hold the database metadata lock, which is what
+    /// makes taking N writer locks at once safe from deadlock.
+    ///
+    /// The default is the loop it replaces, so a store with no fsyncs to
+    /// share (an object store, where durability is the PUT) inherits the
+    /// existing behaviour and nothing to review.
+    async fn commit_batch(
+        &self,
+        swaps: &[HeadSwap],
+        publish: BoxFuture<'_, Result<()>>,
+    ) -> Result<Vec<HeadTag>> {
+        publish.await?;
+        let mut tags = Vec::with_capacity(swaps.len());
+        for swap in swaps {
+            tags.push(
+                self.commit(
+                    swap.table_id,
+                    &swap.table_name,
+                    swap.expected.as_ref(),
+                    &swap.new_head,
+                    Box::pin(std::future::ready(Ok(()))),
+                )
+                .await?,
+            );
+        }
+        Ok(tags)
+    }
 
     /// Remove a table's HEAD (drop-table path). Idempotent.
     async fn remove(&self, table_id: Uuid) -> Result<()>;
@@ -200,6 +248,83 @@ fn read_head_file(path: &Path) -> Result<Option<(Head, HeadTag)>> {
     }
 }
 
+/// Write several HEAD files, sharing the fsync passes across them.
+///
+/// The count of fsyncs cannot drop -- each table has its own directory, so
+/// each needs its own data flush and its own directory flush -- but issuing
+/// them one commit at a time serialises N round trips to the device. Staged
+/// together they can be flushed concurrently, which on a filesystem where a
+/// single fsync is milliseconds is the difference that matters.
+///
+/// The order within the batch is the order [`write_head_file`] uses: every
+/// temp file is durable before any rename, and the directories are flushed
+/// after all the renames. A crash anywhere leaves either the old HEAD or the
+/// new one for each table, never a torn file.
+fn write_head_files(items: Vec<(PathBuf, Head)>) -> Result<Vec<HeadTag>> {
+    use std::io::Write;
+
+    let mut staged = Vec::with_capacity(items.len());
+    for (path, head) in items {
+        let bytes = head.to_bytes()?;
+        let tmp = path.with_extension(format!("tmp.{}", Uuid::new_v4()));
+        let mut f = std::fs::File::create(&tmp).map_err(|e| Error::io(tmp.display(), e))?;
+        f.write_all(&bytes)
+            .map_err(|e| Error::io(tmp.display(), e))?;
+        staged.push((tmp, path, HeadTag(crate::util::checksum_hex(&bytes))));
+    }
+
+    // Data first, then the renames that make it reachable.
+    fsync_all(staged.iter().map(|(tmp, _, _)| tmp.clone()).collect())?;
+    for (tmp, path, _) in &staged {
+        std::fs::rename(tmp, path).map_err(|e| Error::io(path.display(), e))?;
+    }
+    let dirs: std::collections::BTreeSet<PathBuf> = staged
+        .iter()
+        .filter_map(|(_, path, _)| path.parent().map(Path::to_path_buf))
+        .collect();
+    for dir in &dirs {
+        fsync_dir(dir)?;
+    }
+
+    Ok(staged.into_iter().map(|(_, _, tag)| tag).collect())
+}
+
+/// Flush a set of files, in parallel once there are enough to pay for the
+/// threads. Mirrors [`Backend::sync_objects`], which does the same for the
+/// objects a commit introduces.
+fn fsync_all(paths: Vec<PathBuf>) -> Result<()> {
+    const MIN_PARALLEL: usize = 3;
+    const MAX_SYNC_THREADS: usize = 4;
+
+    if paths.len() < MIN_PARALLEL {
+        for path in &paths {
+            fsync_file(path)?;
+        }
+        return Ok(());
+    }
+    let threads = MAX_SYNC_THREADS.min(paths.len());
+    let chunk = paths.len().div_ceil(threads);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = paths
+            .chunks(chunk)
+            .map(|group| {
+                scope.spawn(move || -> Result<()> {
+                    for path in group {
+                        fsync_file(path)?;
+                    }
+                    Ok(())
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| Error::internal("fsync panicked"))??;
+        }
+        Ok(())
+    })
+}
+
 fn write_head_file(path: &Path, head: &Head) -> Result<HeadTag> {
     let bytes = head.to_bytes()?;
     let tmp = path.with_extension(format!("tmp.{}", Uuid::new_v4()));
@@ -268,6 +393,63 @@ impl HeadStore for LocalHeadStore {
 
         let nh = new_head.clone();
         tokio::task::spawn_blocking(move || write_head_file(&head_path, &nh))
+            .await
+            .map_err(Error::internal)?
+    }
+
+    async fn commit_batch(
+        &self,
+        swaps: &[HeadSwap],
+        publish: BoxFuture<'_, Result<()>>,
+    ) -> Result<Vec<HeadTag>> {
+        if swaps.is_empty() {
+            publish.await?;
+            return Ok(Vec::new());
+        }
+
+        // Every writer critical section is entered, and every expectation
+        // revalidated, before anything is published. A loser therefore
+        // publishes nothing -- the same guarantee `commit` gives, extended to
+        // the batch: if any table has moved, none of them are touched.
+        //
+        // The locks are held (in `_locks`) until the swaps are done.
+        let mut _locks = Vec::with_capacity(swaps.len());
+        let mut targets = Vec::with_capacity(swaps.len());
+        for swap in swaps {
+            let head_path = self.head_fs_path(swap.table_id);
+            if let Some(parent) = head_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| Error::io(parent.display(), e))?;
+            }
+            _locks.push(
+                FsLock::acquire(
+                    &self.lock_fs_path(swap.table_id),
+                    self.lock_timeout,
+                    &swap.table_name,
+                )
+                .await?,
+            );
+
+            let hp = head_path.clone();
+            let current = tokio::task::spawn_blocking(move || read_head_file(&hp))
+                .await
+                .map_err(Error::internal)??;
+            match (&swap.expected, &current) {
+                (None, None) => {}
+                (Some(expected), Some((_, actual))) if expected == actual => {}
+                _ => {
+                    return Err(Error::VersionConflict {
+                        table: swap.table_name.clone(),
+                        expected: swap.new_head.sequence.saturating_sub(1),
+                        actual: current.map(|(head, _)| head.sequence).unwrap_or(0),
+                    });
+                }
+            }
+            targets.push((head_path, swap.new_head.clone()));
+        }
+
+        publish.await?;
+
+        tokio::task::spawn_blocking(move || write_head_files(targets))
             .await
             .map_err(Error::internal)?
     }
