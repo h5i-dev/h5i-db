@@ -634,6 +634,20 @@ cannot reconstruct queue position and must not be presented as exact L2
 replay. REST snapshots likewise describe only the instant at which they were
 requested.
 
+A third-party archive does now carry historical Kalshi order-book data, and
+`h5i_db.venues.KALSHI_PMXT_LAYOUT` reads it, so trade-driven and book-driven
+research no longer has to wait for a capture to accumulate. It is not a
+substitute for prospective capture where queue accuracy matters. Its deltas are
+signed size changes replayed into absolute levels at ingest, its snapshots
+carry no venue timestamp and so seed the book rather than being replayed at
+their own stamp, and it has no per-market sequence numbers, so the ingest
+reports divergence against later snapshots instead of detecting a dropped
+message directly. The report says how many vendor snapshots the reconstruction
+reproduced exactly; treat a low number as a signal to load the neighbouring
+hours rather than as a reason to trust the book less than it deserves. Coverage
+on that host also lags the present by weeks, which is its own reason to keep
+recording.
+
 Use `KalshiFees` (or Python's `fee_kind="kalshi"`) with rates pinned from the
 applicable series fee schedule. It implements the quadratic curve, centicent
 trade-fee rounding, whole-cent cash movement, and per-order partial-fill

@@ -141,3 +141,69 @@ archive.
 One practical trap: these hosts answer `403` to the default `Python-urllib`
 user agent, which reads exactly like a blocked network and is not one. Set any
 `User-Agent`.
+
+## Kalshi
+
+Kalshi's hourly archive is outcome-major and its deltas are signed changes in
+resting size, so it needs its own layout. Everything else is the same three
+steps. A market needs no `tokens=`: the files name the instrument and pick the
+outcome with a label, so the outcome order comes from `outcome_labels`.
+
+```python
+specs = [
+    venues.MarketSpec(
+        instrument_id="KXBTC15M-26JUN100815-15",
+        venue="kalshi",
+        outcome_labels=("yes", "no"),
+    )
+]
+report = venues.ingest_archive(
+    db,
+    files=venues.discover("/mnt/kalshi", pattern="kalshi_orderbook_*.parquet"),
+    markets=specs,
+    layout=venues.KALSHI_PMXT_LAYOUT,
+)
+```
+
+Read two numbers out of the report before trusting the result:
+
+* `report.gaps` carries a `snapshot_divergence` entry saying how many vendor
+  snapshots the reconstruction reproduced exactly. This feed has no sequence
+  numbers, so that comparison is the only integrity check available. A low
+  share almost always means the window's deltas are incomplete, and the fix is
+  to load the neighbouring hours, not to lower expectations.
+* `report.skipped` counts changes that arrived with no book to apply them to
+  (`delta_before_snapshot`). An hour that was never snapshotted for a market
+  contributes nothing rather than inventing a base of zero.
+
+`LIMITLESS_PMXT_LAYOUT` and `OPINION_PMXT_LAYOUT` read the same host's other
+venues, which share the Polymarket dialect.
+
+## Bars
+
+Anything shaped like OHLCV goes through one on-ramp, whatever produced it.
+
+```python
+# a vendor dump on disk
+venues.ingest_bars(db, files=[...], layout=venues.BINANCE_KLINES_LAYOUT,
+                   instrument_id="BINANCE:BTCUSDT")
+
+# anything already in memory: a broker export, yfinance, your own frame
+bars = venues.bars_from_dataframe(frame, instrument_id="AAPL")
+
+# a venue that publishes no candles at all
+venues.bars_from_trades(db, interval="1m")
+```
+
+`ts_init` is the bar **close** and `ts_event` the open, because a bar is not
+knowable until its interval ends. That is why a layout must supply either a
+close-time column or an `interval`: there is no safe default, so there is no
+default. The same rule is why `references_from_series` makes you state
+`published_after`. A daily rate for Monday is published on Tuesday, and
+stamping it at Monday lets a strategy read it a day early.
+
+Yahoo has had no official API since 2017, so `yfinance` is a scraper that
+breaks when Yahoo changes internals. Fetch with it if you like, then hand the
+frame to `bars_from_dataframe`: that keeps the breakage in your script instead
+of in a parser here. Stooq downloads now sit behind a browser check, so fetch
+those by hand and point `read_bars_csv` at the file.
