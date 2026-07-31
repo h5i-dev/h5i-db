@@ -689,7 +689,8 @@ fn a_categorical_market_trades_every_outcome_independently() {
     // A complete set costs 1.00 and pays 1.00 whichever outcome wins.
     let resolution = Resolution::new(id, OutcomeId(1), ts(5_000));
     let report = settle(&portfolio, &[resolution], Some(ts(9_000)), &BTreeMap::new()).unwrap();
-    let total: i64 = report.settled.iter().map(|s| s.settled_pnl.raw()).sum();
+    let total: h5i_db_backtest::types::Raw =
+        report.settled.iter().map(|s| s.settled_pnl.raw()).sum();
     assert_eq!(Money::from_raw(total), Money::ZERO);
 }
 

@@ -135,7 +135,7 @@ pub struct KalshiFees {
     pub taker_rate: Price,
     /// `None` for series without maker fees.
     pub maker_rate: Option<Price>,
-    rounding: std::sync::Mutex<std::collections::BTreeMap<OrderId, i64>>,
+    rounding: std::sync::Mutex<std::collections::BTreeMap<OrderId, Raw>>,
 }
 
 impl KalshiFees {
@@ -264,7 +264,7 @@ pub struct TieredFees {
 
 #[derive(Debug, Default)]
 struct VolumeWindow {
-    entries: std::collections::VecDeque<(i64, i64)>,
+    entries: std::collections::VecDeque<(i64, Raw)>,
     total: i128,
 }
 
@@ -328,7 +328,10 @@ impl FeeModel for TieredFees {
             let (_, amount) = traded.entries.pop_front().expect("peeked");
             traded.total -= amount as i128;
         }
-        let rolling = Money::from_raw(traded.total.clamp(0, i64::MAX as i128) as i64);
+        let rolling = Money::from_raw(crate::types::narrow(
+            traded.total.clamp(0, Raw::MAX as i128),
+            "TieredFees rolling volume",
+        )?);
         let tier = self.tier_for(rolling);
         // Priced at the tier reached *before* this fill, then the fill
         // counts towards the next one.
@@ -471,7 +474,7 @@ impl FillModel for TickSlippage {
         if self.ticks == 0 {
             return None;
         }
-        let shift = self.ticks * self.tick_size.raw();
+        let shift = self.ticks as Raw * self.tick_size.raw();
         // A buyer pays up; a seller receives less.
         let (bid_shift, ask_shift) = match order.side {
             Side::Buy => (0, shift),

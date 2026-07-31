@@ -2077,7 +2077,7 @@ mod tests {
     #[test]
     fn round_trip_holds_across_the_whole_tick_grid() {
         // Every 0.0001 tick a prediction market can quote.
-        for tick in 0..=10_000i64 {
+        for tick in 0..=10_000 as crate::types::Raw {
             let original = Price::from_raw(tick * (SCALE / 10_000));
             let restored = Price::from_f64(original.to_f64()).unwrap();
             assert_eq!(original, restored, "tick {tick} failed");

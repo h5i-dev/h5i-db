@@ -1,3 +1,11 @@
+// Fixed-point arithmetic promotes to `i128` to hold a product. Under `wide`
+// that promotion is already the raw type, so every `as i128` is a no-op and
+// clippy says so, 67 times. The casts are not removable: the default build
+// needs them, and this crate compiles both ways from one source. Suppressed
+// only in the mode where they are redundant, so the default build still
+// reports a genuinely pointless cast if one is ever written.
+#![cfg_attr(feature = "wide", allow(clippy::unnecessary_cast))]
+
 //! Deterministic event-driven backtesting on versioned h5i-db data.
 //!
 //! This crate is Part B of `ROADMAP_QUANT.md`. It simulates venues against

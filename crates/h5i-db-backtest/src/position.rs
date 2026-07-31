@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use crate::error::Result;
 use crate::instrument::{InstrumentId, OutcomeId};
 use crate::order::Fill;
-use crate::types::{Money, Price, Qty, notional};
+use crate::types::{Money, Price, Qty, Raw, notional};
 
 /// The key a position is held under: an instrument *and* an outcome.
 pub type PositionKey = (InstrumentId, OutcomeId);
@@ -68,7 +68,7 @@ impl Position {
     /// price). The third is the one that is usually wrong in hand-rolled
     /// implementations, which tend to carry the old average across the flip.
     pub fn apply(&mut self, fill: &Fill) -> Result<()> {
-        let signed = fill.quantity.raw() * fill.side.signum();
+        let signed = fill.quantity.raw() * fill.side.signum() as Raw;
         let before = self.quantity.raw();
         let after = before + signed;
 

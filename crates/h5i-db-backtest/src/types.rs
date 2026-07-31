@@ -505,11 +505,61 @@ mod tests {
 
     #[test]
     fn checked_arithmetic_reports_overflow() {
+        // Against `Raw::MAX`, not `i64::MAX`: the invariant is that the type
+        // refuses to wrap at its own ceiling, whichever ceiling it has. Naming
+        // i64 here would leave the wide build asserting nothing.
         assert!(
-            Money::from_raw(i64::MAX)
+            Money::from_raw(Raw::MAX)
                 .checked_add(Money::from_raw(1))
                 .is_err()
         );
-        assert!(Money::from_units(i64::MAX).is_err());
+        assert!(Money::from_units(Raw::MAX).is_err());
+    }
+
+    #[test]
+    fn the_wide_build_reaches_past_what_i64_could_hold() {
+        // The whole point of the feature, stated as a test so the two modes
+        // cannot silently converge.
+        let beyond = i64::MAX as i128 + 1;
+        if WIDE {
+            let value = Money::from_raw(narrow(beyond, "test").expect("wide holds it"));
+            assert!(value > Money::from_raw(i64::MAX as Raw));
+        } else {
+            assert!(narrow(beyond, "test").is_err(), "i64 must refuse it");
+        }
+    }
+
+    #[test]
+    fn notional_agrees_with_the_reference_in_either_mode() {
+        // Guards the wide build's split-multiply against the narrow build's
+        // promote-and-divide. Both must round half away from zero.
+        let cases: &[(f64, f64)] = &[
+            (0.0, 5.0),
+            (1.0, 1.0),
+            (0.5, 3.0),
+            (0.333333333, 3.0),
+            (-2.5, 4.0),
+            (2.5, -4.0),
+            (0.000000001, 1.0),
+            (123.456789, 987.654321),
+            (0.0000000005, 2.0),
+        ];
+        for &(p, q) in cases {
+            let price = Price::from_f64(p).unwrap();
+            let qty = Qty::from_f64(q).unwrap();
+            let got = notional(price, qty).unwrap();
+            // Reference: exact product in i128, rounded half away from zero.
+            let product = (price.raw() as i128) * (qty.raw() as i128);
+            let want = if product >= 0 {
+                (product + SCALE_I128 / 2) / SCALE_I128
+            } else {
+                (product - SCALE_I128 / 2) / SCALE_I128
+            };
+            assert_eq!(
+                got.raw() as i128,
+                want,
+                "notional({p}, {q}) disagreed with the reference"
+            );
+        }
     }
 }

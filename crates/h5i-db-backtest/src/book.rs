@@ -262,7 +262,7 @@ impl OrderBook {
         // Walk the maps directly. `levels()` materialises the entire side,
         // which is especially wasteful for the common case where an order
         // fills at the touch of a deep book.
-        let mut visit = |price_raw: &i64, size: &Qty| {
+        let mut visit = |price_raw: &Raw, size: &Qty| {
             if remaining <= 0 {
                 return false;
             }
