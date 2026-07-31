@@ -57,7 +57,8 @@ pub use currency::{Currency, FxBook, Haircuts};
 pub use engine::{
     CommandReplay, Context, Engine, EngineBuilder, Forecast, LiquidationPolicy, MarkPoint,
     MarkSource, OrderRequest, ReplayCommand, RiskLimits, RunResult, SetOperation,
-    SetOperationCosts, SetOperationKind, SetOperationRequest, SignalReplay, Strategy,
+    SetOperationCosts, SetOperationKind, SetOperationRequest, SignalReplay, Strategy, TwapProgress,
+    TwapRequest,
 };
 pub use error::{BacktestError, Result};
 pub use event::{MarketEvent, Record};
@@ -72,7 +73,9 @@ pub use models::{
     PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage, TieredFees,
     VenueModule,
 };
-pub use order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
+pub use order::{
+    Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce, Trigger, TriggerDirection,
+};
 pub use position::{Portfolio, Position};
 pub use replay::{Replay, ReplayBuilder};
 pub use run::{CalibrationSample, RunReport, RunSpec, UnscoredForecast, run_in_fork, run_in_place};

@@ -169,39 +169,40 @@ and <code>cs_demean</code> does it in the engine.</p>
 <span class="p">)</span>
 <span class="n">panel_frame</span> <span class="o">=</span> <span class="n">signal_frame</span><span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;asset&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">panel_frame</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> symbol-days&quot;</span><span class="p">)</span>
-<span class="n">panel_frame</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+<span class="n">panel_frame</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">63,870 symbol-days</pre><pre class="stderr">/tmp/ipykernel_64198/829386453.py:28: UserWarning: obj.round has no effect with datetime, timedelta, or period dtypes. Use obj.dt.round(...) instead.
-  panel_frame.head(3).round(4)</pre><div class="nb-html"><div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">63,870 symbol-days</pre><div class="nb-html"><div>
 
 <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th></th>
-      <th>ts</th>
       <th>asset</th>
       <th>ret</th>
       <th>factor</th>
     </tr>
+    <tr>
+      <th>ts</th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
   </thead>
   <tbody>
     <tr>
-      <th>0</th>
-      <td>2018-01-09 20:00:00+00:00</td>
+      <th>2018-01-09 20:00:00+00:00</th>
       <td>AAPL</td>
       <td>-0.0001</td>
       <td>0.0109</td>
     </tr>
     <tr>
-      <th>1</th>
-      <td>2018-01-09 20:00:00+00:00</td>
+      <th>2018-01-09 20:00:00+00:00</th>
       <td>ABBV</td>
       <td>0.0075</td>
       <td>0.0044</td>
     </tr>
     <tr>
-      <th>2</th>
-      <td>2018-01-09 20:00:00+00:00</td>
+      <th>2018-01-09 20:00:00+00:00</th>
       <td>AMZN</td>
       <td>0.0047</td>
       <td>-0.0306</td>

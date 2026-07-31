@@ -2579,6 +2579,27 @@ Trades matter more than they look: without prints the queue model has
 nothing to consume the size ahead of a resting order, so every touched
 limit fills immediately.
 
+`asset_ctxs/<date>.csv.lz4` is the historical mark and oracle — a daily CSV
+at one-minute cadence across the universe. Its `funding` column is the
+standing rate sampled once a minute, **not** a payment, so
+`asset_context_records` deliberately emits reference prices and no funding
+events; sixty samples an hour would charge a carry sixty times. Settlements
+come from `fundingHistory`.
+
+`hyperliquid_archive::load_archive` walks a synced directory and commits it,
+so the whole path is one call:
+
+```rust
+let spec = ArchiveSpec::new("./archive").date("20250101").coin("BTC");
+load_archive(&db, &spec, &universe, known_at).await?;
+```
+
+Coins filter on the *file name*, so a one-coin load reads 700 KB instead of
+77 MB. A date, hour or coin that is not on disk lands in `ArchiveLoad::missing`
+rather than reading as no data — an incomplete sync found at replay time
+looks like a thin book. Instruments come from a supplied `meta` universe,
+not from the archive, which carries prices and no metadata.
+
 ### Post-only
 
 `OrderRequest::post_only()` is Hyperliquid's ALO. It is checked on arrival,
@@ -2587,6 +2608,51 @@ order gets there -- an order sent into a wide market and delivered into a
 crossed one is rejected, which is the risk a maker takes. A post-only order
 that later fills does so as a maker, since by construction it could never
 have taken.
+
+### Stops and take-profits
+
+`OrderRequest::with_trigger` holds an order off the book until a price
+reaches it. That is the difference from a limit at the same price: a limit
+is liquidity someone can trade against, and a stop is not — so resting one
+would invent depth that was never there. Untriggered orders carry their own
+`OrderStatus::Untriggered`.
+
+They fire on the **mark**, not the book, for the same reason margin does: a
+one-print wick should not stop you out of a position the venue still values
+calmly. Once fired the order is ordinary and meets the book from there, so a
+stop can and does fill well below its trigger — the gap it exists to protect
+against is the gap it suffers.
+
+```rust
+ctx.submit(
+    OrderRequest::market(market, outcome, Side::Sell, size)
+        .with_trigger(Trigger::stop_loss(Side::Sell, price)),
+);
+```
+
+```python
+return [{"action": "submit", "client_order_id": "stop", "instrument_id": m,
+         "side": "sell", "quantity": 1.0,
+         "trigger_price": 90.0, "trigger_direction": "stop_loss"}]
+```
+
+### TWAP
+
+Hyperliquid's TWAP is a native order type, not a client-side loop: the venue
+slices it into equal children on a fixed cadence (thirty seconds) and works
+them until the duration is up.
+
+```rust
+ctx.twap(TwapRequest::new(market, outcome, Side::Buy, size, duration_nanos));
+```
+
+Modelling it as one large market order gets the answer wrong in the
+direction that flatters. A size worth slicing is a size that moves the book,
+and the whole reason to slice is that it does — so the children here are
+ordinary market orders crossing through the same matching path, and a TWAP
+into a thin book suffers exactly the slippage that book implies. The last
+slice carries the rounding, so the schedule works exactly the size it was
+given rather than quietly working less and reporting a better average.
 
 ### Fees that fall with volume
 

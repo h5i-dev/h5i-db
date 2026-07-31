@@ -245,42 +245,44 @@ assumed.</p>
 <span class="p">)</span>
 <span class="n">panel</span> <span class="o">=</span> <span class="n">scaled</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">panel</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> symbol-days with a signal and a volatility estimate&quot;</span><span class="p">)</span>
-<span class="n">panel</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+<span class="n">panel</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">56,430 symbol-days with a signal and a volatility estimate</pre><pre class="stderr">/tmp/ipykernel_64108/2338477227.py:28: UserWarning: obj.round has no effect with datetime, timedelta, or period dtypes. Use obj.dt.round(...) instead.
-  panel.head(3).round(4)</pre><div class="nb-html"><div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">56,430 symbol-days with a signal and a volatility estimate</pre><div class="nb-html"><div>
 
 <table border="1" class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th></th>
-      <th>ts</th>
       <th>symbol</th>
       <th>ret</th>
       <th>trend</th>
       <th>annual_vol</th>
     </tr>
+    <tr>
+      <th>ts</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
   </thead>
   <tbody>
     <tr>
-      <th>30</th>
-      <td>2019-01-04 20:00:00+00:00</td>
+      <th>2019-01-04 20:00:00+00:00</th>
       <td>AAPL</td>
       <td>0.0427</td>
       <td>-0.1263</td>
       <td>1.5973</td>
     </tr>
     <tr>
-      <th>31</th>
-      <td>2019-01-04 20:00:00+00:00</td>
+      <th>2019-01-04 20:00:00+00:00</th>
       <td>ABBV</td>
       <td>0.0322</td>
       <td>-0.0741</td>
       <td>0.7315</td>
     </tr>
     <tr>
-      <th>32</th>
-      <td>2019-01-04 20:00:00+00:00</td>
+      <th>2019-01-04 20:00:00+00:00</th>
       <td>AMZN</td>
       <td>0.0501</td>
       <td>0.3082</td>

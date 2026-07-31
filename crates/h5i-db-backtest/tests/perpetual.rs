@@ -682,3 +682,283 @@ fn a_reference_with_only_an_oracle_leaves_the_mark_on_the_book() {
         "an absent mark is not a zero mark, and must not become one"
     );
 }
+
+// -- trigger orders -------------------------------------------------------
+
+/// Places one stop on the first record and leaves it.
+struct StopOnce {
+    trigger: h5i_db_backtest::order::Trigger,
+    side: Side,
+    done: bool,
+}
+
+impl Strategy for StopOnce {
+    fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+        if self.done {
+            return Ok(());
+        }
+        self.done = true;
+        ctx.submit(
+            OrderRequest::market(perp_id(), OutcomeId::FIRST, self.side, qty(1.0))
+                .with_trigger(self.trigger),
+        );
+        Ok(())
+    }
+}
+
+#[test]
+fn a_stop_is_held_off_the_book_until_the_mark_reaches_it() {
+    // The difference that matters: a limit at the same price is liquidity
+    // someone can trade against, and a stop is not. Resting it would invent
+    // depth that was never there.
+    let mut strategy = StopOnce {
+        trigger: h5i_db_backtest::order::Trigger::stop_loss(Side::Sell, price(90.0)),
+        side: Side::Sell,
+        done: false,
+    };
+    let result = run(
+        &mut strategy,
+        vec![
+            book(1, 100.0, 100.0, 10.0),
+            book(2, 95.0, 95.0, 10.0),
+            book(3, 96.0, 96.0, 10.0),
+        ],
+        10_000.0,
+        |builder| builder,
+    )
+    .unwrap();
+
+    assert!(result.fills.is_empty(), "the mark never fell to 90");
+    assert_eq!(result.metrics.orders_triggered, 0);
+    assert_eq!(result.orders[0].status, OrderStatus::Untriggered);
+}
+
+#[test]
+fn a_stop_fires_on_the_mark_and_then_meets_the_book_like_anything_else() {
+    let mut strategy = StopOnce {
+        trigger: h5i_db_backtest::order::Trigger::stop_loss(Side::Sell, price(90.0)),
+        side: Side::Sell,
+        done: false,
+    };
+    let result = run(
+        &mut strategy,
+        vec![
+            book(1, 100.0, 100.0, 10.0),
+            // Through the stop, into a book that has gapped well below it.
+            book(2, 80.0, 80.0, 10.0),
+            book(3, 80.0, 80.0, 10.0),
+        ],
+        10_000.0,
+        |builder| builder,
+    )
+    .unwrap();
+
+    assert_eq!(result.metrics.orders_triggered, 1);
+    assert_eq!(result.fills.len(), 1);
+    assert_eq!(
+        result.fills[0].price,
+        price(80.0),
+        "a stop fills at the book it finds, not at its trigger; the gap it \
+         exists to protect against is the gap it suffers"
+    );
+}
+
+#[test]
+fn a_stop_watches_the_venues_mark_not_a_wick_in_the_book() {
+    // Same reason margin does. A one-print collapse should not stop you out
+    // of a position the venue still values calmly.
+    let records = vec![
+        book(1, 100.0, 100.0, 10.0),
+        book(2, 80.0, 80.0, 1.0),
+        reference(2, Some(99.0), Some(99.0)),
+        book(3, 100.0, 100.0, 10.0),
+    ];
+
+    let mut on_mark = StopOnce {
+        trigger: h5i_db_backtest::order::Trigger::stop_loss(Side::Sell, price(90.0)),
+        side: Side::Sell,
+        done: false,
+    };
+    let marked = run(&mut on_mark, records.clone(), 10_000.0, |builder| builder).unwrap();
+    assert_eq!(
+        marked.metrics.orders_triggered, 0,
+        "the venue's mark stayed at 99, so the stop stayed armed"
+    );
+
+    let mut on_mid = StopOnce {
+        trigger: h5i_db_backtest::order::Trigger::stop_loss(Side::Sell, price(90.0)),
+        side: Side::Sell,
+        done: false,
+    };
+    let midded = run(&mut on_mid, records, 10_000.0, |builder| {
+        builder.mark_source(MarkSource::BookMid)
+    })
+    .unwrap();
+    assert_eq!(
+        midded.metrics.orders_triggered, 1,
+        "on the mid the same wick stops the position out"
+    );
+}
+
+#[test]
+fn a_take_profit_watches_the_other_direction_from_a_stop() {
+    let mut strategy = StopOnce {
+        trigger: h5i_db_backtest::order::Trigger::take_profit(Side::Sell, price(110.0)),
+        side: Side::Sell,
+        done: false,
+    };
+    let result = run(
+        &mut strategy,
+        vec![
+            book(1, 100.0, 100.0, 10.0),
+            book(2, 115.0, 115.0, 10.0),
+            book(3, 115.0, 115.0, 10.0),
+        ],
+        10_000.0,
+        |builder| builder,
+    )
+    .unwrap();
+    assert_eq!(result.metrics.orders_triggered, 1);
+    assert_eq!(result.fills.len(), 1);
+}
+
+// -- TWAP -----------------------------------------------------------------
+
+const SECOND: i64 = 1_000_000_000;
+
+/// Starts one TWAP and lets the venue work it.
+struct TwapOnce {
+    request: h5i_db_backtest::engine::TwapRequest,
+    done: bool,
+}
+
+impl Strategy for TwapOnce {
+    fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+        if self.done {
+            return Ok(());
+        }
+        self.done = true;
+        ctx.twap(self.request.clone());
+        Ok(())
+    }
+}
+
+fn ladder(at: i64) -> Record {
+    // A book thin enough that size moves it, which is the only condition
+    // under which slicing means anything.
+    Record::new(
+        Stamps::immediate(ts(at)),
+        perp_id(),
+        OutcomeId::FIRST,
+        MarketEvent::BookSnapshot {
+            bids: vec![(price(99.0), qty(100.0))],
+            asks: vec![
+                (price(100.0), qty(2.0)),
+                (price(101.0), qty(2.0)),
+                (price(102.0), qty(2.0)),
+                (price(103.0), qty(100.0)),
+            ],
+        },
+    )
+}
+
+#[test]
+fn a_twap_is_worked_in_slices_on_the_venues_clock() {
+    let mut strategy = TwapOnce {
+        request: h5i_db_backtest::engine::TwapRequest::new(
+            perp_id(),
+            OutcomeId::FIRST,
+            Side::Buy,
+            qty(4.0),
+            4 * SECOND,
+        )
+        .interval_nanos(SECOND),
+        done: false,
+    };
+    let result = run(
+        &mut strategy,
+        (0..=5).map(|step| ladder(step * SECOND)).collect(),
+        1_000_000.0,
+        |builder| builder,
+    )
+    .unwrap();
+
+    assert_eq!(result.metrics.twap_slices, 4, "four one-second slices");
+    let progress = &result.twaps[0];
+    assert!(progress.is_done());
+    assert_eq!(
+        progress.worked,
+        qty(4.0),
+        "the schedule works exactly the size it was given"
+    );
+    assert!(
+        result
+            .fills
+            .iter()
+            .all(|fill| fill.tag.as_deref() == Some("twap")),
+        "children are attributable to the parent"
+    );
+}
+
+#[test]
+fn slicing_beats_sending_the_whole_size_into_a_thin_book() {
+    // The point of the order type. Modelling a TWAP as one market order
+    // walks the whole ladder at once and reports an average nobody got;
+    // slicing lets the book refill between children.
+    let records: Vec<Record> = (0..=5).map(|step| ladder(step * SECOND)).collect();
+
+    let mut sliced = TwapOnce {
+        request: h5i_db_backtest::engine::TwapRequest::new(
+            perp_id(),
+            OutcomeId::FIRST,
+            Side::Buy,
+            qty(4.0),
+            4 * SECOND,
+        )
+        .interval_nanos(SECOND),
+        done: false,
+    };
+    let twap = run(&mut sliced, records.clone(), 1_000_000.0, |builder| builder).unwrap();
+
+    let mut whole = BuyOnce::new(qty(4.0));
+    let single = run(&mut whole, records, 1_000_000.0, |builder| builder).unwrap();
+
+    // A perpetual is collateralised rather than bought, so cash does not
+    // move on entry: execution quality is the average price paid.
+    let average = |result: &RunResult| -> f64 {
+        let notional: f64 = result
+            .fills
+            .iter()
+            .map(|fill| fill.price.to_f64() * fill.quantity.to_f64())
+            .sum();
+        let size: f64 = result.fills.iter().map(|fill| fill.quantity.to_f64()).sum();
+        assert!(size > 0.0);
+        notional / size
+    };
+    assert!(
+        average(&twap) < average(&single),
+        "twap averaged {:.4} against {:.4} for the same size",
+        average(&twap),
+        average(&single)
+    );
+    // And both actually worked the whole order.
+    let filled = |result: &RunResult| -> f64 {
+        result.fills.iter().map(|fill| fill.quantity.to_f64()).sum()
+    };
+    assert_eq!(filled(&twap), 4.0);
+    assert_eq!(filled(&single), 4.0);
+}
+
+#[test]
+fn a_twap_that_cannot_be_scheduled_is_refused() {
+    use h5i_db_backtest::engine::TwapRequest;
+    let base = TwapRequest::new(perp_id(), OutcomeId::FIRST, Side::Buy, qty(1.0), SECOND);
+    assert!(base.clone().interval_nanos(2 * SECOND).slices().is_err());
+    assert!(base.clone().interval_nanos(0).slices().is_err());
+    assert!(
+        TwapRequest::new(perp_id(), OutcomeId::FIRST, Side::Buy, Qty::ZERO, SECOND)
+            .slices()
+            .is_err()
+    );
+    assert_eq!(base.interval_nanos(SECOND / 4).slices().unwrap(), 4);
+}

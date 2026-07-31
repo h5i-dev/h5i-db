@@ -166,6 +166,8 @@ pub struct OrderRequest {
     pub reduce_only: bool,
     /// Add liquidity only: refused rather than allowed to cross.
     pub post_only: bool,
+    /// A stop or take-profit condition. Held off the book until it fires.
+    pub trigger: Option<crate::order::Trigger>,
 }
 
 impl OrderRequest {
@@ -180,6 +182,7 @@ impl OrderRequest {
             tag: None,
             reduce_only: false,
             post_only: false,
+            trigger: None,
         }
     }
 
@@ -200,6 +203,7 @@ impl OrderRequest {
             tag: None,
             reduce_only: false,
             post_only: false,
+            trigger: None,
         }
     }
 
@@ -222,6 +226,12 @@ impl OrderRequest {
     /// cross, and any fill it does get is a maker fill by construction.
     pub fn post_only(mut self) -> Self {
         self.post_only = true;
+        self
+    }
+
+    /// Hold this order off the book until the mark reaches `trigger`.
+    pub fn with_trigger(mut self, trigger: crate::order::Trigger) -> Self {
+        self.trigger = Some(trigger);
         self
     }
 }
@@ -344,6 +354,114 @@ pub struct MarkPoint {
     pub price: Price,
 }
 
+/// An order the venue works over time rather than all at once.
+///
+/// Hyperliquid's TWAP is a native order type, not a client-side loop: the
+/// venue slices it into equal child orders on a fixed cadence and works
+/// them until the duration is up. Modelling it as one big market order
+/// gets the answer badly wrong in the direction that flatters -- a size
+/// worth slicing is a size that moves the book, and the whole reason to
+/// slice is that it does.
+///
+/// The children are ordinary market orders and meet the book through the
+/// same matching path as everything else, so a TWAP into a thin book
+/// suffers exactly the slippage that book implies.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TwapRequest {
+    pub instrument: InstrumentId,
+    pub outcome: OutcomeId,
+    pub side: Side,
+    /// Total to work.
+    pub quantity: Qty,
+    /// How long to spread it over.
+    pub duration_nanos: i64,
+    /// How often a child goes out. Hyperliquid uses thirty seconds.
+    pub interval_nanos: i64,
+    pub tag: Option<String>,
+    pub reduce_only: bool,
+}
+
+/// Hyperliquid works a TWAP in thirty-second slices.
+pub const DEFAULT_TWAP_INTERVAL_NANOS: i64 = 30 * 1_000_000_000;
+
+impl TwapRequest {
+    pub fn new(
+        instrument: InstrumentId,
+        outcome: OutcomeId,
+        side: Side,
+        quantity: Qty,
+        duration_nanos: i64,
+    ) -> Self {
+        Self {
+            instrument,
+            outcome,
+            side,
+            quantity,
+            duration_nanos,
+            interval_nanos: DEFAULT_TWAP_INTERVAL_NANOS,
+            tag: None,
+            reduce_only: false,
+        }
+    }
+
+    pub fn interval_nanos(mut self, nanos: i64) -> Self {
+        self.interval_nanos = nanos;
+        self
+    }
+
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = Some(tag.into());
+        self
+    }
+
+    pub fn reduce_only(mut self) -> Self {
+        self.reduce_only = true;
+        self
+    }
+
+    /// How many children this works out to.
+    pub fn slices(&self) -> Result<i64> {
+        if !self.quantity.is_positive() {
+            return Err(BacktestError::invalid("a TWAP needs a positive quantity"));
+        }
+        if self.duration_nanos <= 0 || self.interval_nanos <= 0 {
+            return Err(BacktestError::invalid(
+                "a TWAP needs a positive duration and interval",
+            ));
+        }
+        if self.interval_nanos > self.duration_nanos {
+            return Err(BacktestError::invalid(
+                "a TWAP whose interval exceeds its duration is one order; \
+                 say so rather than hiding it behind a schedule",
+            ));
+        }
+        Ok((self.duration_nanos / self.interval_nanos).max(1))
+    }
+}
+
+/// A TWAP the venue is still working.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct TwapProgress {
+    pub request: TwapRequest,
+    pub started_at: UnixNanos,
+    /// Children released so far.
+    pub sent: i64,
+    pub total_slices: i64,
+    /// Quantity handed to children so far.
+    pub worked: Qty,
+    next_at: i64,
+}
+
+impl TwapProgress {
+    pub fn is_done(&self) -> bool {
+        self.sent >= self.total_slices
+    }
+
+    pub fn remaining(&self) -> Qty {
+        Qty::from_raw(self.request.quantity.raw() - self.worked.raw())
+    }
+}
+
 /// A command a strategy queued. Never executed inside the callback that
 /// produced it.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -356,6 +474,7 @@ enum Command {
         limit: Option<Price>,
     },
     Set(SetOperationRequest),
+    Twap(TwapRequest),
 }
 
 /// What a strategy may do and see.
@@ -518,6 +637,17 @@ impl<'a> Context<'a> {
         self.commands.push_back(Command::Set(request));
     }
 
+    /// Work an order over time, the way the venue's own TWAP does.
+    ///
+    /// The children are ordinary market orders and cross the book through
+    /// the same path as anything else, so a TWAP into a thin book suffers
+    /// the slippage that book implies. Sending the whole size at once
+    /// instead would report a fill the market could not have absorbed --
+    /// and a size worth slicing is exactly a size that moves the book.
+    pub fn twap(&mut self, request: TwapRequest) {
+        self.commands.push_back(Command::Twap(request));
+    }
+
     /// State the probability this strategy assigns to an outcome.
     ///
     /// Purely an observation: it moves no cash, places no order, and the
@@ -651,6 +781,10 @@ pub struct RunMetrics {
     pub orders_rejected_expired: u64,
     /// Post-only orders that would have crossed on arrival.
     pub orders_rejected_post_only: u64,
+    /// Stops and take-profits whose trigger was reached.
+    pub orders_triggered: u64,
+    /// Child orders released by a TWAP.
+    pub twap_slices: u64,
     pub orders_amended: u64,
     pub fills_taker: u64,
     pub fills_maker: u64,
@@ -832,6 +966,8 @@ pub struct RunResult {
     pub mark_curve: Vec<MarkPoint>,
     /// Instruments that stopped trading during the run, with the instant.
     pub expirations: Vec<(InstrumentId, UnixNanos)>,
+    /// Every TWAP the run started, with how much of it was worked.
+    pub twaps: Vec<TwapProgress>,
     /// Counters explaining what the run did and did not do.
     pub metrics: RunMetrics,
 }
@@ -904,6 +1040,8 @@ pub struct Engine {
     isolated: std::collections::BTreeSet<InstrumentId>,
     /// What is posted against each of them, sized at entry.
     isolated_collateral: BTreeMap<InstrumentId, Money>,
+    /// TWAPs the venue is still working.
+    twaps: Vec<TwapProgress>,
 }
 
 /// Which price a run values positions at.
@@ -1099,6 +1237,14 @@ impl Engine {
         self.check_liquidation(ts, strategy)?;
         self.check_isolated_liquidation(ts, strategy)?;
 
+        // 4c. Stops the mark has reached become ordinary orders now, before
+        //     the strategy gets another turn.
+        self.arm_triggers(ts, strategy)?;
+
+        // 4d. TWAP children the schedule has reached, likewise: the venue
+        //     works them on its own clock, not when the strategy asks.
+        self.work_twaps(ts, strategy)?;
+
         // 5. Now the strategy.
         self.with_context(|ctx| strategy.on_event(ctx, record))?;
 
@@ -1112,6 +1258,120 @@ impl Engine {
         self.metrics.record(record.event.kind());
         self.simulated_through = Some(ts);
         self.sample_equity(ts)?;
+        Ok(())
+    }
+
+    /// Begin working a TWAP.
+    ///
+    /// The first child goes out on the next record rather than immediately,
+    /// so a TWAP and a market order for the same size never both execute at
+    /// the submitting instant -- which is what would make slicing look
+    /// free.
+    fn start_twap(&mut self, request: TwapRequest) -> Result<()> {
+        let instrument = self.instruments.get(&request.instrument)?;
+        instrument.check_outcome(request.outcome)?;
+        let total_slices = request.slices()?;
+        let now = self.clock.now();
+        self.twaps.push(TwapProgress {
+            started_at: now,
+            next_at: now.get(),
+            request,
+            sent: 0,
+            total_slices,
+            worked: Qty::ZERO,
+        });
+        Ok(())
+    }
+
+    /// Release any TWAP children now due.
+    ///
+    /// The last slice carries whatever rounding left over, so the total
+    /// worked is exactly the size asked for: a schedule that quietly works
+    /// less than the order is a schedule that reports a better average
+    /// than it achieved.
+    fn work_twaps(&mut self, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
+        let mut due: Vec<(usize, Qty)> = Vec::new();
+        for (index, twap) in self.twaps.iter_mut().enumerate() {
+            if twap.is_done() || ts.get() < twap.next_at {
+                continue;
+            }
+            let remaining_slices = twap.total_slices - twap.sent;
+            let slice = if remaining_slices <= 1 {
+                twap.remaining()
+            } else {
+                Qty::from_raw(twap.request.quantity.raw() / twap.total_slices)
+            };
+            if !slice.is_positive() {
+                twap.sent = twap.total_slices;
+                continue;
+            }
+            twap.sent += 1;
+            twap.worked = twap.worked.checked_add(slice)?;
+            twap.next_at = twap.next_at.saturating_add(twap.request.interval_nanos);
+            due.push((index, slice));
+        }
+
+        for (index, slice) in due {
+            let twap = self.twaps[index].clone();
+            self.next_order_id += 1;
+            let id = OrderId(self.next_order_id);
+            let mut order = Order::new(
+                id,
+                twap.request.instrument.clone(),
+                twap.request.outcome,
+                twap.request.side,
+                OrderKind::Market,
+                slice,
+                TimeInForce::ImmediateOrCancel,
+                ts,
+            )?;
+            order.status = OrderStatus::Accepted;
+            order.accepted_at = Some(ts);
+            order.reduce_only = twap.request.reduce_only;
+            order.tag = Some(
+                twap.request
+                    .tag
+                    .clone()
+                    .unwrap_or_else(|| "twap".to_string()),
+            );
+            self.orders.insert(id, order);
+            self.metrics.twap_slices += 1;
+            self.try_fill(id, ts, strategy)?;
+        }
+        Ok(())
+    }
+
+    /// Release stops and take-profits the mark has now reached.
+    ///
+    /// Fires on the mark rather than the book, for the same reason margin
+    /// does: a one-print wick should not stop you out of a position the
+    /// venue still values calmly. A triggered order becomes an ordinary
+    /// order at that instant and meets the book from there, which is why a
+    /// stop can and does fill worse than its trigger -- the gap it exists
+    /// to protect against is the gap it suffers.
+    fn arm_triggers(&mut self, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
+        let ready: Vec<OrderId> = self
+            .orders
+            .values()
+            .filter(|order| {
+                order.status == OrderStatus::Untriggered
+                    && order.trigger.is_some_and(|trigger| {
+                        self.marks
+                            .get(&(order.instrument.clone(), order.outcome))
+                            .is_some_and(|price| trigger.fires_at(*price))
+                    })
+            })
+            .map(|order| order.id)
+            .collect();
+        for id in ready {
+            if let Some(order) = self.orders.get_mut(&id) {
+                order.trigger = None;
+                order.status = OrderStatus::Accepted;
+                order.accepted_at = Some(ts);
+            }
+            self.metrics.orders_triggered += 1;
+            self.try_fill(id, ts, strategy)?;
+        }
         Ok(())
     }
 
@@ -1896,6 +2156,7 @@ impl Engine {
                     limit,
                 } => self.amend(id, quantity, limit)?,
                 Command::Set(request) => self.queue_set_operation(request)?,
+                Command::Twap(request) => self.start_twap(request)?,
             }
         }
         Ok(())
@@ -2032,6 +2293,7 @@ impl Engine {
         order.tag = request.tag;
         order.reduce_only = request.reduce_only;
         order.post_only = request.post_only;
+        order.trigger = request.trigger;
         if order.post_only && !matches!(order.kind, OrderKind::Limit { .. }) {
             return Err(BacktestError::invalid(
                 "a post-only order must carry a limit price; a market order \
@@ -2274,6 +2536,24 @@ impl Engine {
                 self.orders.insert(order.id, order);
                 self.metrics.orders_rejected_post_only += 1;
                 continue;
+            }
+            // A stop is not liquidity. It is held by the venue, invisible
+            // to everyone else, until the mark reaches it -- so it does not
+            // go near the book or the queue on arrival.
+            if let Some(trigger) = order.trigger {
+                let reference = self
+                    .marks
+                    .get(&(order.instrument.clone(), order.outcome))
+                    .copied();
+                if !reference.is_some_and(|price| trigger.fires_at(price)) {
+                    order.status = OrderStatus::Untriggered;
+                    order.accepted_at = Some(ts);
+                    self.orders.insert(order.id, order);
+                    continue;
+                }
+                // Already through it on arrival: fires immediately.
+                order.trigger = None;
+                self.metrics.orders_triggered += 1;
             }
             if let Some(other) = self.would_self_trade(&order) {
                 order.status = OrderStatus::Rejected;
@@ -2972,6 +3252,7 @@ impl Engine {
             forecasts: self.forecasts.clone(),
             mark_curve: self.mark_curve.clone(),
             expirations: self.expirations.clone(),
+            twaps: self.twaps.clone(),
             metrics: self.metrics.clone(),
         })
     }
@@ -3221,6 +3502,7 @@ impl EngineBuilder {
             liquidation: self.liquidation,
             isolated: self.isolated,
             isolated_collateral: BTreeMap::new(),
+            twaps: Vec::new(),
         }
     }
 }

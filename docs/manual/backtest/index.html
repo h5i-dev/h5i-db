@@ -525,6 +525,23 @@ decompression, and worse to replay as a thin book than to refuse outright.</p>
 <p>Trades matter more than they look: without prints the queue model has
 nothing to consume the size ahead of a resting order, so every touched
 limit fills immediately.</p>
+<p><code>asset_ctxs/&lt;date&gt;.csv.lz4</code> is the historical mark and oracle — a daily CSV
+at one-minute cadence across the universe. Its <code>funding</code> column is the
+standing rate sampled once a minute, <strong>not</strong> a payment, so
+<code>asset_context_records</code> deliberately emits reference prices and no funding
+events; sixty samples an hour would charge a carry sixty times. Settlements
+come from <code>fundingHistory</code>.</p>
+<p><code>hyperliquid_archive::load_archive</code> walks a synced directory and commits it,
+so the whole path is one call:</p>
+<div class="highlight"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">spec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ArchiveSpec</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;./archive&quot;</span><span class="p">).</span><span class="n">date</span><span class="p">(</span><span class="s">&quot;20250101&quot;</span><span class="p">).</span><span class="n">coin</span><span class="p">(</span><span class="s">&quot;BTC&quot;</span><span class="p">);</span>
+<span class="n">load_archive</span><span class="p">(</span><span class="o">&amp;</span><span class="n">db</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">spec</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">universe</span><span class="p">,</span><span class="w"> </span><span class="n">known_at</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</code></pre></div>
+
+<p>Coins filter on the <em>file name</em>, so a one-coin load reads 700 KB instead of
+77 MB. A date, hour or coin that is not on disk lands in <code>ArchiveLoad::missing</code>
+rather than reading as no data — an incomplete sync found at replay time
+looks like a thin book. Instruments come from a supplied <code>meta</code> universe,
+not from the archive, which carries prices and no metadata.</p>
 <h3 id="post-only">Post-only<a class="headerlink" href="#post-only" title="Permanent link">#</a></h3>
 <p><code>OrderRequest::post_only()</code> is Hyperliquid's ALO. It is checked on arrival,
 not on submission, because what matters is the book the venue sees when the
@@ -532,6 +549,42 @@ order gets there -- an order sent into a wide market and delivered into a
 crossed one is rejected, which is the risk a maker takes. A post-only order
 that later fills does so as a maker, since by construction it could never
 have taken.</p>
+<h3 id="stops-and-take-profits">Stops and take-profits<a class="headerlink" href="#stops-and-take-profits" title="Permanent link">#</a></h3>
+<p><code>OrderRequest::with_trigger</code> holds an order off the book until a price
+reaches it. That is the difference from a limit at the same price: a limit
+is liquidity someone can trade against, and a stop is not — so resting one
+would invent depth that was never there. Untriggered orders carry their own
+<code>OrderStatus::Untriggered</code>.</p>
+<p>They fire on the <strong>mark</strong>, not the book, for the same reason margin does: a
+one-print wick should not stop you out of a position the venue still values
+calmly. Once fired the order is ordinary and meets the book from there, so a
+stop can and does fill well below its trigger — the gap it exists to protect
+against is the gap it suffers.</p>
+<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">submit</span><span class="p">(</span>
+<span class="w">    </span><span class="n">OrderRequest</span>::<span class="n">market</span><span class="p">(</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Side</span>::<span class="n">Sell</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_trigger</span><span class="p">(</span><span class="n">Trigger</span>::<span class="n">stop_loss</span><span class="p">(</span><span class="n">Side</span>::<span class="n">Sell</span><span class="p">,</span><span class="w"> </span><span class="n">price</span><span class="p">)),</span>
+<span class="p">);</span>
+</code></pre></div>
+
+<div class="highlight"><pre><span></span><code><span class="k">return</span> <span class="p">[{</span><span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;submit&quot;</span><span class="p">,</span> <span class="s2">&quot;client_order_id&quot;</span><span class="p">:</span> <span class="s2">&quot;stop&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">m</span><span class="p">,</span>
+         <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;sell&quot;</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">1.0</span><span class="p">,</span>
+         <span class="s2">&quot;trigger_price&quot;</span><span class="p">:</span> <span class="mf">90.0</span><span class="p">,</span> <span class="s2">&quot;trigger_direction&quot;</span><span class="p">:</span> <span class="s2">&quot;stop_loss&quot;</span><span class="p">}]</span>
+</code></pre></div>
+
+<h3 id="twap">TWAP<a class="headerlink" href="#twap" title="Permanent link">#</a></h3>
+<p>Hyperliquid's TWAP is a native order type, not a client-side loop: the venue
+slices it into equal children on a fixed cadence (thirty seconds) and works
+them until the duration is up.</p>
+<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">twap</span><span class="p">(</span><span class="n">TwapRequest</span>::<span class="n">new</span><span class="p">(</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Side</span>::<span class="n">Buy</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">,</span><span class="w"> </span><span class="n">duration_nanos</span><span class="p">));</span>
+</code></pre></div>
+
+<p>Modelling it as one large market order gets the answer wrong in the
+direction that flatters. A size worth slicing is a size that moves the book,
+and the whole reason to slice is that it does — so the children here are
+ordinary market orders crossing through the same matching path, and a TWAP
+into a thin book suffers exactly the slippage that book implies. The last
+slice carries the rounding, so the schedule works exactly the size it was
+given rather than quietly working less and reporting a better average.</p>
 <h3 id="fees-that-fall-with-volume">Fees that fall with volume<a class="headerlink" href="#fees-that-fall-with-volume" title="Permanent link">#</a></h3>
 <p><code>TieredFees</code> prices on rolling traded notional. Every serious venue does
 this and most simulators do not, which decides whether a market-making
@@ -804,7 +857,7 @@ pass/fail, because <em>where</em> the book refused is the finding.</p>
     <nav class="page-nav"><a class="prev" href="/manual/operations/"><span class="dir">← Previous</span><span class="pn-title">Operations guide</span></a><a class="next" href="/api/"><span class="dir">Next →</span><span class="pn-title">Overview</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-tearsheet">From a run to a tearsheet</a></li><li><a href="#from-the-shell">From the shell</a></li><li><a href="#settlement">Settlement</a><ul><li><a href="#not-every-market-picks-a-winner">Not every market picks a winner</a></li></ul></li><li><a href="#trading-stops-before-resolving">Trading stops before resolving</a></li><li><a href="#outcomes-cannot-be-borrowed">Outcomes cannot be borrowed</a></li><li><a href="#complete-sets">Complete sets</a><ul><li><a href="#negative-risk-conversion">Negative-risk conversion</a></li></ul></li><li><a href="#scoring-a-forecast">Scoring a forecast</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#perpetuals">Perpetuals</a><ul><li><a href="#three-prices-not-one">Three prices, not one</a></li><li><a href="#prices-the-venue-will-actually-accept">Prices the venue will actually accept</a></li><li><a href="#data">Data</a></li><li><a href="#post-only">Post-only</a></li><li><a href="#fees-that-fall-with-volume">Fees that fall with volume</a></li><li><a href="#margin">Margin</a></li></ul></li><li><a href="#kalshi-data">Kalshi data</a></li><li><a href="#strategies">Strategies</a><ul><li><a href="#stamp-a-signal-after-the-quote-it-came-from">Stamp a signal after the quote it came from</a></li></ul></li><li><a href="#agent-trial-ledger">Agent trial ledger</a></li><li><a href="#what-is-not-here">What is not here</a></li><li><a href="#bringing-your-own-data">Bringing your own data</a></li><li><a href="#searching-without-fooling-yourself">Searching without fooling yourself</a></li><li><a href="#comparing-many-runs-at-once">Comparing many runs at once</a></li><li><a href="#a-pack-of-strategies-as-data">A pack of strategies, as data</a></li><li><a href="#replaying-an-accounts-ledger">Replaying an account's ledger</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-tearsheet">From a run to a tearsheet</a></li><li><a href="#from-the-shell">From the shell</a></li><li><a href="#settlement">Settlement</a><ul><li><a href="#not-every-market-picks-a-winner">Not every market picks a winner</a></li></ul></li><li><a href="#trading-stops-before-resolving">Trading stops before resolving</a></li><li><a href="#outcomes-cannot-be-borrowed">Outcomes cannot be borrowed</a></li><li><a href="#complete-sets">Complete sets</a><ul><li><a href="#negative-risk-conversion">Negative-risk conversion</a></li></ul></li><li><a href="#scoring-a-forecast">Scoring a forecast</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#perpetuals">Perpetuals</a><ul><li><a href="#three-prices-not-one">Three prices, not one</a></li><li><a href="#prices-the-venue-will-actually-accept">Prices the venue will actually accept</a></li><li><a href="#data">Data</a></li><li><a href="#post-only">Post-only</a></li><li><a href="#stops-and-take-profits">Stops and take-profits</a></li><li><a href="#twap">TWAP</a></li><li><a href="#fees-that-fall-with-volume">Fees that fall with volume</a></li><li><a href="#margin">Margin</a></li></ul></li><li><a href="#kalshi-data">Kalshi data</a></li><li><a href="#strategies">Strategies</a><ul><li><a href="#stamp-a-signal-after-the-quote-it-came-from">Stamp a signal after the quote it came from</a></li></ul></li><li><a href="#agent-trial-ledger">Agent trial ledger</a></li><li><a href="#what-is-not-here">What is not here</a></li><li><a href="#bringing-your-own-data">Bringing your own data</a></li><li><a href="#searching-without-fooling-yourself">Searching without fooling yourself</a></li><li><a href="#comparing-many-runs-at-once">Comparing many runs at once</a></li><li><a href="#a-pack-of-strategies-as-data">A pack of strategies, as data</a></li><li><a href="#replaying-an-accounts-ledger">Replaying an account's ledger</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

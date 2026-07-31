@@ -38,6 +38,14 @@ pub enum TimeInForce {
 pub enum OrderStatus {
     /// Submitted, not yet seen by the venue (in the latency queue).
     InFlight,
+    /// Held by the venue but not on the book: a stop or take-profit whose
+    /// trigger has not been reached.
+    ///
+    /// Distinct from `Accepted` because it is invisible. A resting order
+    /// contributes depth and can be traded against; an untriggered one
+    /// cannot, and counting it as live would let a queue model treat it as
+    /// liquidity that was never there.
+    Untriggered,
     /// Live at the venue.
     Accepted,
     PartiallyFilled,
@@ -58,11 +66,88 @@ impl OrderStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             OrderStatus::InFlight => "in_flight",
+            OrderStatus::Untriggered => "untriggered",
             OrderStatus::Accepted => "accepted",
             OrderStatus::PartiallyFilled => "partially_filled",
             OrderStatus::Filled => "filled",
             OrderStatus::Cancelled => "cancelled",
             OrderStatus::Rejected => "rejected",
+        }
+    }
+}
+
+/// Which way a price has to move for a trigger to fire.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TriggerDirection {
+    /// Fires once the reference price reaches or exceeds the trigger.
+    Above,
+    /// Fires once it reaches or falls below.
+    Below,
+}
+
+/// A stop or take-profit condition.
+///
+/// Held off the book until it fires, which is the difference that matters:
+/// a limit order at the same price is liquidity someone can trade against,
+/// and a stop is not. A simulator that rests stops on the book invents
+/// depth, and one that fills them at the limit price ignores the gap they
+/// exist to protect against.
+///
+/// Hyperliquid fires these on the **mark**, not the book, for the same
+/// reason it margins on the mark: a one-print wick should not stop you out
+/// of a position the venue still values calmly. The engine follows that,
+/// so the price a trigger watches is whatever
+/// [`crate::engine::MarkSource`] selected.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Trigger {
+    pub price: Price,
+    pub direction: TriggerDirection,
+}
+
+impl Trigger {
+    /// A stop-loss: a sell that fires as the price falls, or a buy that
+    /// fires as it rises. Which one it is follows from the side.
+    pub fn stop_loss(side: Side, price: Price) -> Self {
+        Self {
+            price,
+            direction: match side {
+                Side::Sell => TriggerDirection::Below,
+                Side::Buy => TriggerDirection::Above,
+            },
+        }
+    }
+
+    /// A take-profit, which watches the opposite direction of a stop on the
+    /// same side.
+    pub fn take_profit(side: Side, price: Price) -> Self {
+        Self {
+            price,
+            direction: match side {
+                Side::Sell => TriggerDirection::Above,
+                Side::Buy => TriggerDirection::Below,
+            },
+        }
+    }
+
+    pub fn above(price: Price) -> Self {
+        Self {
+            price,
+            direction: TriggerDirection::Above,
+        }
+    }
+
+    pub fn below(price: Price) -> Self {
+        Self {
+            price,
+            direction: TriggerDirection::Below,
+        }
+    }
+
+    /// Whether `reference` has reached this trigger.
+    pub fn fires_at(&self, reference: Price) -> bool {
+        match self.direction {
+            TriggerDirection::Above => reference >= self.price,
+            TriggerDirection::Below => reference <= self.price,
         }
     }
 }
@@ -90,6 +175,12 @@ pub struct Order {
     pub tag: Option<String>,
     /// Only reduces an existing position; never opens or flips one.
     pub reduce_only: bool,
+    /// A stop or take-profit condition, if this order has one.
+    ///
+    /// Until it fires the order is held off the book entirely, which is
+    /// what a real venue does and what makes a stop different from a limit
+    /// at the same price: a limit is liquidity, a stop is not.
+    pub trigger: Option<Trigger>,
     /// Add liquidity only: the venue refuses it rather than let it cross.
     ///
     /// Hyperliquid calls this ALO and Binance post-only; the behaviour is
@@ -174,6 +265,7 @@ impl Order {
             tag: None,
             reduce_only: false,
             post_only: false,
+            trigger: None,
         })
     }
 
@@ -194,6 +286,11 @@ impl Order {
 
     pub fn post_only(mut self) -> Self {
         self.post_only = true;
+        self
+    }
+
+    pub fn with_trigger(mut self, trigger: Trigger) -> Self {
+        self.trigger = Some(trigger);
         self
     }
 

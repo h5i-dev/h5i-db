@@ -775,6 +775,38 @@ impl NativeDatabase {
                 .await
                 .map_err(backtest_err)?;
 
+                // Built separately: one `json!` for the whole payload
+                // exceeds the macro's recursion limit.
+                let metrics = serde_json::json!({
+                        "orders_submitted": report.result.metrics.orders_submitted,
+                        "orders_filled": report.result.metrics.orders_filled,
+                        "orders_cancelled_unfilled":
+                            report.result.metrics.orders_cancelled_unfilled,
+                        "orders_rejected_margin":
+                            report.result.metrics.orders_rejected_margin,
+                        "orders_rejected_risk":
+                            report.result.metrics.orders_rejected_risk,
+                        "orders_rejected_self_trade":
+                            report.result.metrics.orders_rejected_self_trade,
+                        "orders_rejected_naked_short":
+                            report.result.metrics.orders_rejected_naked_short,
+                        "orders_rejected_expired":
+                            report.result.metrics.orders_rejected_expired,
+                        "orders_rejected_post_only":
+                            report.result.metrics.orders_rejected_post_only,
+                        "orders_triggered": report.result.metrics.orders_triggered,
+                        "twap_slices": report.result.metrics.twap_slices,
+                        "fills_taker": report.result.metrics.fills_taker,
+                        "fills_maker": report.result.metrics.fills_maker,
+                        "book_gaps": report.result.metrics.book_gaps,
+                        "liquidations": report.result.metrics.liquidations,
+                        "set_operations": report.result.metrics.set_operations,
+                        "set_operations_rejected":
+                            report.result.metrics.set_operations_rejected,
+                        "instruments_expired":
+                            report.result.metrics.instruments_expired,
+                });
+
                 // The triples `quant.calibration` scores: what the strategy
                 // said, what the market said at the same instant, and what
                 // happened. Carried in the payload because they cannot be
@@ -847,33 +879,7 @@ impl NativeDatabase {
                             })
                         })
                         .collect::<Vec<_>>(),
-                    "metrics": {
-                        "orders_submitted": report.result.metrics.orders_submitted,
-                        "orders_filled": report.result.metrics.orders_filled,
-                        "orders_cancelled_unfilled":
-                            report.result.metrics.orders_cancelled_unfilled,
-                        "orders_rejected_margin":
-                            report.result.metrics.orders_rejected_margin,
-                        "orders_rejected_risk":
-                            report.result.metrics.orders_rejected_risk,
-                        "orders_rejected_self_trade":
-                            report.result.metrics.orders_rejected_self_trade,
-                        "orders_rejected_naked_short":
-                            report.result.metrics.orders_rejected_naked_short,
-                        "orders_rejected_expired":
-                            report.result.metrics.orders_rejected_expired,
-                        "orders_rejected_post_only":
-                            report.result.metrics.orders_rejected_post_only,
-                        "fills_taker": report.result.metrics.fills_taker,
-                        "fills_maker": report.result.metrics.fills_maker,
-                        "book_gaps": report.result.metrics.book_gaps,
-                        "liquidations": report.result.metrics.liquidations,
-                        "set_operations": report.result.metrics.set_operations,
-                        "set_operations_rejected":
-                            report.result.metrics.set_operations_rejected,
-                        "instruments_expired":
-                            report.result.metrics.instruments_expired,
-                    },
+                    "metrics": metrics,
                     "warnings": report.warnings(),
                 })
                 .to_string())
