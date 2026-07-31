@@ -54,6 +54,7 @@ across study trials (23% of a four-trial study) and trials run
 concurrently across forks. They are the only remaining backtest-performance
 items that are multiplier-class; the rest are percent-class and the machine's
 own noise floor is now comparable to them.
+
 ---
 
 # Part I — Production readiness
