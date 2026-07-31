@@ -253,14 +253,10 @@ as the column says, and the benchmark checks counts rather than PnL equivalence.
 Nautilus does. Callback against callback the gap is 3.1×, not 13×. Derived
 (native kernel plus measured boundary cost), not timed directly.
 ⁷ `--features wide`, off by default; see
-[Precision and range](https://db.h5i.dev/manual/backtest/). The kernel figure
-is the row above scaled by **1.43×**: 12 alternating same-machine pairs, wide
-slower in all 12, medians 68.2 to 97.5 ms, ranges not overlapping. Scaled
-because this machine runs the i64 kernel at 68.2 ms, not 65.7. The Python
-boundary cost is unchanged.
-⁸ Measured, and unchanged: across those 12 pairs `wide` was slower in 6 and
-faster in 6, medians within 2%. The row is dominated by commit fsyncs, which
-arithmetic width does not touch.
+[Precision and range](https://db.h5i.dev/manual/backtest/). Scaled from the row
+above by a measured **1.43×** rather than timed directly; method in
+[RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
+⁸ Measured, and unchanged: this row is fsync-bound.
 
 ---
 

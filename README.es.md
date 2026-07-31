@@ -271,14 +271,10 @@ Nautilus. Callback contra callback la distancia es 3,1× y no 13×. Cifra
 derivada (núcleo nativo más el coste de frontera medido), no cronometrada
 directamente.
 ⁷ `--features wide`, desactivado por defecto; véase
-[Precisión y rango](https://db.h5i.dev/manual/backtest/). La cifra del núcleo es
-la fila de encima multiplicada por **1,43×**: 12 pares alternados en la misma
-máquina, `wide` más lento en los 12, medianas de 68,2 a 97,5 ms, rangos sin
-solaparse. Escalada porque esta máquina ejecuta el núcleo i64 en 68,2 ms, no en
-65,7. El coste de frontera de Python no cambia.
-⁸ Medido, y sin cambio: en esos 12 pares `wide` fue más lento en 6 y más rápido
-en 6, con medianas dentro del 2%. La fila la dominan los fsync de cada commit,
-que el ancho de la aritmética no toca.
+[Precisión y rango](https://db.h5i.dev/manual/backtest/). Escalada desde la fila
+de encima por un **1,43×** medido, no cronometrada directamente; método en
+[RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
+⁸ Medido, y sin cambio: esta fila la dominan los fsync.
 
 ---
 

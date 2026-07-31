@@ -274,14 +274,10 @@ des comptages plutôt qu'une équivalence de PnL.
 non de 13×. Chiffre dérivé (noyau natif plus coût de frontière mesuré), non
 chronométré directement.
 ⁷ `--features wide`, désactivé par défaut ; voir
-[Précision et plage](https://db.h5i.dev/manual/backtest/). Le chiffre du noyau
-est la ligne au-dessus multipliée par **1,43×** : 12 paires alternées sur la
-même machine, `wide` plus lent sur les 12, médianes de 68,2 à 97,5 ms, plages
-sans recouvrement. Mis à l'échelle parce que cette machine exécute le noyau i64
-en 68,2 ms, pas 65,7. Le coût de frontière Python ne change pas.
-⁸ Mesuré, et inchangé : sur ces 12 paires, `wide` a été plus lent 6 fois et plus
-rapide 6 fois, médianes à moins de 2%. La ligne est dominée par les fsync de
-chaque commit, que la largeur de l'arithmétique ne touche pas.
+[Précision et plage](https://db.h5i.dev/manual/backtest/). Mis à l'échelle
+depuis la ligne au-dessus par un **1,43×** mesuré, non chronométré directement ;
+méthode dans [RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
+⁸ Mesuré, et inchangé : cette ligne est dominée par les fsync.
 
 ---
 

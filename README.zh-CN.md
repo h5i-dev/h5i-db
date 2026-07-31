@@ -238,12 +238,10 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 回调来比，差距是 3.1 倍而不是 13 倍。此数字为推导值（原生内核加实测边界开销），
 并非直接计时。
 ⁷ `--features wide`，默认关闭，详见
-[精度与范围](https://db.h5i.dev/manual/backtest/)。内核这一项是上一行乘以
-**1.43 倍**：同一台机器交替测 12 对，12 次都是 `wide` 更慢，中位数 68.2 到
-97.5 ms，两组区间不重叠。用倍率是因为这台机器跑 i64 内核是 68.2 ms，不是
-65.7 ms。Python 边界开销不变。
-⁸ 测了，而且没有变化：这 12 对里 `wide` 更慢 6 次、更快 6 次，中位数相差 2%
-以内。这一行由每次提交的 fsync 主导，与运算宽度无关。
+[精度与范围](https://db.h5i.dev/manual/backtest/)。并非直接计时，而是把实测的
+**1.43 倍**乘到上一行；方法见
+[RESULTS.md](benchmarks/backtest_compare/RESULTS.md)。
+⁸ 测了，而且没有变化：这一行由 fsync 主导。
 
 ---
 

@@ -263,6 +263,46 @@ cargo bench -p h5i-db-backtest --bench replay_path -- \
     --common-quotes --trials 1
 ```
 
+## What 128-bit fixed point costs, 2026-07-31
+
+`--features wide` switches the fixed-point raw type from `i64` to `i128`. It is
+off by default and the scale does not move with it, so this is a range change
+and not a precision one.
+
+Two release binaries of `benches/replay_path.rs` were built from the same
+source, one per mode, and run **alternately (ABBA)** for 12 pairs on the
+README workload (`--book 200000 --trades 0 --instruments 1 --signals 200
+--trials 1 --common-quotes`). Alternating matters: a first attempt ran the arms
+in a fixed order and every phase came out slower, which is what monotonic drift
+looks like when all of it lands on the second arm.
+
+| phase | i64 median | i128 median | ratio | i128 slower in |
+|---|---:|---:|---:|---:|
+| kernel | 68.2 ms | 97.5 ms | **1.43×** | 12/12 |
+| decode | 82.5 ms | 103.1 ms | 1.25× | 8/12 |
+| persisted run | 393.4 ms | 402.1 ms | 1.02× | 6/12 |
+
+Only the kernel row is solid. Median and minimum agree (1.43× and 1.44×), it
+lost every pair, and the two arms' ranges do not overlap: i64 spans 53–74 ms,
+i128 spans 77–134 ms. That is the expected shape, since an `i128` add spans two
+registers.
+
+The persisted run shows **no effect**: 6 pairs each way, medians within 2%. It
+is dominated by the fsyncs a commit pays for, which the arithmetic width does
+not touch. Decode is not quotable — 1.25× by median against 1.09× by minimum at
+8/12 is two statistics disagreeing, not a measurement.
+
+### Why the README scales rather than quotes
+
+This machine runs the i64 kernel at 68.2 ms against the 65.7 ms in the
+published table. Quoting today's raw i128 figure beside i64 rows measured in an
+earlier session would charge that drift to the integer width. The ratio is the
+transferable quantity, so the README's `wide` kernel row is 65.7 × 1.43, and
+its callback row adds the same measured 1.062 µs/event `trading` boundary the
+i64 callback row uses — crossing into Python does not depend on integer width.
+That composition was checked against the i64 row first: 65.7 + 212.4 = 278.1
+against a published 278.
+
 ## Interpretation limits
 
 This establishes a reproducible advantage for this narrow event-driven
