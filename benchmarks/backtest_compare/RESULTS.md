@@ -156,6 +156,63 @@ Eleven rounds rather than five because the arms are close enough now that five
 put `trading` below `noop`, which cannot be true: the medians were not
 separated, and reporting them would have been reporting noise.
 
+## What the kernel costs per instrument, 2026-07-31
+
+Every number above was measured with one instrument, which turned out to be
+the setting that hides the engine's worst scaling. Holding the event count at
+200k and varying only how many instruments they are spread across:
+
+| instruments | before | after |
+|---:|---:|---:|
+| 1 | 0.389 µs/event | 0.312 µs/event |
+| 32 | 0.490 | 0.383 |
+| 256 | 0.625 | 0.434 |
+| 1024 | 0.712 | 0.522 |
+| **growth, 1 → 1024** | **1.83×** | **1.67×** |
+
+Before, the increments tracked `log2(N)` almost exactly — the shape of a tree
+descent — and 45% of the per-event cost at 1024 instruments was growth in `N`
+rather than anything the run had asked for. Six of the engine's maps were
+keyed by `(InstrumentId, OutcomeId)`; the id is an `Arc<str>`, so every lookup
+compared string contents and every insert cloned an `Arc`, six deep, on every
+record. They are keyed by a dense `u32` slot now, computed once from the
+instrument set.
+
+**The growth figures are the result. The absolutes are not.** Each column was
+measured within one session, alternating instrument counts, so the ratio down
+each column is drift-free. The two columns are different sessions, so
+comparing 0.389 against 0.312 carries a session of drift and comparing the
+two ratios does not.
+
+An alternating A/B of the two revisions makes the reason to distrust the
+absolutes concrete. `decode` is the control: untouched by the change, and run
+*before* the kernel in the same process, so nothing the engine does can reach
+it.
+
+| | before | after | |
+|---|---:|---:|---:|
+| kernel | 71.0 ms | 59.9 ms | -15.6 % |
+| decode — unchanged code | 78.9 ms | 68.9 ms | -12.8 % |
+| kernel ÷ decode | 0.918 | 0.882 | **-4.0 %** |
+
+Decode cannot have got faster, so its -12.8% is common mode: two separately
+linked binaries with different code layout, an effect worth 5-10% on its own.
+Against that control the kernel's differential is about 4%, and the honest
+statement is that this setup does not separate it from drift.
+
+Which is why the table at the top of this file did not move. Replacing 65.7 ms
+with 59.9 ms would publish drift as improvement, the same mistake the
+persisted-run note above exists to avoid. The scaling result needs no such
+claim: it is a shape, measured within a session, and it holds whatever the
+machine was doing that day.
+
+```sh
+# vary --instruments over 1, 32, 256, 1024 with everything else fixed
+cargo bench -p h5i-db-backtest --bench replay_path -- \
+    --book 200000 --trades 0 --instruments 1024 --signals 200 \
+    --common-quotes --trials 1
+```
+
 ## Interpretation limits
 
 This establishes a reproducible advantage for this narrow event-driven
@@ -176,6 +233,10 @@ workload, not a universal ranking of backtest systems.
 - The local Nautilus checkout is 1.231.0, but building it exceeded this
   machine's memory twice. The benchmark therefore uses the nearest published
   aarch64 wheel, 1.230.0, and records that version in the artifact.
+- Comparisons across sessions on this machine carry its drift, which the
+  kernel-scaling section measures at 5-10% for a relinked binary alone. Only
+  figures gathered by alternating arms within one session are quoted as
+  before-and-after here; anything else is quoted as what it is.
 - The 2.7× and 7.3× above put a 2026-07-31 h5i measurement beside 2026-07-29
   competitor measurements. Neither competitor's code changed, and the
   re-measured `a3d5c2a4` arm shows which direction the machine drifted, but
