@@ -775,6 +775,76 @@ impl NativeDatabase {
                 .await
                 .map_err(backtest_err)?;
 
+                // Built separately: one `json!` for the whole payload
+                // exceeds the macro's recursion limit.
+                let metrics = serde_json::json!({
+                        "orders_submitted": report.result.metrics.orders_submitted,
+                        "orders_filled": report.result.metrics.orders_filled,
+                        "orders_cancelled_unfilled":
+                            report.result.metrics.orders_cancelled_unfilled,
+                        "orders_rejected_margin":
+                            report.result.metrics.orders_rejected_margin,
+                        "orders_rejected_risk":
+                            report.result.metrics.orders_rejected_risk,
+                        "orders_rejected_self_trade":
+                            report.result.metrics.orders_rejected_self_trade,
+                        "orders_rejected_naked_short":
+                            report.result.metrics.orders_rejected_naked_short,
+                        "orders_rejected_expired":
+                            report.result.metrics.orders_rejected_expired,
+                        "orders_rejected_post_only":
+                            report.result.metrics.orders_rejected_post_only,
+                        "orders_triggered": report.result.metrics.orders_triggered,
+                        "twap_slices": report.result.metrics.twap_slices,
+                        "fills_taker": report.result.metrics.fills_taker,
+                        "fills_maker": report.result.metrics.fills_maker,
+                        "book_gaps": report.result.metrics.book_gaps,
+                        "liquidations": report.result.metrics.liquidations,
+                        "set_operations": report.result.metrics.set_operations,
+                        "set_operations_rejected":
+                            report.result.metrics.set_operations_rejected,
+                        "instruments_expired":
+                            report.result.metrics.instruments_expired,
+                });
+
+                // The triples `quant.calibration` scores: what the strategy
+                // said, what the market said at the same instant, and what
+                // happened. Carried in the payload because they cannot be
+                // reconstructed from the stored tables -- the fills record
+                // what a strategy did, and only the strategy knows what it
+                // believed.
+                let calibration: Vec<serde_json::Value> = report
+                    .calibration_samples()
+                    .into_iter()
+                    .map(|sample| {
+                        serde_json::json!({
+                            "ts": sample.ts.get(),
+                            "instrument_id": sample.instrument.to_string(),
+                            "outcome": sample.outcome.0,
+                            "forecast": sample.forecast.to_f64(),
+                            "market": sample.market.map(|price| price.to_f64()),
+                            "realized": sample.realized.to_f64(),
+                            "tag": sample.tag,
+                        })
+                    })
+                    .collect();
+                let set_operations: Vec<serde_json::Value> = report
+                    .result
+                    .set_operations
+                    .iter()
+                    .map(|operation| {
+                        serde_json::json!({
+                            "ts": operation.ts.get(),
+                            "instrument_id": operation.instrument.to_string(),
+                            "kind": operation.kind.as_str(),
+                            "sets": operation.sets.to_f64(),
+                            "cash_delta": operation.cash_delta.to_f64(),
+                            "cost": operation.cost.to_f64(),
+                            "rejected": operation.rejected,
+                        })
+                    })
+                    .collect();
+
                 Ok(serde_json::json!({
                     "run_id": report.run_id,
                     "fork": report.fork,
@@ -794,22 +864,22 @@ impl NativeDatabase {
                     "liquidations": report.result.liquidations.len(),
                     "rejected_for_margin": report.result.rejected_for_margin,
                     "self_trades_prevented": report.result.self_trades_prevented,
-                    "metrics": {
-                        "orders_submitted": report.result.metrics.orders_submitted,
-                        "orders_filled": report.result.metrics.orders_filled,
-                        "orders_cancelled_unfilled":
-                            report.result.metrics.orders_cancelled_unfilled,
-                        "orders_rejected_margin":
-                            report.result.metrics.orders_rejected_margin,
-                        "orders_rejected_risk":
-                            report.result.metrics.orders_rejected_risk,
-                        "orders_rejected_self_trade":
-                            report.result.metrics.orders_rejected_self_trade,
-                        "fills_taker": report.result.metrics.fills_taker,
-                        "fills_maker": report.result.metrics.fills_maker,
-                        "book_gaps": report.result.metrics.book_gaps,
-                        "liquidations": report.result.metrics.liquidations,
-                    },
+                    "calibration_samples": calibration,
+                    "set_operations": set_operations,
+                    "forecasts": report.result.forecasts.len(),
+                    "mark_points": report.result.mark_curve.len(),
+                    "expirations": report
+                        .result
+                        .expirations
+                        .iter()
+                        .map(|(instrument, at)| {
+                            serde_json::json!({
+                                "instrument_id": instrument.to_string(),
+                                "ts": at.get(),
+                            })
+                        })
+                        .collect::<Vec<_>>(),
+                    "metrics": metrics,
                     "warnings": report.warnings(),
                 })
                 .to_string())

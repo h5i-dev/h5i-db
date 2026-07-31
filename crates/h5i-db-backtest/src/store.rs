@@ -16,7 +16,7 @@ use std::sync::Arc;
 use arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Array, Float64Builder, Int64Array,
     Int64Builder, StringArray, StringBuilder, TimestampNanosecondArray, TimestampNanosecondBuilder,
-    UInt16Array, UInt16Builder,
+    UInt8Array, UInt8Builder, UInt16Array, UInt16Builder,
 };
 use arrow::record_batch::RecordBatch;
 use h5i_db_core::Database;
@@ -26,10 +26,12 @@ use crate::book::{BookDelta, OrderBook};
 use crate::engine::RunResult;
 use crate::error::{BacktestError, Result};
 use crate::event::{MarketEvent, Record};
-use crate::instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
+use crate::instrument::{
+    Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId, PriceRule,
+};
 use crate::position::Portfolio;
 use crate::schema;
-use crate::settlement::{Resolution, SettlementReport};
+use crate::settlement::{Payout, Resolution, SettlementReport};
 use crate::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
 use crate::window::TimeWindow;
 
@@ -182,6 +184,9 @@ pub async fn write_instruments(
     let mut lot = Float64Builder::new();
     let mut expiration = Int64Builder::new();
     let mut observable = Int64Builder::new();
+    let mut neg_risk = BooleanBuilder::new();
+    let mut significant_figures = UInt8Builder::new();
+    let mut max_decimals = UInt8Builder::new();
 
     for instrument in instruments {
         for (index, name) in instrument.outcomes.iter().enumerate() {
@@ -201,6 +206,20 @@ pub async fn write_instruments(
                 Some(at) => observable.append_value(at.get()),
                 None => observable.append_null(),
             }
+            neg_risk.append_value(instrument.neg_risk);
+            match instrument.price_rule {
+                PriceRule::Tick => {
+                    significant_figures.append_null();
+                    max_decimals.append_null();
+                }
+                PriceRule::SignificantFigures {
+                    significant_figures: figures,
+                    max_decimals: decimals,
+                } => {
+                    significant_figures.append_value(figures);
+                    max_decimals.append_value(decimals);
+                }
+            }
         }
     }
 
@@ -215,6 +234,9 @@ pub async fn write_instruments(
         Arc::new(lot.finish()),
         Arc::new(expiration.finish()),
         Arc::new(observable.finish()),
+        Arc::new(neg_risk.finish()),
+        Arc::new(significant_figures.finish()),
+        Arc::new(max_decimals.finish()),
     ];
     append(db, schema::INSTRUMENTS, schema::instruments(), columns).await
 }
@@ -255,6 +277,11 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
         let lot = column::<Float64Array>(batch, "lot_size")?;
         let expiration = column::<Int64Array>(batch, "expiration_ns")?;
         let observable = column::<Int64Array>(batch, "settlement_observable_ns")?;
+        // Absent for rows written before the column existed; false is the
+        // reading that cannot invent a mintable set.
+        let neg_risk = column::<BooleanArray>(batch, "neg_risk").ok();
+        let significant_figures = column::<UInt8Array>(batch, "price_significant_figures").ok();
+        let max_decimals = column::<UInt8Array>(batch, "price_max_decimals").ok();
 
         for row in 0..batch.num_rows() {
             let draft = collected
@@ -267,6 +294,17 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
                     lot: lot.value(row),
                     expiration: opt_i64(expiration, row),
                     observable: opt_i64(observable, row),
+                    neg_risk: neg_risk
+                        .map(|column| column.is_valid(row) && column.value(row))
+                        .unwrap_or(false),
+                    price_rule: match (significant_figures, max_decimals) {
+                        (Some(figures), Some(decimals))
+                            if figures.is_valid(row) && decimals.is_valid(row) =>
+                        {
+                            Some((figures.value(row), decimals.value(row)))
+                        }
+                        _ => None,
+                    },
                 });
             draft
                 .outcomes
@@ -296,10 +334,20 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
                 spot
             }
         };
+        // The rule comes first: it fixes the tick at the finest legal
+        // increment, and the stored tick must win over that default so a
+        // venue quoting coarser than its own rule round-trips faithfully.
+        if let Some((significant_figures, max_decimals)) = draft.price_rule {
+            instrument = instrument.with_price_rule(PriceRule::SignificantFigures {
+                significant_figures,
+                max_decimals,
+            })?;
+        }
         instrument.tick_size = Price::from_f64(draft.tick)?;
         instrument.lot_size = Qty::from_f64(draft.lot)?;
         instrument.expiration = draft.expiration.map(UnixNanos::new);
         instrument.settlement_observable = draft.observable.map(UnixNanos::new);
+        instrument.neg_risk = draft.neg_risk;
         set.insert(instrument)?;
     }
     Ok(set)
@@ -313,6 +361,8 @@ struct InstrumentDraft {
     lot: f64,
     expiration: Option<i64>,
     observable: Option<i64>,
+    neg_risk: bool,
+    price_rule: Option<(u8, u8)>,
 }
 
 // -- book events ------------------------------------------------------------
@@ -412,10 +462,11 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
             MarketEvent::Trade { .. }
             | MarketEvent::Bar { .. }
             | MarketEvent::Funding { .. }
+            | MarketEvent::Reference { .. }
             | MarketEvent::Corporate(_) => {
                 return Err(BacktestError::invalid(
-                    "trades, bars, funding and corporate actions belong in \
-                     their own tables, not book_deltas",
+                    "trades, bars, funding, reference prices and corporate \
+                     actions belong in their own tables, not book_deltas",
                 ));
             }
         }
@@ -728,16 +779,50 @@ pub async fn read_funding(
 pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Result<()> {
     let mut ts = TimestampNanosecondBuilder::new();
     let mut instrument = StringBuilder::new();
-    let mut winner = UInt16Builder::new();
+    let mut kind = StringBuilder::new();
+    let mut outcome = UInt16Builder::new();
+    let mut payout = Float64Builder::new();
+    let mut outcome_count = UInt16Builder::new();
+
     for resolution in resolutions {
-        ts.append_value(resolution.observable_at.get());
-        instrument.append_value(resolution.instrument.as_str());
-        winner.append_value(resolution.winner.0);
+        let mut push = |kind_name: &str,
+                        outcome_value: Option<u16>,
+                        payout_value: Option<Price>,
+                        count: Option<u16>| {
+            ts.append_value(resolution.observable_at.get());
+            instrument.append_value(resolution.instrument.as_str());
+            kind.append_value(kind_name);
+            match outcome_value {
+                Some(value) => outcome.append_value(value),
+                None => outcome.append_null(),
+            }
+            match payout_value {
+                Some(value) => payout.append_value(value.to_f64()),
+                None => payout.append_null(),
+            }
+            match count {
+                Some(value) => outcome_count.append_value(value),
+                None => outcome_count.append_null(),
+            }
+        };
+        match &resolution.payout {
+            Payout::Winner(winner) => push("winner", Some(winner.0), None, None),
+            Payout::Void { outcomes } => push("void", None, None, Some(*outcomes)),
+            Payout::Split(payouts) => {
+                for (index, price) in payouts.iter().enumerate() {
+                    push("split", Some(index as u16), Some(*price), None);
+                }
+            }
+        }
     }
+
     let columns: Vec<ArrayRef> = vec![
         Arc::new(ts.finish()),
         Arc::new(instrument.finish()),
-        Arc::new(winner.finish()),
+        Arc::new(kind.finish()),
+        Arc::new(outcome.finish()),
+        Arc::new(payout.finish()),
+        Arc::new(outcome_count.finish()),
     ];
     append(db, schema::RESOLUTIONS, schema::resolutions(), columns).await
 }
@@ -747,20 +832,89 @@ pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Res
 /// Called only by the post-run settlement policy. Nothing on the strategy
 /// path reaches this function, which is the structural half of "a strategy
 /// cannot see the answer".
+///
+/// A split arrives as one row per outcome and is reassembled by instrument,
+/// with the payouts placed by their outcome index rather than by arrival
+/// order, because segments hold rows in whatever order they were written.
 pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolution>> {
     let batches = scan_optional(db, schema::RESOLUTIONS, at, None).await?;
     let mut out = Vec::new();
+    // Split rows, gathered by instrument until every outcome has arrived.
+    let mut splits: BTreeMap<String, (i64, BTreeMap<u16, Price>)> = BTreeMap::new();
+
     for batch in &batches {
         let ts = column::<TimestampNanosecondArray>(batch, "ts_init")?;
         let instrument = column::<StringArray>(batch, "instrument_id")?;
-        let winner = column::<UInt16Array>(batch, "winner_outcome")?;
+        let kind = column::<StringArray>(batch, "kind")?;
+        let outcome = column::<UInt16Array>(batch, "outcome")?;
+        let payout = column::<Float64Array>(batch, "payout")?;
+        let outcome_count = column::<UInt16Array>(batch, "outcome_count")?;
         for row in 0..batch.num_rows() {
-            out.push(Resolution::new(
-                InstrumentId::new(instrument.value(row))?,
-                OutcomeId(winner.value(row)),
-                UnixNanos::new(ts.value(row)),
-            ));
+            let id = instrument.value(row);
+            let at = UnixNanos::new(ts.value(row));
+            match kind.value(row) {
+                "winner" => {
+                    if !outcome.is_valid(row) {
+                        return Err(BacktestError::invalid(format!(
+                            "resolution for {id} names a winner but no outcome"
+                        )));
+                    }
+                    out.push(Resolution::new(
+                        InstrumentId::new(id)?,
+                        OutcomeId(outcome.value(row)),
+                        at,
+                    ));
+                }
+                "void" => {
+                    if !outcome_count.is_valid(row) {
+                        return Err(BacktestError::invalid(format!(
+                            "voided resolution for {id} does not say how many \
+                             outcomes it refunds across"
+                        )));
+                    }
+                    out.push(Resolution::void(
+                        InstrumentId::new(id)?,
+                        outcome_count.value(row),
+                        at,
+                    )?);
+                }
+                "split" => {
+                    if !outcome.is_valid(row) || !payout.is_valid(row) {
+                        return Err(BacktestError::invalid(format!(
+                            "split resolution row for {id} is missing its \
+                             outcome or payout"
+                        )));
+                    }
+                    let entry = splits
+                        .entry(id.to_string())
+                        .or_insert((at.get(), BTreeMap::new()));
+                    entry
+                        .1
+                        .insert(outcome.value(row), Price::from_f64(payout.value(row))?);
+                }
+                other => {
+                    return Err(BacktestError::Parse {
+                        what: "resolution kind",
+                        value: other.to_string(),
+                    });
+                }
+            }
         }
+    }
+
+    for (id, (at, payouts)) in splits {
+        let expected = payouts.keys().copied().max().map(|last| last as usize + 1);
+        if expected != Some(payouts.len()) {
+            return Err(BacktestError::invalid(format!(
+                "split resolution for {id} has gaps in its outcome indices: {:?}",
+                payouts.keys().collect::<Vec<_>>()
+            )));
+        }
+        out.push(Resolution::split(
+            InstrumentId::new(id)?,
+            payouts.into_values().collect(),
+            UnixNanos::new(at),
+        )?);
     }
     Ok(out)
 }
@@ -795,6 +949,10 @@ pub async fn read_signals(
         let tif = column::<StringArray>(batch, "time_in_force")?;
         let tag = column::<StringArray>(batch, "tag")?;
         let reduce_only = column::<BooleanArray>(batch, "reduce_only")?;
+        // Tolerated as absent so a table written before the column existed
+        // still reads; false is the reading that cannot turn a taker into a
+        // maker by accident.
+        let post_only = column::<BooleanArray>(batch, "post_only").ok();
 
         for row in 0..batch.num_rows() {
             let id = InstrumentId::new(instrument.value(row))?;
@@ -842,6 +1000,9 @@ pub async fn read_signals(
             if reduce_only.is_valid(row) && reduce_only.value(row) {
                 request = request.reduce_only();
             }
+            if post_only.is_some_and(|column| column.is_valid(row) && column.value(row)) {
+                request = request.post_only();
+            }
             out.push((UnixNanos::new(ts.value(row)), request));
         }
     }
@@ -879,6 +1040,10 @@ pub async fn read_commands(
         let tif = column::<StringArray>(batch, "time_in_force")?;
         let tag = column::<StringArray>(batch, "tag")?;
         let reduce_only = column::<BooleanArray>(batch, "reduce_only")?;
+        // Tolerated as absent so a table written before the column existed
+        // still reads; false is the reading that cannot turn a taker into a
+        // maker by accident.
+        let post_only = column::<BooleanArray>(batch, "post_only").ok();
 
         for row in 0..batch.num_rows() {
             let client_order_id = client_id.value(row).to_string();
@@ -963,6 +1128,9 @@ pub async fn read_commands(
                     }
                     if reduce_only.is_valid(row) && reduce_only.value(row) {
                         request = request.reduce_only();
+                    }
+                    if post_only.is_some_and(|column| column.is_valid(row) && column.value(row)) {
+                        request = request.post_only();
                     }
                     ReplayCommand::Submit {
                         client_order_id,
@@ -1081,6 +1249,102 @@ pub async fn funding_source(
         buffer: Default::default(),
         decode: decode_funding,
     }))
+}
+
+/// Stream the venue's published mark and oracle prices.
+pub async fn reference_source(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<crate::replay::RecordSource> {
+    let batches = scan_optional(db, schema::REFERENCES, at, window).await?;
+    Ok(Box::new(BatchDecoder {
+        batches: batches.into_iter(),
+        buffer: Default::default(),
+        decode: decode_reference,
+    }))
+}
+
+fn decode_reference(
+    batch: &RecordBatch,
+    out: &mut std::collections::VecDeque<Record>,
+) -> Result<()> {
+    let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
+    let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
+    let instrument = column::<StringArray>(batch, "instrument_id")?;
+    let outcome = column::<UInt16Array>(batch, "outcome")?;
+    let mark = column::<Float64Array>(batch, "mark")?;
+    let oracle = column::<Float64Array>(batch, "oracle")?;
+    for row in 0..batch.num_rows() {
+        out.push_back(Record::new(
+            Stamps::new(
+                UnixNanos::new(ts_event.value(row)),
+                UnixNanos::new(ts_init.value(row)),
+            )?,
+            InstrumentId::new(instrument.value(row))?,
+            OutcomeId(outcome.value(row)),
+            MarketEvent::Reference {
+                mark: opt_price(mark, row)?,
+                oracle: opt_price(oracle, row)?,
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn opt_price(column: &Float64Array, row: usize) -> Result<Option<Price>> {
+    if column.is_valid(row) {
+        Ok(Some(Price::from_f64(column.value(row))?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Write venue-published reference prices.
+pub async fn write_references(db: &Database, records: &[Record]) -> Result<()> {
+    let mut ts_init = TimestampNanosecondBuilder::new();
+    let mut ts_event = TimestampNanosecondBuilder::new();
+    let mut instrument = StringBuilder::new();
+    let mut outcome = UInt16Builder::new();
+    let mut mark = Float64Builder::new();
+    let mut oracle = Float64Builder::new();
+    let mut vendor = StringBuilder::new();
+
+    for record in records {
+        let MarketEvent::Reference {
+            mark: mark_value,
+            oracle: oracle_value,
+        } = &record.event
+        else {
+            return Err(BacktestError::invalid(
+                "write_references takes reference records only",
+            ));
+        };
+        ts_init.append_value(record.stamps.ts_init.get());
+        ts_event.append_value(record.stamps.ts_event.get());
+        instrument.append_value(record.instrument.as_str());
+        outcome.append_value(record.outcome.0);
+        match mark_value {
+            Some(price) => mark.append_value(price.to_f64()),
+            None => mark.append_null(),
+        }
+        match oracle_value {
+            Some(price) => oracle.append_value(price.to_f64()),
+            None => oracle.append_null(),
+        }
+        vendor.append_null();
+    }
+
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(ts_init.finish()),
+        Arc::new(ts_event.finish()),
+        Arc::new(instrument.finish()),
+        Arc::new(outcome.finish()),
+        Arc::new(mark.finish()),
+        Arc::new(oracle.finish()),
+        Arc::new(vendor.finish()),
+    ];
+    append(db, schema::REFERENCES, schema::references(), columns).await
 }
 
 fn decode_funding(batch: &RecordBatch, out: &mut std::collections::VecDeque<Record>) -> Result<()> {

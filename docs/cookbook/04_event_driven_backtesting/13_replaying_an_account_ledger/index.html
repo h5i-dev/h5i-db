@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Replaying an account&#x27;s ledger · h5i-db docs</title>
+  <meta name="description" content="Every other recipe in this section asks what a strategy would have done. This one asks the strictest question a backtester can be asked: here are the…">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Replaying an account&#x27;s ledger · h5i-db docs">
+  <meta property="og:description" content="Every other recipe in this section asks what a strategy would have done. This one asks the strictest question a backtester can be asked: here are the…">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Replaying an account&#x27;s ledger · h5i-db docs">
+  <meta name="twitter:description" content="Every other recipe in this section asks what a strategy would have done. This one asks the strictest question a backtester can be asked: here are the…">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/#article","headline":"Replaying an account's ledger","name":"Replaying an account's ledger","description":"Every other recipe in this section asks what a strategy would have done. This one asks the strictest question a backtester can be asked: here are the\u2026","url":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Event-driven backtesting"},{"@type":"ListItem","position":4,"name":"Replaying an account's ledger","item":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Event-driven backtesting</div><ul><li><a href="/cookbook/04_event_driven_backtesting/01_first_event_driven_run/">Your first event-driven backtest</a></li><li><a href="/cookbook/04_event_driven_backtesting/02_execution_realism/">Stress-test execution assumptions</a></li><li><a href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/">Operate reproducible backtests</a></li><li><a href="/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/">A production data contract for Kaggle Polymarket L2</a></li><li><a href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/">Causal signal replay on real Polymarket books</a></li><li><a href="/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/">Order lifecycle and account risk</a></li><li><a href="/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/">Path-dependent Python strategies</a></li><li><a href="/cookbook/04_event_driven_backtesting/08_equity_bars_to_event_driven/">From a vectorized equity backtest to an event-driven one</a></li><li><a href="/cookbook/04_event_driven_backtesting/09_market_making_inventory/">Market making: inventory, latency, and being run over</a></li><li><a href="/cookbook/04_event_driven_backtesting/10_execution_algorithms/">Execution algorithms and the cost of not finishing</a></li><li><a href="/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/">Calibrating costs from your own fills</a></li><li><a href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/">Searching a strategy space without fooling yourself</a></li><li><a href="/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/" class="active">Replaying an account&#x27;s ledger</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Event-driven backtesting</span>
+<span class="sep">/</span>
+<span>Replaying an account&#x27;s ledger</span></div>
+<h1>Replaying an account&#x27;s ledger</h1>
+<p>Every other recipe in this section asks what a strategy would have done. This
+one asks the strictest question a backtester can be asked: here are the trades
+an account <em>actually</em> took, published on a public ledger. Does the engine
+reproduce that portfolio against the historical book?</p>
+<p>The answer is usually no, and that is the finding rather than the failure. A
+simulator that forced the fills would reproduce any ledger by construction and
+would have tested nothing. So the ledger is compiled into <strong>intent</strong> -- a limit
+order at the price the account got, immediate-or-cancel, with sells marked
+reduce-only -- and the recorded book is allowed to refuse it.</p>
+<p>Where it refuses is the useful output. It is either a fact about your market
+data (the book you have is not the book they traded against) or a fact about
+the ledger (that fill did not happen the way it is reported).</p>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ledger</td>
+<td>a public record of trades an account executed</td>
+</tr>
+<tr>
+<td>intent</td>
+<td>an order as submitted, before any venue decided whether it fills</td>
+</tr>
+<tr>
+<td>immediate-or-cancel</td>
+<td>fill whatever is available right now and cancel the rest</td>
+</tr>
+<tr>
+<td>reduce-only</td>
+<td>an order that may only shrink a position, never open the opposite one</td>
+</tr>
+<tr>
+<td>reconciliation</td>
+<td>comparing what was reported against what the replay produced, per market</td>
+</tr>
+<tr>
+<td>fill ratio</td>
+<td>the share of ledger quantity the replay managed to reproduce</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span><span class="p">,</span> <span class="n">venues</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">TICK</span> <span class="o">=</span> <span class="mf">0.001</span>
+</pre></div>
+</div>
+<h2 id="1-the-market-data-the-account-traded-against">1. The market data the account traded against<a class="headerlink" href="#1-the-market-data-the-account-traded-against" title="Permanent link">#</a></h2>
+<p>A panel of binary event contracts, with the book, the prints and the
+resolutions. This is the historical record; the ledger below is what somebody
+claims they did inside it.</p>
+<p>The fixture updates every market at the same instant, and each market is given
+its own millisecond before anything is ingested. A real feed does not quote
+twelve markets at one nanosecond either, and the stagger removes an ambiguity
+that would otherwise decide the answer: an order released into a batch of
+same-timestamp events meets the <em>new</em> book for whichever market the merge
+reached first, and the previous one for all the others.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">raw</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_prediction_markets</span><span class="p">(</span><span class="n">n_markets</span><span class="o">=</span><span class="mi">12</span><span class="p">,</span> <span class="n">steps</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
+<span class="n">offsets</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">name</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">milliseconds</span><span class="o">=</span><span class="n">index</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">name</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">raw</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">column</span><span class="p">(</span><span class="s2">&quot;instrument_id&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pylist</span><span class="p">())))</span>
+<span class="p">}</span>
+
+
+<span class="k">def</span> <span class="nf">stagger</span><span class="p">(</span><span class="n">table</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Give every market its own instant, as a real feed would.&quot;&quot;&quot;</span>
+    <span class="n">frame</span> <span class="o">=</span> <span class="n">table</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="k">if</span> <span class="s2">&quot;instrument_id&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">frame</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">table</span>
+    <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;instrument_id&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">offsets</span><span class="p">)</span>
+    <span class="k">if</span> <span class="s2">&quot;ts_event&quot;</span> <span class="ow">in</span> <span class="n">frame</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+        <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;ts_event&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">]</span>
+    <span class="n">frame</span> <span class="o">=</span> <span class="n">frame</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="n">kind</span><span class="o">=</span><span class="s2">&quot;stable&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">schema</span><span class="o">=</span><span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+
+<span class="n">panel</span> <span class="o">=</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="n">stagger</span><span class="p">(</span><span class="n">table</span><span class="p">)</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">raw</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;04_replaying_an_account_ledger&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">panel</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;panel fixture, one instant per market&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;books-v1&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">panel</span><span class="p">),</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;The book the ledger is checked against&quot;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">panel</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+
+<span class="n">specs</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">polymarket_markets_from_json</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">polymarket_market_payloads</span><span class="p">(</span><span class="n">raw</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">specs</span><span class="p">)</span><span class="si">}</span><span class="s2"> market specs, tokens resolved positionally to outcomes&quot;</span><span class="p">)</span>
+<span class="n">panel</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">instruments: 24 rows x 10 columns
+book_deltas: 1,344 rows x 11 columns
+trades: 288 rows x 9 columns
+resolutions: 12 rows x 6 columns
+
+12 market specs, tokens resolved positionally to outcomes</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_init</th>
+      <th>ts_event</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>action</th>
+      <th>side</th>
+      <th>price</th>
+      <th>size</th>
+      <th>event_index</th>
+      <th>is_last</th>
+      <th>source_vendor</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-05-01 12:00:00</td>
+      <td>2026-05-01 12:00:00</td>
+      <td>EVENT-0000</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>buy</td>
+      <td>0.123</td>
+      <td>55.073</td>
+      <td>1</td>
+      <td>False</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-05-01 12:00:00</td>
+      <td>2026-05-01 12:00:00</td>
+      <td>EVENT-0000</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>0.139</td>
+      <td>114.264</td>
+      <td>1</td>
+      <td>True</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-05-01 12:00:00</td>
+      <td>2026-05-01 12:00:00</td>
+      <td>EVENT-0000</td>
+      <td>1</td>
+      <td>snapshot</td>
+      <td>buy</td>
+      <td>0.826</td>
+      <td>73.635</td>
+      <td>2</td>
+      <td>False</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-05-01 12:00:00</td>
+      <td>2026-05-01 12:00:00</td>
+      <td>EVENT-0000</td>
+      <td>1</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>0.842</td>
+      <td>155.604</td>
+      <td>2</td>
+      <td>True</td>
+      <td>cookbook-sim</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="2-a-ledger-including-the-parts-that-will-not-replay">2. A ledger, including the parts that will not replay<a class="headerlink" href="#2-a-ledger-including-the-parts-that-will-not-replay" title="Permanent link">#</a></h2>
+<p>A real ledger is downloaded. This one is constructed, so that the
+reconciliation can be checked against a known answer: three kinds of row go in
+and the comparison should find exactly the two kinds that cannot replay.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>kind</th>
+<th>what it is</th>
+<th>what the book should do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>at the touch</td>
+<td>a buy at the offer, smaller than the displayed size</td>
+<td>fill it</td>
+</tr>
+<tr>
+<td>better than the touch</td>
+<td>a buy reported below the best bid</td>
+<td>refuse: nothing was resting that low</td>
+</tr>
+<tr>
+<td>oversized</td>
+<td>a buy at the offer, larger than the displayed size</td>
+<td>fill part of it</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">book</span> <span class="o">=</span> <span class="n">panel</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">quotes</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">book</span><span class="o">.</span><span class="n">pivot_table</span><span class="p">(</span>
+        <span class="n">index</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">,</span> <span class="s2">&quot;outcome&quot;</span><span class="p">],</span>
+        <span class="n">columns</span><span class="o">=</span><span class="s2">&quot;side&quot;</span><span class="p">,</span>
+        <span class="n">values</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;size&quot;</span><span class="p">],</span>
+        <span class="n">aggfunc</span><span class="o">=</span><span class="s2">&quot;last&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="o">.</span><span class="n">dropna</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">reset_index</span><span class="p">()</span>
+<span class="p">)</span>
+<span class="n">quotes</span><span class="o">.</span><span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">,</span> <span class="s2">&quot;outcome&quot;</span><span class="p">,</span> <span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="s2">&quot;bid_size&quot;</span><span class="p">,</span> <span class="s2">&quot;ask_size&quot;</span><span class="p">]</span>
+<span class="n">quotes</span> <span class="o">=</span> <span class="n">quotes</span><span class="p">[</span><span class="n">quotes</span><span class="p">[</span><span class="s2">&quot;outcome&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">quotes</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> usable two-sided quotes&quot;</span><span class="p">)</span>
+<span class="n">quotes</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">336 usable two-sided quotes</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_init</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>bid</th>
+      <th>ask</th>
+      <th>bid_size</th>
+      <th>ask_size</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-05-01 12:00:00.000</td>
+      <td>EVENT-0000</td>
+      <td>0</td>
+      <td>0.123</td>
+      <td>0.139</td>
+      <td>55.073</td>
+      <td>114.264</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-05-01 12:00:00.001</td>
+      <td>EVENT-0001</td>
+      <td>0</td>
+      <td>0.199</td>
+      <td>0.213</td>
+      <td>90.543</td>
+      <td>163.522</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-05-01 12:00:00.002</td>
+      <td>EVENT-0002</td>
+      <td>0</td>
+      <td>0.250</td>
+      <td>0.262</td>
+      <td>84.210</td>
+      <td>161.497</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">rows</span><span class="p">,</span> <span class="n">kinds</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">quote</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">quotes</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">40</span><span class="p">:</span><span class="mi">100</span><span class="p">:</span><span class="mi">6</span><span class="p">]</span><span class="o">.</span><span class="n">itertuples</span><span class="p">()):</span>
+    <span class="n">kind</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;at the touch&quot;</span><span class="p">,</span> <span class="s2">&quot;better than the touch&quot;</span><span class="p">,</span> <span class="s2">&quot;oversized&quot;</span><span class="p">)[</span><span class="n">index</span> <span class="o">%</span> <span class="mi">3</span><span class="p">]</span>
+    <span class="c1"># Prices stay on the market&#39;s 0.001 grid; an off-grid order is refused</span>
+    <span class="c1"># before it ever meets the book.</span>
+    <span class="n">price</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="nb">round</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">quote</span><span class="o">.</span><span class="n">bid</span><span class="p">)</span> <span class="o">-</span> <span class="n">TICK</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">kind</span> <span class="o">==</span> <span class="s2">&quot;better than the touch&quot;</span>
+        <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="n">quote</span><span class="o">.</span><span class="n">ask</span><span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">quantity</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">quote</span><span class="o">.</span><span class="n">ask_size</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="mf">3.0</span> <span class="k">if</span> <span class="n">kind</span> <span class="o">==</span> <span class="s2">&quot;oversized&quot;</span> <span class="k">else</span> <span class="mf">0.4</span><span class="p">)</span>
+    <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="n">venues</span><span class="o">.</span><span class="n">LedgerRow</span><span class="p">(</span>
+            <span class="n">ts_ns</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">quote</span><span class="o">.</span><span class="n">ts_init</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">),</span>
+            <span class="n">instrument_id</span><span class="o">=</span><span class="n">quote</span><span class="o">.</span><span class="n">instrument_id</span><span class="p">,</span>
+            <span class="n">outcome</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+            <span class="n">side</span><span class="o">=</span><span class="s2">&quot;buy&quot;</span><span class="p">,</span>
+            <span class="n">quantity</span><span class="o">=</span><span class="nb">round</span><span class="p">(</span><span class="n">quantity</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span>
+            <span class="n">price</span><span class="o">=</span><span class="n">price</span><span class="p">,</span>
+            <span class="n">trade_id</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;0x</span><span class="si">{</span><span class="n">index</span><span class="si">:</span><span class="s2">04d</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">kinds</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">kind</span><span class="p">)</span>
+
+<span class="n">ledger</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ledger_table</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="n">kinds</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span><span class="si">}</span><span class="s2"> ledger rows over </span><span class="si">{</span><span class="n">ledger</span><span class="p">[</span><span class="s1">&#39;instrument_id&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">nunique</span><span class="p">()</span><span class="si">}</span><span class="s2"> markets&quot;</span><span class="p">)</span>
+<span class="n">ledger</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">10 ledger rows over 2 markets</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_ns</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>price</th>
+      <th>trade_id</th>
+      <th>kind</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>1777639500004000000</td>
+      <td>EVENT-0004</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>47.53</td>
+      <td>0.371</td>
+      <td>0x0000</td>
+      <td>at the touch</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>1777639500010000000</td>
+      <td>EVENT-0010</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>39.03</td>
+      <td>0.799</td>
+      <td>0x0001</td>
+      <td>better than the touch</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>1777640400004000000</td>
+      <td>EVENT-0004</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>391.71</td>
+      <td>0.371</td>
+      <td>0x0002</td>
+      <td>oversized</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>1777640400010000000</td>
+      <td>EVENT-0010</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>34.43</td>
+      <td>0.812</td>
+      <td>0x0003</td>
+      <td>at the touch</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>1777641300004000000</td>
+      <td>EVENT-0004</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>56.52</td>
+      <td>0.366</td>
+      <td>0x0004</td>
+      <td>better than the touch</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>1777641300010000000</td>
+      <td>EVENT-0010</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>227.24</td>
+      <td>0.806</td>
+      <td>0x0005</td>
+      <td>oversized</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p><code>LedgerRow</code> refuses the things that would silently invert a position: a price
+outside <code>(0, 1)</code> is not a probability, a non-positive quantity is not a fill,
+and a side that is neither buy nor sell is not a trade.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">description</span><span class="p">,</span> <span class="n">build</span> <span class="ow">in</span> <span class="p">(</span>
+    <span class="p">(</span><span class="s2">&quot;price of 1.4&quot;</span><span class="p">,</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">venues</span><span class="o">.</span><span class="n">LedgerRow</span><span class="p">(</span>
+        <span class="n">ts_ns</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;m&quot;</span><span class="p">,</span> <span class="n">outcome</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;buy&quot;</span><span class="p">,</span> <span class="n">quantity</span><span class="o">=</span><span class="mf">10.0</span><span class="p">,</span> <span class="n">price</span><span class="o">=</span><span class="mf">1.4</span><span class="p">)),</span>
+    <span class="p">(</span><span class="s2">&quot;quantity of 0&quot;</span><span class="p">,</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">venues</span><span class="o">.</span><span class="n">LedgerRow</span><span class="p">(</span>
+        <span class="n">ts_ns</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;m&quot;</span><span class="p">,</span> <span class="n">outcome</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;buy&quot;</span><span class="p">,</span> <span class="n">quantity</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">price</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)),</span>
+    <span class="p">(</span><span class="s2">&quot;side &#39;long&#39;&quot;</span><span class="p">,</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">venues</span><span class="o">.</span><span class="n">LedgerRow</span><span class="p">(</span>
+        <span class="n">ts_ns</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;m&quot;</span><span class="p">,</span> <span class="n">outcome</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">side</span><span class="o">=</span><span class="s2">&quot;long&quot;</span><span class="p">,</span> <span class="n">quantity</span><span class="o">=</span><span class="mf">10.0</span><span class="p">,</span> <span class="n">price</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)),</span>
+<span class="p">):</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">build</span><span class="p">()</span>
+    <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">description</span><span class="si">:</span><span class="s2">16</span><span class="si">}</span><span class="s2"> refused: </span><span class="si">{</span><span class="nb">str</span><span class="p">(</span><span class="n">error</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;;&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">][:</span><span class="mi">70</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">price of 1.4     refused: m: price 1.4 is outside (0, 1)
+quantity of 0    refused: a ledger row with non-positive quantity is not a fill
+side &#x27;long&#x27;      refused: side must be buy or sell, got &#x27;long&#x27;</pre></div></div>
+<h2 id="3-compiling-the-ledger-into-intent">3. Compiling the ledger into intent<a class="headerlink" href="#3-compiling-the-ledger-into-intent" title="Permanent link">#</a></h2>
+<p><code>commands_from_ledger</code> turns each row into a limit order at the price the
+ledger reports, immediate-or-cancel, stamped a microsecond after the instant
+it claims. Sells become reduce-only, so a replay cannot invent short exposure
+the ledger never showed.</p>
+<p>Vendor dictionaries work too: pass the raw rows and the market specs, and
+tokens are resolved to outcomes positionally. Typed rows are used here because
+the reconciliation below wants them anyway.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">commands</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">commands_from_ledger</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="n">specs</span><span class="p">)</span>
+<span class="n">backtest</span><span class="o">.</span><span class="n">create_command_table</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;commands&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;commands&quot;</span><span class="p">,</span> <span class="n">commands</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;one account&#39;s published trades, as intent&quot;</span><span class="p">)</span>
+<span class="n">frame</span> <span class="o">=</span> <span class="n">commands</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">commands</span><span class="o">.</span><span class="n">num_rows</span><span class="si">}</span><span class="s2"> commands&quot;</span><span class="p">)</span>
+<span class="n">frame</span><span class="p">[[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;action&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">,</span> <span class="s2">&quot;kind&quot;</span><span class="p">,</span> <span class="s2">&quot;limit_price&quot;</span><span class="p">,</span>
+       <span class="s2">&quot;time_in_force&quot;</span><span class="p">,</span> <span class="s2">&quot;reduce_only&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">10 commands</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>action</th>
+      <th>instrument_id</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>kind</th>
+      <th>limit_price</th>
+      <th>time_in_force</th>
+      <th>reduce_only</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-05-01 12:45:00.004001</td>
+      <td>submit</td>
+      <td>EVENT-0004</td>
+      <td>buy</td>
+      <td>47.53</td>
+      <td>limit</td>
+      <td>0.371</td>
+      <td>ioc</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-05-01 12:45:00.010001</td>
+      <td>submit</td>
+      <td>EVENT-0010</td>
+      <td>buy</td>
+      <td>39.03</td>
+      <td>limit</td>
+      <td>0.799</td>
+      <td>ioc</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-05-01 13:00:00.004001</td>
+      <td>submit</td>
+      <td>EVENT-0004</td>
+      <td>buy</td>
+      <td>391.71</td>
+      <td>limit</td>
+      <td>0.371</td>
+      <td>ioc</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-05-01 13:00:00.010001</td>
+      <td>submit</td>
+      <td>EVENT-0010</td>
+      <td>buy</td>
+      <td>34.43</td>
+      <td>limit</td>
+      <td>0.812</td>
+      <td>ioc</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="4-the-replay">4. The replay<a class="headerlink" href="#4-the-replay" title="Permanent link">#</a></h2>
+<p><code>DataConfig(commands=...)</code> replaces the signals table with the command stream.
+Everything else is an ordinary run against the pinned book.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">backtest</span><span class="o">.</span><span class="n">BacktestConfig</span><span class="p">(</span>
+        <span class="n">run_id</span><span class="o">=</span><span class="s2">&quot;ledger-replay&quot;</span><span class="p">,</span>
+        <span class="n">portfolio</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">PortfolioConfig</span><span class="p">(</span><span class="n">starting_cash</span><span class="o">=</span><span class="mf">100_000.0</span><span class="p">),</span>
+        <span class="n">data</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">DataConfig</span><span class="p">(</span><span class="n">commands</span><span class="o">=</span><span class="s2">&quot;commands&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;books-v1&quot;</span><span class="p">),</span>
+        <span class="n">execution</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">ExecutionConfig</span><span class="p">(</span><span class="n">fee_kind</span><span class="o">=</span><span class="s2">&quot;prediction_market&quot;</span><span class="p">,</span> <span class="n">fee_rate</span><span class="o">=</span><span class="mf">0.02</span><span class="p">),</span>
+        <span class="n">output</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">OutputConfig</span><span class="p">(</span><span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">900_000_000_000</span><span class="p">),</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;orders </span><span class="si">{</span><span class="n">result</span><span class="p">[</span><span class="s1">&#39;orders&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">  fills </span><span class="si">{</span><span class="n">result</span><span class="p">[</span><span class="s1">&#39;fills&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">result</span><span class="o">.</span><span class="n">orders</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[[</span><span class="s2">&quot;order_id&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">,</span> <span class="s2">&quot;filled&quot;</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">orders 10  fills 7</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>order_id</th>
+      <th>instrument_id</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>filled</th>
+      <th>status</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>1</td>
+      <td>EVENT-0004</td>
+      <td>buy</td>
+      <td>47.53</td>
+      <td>47.530</td>
+      <td>filled</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2</td>
+      <td>EVENT-0010</td>
+      <td>buy</td>
+      <td>39.03</td>
+      <td>0.000</td>
+      <td>cancelled</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>3</td>
+      <td>EVENT-0004</td>
+      <td>buy</td>
+      <td>391.71</td>
+      <td>130.571</td>
+      <td>cancelled</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>4</td>
+      <td>EVENT-0010</td>
+      <td>buy</td>
+      <td>34.43</td>
+      <td>34.430</td>
+      <td>filled</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>5</td>
+      <td>EVENT-0004</td>
+      <td>buy</td>
+      <td>56.52</td>
+      <td>0.000</td>
+      <td>cancelled</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>6</td>
+      <td>EVENT-0010</td>
+      <td>buy</td>
+      <td>227.24</td>
+      <td>75.745</td>
+      <td>cancelled</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="5-reconciliation-per-market">5. Reconciliation, per market<a class="headerlink" href="#5-reconciliation-per-market" title="Permanent link">#</a></h2>
+<p><code>compare_to_ledger</code> reports where the replay and the ledger disagree rather
+than a single pass or fail, because <em>where</em> the book refused is the finding.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">comparison</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">compare_to_ledger</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">rows</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ledger rows        </span><span class="si">{</span><span class="n">comparison</span><span class="p">[</span><span class="s1">&#39;ledger_rows&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;replay fills       </span><span class="si">{</span><span class="n">comparison</span><span class="p">[</span><span class="s1">&#39;replay_fills&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;ledger quantity    </span><span class="si">{</span><span class="n">comparison</span><span class="p">[</span><span class="s1">&#39;ledger_quantity&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;replay quantity    </span><span class="si">{</span><span class="n">comparison</span><span class="p">[</span><span class="s1">&#39;replay_quantity&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;fill ratio         </span><span class="si">{</span><span class="n">comparison</span><span class="p">[</span><span class="s1">&#39;fill_ratio&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.1%</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;markets reproduced </span><span class="si">{</span><span class="n">comparison</span><span class="p">[</span><span class="s1">&#39;markets_reproduced&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">comparison</span><span class="p">[</span><span class="s1">&#39;markets&#39;</span><span class="p">])</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">comparison</span><span class="p">[</span><span class="s2">&quot;markets&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">ledger rows        10
+replay fills       7
+ledger quantity    1,380.85
+replay quantity    530.41
+fill ratio         38.4%
+markets reproduced 0 of 2</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>ledger_buy</th>
+      <th>ledger_sell</th>
+      <th>replay_buy</th>
+      <th>replay_sell</th>
+      <th>ledger_notional</th>
+      <th>replay_notional</th>
+      <th>reproduced</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>EVENT-0004</td>
+      <td>0</td>
+      <td>1029.08</td>
+      <td>0.0</td>
+      <td>396.009</td>
+      <td>0.0</td>
+      <td>389.205</td>
+      <td>149.887</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>EVENT-0010</td>
+      <td>0</td>
+      <td>351.77</td>
+      <td>0.0</td>
+      <td>134.405</td>
+      <td>0.0</td>
+      <td>282.662</td>
+      <td>108.222</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>The rows that failed to replay are the ones that were built to fail. Joining
+the per-row outcome back to the kind of row it was turns the reconciliation
+into a statement about the data rather than a number.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">submitted</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">orders</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;order_id&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(</span><span class="n">drop</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">assert</span> <span class="p">(</span><span class="n">submitted</span><span class="p">[</span><span class="s2">&quot;quantity&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span> <span class="o">==</span> <span class="n">ledger</span><span class="p">[</span><span class="s2">&quot;quantity&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">())</span><span class="o">.</span><span class="n">all</span><span class="p">(),</span> <span class="p">(</span>
+    <span class="s2">&quot;orders and ledger rows are no longer in the same order&quot;</span>
+<span class="p">)</span>
+<span class="n">ledger</span><span class="p">[</span><span class="s2">&quot;replayed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">submitted</span><span class="p">[</span><span class="s2">&quot;filled&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">()</span>
+<span class="n">by_kind</span> <span class="o">=</span> <span class="n">ledger</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;kind&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+    <span class="n">rows</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;quantity&quot;</span><span class="p">,</span> <span class="s2">&quot;size&quot;</span><span class="p">),</span>
+    <span class="n">ledger_quantity</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;quantity&quot;</span><span class="p">,</span> <span class="s2">&quot;sum&quot;</span><span class="p">),</span>
+    <span class="n">replayed_quantity</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;replayed&quot;</span><span class="p">,</span> <span class="s2">&quot;sum&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">by_kind</span><span class="p">[</span><span class="s2">&quot;ratio&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">by_kind</span><span class="p">[</span><span class="s2">&quot;replayed_quantity&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">by_kind</span><span class="p">[</span><span class="s2">&quot;ledger_quantity&quot;</span><span class="p">]</span>
+<span class="n">by_kind</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>rows</th>
+      <th>ledger_quantity</th>
+      <th>replayed_quantity</th>
+      <th>ratio</th>
+    </tr>
+    <tr>
+      <th>kind</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>at the touch</th>
+      <td>4</td>
+      <td>166.39</td>
+      <td>166.390</td>
+      <td>1.000</td>
+    </tr>
+    <tr>
+      <th>better than the touch</th>
+      <td>3</td>
+      <td>122.39</td>
+      <td>0.000</td>
+      <td>0.000</td>
+    </tr>
+    <tr>
+      <th>oversized</th>
+      <td>3</td>
+      <td>1092.07</td>
+      <td>364.024</td>
+      <td>0.333</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Read the three rows as three different conversations. "At the touch"
+reproduced, so nothing is wrong. "Better than the touch" did not fill at all:
+on real data that is either hidden liquidity, a venue you are not looking at,
+or a mid-quoted report. "Oversized" filled partially, which says the displayed
+book could not have supported that trade and is a statement about the depth in
+your archive.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">assert</span> <span class="n">by_kind</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s2">&quot;at the touch&quot;</span><span class="p">,</span> <span class="s2">&quot;ratio&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mf">0.99</span>
+<span class="k">assert</span> <span class="n">by_kind</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s2">&quot;better than the touch&quot;</span><span class="p">,</span> <span class="s2">&quot;ratio&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mf">0.01</span>
+<span class="k">assert</span> <span class="n">by_kind</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s2">&quot;oversized&quot;</span><span class="p">,</span> <span class="s2">&quot;ratio&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mf">1.0</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;the reconciliation found exactly the rows that were built to fail&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">the reconciliation found exactly the rows that were built to fail</pre></div></div>
+<h2 id="6-why-the-orders-that-did-not-fill-are-worth-reading">6. Why the orders that did not fill are worth reading<a class="headerlink" href="#6-why-the-orders-that-did-not-fill-are-worth-reading" title="Permanent link">#</a></h2>
+<p>The run's own explanation carries the count of orders that produced no fill,
+which is the number to watch when the ledger is real and nobody planted the
+failures.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">explanation</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">explain</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;orders without fills </span><span class="si">{</span><span class="n">explanation</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;orders_without_fills&#39;</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">unfilled</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">orders</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">unfilled</span> <span class="o">=</span> <span class="n">unfilled</span><span class="p">[</span><span class="n">unfilled</span><span class="p">[</span><span class="s2">&quot;filled&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">unfilled</span><span class="p">)</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="n">result</span><span class="p">[</span><span class="s1">&#39;orders&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> orders never filled&quot;</span><span class="p">)</span>
+<span class="n">unfilled</span><span class="p">[[</span><span class="s2">&quot;instrument_id&quot;</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">,</span> <span class="s2">&quot;limit_price&quot;</span><span class="p">,</span> <span class="s2">&quot;status&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">orders without fills 3
+3 of 10 orders never filled</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>instrument_id</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>limit_price</th>
+      <th>status</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>1</th>
+      <td>EVENT-0010</td>
+      <td>buy</td>
+      <td>39.03</td>
+      <td>0.799</td>
+      <td>cancelled</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>EVENT-0004</td>
+      <td>buy</td>
+      <td>56.52</td>
+      <td>0.366</td>
+      <td>cancelled</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>EVENT-0010</td>
+      <td>buy</td>
+      <td>26.84</td>
+      <td>0.788</td>
+      <td>cancelled</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>A ledger replays as <em>intent</em>, never as forced fills. Forcing them would
+  reproduce the ledger by construction and test nothing.</li>
+<li><code>commands_from_ledger</code> chooses limit, immediate-or-cancel and reduce-only on
+  purpose: each one refuses a way the replay could invent a position.</li>
+<li><code>compare_to_ledger</code> reports per-market shortfalls, because the useful output
+  is which market disagreed and by how much.</li>
+<li>A row that will not replay is evidence: hidden liquidity, a missing venue, a
+  mid-quoted report, or an archive without the depth to support the trade.</li>
+<li>The command stream is an ordinary pinned table, so a reconciliation is as
+  reproducible as any other run in this section.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/"><span class="dir">← Previous</span><span class="pn-title">Searching a strategy space without fooling yourself</span></a><a class="next" href="/cookbook/05_prediction_markets/01_binary_parity_and_fee_curves/"><span class="dir">Next →</span><span class="pn-title">Binary parity and the fee curve</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-market-data-the-account-traded-against">1. The market data the account traded against</a></li><li><a href="#2-a-ledger-including-the-parts-that-will-not-replay">2. A ledger, including the parts that will not replay</a></li><li><a href="#3-compiling-the-ledger-into-intent">3. Compiling the ledger into intent</a></li><li><a href="#4-the-replay">4. The replay</a></li><li><a href="#5-reconciliation-per-market">5. Reconciliation, per market</a></li><li><a href="#6-why-the-orders-that-did-not-fill-are-worth-reading">6. Why the orders that did not fill are worth reading</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

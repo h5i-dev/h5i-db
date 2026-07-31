@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Searching a strategy space without fooling yourself · h5i-db</title>
+  <meta name="description" content="A backtest that has been run once is a measurement. A backtest that has been run four hundred times and reported once is a selection, and the number on…">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Searching a strategy space without fooling yourself · h5i-db">
+  <meta property="og:description" content="A backtest that has been run once is a measurement. A backtest that has been run four hundred times and reported once is a selection, and the number on…">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Searching a strategy space without fooling yourself · h5i-db">
+  <meta name="twitter:description" content="A backtest that has been run once is a measurement. A backtest that has been run four hundred times and reported once is a selection, and the number on…">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/#article","headline":"Searching a strategy space without fooling yourself","name":"Searching a strategy space without fooling yourself","description":"A backtest that has been run once is a measurement. A backtest that has been run four hundred times and reported once is a selection, and the number on\u2026","url":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Event-driven backtesting"},{"@type":"ListItem","position":4,"name":"Searching a strategy space without fooling yourself","item":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Event-driven backtesting</div><ul><li><a href="/cookbook/04_event_driven_backtesting/01_first_event_driven_run/">Your first event-driven backtest</a></li><li><a href="/cookbook/04_event_driven_backtesting/02_execution_realism/">Stress-test execution assumptions</a></li><li><a href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/">Operate reproducible backtests</a></li><li><a href="/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/">A production data contract for Kaggle Polymarket L2</a></li><li><a href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/">Causal signal replay on real Polymarket books</a></li><li><a href="/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/">Order lifecycle and account risk</a></li><li><a href="/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/">Path-dependent Python strategies</a></li><li><a href="/cookbook/04_event_driven_backtesting/08_equity_bars_to_event_driven/">From a vectorized equity backtest to an event-driven one</a></li><li><a href="/cookbook/04_event_driven_backtesting/09_market_making_inventory/">Market making: inventory, latency, and being run over</a></li><li><a href="/cookbook/04_event_driven_backtesting/10_execution_algorithms/">Execution algorithms and the cost of not finishing</a></li><li><a href="/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/">Calibrating costs from your own fills</a></li><li><a href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/" class="active">Searching a strategy space without fooling yourself</a></li><li><a href="/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/">Replaying an account&#x27;s ledger</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Event-driven backtesting</span>
+<span class="sep">/</span>
+<span>Searching a strategy space without fooling yourself</span></div>
+<h1>Searching a strategy space without fooling yourself</h1>
+<p>A backtest that has been run once is a measurement. A backtest that has been
+run four hundred times and reported once is a selection, and the number on the
+slide is the maximum of four hundred draws. Everything in this recipe exists
+to keep those two things apart.</p>
+<p>There are two searches here and they are not the same shape. Strategy
+parameters change what was traded, so each candidate is a different signals
+table and a different run. Execution parameters change only what the trades
+cost, so those can be swept by <code>backtest.study</code>, which knows how to hold a
+holdout back and how to score a candidate on several windows.</p>
+<p>Recipe 05/07 does this on prediction markets. This one does it on equities,
+and adds the parts that only matter when the search is wide: random search,
+the trial ledger that makes a repeated run free, and one report across every
+surviving run.</p>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>grid search</td>
+<td>trying every combination of the parameters you listed</td>
+</tr>
+<tr>
+<td>random search</td>
+<td>drawing parameter sets at random from ranges you gave</td>
+</tr>
+<tr>
+<td>walk-forward</td>
+<td>scoring a candidate on several train/holdout splits in time order</td>
+</tr>
+<tr>
+<td>holdout</td>
+<td>data used once, to score candidates that were already chosen</td>
+</tr>
+<tr>
+<td>trial ledger</td>
+<td>a record of every scored configuration, keyed by what it read and did</td>
+</tr>
+<tr>
+<td>basket report</td>
+<td>one document assembling many runs from their stored tables</td>
+</tr>
+<tr>
+<td>in-sample</td>
+<td>measured on the same data used to choose the parameters</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">datetime</span> <span class="k">as</span> <span class="nn">dt</span>
+<span class="kn">import</span> <span class="nn">itertools</span>
+
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span><span class="p">,</span> <span class="n">quant</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">CAPITAL</span> <span class="o">=</span> <span class="mf">250_000.0</span>
+<span class="n">LOT</span> <span class="o">=</span> <span class="mf">100.0</span>
+</pre></div>
+</div>
+<h2 id="1-market-data-once">1. Market data, once<a class="headerlink" href="#1-market-data-once" title="Permanent link">#</a></h2>
+<p>Ten large caps since 2022, with a book synthesized from the bars exactly as in
+recipe 04/08. Every candidate below reads this one snapshot, so no comparison
+is ever between two different tapes.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">daily</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">fetch_daily</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">SP500_EXAMPLES</span><span class="p">[:</span><span class="mi">10</span><span class="p">],</span> <span class="n">start</span><span class="o">=</span><span class="s2">&quot;2020-01-01&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;2026-07-01&quot;</span><span class="p">)</span>
+<span class="n">frame</span> <span class="o">=</span> <span class="n">daily</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">frame</span> <span class="o">=</span> <span class="n">frame</span><span class="p">[</span><span class="n">frame</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2022-01-01&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)]</span>
+<span class="n">market</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_equity_market</span><span class="p">(</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">spread_bps</span><span class="o">=</span><span class="mf">4.0</span>
+<span class="p">)</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;04_searching_a_strategy_space&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="s2">&quot;trades&quot;</span><span class="p">):</span>
+    <span class="n">table</span> <span class="o">=</span> <span class="n">market</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;4bp synthetic book&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;tape-v1&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="s2">&quot;trades&quot;</span><span class="p">],</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;One tape for every trial&quot;</span><span class="p">)</span>
+
+<span class="n">closes</span> <span class="o">=</span> <span class="n">frame</span><span class="o">.</span><span class="n">pivot</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">values</span><span class="o">=</span><span class="s2">&quot;close&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+<span class="n">sessions</span> <span class="o">=</span> <span class="n">closes</span><span class="o">.</span><span class="n">index</span>
+<span class="n">book</span> <span class="o">=</span> <span class="n">market</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">book</span><span class="p">[</span><span class="s2">&quot;session&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">book</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;s&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">tz_localize</span><span class="p">(</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span>
+<span class="n">quote_at</span> <span class="o">=</span> <span class="p">{(</span><span class="n">row</span><span class="o">.</span><span class="n">session</span><span class="p">,</span> <span class="n">row</span><span class="o">.</span><span class="n">instrument_id</span><span class="p">):</span> <span class="n">row</span><span class="o">.</span><span class="n">ts_init</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">book</span><span class="o">.</span><span class="n">itertuples</span><span class="p">()}</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">sessions</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> sessions, </span><span class="si">{</span><span class="n">closes</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> names&quot;</span><span class="p">)</span>
+<span class="n">closes</span><span class="o">.</span><span class="n">tail</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">1,126 sessions, 10 names</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>symbol</th>
+      <th>AAPL</th>
+      <th>AMZN</th>
+      <th>BRK-B</th>
+      <th>GOOGL</th>
+      <th>JPM</th>
+      <th>META</th>
+      <th>MSFT</th>
+      <th>NVDA</th>
+      <th>V</th>
+      <th>XOM</th>
+    </tr>
+    <tr>
+      <th>ts</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>2026-06-26 20:00:00+00:00</th>
+      <td>283.779999</td>
+      <td>232.690002</td>
+      <td>498.660004</td>
+      <td>337.390015</td>
+      <td>329.049988</td>
+      <td>550.250000</td>
+      <td>372.970001</td>
+      <td>192.529999</td>
+      <td>336.230011</td>
+      <td>136.539993</td>
+    </tr>
+    <tr>
+      <th>2026-06-29 20:00:00+00:00</th>
+      <td>281.739990</td>
+      <td>240.139999</td>
+      <td>496.000000</td>
+      <td>353.649994</td>
+      <td>329.390015</td>
+      <td>562.599976</td>
+      <td>368.570007</td>
+      <td>194.970001</td>
+      <td>341.649994</td>
+      <td>136.059998</td>
+    </tr>
+    <tr>
+      <th>2026-06-30 20:00:00+00:00</th>
+      <td>289.359985</td>
+      <td>238.339996</td>
+      <td>500.390015</td>
+      <td>357.369995</td>
+      <td>327.329987</td>
+      <td>563.289978</td>
+      <td>373.019989</td>
+      <td>200.089996</td>
+      <td>343.089996</td>
+      <td>136.720001</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="2-one-signals-table-per-candidate">2. One signals table per candidate<a class="headerlink" href="#2-one-signals-table-per-candidate" title="Permanent link">#</a></h2>
+<p>The rule is a moving-average crossover: hold a fixed lot while the fast
+average is above the slow one, hold nothing otherwise. The parameters are the
+two window lengths.</p>
+<p>Those cannot be swept by <code>backtest.study</code>, and the refusal is deliberate.
+<code>data.signals</code> identifies <em>what was traded</em>, so a study that varied it would
+be comparing different strategies while claiming to compare settings of one.
+Each candidate therefore gets its own table, and the table is versioned data
+like everything else.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">crossover_signals</span><span class="p">(</span><span class="n">fast</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">slow</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Target one lot per name while the fast average leads the slow one.&quot;&quot;&quot;</span>
+    <span class="n">averages</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;fast&quot;</span><span class="p">:</span> <span class="n">closes</span><span class="o">.</span><span class="n">rolling</span><span class="p">(</span><span class="n">fast</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">(),</span>
+        <span class="s2">&quot;slow&quot;</span><span class="p">:</span> <span class="n">closes</span><span class="o">.</span><span class="n">rolling</span><span class="p">(</span><span class="n">slow</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">(),</span>
+    <span class="p">}</span>
+    <span class="n">holding</span> <span class="o">=</span> <span class="p">(</span><span class="n">averages</span><span class="p">[</span><span class="s2">&quot;fast&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">averages</span><span class="p">[</span><span class="s2">&quot;slow&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="nb">float</span><span class="p">)</span> <span class="o">*</span> <span class="n">LOT</span>
+    <span class="c1"># The last session has no session after it to execute in, so it cannot</span>
+    <span class="c1"># carry a target. The one before it is set flat, which makes final cash the</span>
+    <span class="c1"># whole answer instead of cash plus an open position to mark.</span>
+    <span class="n">holding</span> <span class="o">=</span> <span class="n">holding</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">slow</span><span class="p">:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+    <span class="n">holding</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="mf">0.0</span>
+
+    <span class="n">stamps</span><span class="p">,</span> <span class="n">targets</span><span class="p">,</span> <span class="n">names</span> <span class="o">=</span> <span class="p">[],</span> <span class="p">[],</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">session</span><span class="p">,</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">holding</span><span class="o">.</span><span class="n">iterrows</span><span class="p">():</span>
+        <span class="n">index</span> <span class="o">=</span> <span class="n">sessions</span><span class="o">.</span><span class="n">get_loc</span><span class="p">(</span><span class="n">session</span><span class="p">)</span>
+        <span class="n">execution</span> <span class="o">=</span> <span class="n">sessions</span><span class="p">[</span><span class="n">index</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="k">for</span> <span class="n">symbol</span><span class="p">,</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">row</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">stamps</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">quote_at</span><span class="p">[(</span><span class="n">execution</span><span class="p">,</span> <span class="n">symbol</span><span class="p">)]</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">microseconds</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+            <span class="n">targets</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">target</span><span class="p">))</span>
+            <span class="n">names</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">symbol</span><span class="p">)</span>
+    <span class="n">order</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">stamps</span><span class="p">)),</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">i</span><span class="p">:</span> <span class="p">(</span><span class="n">stamps</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">names</span><span class="p">[</span><span class="n">i</span><span class="p">]))</span>
+    <span class="k">return</span> <span class="n">backtest</span><span class="o">.</span><span class="n">target_positions</span><span class="p">(</span>
+        <span class="p">[</span><span class="n">stamps</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">order</span><span class="p">],</span>
+        <span class="p">[</span><span class="n">targets</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">order</span><span class="p">],</span>
+        <span class="n">instrument_id</span><span class="o">=</span><span class="p">[</span><span class="n">names</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">order</span><span class="p">],</span>
+        <span class="n">tag</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;ma-</span><span class="si">{</span><span class="n">fast</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">slow</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+
+
+<span class="n">CANDIDATES</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="p">(</span><span class="n">fast</span><span class="p">,</span> <span class="n">slow</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">fast</span><span class="p">,</span> <span class="n">slow</span> <span class="ow">in</span> <span class="n">itertools</span><span class="o">.</span><span class="n">product</span><span class="p">((</span><span class="mi">10</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">50</span><span class="p">),</span> <span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">100</span><span class="p">,</span> <span class="mi">200</span><span class="p">))</span>
+    <span class="k">if</span> <span class="n">fast</span> <span class="o">&lt;</span> <span class="n">slow</span>
+<span class="p">]</span>
+<span class="k">for</span> <span class="n">fast</span><span class="p">,</span> <span class="n">slow</span> <span class="ow">in</span> <span class="n">CANDIDATES</span><span class="p">:</span>
+    <span class="n">table</span> <span class="o">=</span> <span class="n">crossover_signals</span><span class="p">(</span><span class="n">fast</span><span class="p">,</span> <span class="n">slow</span><span class="p">)</span>
+    <span class="n">name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;signals_</span><span class="si">{</span><span class="n">fast</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">slow</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;MA </span><span class="si">{</span><span class="n">fast</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">slow</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;plans-v1&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="sa">f</span><span class="s2">&quot;signals_</span><span class="si">{</span><span class="n">f</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">s</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">f</span><span class="p">,</span> <span class="n">s</span> <span class="ow">in</span> <span class="n">CANDIDATES</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">CANDIDATES</span><span class="p">)</span><span class="si">}</span><span class="s2"> candidates, one signals table each&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;signals_</span><span class="si">{</span><span class="n">CANDIDATES</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">CANDIDATES</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">8 candidates, one signals table each</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>kind</th>
+      <th>limit_price</th>
+      <th>time_in_force</th>
+      <th>tag</th>
+      <th>reduce_only</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2022-03-17 20:00:00.000003072</td>
+      <td>BRK-B</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>100.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>ma-10-50</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2022-03-17 20:00:00.000009984</td>
+      <td>XOM</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>100.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>ma-10-50</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2022-03-23 20:00:00.000001792</td>
+      <td>AMZN</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>100.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>ma-10-50</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="3-the-in-sample-leaderboard-and-why-it-is-not-a-result">3. The in-sample leaderboard, and why it is not a result<a class="headerlink" href="#3-the-in-sample-leaderboard-and-why-it-is-not-a-result" title="Permanent link">#</a></h2>
+<p>Running every candidate on the whole history gives a ranking. It is the
+ranking a search produces before any of the discipline is applied, and it is
+reported here so the later numbers have something to be compared against.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">config</span><span class="p">(</span><span class="n">run_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">signals</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="o">**</span><span class="n">execution</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">backtest</span><span class="o">.</span><span class="n">BacktestConfig</span><span class="p">:</span>
+    <span class="k">return</span> <span class="n">backtest</span><span class="o">.</span><span class="n">BacktestConfig</span><span class="p">(</span>
+        <span class="n">run_id</span><span class="o">=</span><span class="n">run_id</span><span class="p">,</span>
+        <span class="n">portfolio</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">PortfolioConfig</span><span class="p">(</span><span class="n">starting_cash</span><span class="o">=</span><span class="n">CAPITAL</span><span class="p">),</span>
+        <span class="n">data</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">DataConfig</span><span class="p">(</span><span class="n">signals</span><span class="o">=</span><span class="n">signals</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;tape-v1&quot;</span><span class="p">),</span>
+        <span class="n">execution</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">ExecutionConfig</span><span class="p">(</span>
+            <span class="n">fee_kind</span><span class="o">=</span><span class="s2">&quot;proportional&quot;</span><span class="p">,</span> <span class="n">fee_rate</span><span class="o">=</span><span class="n">execution</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;fee_rate&quot;</span><span class="p">,</span> <span class="mf">0.0005</span><span class="p">)</span>
+        <span class="p">),</span>
+        <span class="n">output</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">OutputConfig</span><span class="p">(</span><span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">86_400_000_000_000</span><span class="p">),</span>
+    <span class="p">)</span>
+
+
+<span class="n">leaderboard</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="n">runs</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="k">for</span> <span class="n">fast</span><span class="p">,</span> <span class="n">slow</span> <span class="ow">in</span> <span class="n">CANDIDATES</span><span class="p">:</span>
+    <span class="n">label</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;ma-</span><span class="si">{</span><span class="n">fast</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">slow</span><span class="si">}</span><span class="s2">&quot;</span>
+    <span class="n">result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">config</span><span class="p">(</span><span class="n">label</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;signals_</span><span class="si">{</span><span class="n">fast</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">slow</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">))</span>
+    <span class="n">runs</span><span class="p">[</span><span class="n">label</span><span class="p">]</span> <span class="o">=</span> <span class="n">result</span>
+    <span class="n">leaderboard</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;candidate&quot;</span><span class="p">:</span> <span class="n">label</span><span class="p">,</span>
+            <span class="s2">&quot;fills&quot;</span><span class="p">:</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;fills&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;commissions&quot;</span><span class="p">:</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;commissions&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;net&quot;</span><span class="p">:</span> <span class="n">result</span><span class="p">[</span><span class="s2">&quot;final_cash&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">CAPITAL</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+<span class="n">board</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">leaderboard</span><span class="p">)</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;net&quot;</span><span class="p">,</span> <span class="n">ascending</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">board</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>candidate</th>
+      <th>fills</th>
+      <th>commissions</th>
+      <th>net</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>5</th>
+      <td>ma-20-200</td>
+      <td>75</td>
+      <td>967.78</td>
+      <td>113466.49</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>ma-10-200</td>
+      <td>99</td>
+      <td>1401.30</td>
+      <td>112007.73</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>ma-20-100</td>
+      <td>158</td>
+      <td>1966.04</td>
+      <td>109314.92</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>ma-50-200</td>
+      <td>53</td>
+      <td>743.66</td>
+      <td>108338.50</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>ma-10-100</td>
+      <td>188</td>
+      <td>2425.12</td>
+      <td>95086.09</td>
+    </tr>
+    <tr>
+      <th>6</th>
+      <td>ma-50-100</td>
+      <td>118</td>
+      <td>1472.21</td>
+      <td>84914.80</td>
+    </tr>
+    <tr>
+      <th>0</th>
+      <td>ma-10-50</td>
+      <td>292</td>
+      <td>3580.79</td>
+      <td>70852.82</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>ma-20-50</td>
+      <td>242</td>
+      <td>2948.25</td>
+      <td>68230.23</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="4-a-repeated-trial-is-free-and-does-not-count-twice">4. A repeated trial is free, and does not count twice<a class="headerlink" href="#4-a-repeated-trial-is-free-and-does-not-count-twice" title="Permanent link">#</a></h2>
+<p>Every pinned, declarative config is a trial with a digest over everything that
+affects the replay. Submitting the same one again returns the recorded result
+instead of running it, and does not increase the trial count. That matters for
+two reasons: a retried job cannot silently multiply your effective number of
+trials, and an agent looping over configurations cannot pay twice for the same
+question.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">before</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">trial_count</span><span class="p">(</span><span class="n">db</span><span class="p">)</span>
+<span class="n">again</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">config</span><span class="p">(</span><span class="s2">&quot;ma-20-100&quot;</span><span class="p">,</span> <span class="s2">&quot;signals_20_100&quot;</span><span class="p">))</span>
+<span class="n">after</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">trial_count</span><span class="p">(</span><span class="n">db</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;cached          </span><span class="si">{</span><span class="n">again</span><span class="p">[</span><span class="s1">&#39;cached&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;trial count     </span><span class="si">{</span><span class="n">before</span><span class="si">}</span><span class="s2"> -&gt; </span><span class="si">{</span><span class="n">after</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;fork reused     </span><span class="si">{</span><span class="n">again</span><span class="p">[</span><span class="s1">&#39;fork&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">runs</span><span class="p">[</span><span class="s1">&#39;ma-20-100&#39;</span><span class="p">][</span><span class="s1">&#39;fork&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;same final cash </span><span class="si">{</span><span class="n">again</span><span class="p">[</span><span class="s1">&#39;final_cash&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">runs</span><span class="p">[</span><span class="s1">&#39;ma-20-100&#39;</span><span class="p">][</span><span class="s1">&#39;final_cash&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">again</span><span class="p">[</span><span class="s2">&quot;cached&quot;</span><span class="p">]</span> <span class="ow">and</span> <span class="n">after</span> <span class="o">==</span> <span class="n">before</span>
+<span class="k">assert</span> <span class="n">again</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">runs</span><span class="p">[</span><span class="s2">&quot;ma-20-100&quot;</span><span class="p">][</span><span class="s2">&quot;fork&quot;</span><span class="p">]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">cached          True
+trial count     8 -&gt; 8
+fork reused     True
+same final cash True</pre></div></div>
+<h2 id="5-sweeping-what-execution-costs-honestly">5. Sweeping what execution costs, honestly<a class="headerlink" href="#5-sweeping-what-execution-costs-honestly" title="Permanent link">#</a></h2>
+<p>The surviving question for the leading rule is whether its edge is bigger than
+the cost of trading it. That <em>is</em> a study: the signals are fixed and only
+<code>execution</code> moves.</p>
+<p>Three pieces do the work. <code>RandomSearch</code> draws from a range instead of
+enumerating a grid, which is the better bet when a space is wide and most axes
+do not matter. <code>WalkForward</code> scores each candidate on several train/holdout
+splits so one lucky window cannot carry it. <code>TopK</code> makes the holdout a second
+stage: candidates are ranked on train, and only the best few are ever run out
+of sample.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">best_label</span> <span class="o">=</span> <span class="n">board</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;candidate&quot;</span><span class="p">]</span>
+<span class="n">best_fast</span><span class="p">,</span> <span class="n">best_slow</span> <span class="o">=</span> <span class="n">best_label</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&quot;-&quot;</span><span class="p">)[</span><span class="mi">1</span><span class="p">:]</span>
+<span class="n">edges</span> <span class="o">=</span> <span class="p">[</span><span class="n">sessions</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">sessions</span><span class="p">)</span> <span class="o">//</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">2</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">sessions</span><span class="p">)</span> <span class="o">//</span> <span class="mi">3</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">sessions</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)]</span>
+<span class="n">folds</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">WalkForward</span><span class="o">.</span><span class="n">of</span><span class="p">(</span>
+    <span class="o">*</span><span class="p">[</span>
+        <span class="n">backtest</span><span class="o">.</span><span class="n">ValidationWindows</span><span class="p">(</span>
+            <span class="n">train</span><span class="o">=</span><span class="p">(</span><span class="n">edges</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">tz_localize</span><span class="p">(</span><span class="kc">None</span><span class="p">),</span> <span class="n">edges</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">tz_localize</span><span class="p">(</span><span class="kc">None</span><span class="p">)),</span>
+            <span class="n">holdout</span><span class="o">=</span><span class="p">(</span><span class="n">edges</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">tz_localize</span><span class="p">(</span><span class="kc">None</span><span class="p">),</span> <span class="n">edges</span><span class="p">[</span><span class="n">i</span> <span class="o">+</span> <span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">tz_localize</span><span class="p">(</span><span class="kc">None</span><span class="p">)),</span>
+        <span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">edges</span><span class="p">)</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">study</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">study</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">study_id</span><span class="o">=</span><span class="s2">&quot;cost-tolerance&quot;</span><span class="p">,</span>
+    <span class="n">base</span><span class="o">=</span><span class="n">config</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;study-</span><span class="si">{</span><span class="n">best_label</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;signals_</span><span class="si">{</span><span class="n">best_fast</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">best_slow</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">),</span>
+    <span class="n">parameters</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;execution.fee_rate&quot;</span><span class="p">:</span> <span class="n">backtest</span><span class="o">.</span><span class="n">Range</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">0.004</span><span class="p">)},</span>
+    <span class="n">search</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">RandomSearch</span><span class="p">(</span><span class="n">trials</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">5</span><span class="p">),</span>
+    <span class="n">validation</span><span class="o">=</span><span class="n">folds</span><span class="p">,</span>
+    <span class="n">selection</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">TopK</span><span class="p">(</span><span class="n">k</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">metric</span><span class="o">=</span><span class="s2">&quot;final_cash&quot;</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">ranked</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">study</span><span class="o">.</span><span class="n">ranked</span><span class="p">())</span>
+<span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;trial&quot;</span><span class="p">,</span> <span class="s2">&quot;parameters&quot;</span><span class="p">,</span> <span class="s2">&quot;train_median_final_cash&quot;</span><span class="p">,</span>
+                       <span class="s2">&quot;holdout_median_final_cash&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">ranked</span><span class="o">.</span><span class="n">columns</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;trials </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">study</span><span class="o">.</span><span class="n">trials</span><span class="p">)</span><span class="si">}</span><span class="s2">, reached the holdout </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">study</span><span class="o">.</span><span class="n">selected</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">ranked</span><span class="p">[</span><span class="n">columns</span><span class="p">]</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">trials 8, reached the holdout 3</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>trial</th>
+      <th>parameters</th>
+      <th>train_median_final_cash</th>
+      <th>holdout_median_final_cash</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>6</td>
+      <td>{"execution.fee_rate": 0.00011602091313445895}</td>
+      <td>171293.47</td>
+      <td>311562.91</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>7</td>
+      <td>{"execution.fee_rate": 0.0018624906175124215}</td>
+      <td>170891.52</td>
+      <td>310144.95</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>0</td>
+      <td>{"execution.fee_rate": 0.0024916067795588076}</td>
+      <td>170746.73</td>
+      <td>309634.16</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>The property to check in your own studies is the one this table shows: most
+candidates have no holdout column at all. A holdout that every candidate
+touched is a second training set with a nicer name.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">with_holdout</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span>
+    <span class="mi">1</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">study</span><span class="o">.</span><span class="n">trials</span> <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">key</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&quot;fold0_holdout_&quot;</span><span class="p">)</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">row</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">with_holdout</span><span class="si">}</span><span class="s2"> of </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">study</span><span class="o">.</span><span class="n">trials</span><span class="p">)</span><span class="si">}</span><span class="s2"> trials ever saw the holdout&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">with_holdout</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">study</span><span class="o">.</span><span class="n">selected</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="mi">3</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">3 of 8 trials ever saw the holdout</pre></div></div>
+<p><code>TPESearch</code> is the third search shape. It proposes each point from the results
+so far, so it runs sequentially and needs the optional <code>optuna</code> extra. The
+call is otherwise identical:</p>
+<div class="highlight"><pre><span></span><code><span class="n">search</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">TPESearch</span><span class="p">(</span><span class="n">trials</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Duplicate draws are kept rather than resampled, in every search shape, because
+dropping them would quietly change the trial count that the deflated-Sharpe
+correction depends on.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">try</span><span class="p">:</span>
+    <span class="kn">import</span> <span class="nn">optuna</span>  <span class="c1"># noqa: F401</span>
+
+    <span class="n">available</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="k">except</span> <span class="ne">ImportError</span><span class="p">:</span>
+    <span class="n">available</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;optuna installed: </span><span class="si">{</span><span class="n">available</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;trials recorded in this database so far: </span><span class="si">{</span><span class="n">backtest</span><span class="o">.</span><span class="n">trial_count</span><span class="p">(</span><span class="n">db</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">optuna installed: False
+trials recorded in this database so far: 27</pre></div></div>
+<h2 id="6-one-document-for-the-whole-search">6. One document for the whole search<a class="headerlink" href="#6-one-document-for-the-whole-search" title="Permanent link">#</a></h2>
+<p>Twenty forks are not a comparison. <code>quant.basket_payload</code> assembles a single
+report from the stored tables with no re-simulation: portfolio panels for the
+basket, per-run panels while the basket is small enough to read, and a record
+of anything it refused to draw.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">basket</span> <span class="o">=</span> <span class="p">{</span><span class="n">label</span><span class="p">:</span> <span class="n">result</span> <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">result</span> <span class="ow">in</span> <span class="nb">list</span><span class="p">(</span><span class="n">runs</span><span class="o">.</span><span class="n">items</span><span class="p">())[:</span><span class="mi">6</span><span class="p">]}</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">basket_payload</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">basket</span><span class="p">,</span>
+    <span class="n">basket_id</span><span class="o">=</span><span class="s2">&quot;ma-crossover search&quot;</span><span class="p">,</span>
+    <span class="n">panels</span><span class="o">=</span><span class="n">quant</span><span class="o">.</span><span class="n">PORTFOLIO_PANELS</span> <span class="o">+</span> <span class="p">(</span><span class="s2">&quot;equity&quot;</span><span class="p">,),</span>
+    <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;tape-v1&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;runs      </span><span class="si">{</span><span class="n">report</span><span class="o">.</span><span class="n">totals</span><span class="p">[</span><span class="s1">&#39;runs&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;net       </span><span class="si">{</span><span class="n">report</span><span class="o">.</span><span class="n">totals</span><span class="p">[</span><span class="s1">&#39;net&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;drawdown  </span><span class="si">{</span><span class="n">report</span><span class="o">.</span><span class="n">totals</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s1">&#39;max_drawdown&#39;</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;panels    </span><span class="si">{</span><span class="s1">&#39;, &#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">drawn</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">report</span><span class="o">.</span><span class="n">skipped</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;not drawn </span><span class="si">{</span><span class="p">[</span><span class="n">item</span><span class="p">[</span><span class="s1">&#39;panel&#39;</span><span class="p">]</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">item</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">report</span><span class="o">.</span><span class="n">skipped</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">path</span> <span class="o">=</span> <span class="n">report</span><span class="o">.</span><span class="n">to_html</span><span class="p">(</span><span class="s2">&quot;data/cache/ma-search-basket.html&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">wrote </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> bytes of self-contained HTML&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">runs      6
+net       591,496.78
+drawdown  -0.0910
+panels    total_equity, total_drawdown, total_rolling_sharpe, total_cash_equity, periodic_pnl, leaderboard, equity
+
+wrote 2,098,201 bytes of self-contained HTML</pre></div></div>
+<h2 id="7-what-the-search-costs-the-conclusion">7. What the search costs the conclusion<a class="headerlink" href="#7-what-the-search-costs-the-conclusion" title="Permanent link">#</a></h2>
+<p>Nine candidates and eight cost draws is a small search, and it is still a
+search. The correction belongs with the result: recipe 05/05 computes the
+deflated Sharpe ratio and the probability of backtest overfitting for exactly
+this situation, and recipe 06/03 applies the same idea to a purged
+cross-validation on an equity panel.</p>
+<p>The number worth carrying out of this recipe is the trial count, because every
+honest correction needs it and only the ledger knows it.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;strategy candidates run   </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">CANDIDATES</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;execution trials run      </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">study</span><span class="o">.</span><span class="n">trials</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;total trials in ledger    </span><span class="si">{</span><span class="n">backtest</span><span class="o">.</span><span class="n">trial_count</span><span class="p">(</span><span class="n">db</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;best in-sample candidate  </span><span class="si">{</span><span class="n">best_label</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">strategy candidates run   8
+execution trials run      8
+total trials in ledger    27
+best in-sample candidate  ma-20-200</pre></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>Strategy parameters and execution parameters need different machinery: one
+  signals table per strategy candidate, <code>backtest.study</code> for the rest.</li>
+<li><code>RandomSearch</code> beats a grid when the space is wide; <code>TPESearch</code> needs the
+  <code>optuna</code> extra and runs sequentially by construction.</li>
+<li><code>WalkForward</code> stops one window carrying a candidate, and <code>TopK</code> keeps the
+  holdout for the shortlist. Check that most trials have no holdout columns.</li>
+<li>The trial ledger makes a resubmitted config free and keeps the trial count
+  honest, which is what every overfitting correction is a function of.</li>
+<li><code>quant.basket_payload</code> compares runs from stored tables with no
+  re-simulation, and records what it refused to draw rather than thinning it.</li>
+<li>A leaderboard is not a result until something out of sample has seen it.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/"><span class="dir">← Previous</span><span class="pn-title">Calibrating costs from your own fills</span></a><a class="next" href="/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/"><span class="dir">Next →</span><span class="pn-title">Replaying an account&#x27;s ledger</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-market-data-once">1. Market data, once</a></li><li><a href="#2-one-signals-table-per-candidate">2. One signals table per candidate</a></li><li><a href="#3-the-in-sample-leaderboard-and-why-it-is-not-a-result">3. The in-sample leaderboard, and why it is not a result</a></li><li><a href="#4-a-repeated-trial-is-free-and-does-not-count-twice">4. A repeated trial is free, and does not count twice</a></li><li><a href="#5-sweeping-what-execution-costs-honestly">5. Sweeping what execution costs, honestly</a></li><li><a href="#6-one-document-for-the-whole-search">6. One document for the whole search</a></li><li><a href="#7-what-the-search-costs-the-conclusion">7. What the search costs the conclusion</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

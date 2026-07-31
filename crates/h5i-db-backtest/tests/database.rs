@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use h5i_db_backtest::book::BookDelta;
 use h5i_db_backtest::engine::{OrderRequest, SignalReplay};
 use h5i_db_backtest::event::{MarketEvent, Record};
-use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId};
+use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId, PriceRule};
 use h5i_db_backtest::models::PredictionMarketFees;
 use h5i_db_backtest::position::Portfolio;
 use h5i_db_backtest::run::{RunSpec, run_in_fork, run_in_place};
@@ -114,7 +114,8 @@ async fn instruments_survive_the_round_trip() {
     )
     .unwrap()
     .with_expiration(ts(42))
-    .with_settlement_observable(ts(99));
+    .with_settlement_observable(ts(99))
+    .with_neg_risk(true);
     store::write_instruments(&db, &[market(), categorical.clone()], ts(0))
         .await
         .unwrap();
@@ -128,6 +129,70 @@ async fn instruments_survive_the_round_trip() {
     );
     assert_eq!(restored.outcomes, vec!["A", "B", "C"]);
     assert_eq!(restored.expiration, Some(ts(42)));
+    assert!(
+        restored.supports_complete_set(),
+        "a market's set-exchangeability must survive storage: reading it \
+         back as false would silently disable minting, and reading a \
+         non-set market back as true would let a run create cash"
+    );
+    assert!(!read.get(&id()).unwrap().neg_risk);
+}
+
+#[tokio::test]
+async fn a_venues_price_rule_survives_the_round_trip() {
+    // A perpetual whose legal prices are not a flat grid. Reading the rule
+    // back as a tick would accept prices the venue refuses at the top of
+    // its range and refuse ones it accepts at the bottom.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("p.db")).await.unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+
+    let perp = Instrument::perpetual("BTC-PERP", "hyperliquid")
+        .unwrap()
+        .with_price_rule(PriceRule::SignificantFigures {
+            significant_figures: 5,
+            max_decimals: 1,
+        })
+        .unwrap();
+    store::write_instruments(&db, std::slice::from_ref(&perp), ts(0))
+        .await
+        .unwrap();
+
+    let read = store::read_instruments(&db, ReadAt::Latest).await.unwrap();
+    let restored = read.get(&InstrumentId::new("BTC-PERP").unwrap()).unwrap();
+    assert_eq!(restored, &perp);
+    assert!(restored.check_price(price(50_000.5)).is_err());
+    assert!(restored.check_price(price(50_001.0)).is_ok());
+}
+
+#[tokio::test]
+async fn every_shape_a_resolution_can_take_survives_the_round_trip() {
+    // A winner, a partial settlement and a void are three different
+    // results, and a store that flattens them to a winner is wrong by the
+    // full notional on two of the three.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("r.db")).await.unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+
+    let written = vec![
+        Resolution::new(InstrumentId::new("plain").unwrap(), OutcomeId(1), ts(10)),
+        Resolution::split(
+            InstrumentId::new("scalar").unwrap(),
+            vec![price(0.7), price(0.3)],
+            ts(20),
+        )
+        .unwrap(),
+        Resolution::void(InstrumentId::new("voided").unwrap(), 3, ts(30)).unwrap(),
+    ];
+    store::write_resolutions(&db, &written).await.unwrap();
+
+    let mut read = store::read_resolutions(&db, ReadAt::Latest).await.unwrap();
+    read.sort_by_key(|resolution| resolution.observable_at);
+    assert_eq!(read.len(), 3);
+    assert_eq!(read[0], written[0]);
+    assert_eq!(read[1], written[1]);
+    assert_eq!(read[2], written[2]);
+    assert_eq!(read[2].settlement_price(OutcomeId(0)).raw(), 333_333_334);
 }
 
 #[tokio::test]

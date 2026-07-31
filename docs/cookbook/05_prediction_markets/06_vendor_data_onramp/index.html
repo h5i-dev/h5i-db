@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>From a vendor mirror to canonical tables · h5i-db docs</title>
+  <meta name="description" content="Most prediction-market research starts with a directory of vendor Parquet already on disk: hourly full-feed archives, or per-day channel files.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/05_prediction_markets/06_vendor_data_onramp/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="From a vendor mirror to canonical tables · h5i-db docs">
+  <meta property="og:description" content="Most prediction-market research starts with a directory of vendor Parquet already on disk: hourly full-feed archives, or per-day channel files.">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/05_prediction_markets/06_vendor_data_onramp/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="From a vendor mirror to canonical tables · h5i-db docs">
+  <meta name="twitter:description" content="Most prediction-market research starts with a directory of vendor Parquet already on disk: hourly full-feed archives, or per-day channel files.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/05_prediction_markets/06_vendor_data_onramp/#article","headline":"From a vendor mirror to canonical tables","name":"From a vendor mirror to canonical tables","description":"Most prediction-market research starts with a directory of vendor Parquet already on disk: hourly full-feed archives, or per-day channel files.","url":"https://db.h5i.dev/cookbook/05_prediction_markets/06_vendor_data_onramp/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/05_prediction_markets/06_vendor_data_onramp/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Prediction markets"},{"@type":"ListItem","position":4,"name":"From a vendor mirror to canonical tables","item":"https://db.h5i.dev/cookbook/05_prediction_markets/06_vendor_data_onramp/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Prediction markets</div><ul><li><a href="/cookbook/05_prediction_markets/01_binary_parity_and_fee_curves/">Binary parity and the fee curve</a></li><li><a href="/cookbook/05_prediction_markets/02_probability_calibration/">Is the market&#x27;s probability any good?</a></li><li><a href="/cookbook/05_prediction_markets/03_favorite_longshot_bias/">Trading the favorite-longshot bias</a></li><li><a href="/cookbook/05_prediction_markets/04_execution_fidelity_and_depth/">What your data can and cannot tell you about execution</a></li><li><a href="/cookbook/05_prediction_markets/05_settlement_and_selection_risk/">Two ways a prediction-market backtest lies to you</a></li><li><a href="/cookbook/05_prediction_markets/06_vendor_data_onramp/" class="active">From a vendor mirror to canonical tables</a></li><li><a href="/cookbook/05_prediction_markets/07_end_to_end_workflow/">The whole loop, once</a></li><li><a href="/cookbook/05_prediction_markets/08_real_polymarket_end_to_end/">The whole loop on real Polymarket books</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Prediction markets</span>
+<span class="sep">/</span>
+<span>From a vendor mirror to canonical tables</span></div>
+<h1>From a vendor mirror to canonical tables</h1>
+<p>Most prediction-market research starts with a directory of vendor Parquet
+already on disk: hourly full-feed archives, or per-day channel files. This
+recipe turns that directory into the tables a replay reads, and spends most of
+its length on the four things that decide whether the result is trustworthy:
+which outcome a row belongs to, what happens when you run the import twice,
+how much of the window you actually got, and what the importer does with a row
+it does not recognise.</p>
+<p>Nothing here fetches. Downloading belongs in a script where credentials and
+rate limits belong; <code>h5i_db.venues</code> is the part that must be reproducible.</p>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>vendor mirror</td>
+<td>a directory of vendor files already on disk, which is where most research starts</td>
+</tr>
+<tr>
+<td>canonical tables</td>
+<td>the normalized shape a replay reads, whatever the vendor's layout was</td>
+</tr>
+<tr>
+<td>market spec</td>
+<td>the definition of a market: its outcomes, tick size, and expiry</td>
+</tr>
+<tr>
+<td>layout</td>
+<td>which vendor columns mean what, declared as data rather than hard-coded</td>
+</tr>
+<tr>
+<td>content-addressed</td>
+<td>keyed by the file's hash, so running the import twice replays rather than duplicates</td>
+</tr>
+<tr>
+<td>coverage</td>
+<td>how much of the intended window the ingest actually got</td>
+</tr>
+<tr>
+<td>quarantine</td>
+<td>what the importer does with a row it does not recognise, instead of dropping it</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">json</span>
+<span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow.parquet</span> <span class="k">as</span> <span class="nn">pq</span>
+
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">venues</span>
+
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;05_vendor_data_onramp&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="a-stand-in-mirror">A stand-in mirror<a class="headerlink" href="#a-stand-in-mirror" title="Permanent link">#</a></h2>
+<p><code>cu.write_polymarket_archive</code> de-normalises a synthetic panel into the shape
+the public hourly archives publish. It exists so this recipe runs offline; on
+your own machine, point the same code at your real mirror and delete this cell.</p>
+<p>One archive row is one event. A book state carries its levels nested; an
+incremental change or a print carries flat <code>price</code>/<code>size</code>/<code>side</code>.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>event_type</code></td>
+<td><code>string</code></td>
+<td><code>book</code>, <code>price_change</code>, <code>last_trade_price</code>, and others</td>
+</tr>
+<tr>
+<td><code>timestamp</code></td>
+<td><code>int64</code></td>
+<td>event time, <strong>milliseconds</strong></td>
+</tr>
+<tr>
+<td><code>market</code></td>
+<td><code>string</code></td>
+<td>the condition id</td>
+</tr>
+<tr>
+<td><code>asset_id</code></td>
+<td><code>string</code></td>
+<td>the per-outcome token; this is the join key</td>
+</tr>
+<tr>
+<td><code>bids</code> / <code>asks</code></td>
+<td><code>list&lt;struct&lt;price, size&gt;&gt;</code></td>
+<td>levels of a book state</td>
+</tr>
+<tr>
+<td><code>price</code> / <code>size</code> / <code>side</code></td>
+<td><code>float64</code> / <code>float64</code> / <code>string</code></td>
+<td>one level, or one print</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">panel</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_prediction_markets</span><span class="p">(</span><span class="n">n_markets</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">steps</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">11</span><span class="p">)</span>
+<span class="n">mirror</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;data/cache/onramp-mirror&quot;</span><span class="p">)</span>
+<span class="n">files</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">write_polymarket_archive</span><span class="p">(</span><span class="n">panel</span><span class="p">,</span> <span class="n">mirror</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">files</span><span class="p">)</span><span class="si">}</span><span class="s2"> hourly files under </span><span class="si">{</span><span class="n">mirror</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">sample</span> <span class="o">=</span> <span class="n">pq</span><span class="o">.</span><span class="n">read_table</span><span class="p">(</span><span class="n">files</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sample</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">sample</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns in </span><span class="si">{</span><span class="n">files</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">sample</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">8 hourly files under data/cache/onramp-mirror
+480 rows x 9 columns in 20260501T120000Z.parquet</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>event_type</th>
+      <th>timestamp</th>
+      <th>market</th>
+      <th>asset_id</th>
+      <th>bids</th>
+      <th>asks</th>
+      <th>price</th>
+      <th>size</th>
+      <th>side</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>book</td>
+      <td>1777636800000</td>
+      <td>EVENT-0000</td>
+      <td>EVENT-0000-yes</td>
+      <td>[{'price': 0.104, 'size': 89.826}]</td>
+      <td>[{'price': 0.12, 'size': 61.859}]</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>last_trade_price</td>
+      <td>1777636800000</td>
+      <td>EVENT-0032</td>
+      <td>EVENT-0032-yes</td>
+      <td>None</td>
+      <td>None</td>
+      <td>0.743</td>
+      <td>40.316</td>
+      <td>sell</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>last_trade_price</td>
+      <td>1777636800000</td>
+      <td>EVENT-0033</td>
+      <td>EVENT-0033-yes</td>
+      <td>None</td>
+      <td>None</td>
+      <td>0.786</td>
+      <td>39.477</td>
+      <td>buy</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>last_trade_price</td>
+      <td>1777636800000</td>
+      <td>EVENT-0034</td>
+      <td>EVENT-0034-yes</td>
+      <td>None</td>
+      <td>None</td>
+      <td>0.780</td>
+      <td>40.052</td>
+      <td>sell</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>last_trade_price</td>
+      <td>1777636800000</td>
+      <td>EVENT-0035</td>
+      <td>EVENT-0035-yes</td>
+      <td>None</td>
+      <td>None</td>
+      <td>0.806</td>
+      <td>21.926</td>
+      <td>sell</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="step-one-what-the-markets-are">Step one: what the markets are<a class="headerlink" href="#step-one-what-the-markets-are" title="Permanent link">#</a></h2>
+<p>A market spec is the identity of one tradeable event: the outcomes, the vendor
+token for each, when trading stops, and when the result became knowable. Get
+the outcome order wrong and every fill is attributed to the wrong side, so this
+is the step to be pedantic about.</p>
+<p><code>polymarket_markets_from_json</code> reads the payloads a public market endpoint
+returns, including the awkward parts: the list fields arrive as JSON-encoded
+strings, and a resolution is expressed as settled prices plus a closed flag.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">payloads</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">polymarket_market_payloads</span><span class="p">(</span><span class="n">panel</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">payloads</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">indent</span><span class="o">=</span><span class="mi">2</span><span class="p">)[:</span><span class="mi">420</span><span class="p">],</span> <span class="s2">&quot;...&quot;</span><span class="p">)</span>
+
+<span class="n">specs</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">polymarket_markets_from_json</span><span class="p">(</span><span class="n">payloads</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">specs</span><span class="p">)</span><span class="si">}</span><span class="s2"> markets parsed&quot;</span><span class="p">)</span>
+<span class="n">first</span> <span class="o">=</span> <span class="n">specs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  </span><span class="si">{</span><span class="n">first</span><span class="o">.</span><span class="n">instrument_id</span><span class="si">}</span><span class="s2">: outcomes </span><span class="si">{</span><span class="n">first</span><span class="o">.</span><span class="n">outcome_labels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  tokens              </span><span class="si">{</span><span class="n">first</span><span class="o">.</span><span class="n">tokens</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  token -&gt; outcome    </span><span class="si">{</span><span class="n">first</span><span class="o">.</span><span class="n">tokens</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> is outcome </span><span class="si">{</span><span class="n">first</span><span class="o">.</span><span class="n">outcome_of_token</span><span class="p">(</span><span class="n">first</span><span class="o">.</span><span class="n">tokens</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  resolved            </span><span class="si">{</span><span class="n">first</span><span class="o">.</span><span class="n">is_resolved</span><span class="si">}</span><span class="s2">, winner </span><span class="si">{</span><span class="n">first</span><span class="o">.</span><span class="n">winner_outcome</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">{
+  &quot;condition_id&quot;: &quot;EVENT-0000&quot;,
+  &quot;slug&quot;: &quot;event-0000&quot;,
+  &quot;outcomes&quot;: &quot;[\&quot;YES\&quot;, \&quot;NO\&quot;]&quot;,
+  &quot;clobTokenIds&quot;: &quot;[\&quot;EVENT-0000-yes\&quot;, \&quot;EVENT-0000-no\&quot;]&quot;,
+  &quot;outcomePrices&quot;: &quot;[\&quot;0\&quot;, \&quot;1\&quot;]&quot;,
+  &quot;closed&quot;: true,
+  &quot;tick_size&quot;: 0.001,
+  &quot;endDate&quot;: &quot;2026-05-01T17:45:00Z&quot;,
+  &quot;umaResolutionTime&quot;: &quot;2026-05-01T18:30:00Z&quot;
+} ...
+
+40 markets parsed
+  EVENT-0000: outcomes (&#x27;YES&#x27;, &#x27;NO&#x27;)
+  tokens              (&#x27;EVENT-0000-yes&#x27;, &#x27;EVENT-0000-no&#x27;)
+  token -&gt; outcome    EVENT-0000-no is outcome 1
+  resolved            True, winner 1</pre></div></div>
+<p><code>outcome_labels</code> and <code>tokens</code> are positional: index <code>i</code> of each describes the
+same outcome. That is the entire contract, and the spec refuses every way of
+breaking it rather than resolving the ambiguity.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">description</span><span class="p">,</span> <span class="n">build</span> <span class="ow">in</span> <span class="p">(</span>
+    <span class="p">(</span><span class="s2">&quot;one outcome&quot;</span><span class="p">,</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">venues</span><span class="o">.</span><span class="n">MarketSpec</span><span class="p">(</span>
+        <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;m&quot;</span><span class="p">,</span> <span class="n">venue</span><span class="o">=</span><span class="s2">&quot;v&quot;</span><span class="p">,</span> <span class="n">outcome_labels</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Yes&quot;</span><span class="p">,))),</span>
+    <span class="p">(</span><span class="s2">&quot;tokens and outcomes disagree&quot;</span><span class="p">,</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">venues</span><span class="o">.</span><span class="n">MarketSpec</span><span class="p">(</span>
+        <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;m&quot;</span><span class="p">,</span> <span class="n">venue</span><span class="o">=</span><span class="s2">&quot;v&quot;</span><span class="p">,</span> <span class="n">outcome_labels</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Yes&quot;</span><span class="p">,</span> <span class="s2">&quot;No&quot;</span><span class="p">),</span> <span class="n">tokens</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;a&quot;</span><span class="p">,))),</span>
+    <span class="p">(</span><span class="s2">&quot;resolved with no resolution time&quot;</span><span class="p">,</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">venues</span><span class="o">.</span><span class="n">MarketSpec</span><span class="p">(</span>
+        <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;m&quot;</span><span class="p">,</span> <span class="n">venue</span><span class="o">=</span><span class="s2">&quot;v&quot;</span><span class="p">,</span> <span class="n">outcome_labels</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Yes&quot;</span><span class="p">,</span> <span class="s2">&quot;No&quot;</span><span class="p">),</span> <span class="n">winner_outcome</span><span class="o">=</span><span class="mi">0</span><span class="p">)),</span>
+<span class="p">):</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">build</span><span class="p">()</span>
+    <span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">description</span><span class="si">:</span><span class="s2">32</span><span class="si">}</span><span class="s2"> refused: </span><span class="si">{</span><span class="nb">str</span><span class="p">(</span><span class="n">error</span><span class="p">)</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;;&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">][:</span><span class="mi">78</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="c1"># A token two markets both claim would make every row keyed by it ambiguous.</span>
+<span class="k">try</span><span class="p">:</span>
+    <span class="n">venues</span><span class="o">.</span><span class="n">token_index</span><span class="p">([</span>
+        <span class="n">venues</span><span class="o">.</span><span class="n">MarketSpec</span><span class="p">(</span><span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;a&quot;</span><span class="p">,</span> <span class="n">venue</span><span class="o">=</span><span class="s2">&quot;v&quot;</span><span class="p">,</span>
+                          <span class="n">outcome_labels</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Yes&quot;</span><span class="p">,</span> <span class="s2">&quot;No&quot;</span><span class="p">),</span> <span class="n">tokens</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;t1&quot;</span><span class="p">,</span> <span class="s2">&quot;t2&quot;</span><span class="p">)),</span>
+        <span class="n">venues</span><span class="o">.</span><span class="n">MarketSpec</span><span class="p">(</span><span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;b&quot;</span><span class="p">,</span> <span class="n">venue</span><span class="o">=</span><span class="s2">&quot;v&quot;</span><span class="p">,</span>
+                          <span class="n">outcome_labels</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;Yes&quot;</span><span class="p">,</span> <span class="s2">&quot;No&quot;</span><span class="p">),</span> <span class="n">tokens</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;t1&quot;</span><span class="p">,</span> <span class="s2">&quot;t3&quot;</span><span class="p">)),</span>
+    <span class="p">])</span>
+<span class="k">except</span> <span class="ne">ValueError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">&#39;token claimed twice&#39;</span><span class="si">:</span><span class="s2">32</span><span class="si">}</span><span class="s2"> refused: </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">one outcome                      refused: m: a prediction market needs at least two outcomes
+tokens and outcomes disagree     refused: m: 1 tokens for 2 outcomes
+resolved with no resolution time refused: m: a resolved market needs settlement_observable_ns
+token claimed twice              refused: token &#x27;t1&#x27; is claimed by both &#x27;a&#x27; and &#x27;b&#x27;</pre></div></div>
+<h2 id="step-two-write-the-definitions">Step two: write the definitions<a class="headerlink" href="#step-two-write-the-definitions" title="Permanent link">#</a></h2>
+<p><code>instruments</code> gets one row per outcome; <code>resolutions</code> gets one row per resolved
+market, dated by the instant the result became <strong>observable</strong> rather than when
+the event happened. That column is what settlement is gated on later.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">report</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">write_markets</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">specs</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;market definitions&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">instruments rows: </span><span class="si">{</span><span class="n">report</span><span class="o">.</span><span class="n">tables</span><span class="p">[</span><span class="s1">&#39;instruments&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">rows</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;resolutions rows: </span><span class="si">{</span><span class="n">report</span><span class="o">.</span><span class="n">tables</span><span class="p">[</span><span class="s1">&#39;resolutions&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">rows</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT * FROM instruments ORDER BY instrument_id, outcome LIMIT 4&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">IngestReport(vendor=&#x27;markets&#x27;, instruments=80 resolutions=40, coverage=n/a, gaps=0, replayed=False)
+
+instruments rows: 80
+resolutions rows: 40</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_init</th>
+      <th>instrument_id</th>
+      <th>venue</th>
+      <th>kind</th>
+      <th>outcome</th>
+      <th>outcome_label</th>
+      <th>tick_size</th>
+      <th>lot_size</th>
+      <th>expiration_ns</th>
+      <th>settlement_observable_ns</th>
+      <th>neg_risk</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>1970-01-01</td>
+      <td>EVENT-0000</td>
+      <td>polymarket</td>
+      <td>prediction_market</td>
+      <td>0</td>
+      <td>YES</td>
+      <td>0.001</td>
+      <td>1.0</td>
+      <td>1777657500000000000</td>
+      <td>1777660200000000000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>1970-01-01</td>
+      <td>EVENT-0000</td>
+      <td>polymarket</td>
+      <td>prediction_market</td>
+      <td>1</td>
+      <td>NO</td>
+      <td>0.001</td>
+      <td>1.0</td>
+      <td>1777657500000000000</td>
+      <td>1777660200000000000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>1970-01-01</td>
+      <td>EVENT-0001</td>
+      <td>polymarket</td>
+      <td>prediction_market</td>
+      <td>0</td>
+      <td>YES</td>
+      <td>0.001</td>
+      <td>1.0</td>
+      <td>1777657500000000000</td>
+      <td>1777660200000000000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>1970-01-01</td>
+      <td>EVENT-0001</td>
+      <td>polymarket</td>
+      <td>prediction_market</td>
+      <td>1</td>
+      <td>NO</td>
+      <td>0.001</td>
+      <td>1.0</td>
+      <td>1777657500000000000</td>
+      <td>1777660200000000000</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="step-three-ingest-the-archive">Step three: ingest the archive<a class="headerlink" href="#step-three-ingest-the-archive" title="Permanent link">#</a></h2>
+<p>Rows are filtered to the tokens of the markets you asked for, so a full-feed
+hour costs only the markets you care about. The window is a half-open
+<code>[start, end)</code> in epoch nanoseconds and bounds what is read.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">expiry</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT max(expiration_ns) AS e FROM instruments&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;e&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span>
+<span class="n">start</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2026-05-01T12:00:00Z&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+<span class="n">ingest</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">files</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">discover</span><span class="p">(</span><span class="n">mirror</span><span class="p">),</span>
+    <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">PMXT_LAYOUT</span><span class="p">,</span>
+    <span class="n">window</span><span class="o">=</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">expiry</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;mirror backfill&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">ingest</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;rows by table: &quot;</span><span class="p">,</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="n">write</span><span class="o">.</span><span class="n">rows</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">write</span> <span class="ow">in</span> <span class="n">ingest</span><span class="o">.</span><span class="n">tables</span><span class="o">.</span><span class="n">items</span><span class="p">()})</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;files read:     </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">ingest</span><span class="o">.</span><span class="n">sources</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;coverage:      </span><span class="si">{</span><span class="n">ingest</span><span class="o">.</span><span class="n">coverage</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">IngestReport(vendor=&#x27;pmxt&#x27;, book_deltas=3840 trades=960, coverage=1.000, gaps=0, replayed=False)
+rows by table:  {&#x27;book_deltas&#x27;: 3840, &#x27;trades&#x27;: 960}
+files read:     8
+coverage:      1.0000</pre></div></div>
+<p>The <code>book</code> events became grouped snapshots and the prints became trades. Note
+what the outcome column proves: each event describes one outcome of one
+instrument, which is the invariant the engine refuses to violate.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">grouping</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    SELECT count(*) AS events,</span>
+<span class="sd">           min(rows_per_event) AS min_rows, max(rows_per_event) AS max_rows,</span>
+<span class="sd">           sum(CASE WHEN outcomes &gt; 1 THEN 1 ELSE 0 END) AS events_mixing_outcomes,</span>
+<span class="sd">           sum(CASE WHEN terminators &lt;&gt; 1 THEN 1 ELSE 0 END) AS badly_terminated</span>
+<span class="sd">    FROM (</span>
+<span class="sd">        SELECT event_index, count(*) AS rows_per_event,</span>
+<span class="sd">               count(DISTINCT outcome) AS outcomes,</span>
+<span class="sd">               sum(CASE WHEN is_last THEN 1 ELSE 0 END) AS terminators</span>
+<span class="sd">        FROM book_deltas GROUP BY event_index</span>
+<span class="sd">    )</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">grouping</span><span class="o">.</span><span class="n">to_string</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
+<span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+    <span class="s2">&quot;SELECT * FROM book_deltas ORDER BY ts_init, event_index, is_last LIMIT 4&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class=""> events  min_rows  max_rows  events_mixing_outcomes  badly_terminated
+   1920         2         2                       0                 0</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_init</th>
+      <th>ts_event</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>action</th>
+      <th>side</th>
+      <th>price</th>
+      <th>size</th>
+      <th>event_index</th>
+      <th>is_last</th>
+      <th>source_vendor</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-05-01 12:00:00</td>
+      <td>2026-05-01 12:00:00</td>
+      <td>EVENT-0000</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>buy</td>
+      <td>0.104</td>
+      <td>89.826</td>
+      <td>1</td>
+      <td>False</td>
+      <td>pmxt</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-05-01 12:00:00</td>
+      <td>2026-05-01 12:00:00</td>
+      <td>EVENT-0000</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>0.120</td>
+      <td>61.859</td>
+      <td>1</td>
+      <td>True</td>
+      <td>pmxt</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-05-01 12:00:00</td>
+      <td>2026-05-01 12:00:00</td>
+      <td>EVENT-0039</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>buy</td>
+      <td>0.881</td>
+      <td>164.575</td>
+      <td>2</td>
+      <td>False</td>
+      <td>pmxt</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-05-01 12:00:00</td>
+      <td>2026-05-01 12:00:00</td>
+      <td>EVENT-0039</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>0.897</td>
+      <td>96.202</td>
+      <td>2</td>
+      <td>True</td>
+      <td>pmxt</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="run-it-again">Run it again<a class="headerlink" href="#run-it-again" title="Permanent link">#</a></h2>
+<p>Every commit is keyed by the hash of the rows it carries, so identical inputs
+produce identical keys and h5i-db recognises them. An interrupted backfill is
+safe to restart, and two sources serving the same hour converge on one commit
+instead of two.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">before</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT count(*) AS n FROM book_deltas&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;n&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">versions_before</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">))</span>
+<span class="n">again</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">files</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">discover</span><span class="p">(</span><span class="n">mirror</span><span class="p">),</span>
+    <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">PMXT_LAYOUT</span><span class="p">,</span>
+    <span class="n">window</span><span class="o">=</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">expiry</span> <span class="o">+</span> <span class="mi">1</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">after</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT count(*) AS n FROM book_deltas&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="s2">&quot;n&quot;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;first  pass replayed: </span><span class="si">{</span><span class="n">ingest</span><span class="o">.</span><span class="n">replayed</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;second pass replayed: </span><span class="si">{</span><span class="n">again</span><span class="o">.</span><span class="n">replayed</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;rows    </span><span class="si">{</span><span class="n">before</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> -&gt; </span><span class="si">{</span><span class="n">after</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;versions </span><span class="si">{</span><span class="n">versions_before</span><span class="si">}</span><span class="s2"> -&gt; </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s1">&#39;book_deltas&#39;</span><span class="p">))</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">after</span> <span class="o">==</span> <span class="n">before</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">first  pass replayed: False
+second pass replayed: True
+rows    3,840 -&gt; 3,840
+versions 2 -&gt; 2</pre></div></div>
+<h2 id="coverage-is-a-reported-fact-not-an-assumption">Coverage is a reported fact, not an assumption<a class="headerlink" href="#coverage-is-a-reported-fact-not-an-assumption" title="Permanent link">#</a></h2>
+<p><code>requested_window</code> and <code>loaded_window</code> stay separate. Asking for a week and
+getting six hours is a normal thing to discover, and the point is to discover
+it from the result rather than from a strange backtest three steps later.</p>
+<p><code>coverage</code> is deliberately <code>None</code> when no window was requested: a ratio against
+an unbounded request would mean nothing.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">week</span> <span class="o">=</span> <span class="n">start</span> <span class="o">+</span> <span class="mi">7</span> <span class="o">*</span> <span class="mi">24</span> <span class="o">*</span> <span class="mi">3_600</span> <span class="o">*</span> <span class="mi">1_000_000_000</span>
+<span class="n">probe</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;05_vendor_data_onramp_probe&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">short</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>
+    <span class="n">probe</span><span class="p">,</span> <span class="n">files</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">discover</span><span class="p">(</span><span class="n">mirror</span><span class="p">),</span> <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">PMXT_LAYOUT</span><span class="p">,</span> <span class="n">window</span><span class="o">=</span><span class="p">(</span><span class="n">start</span><span class="p">,</span> <span class="n">week</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;asked for </span><span class="si">{</span><span class="p">(</span><span class="n">week</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">start</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">3.6e12</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> hours&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;loaded    </span><span class="si">{</span><span class="p">(</span><span class="n">short</span><span class="o">.</span><span class="n">loaded_window</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">short</span><span class="o">.</span><span class="n">loaded_window</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mf">3.6e12</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> hours&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;coverage  </span><span class="si">{</span><span class="n">short</span><span class="o">.</span><span class="n">coverage</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="n">unbounded</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>
+    <span class="n">probe</span><span class="p">,</span> <span class="n">files</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">discover</span><span class="p">(</span><span class="n">mirror</span><span class="p">),</span> <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">PMXT_LAYOUT</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;coverage with no window requested: </span><span class="si">{</span><span class="n">unbounded</span><span class="o">.</span><span class="n">coverage</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">probe</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">asked for 168.0 hours
+loaded    7.2 hours
+coverage  0.0432</pre><pre class="">coverage with no window requested: None</pre></div></div>
+<h2 id="what-the-importer-will-not-guess">What the importer will not guess<a class="headerlink" href="#what-the-importer-will-not-guess" title="Permanent link">#</a></h2>
+<p>Two failure modes that a permissive loader hides. A file missing the columns
+the layout needs is skipped with its name and the missing columns recorded. An
+event type present in the data but absent from the layout is counted, because
+silently dropping the update that mattered is how a book goes wrong quietly.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">broken</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;data/cache/onramp-broken&quot;</span><span class="p">)</span>
+<span class="n">broken</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+
+<span class="n">pq</span><span class="o">.</span><span class="n">write_table</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;nonsense&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])}),</span> <span class="n">broken</span> <span class="o">/</span> <span class="s2">&quot;bad.parquet&quot;</span><span class="p">)</span>
+<span class="c1"># A layout that does not know about prints leaves them unrecognised.</span>
+<span class="n">book_only</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ArchiveLayout</span><span class="p">(</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;book-only&quot;</span><span class="p">,</span>
+    <span class="n">timestamp_unit</span><span class="o">=</span><span class="s2">&quot;ms&quot;</span><span class="p">,</span>
+    <span class="n">instrument_column</span><span class="o">=</span><span class="s2">&quot;market&quot;</span><span class="p">,</span>
+    <span class="n">snapshot_events</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;book&quot;</span><span class="p">,),</span>
+<span class="p">)</span>
+<span class="n">strict</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;05_vendor_data_onramp_strict&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">picky</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>
+    <span class="n">strict</span><span class="p">,</span>
+    <span class="n">files</span><span class="o">=</span><span class="p">[</span><span class="n">broken</span> <span class="o">/</span> <span class="s2">&quot;bad.parquet&quot;</span><span class="p">,</span> <span class="o">*</span><span class="n">venues</span><span class="o">.</span><span class="n">discover</span><span class="p">(</span><span class="n">mirror</span><span class="p">)],</span>
+    <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">book_only</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">picky</span><span class="o">.</span><span class="n">skipped</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">item</span><span class="p">)[:</span><span class="mi">150</span><span class="p">])</span>
+<span class="n">strict</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">{&quot;path&quot;: &quot;data/cache/onramp-broken/bad.parquet&quot;, &quot;reason&quot;: &quot;missing_columns&quot;, &quot;columns&quot;: [&quot;timestamp&quot;, &quot;asset_id&quot;]}
+{&quot;reason&quot;: &quot;unknown_event_types&quot;, &quot;counts&quot;: {&quot;last_trade_price&quot;: 960}}</pre></div></div>
+<h2 id="a-vendor-dialect-is-data">A vendor dialect is data<a class="headerlink" href="#a-vendor-dialect-is-data" title="Permanent link">#</a></h2>
+<p><code>ArchiveLayout</code> carries the column names, the event vocabulary, the timestamp
+unit and the level shape. The two shipped layouts are literals of that type, so
+a third vendor is another literal rather than another module. Here is a
+house-format feed ingested with no new code.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;PMXT_LAYOUT:&quot;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;timestamp_column&quot;</span><span class="p">,</span> <span class="s2">&quot;timestamp_unit&quot;</span><span class="p">,</span> <span class="s2">&quot;token_column&quot;</span><span class="p">,</span> <span class="s2">&quot;snapshot_events&quot;</span><span class="p">,</span>
+              <span class="s2">&quot;delta_events&quot;</span><span class="p">,</span> <span class="s2">&quot;trade_events&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  </span><span class="si">{</span><span class="n">field</span><span class="si">:</span><span class="s2">18</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="nb">getattr</span><span class="p">(</span><span class="n">venues</span><span class="o">.</span><span class="n">PMXT_LAYOUT</span><span class="p">,</span><span class="w"> </span><span class="n">field</span><span class="p">)</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">TELONEX_LAYOUT differs only in these:&quot;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;timestamp_unit&quot;</span><span class="p">,</span> <span class="s2">&quot;event_type_column&quot;</span><span class="p">,</span> <span class="s2">&quot;snapshot_events&quot;</span><span class="p">):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  </span><span class="si">{</span><span class="n">field</span><span class="si">:</span><span class="s2">18</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="nb">getattr</span><span class="p">(</span><span class="n">venues</span><span class="o">.</span><span class="n">TELONEX_LAYOUT</span><span class="p">,</span><span class="w"> </span><span class="n">field</span><span class="p">)</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">PMXT_LAYOUT:
+  timestamp_column   &#x27;timestamp&#x27;
+  timestamp_unit     &#x27;ms&#x27;
+  token_column       &#x27;asset_id&#x27;
+  snapshot_events    (&#x27;book&#x27;,)
+  delta_events       (&#x27;price_change&#x27;,)
+  trade_events       (&#x27;last_trade_price&#x27;, &#x27;trade&#x27;)
+
+TELONEX_LAYOUT differs only in these:
+  timestamp_unit     &#x27;ns&#x27;
+  event_type_column  None
+  snapshot_events    (&#x27;book_snapshot_full&#x27;,)</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">house</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;data/cache/onramp-house&quot;</span><span class="p">)</span>
+<span class="n">house</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">level</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">struct</span><span class="p">([(</span><span class="s2">&quot;px&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">()),</span> <span class="p">(</span><span class="s2">&quot;qty&quot;</span><span class="p">,</span> <span class="n">pa</span><span class="o">.</span><span class="n">float64</span><span class="p">())])</span>
+<span class="n">token</span> <span class="o">=</span> <span class="n">specs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">tokens</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">pq</span><span class="o">.</span><span class="n">write_table</span><span class="p">(</span>
+    <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span>
+        <span class="s2">&quot;channel&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="s2">&quot;depth&quot;</span><span class="p">],</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="s2">&quot;recv_ns&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">start</span><span class="p">],</span> <span class="n">pa</span><span class="o">.</span><span class="n">int64</span><span class="p">()),</span>
+        <span class="s2">&quot;token&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">token</span><span class="p">],</span> <span class="n">pa</span><span class="o">.</span><span class="n">string</span><span class="p">()),</span>
+        <span class="s2">&quot;buys&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([[{</span><span class="s2">&quot;px&quot;</span><span class="p">:</span> <span class="mf">0.31</span><span class="p">,</span> <span class="s2">&quot;qty&quot;</span><span class="p">:</span> <span class="mf">40.0</span><span class="p">}]],</span> <span class="n">pa</span><span class="o">.</span><span class="n">list_</span><span class="p">(</span><span class="n">level</span><span class="p">)),</span>
+        <span class="s2">&quot;sells&quot;</span><span class="p">:</span> <span class="n">pa</span><span class="o">.</span><span class="n">array</span><span class="p">([[{</span><span class="s2">&quot;px&quot;</span><span class="p">:</span> <span class="mf">0.33</span><span class="p">,</span> <span class="s2">&quot;qty&quot;</span><span class="p">:</span> <span class="mf">35.0</span><span class="p">}]],</span> <span class="n">pa</span><span class="o">.</span><span class="n">list_</span><span class="p">(</span><span class="n">level</span><span class="p">)),</span>
+    <span class="p">}),</span>
+    <span class="n">house</span> <span class="o">/</span> <span class="s2">&quot;day.parquet&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">house_layout</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ArchiveLayout</span><span class="p">(</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;house-feed&quot;</span><span class="p">,</span>
+    <span class="n">timestamp_column</span><span class="o">=</span><span class="s2">&quot;recv_ns&quot;</span><span class="p">,</span>
+    <span class="n">timestamp_unit</span><span class="o">=</span><span class="s2">&quot;ns&quot;</span><span class="p">,</span>
+    <span class="n">token_column</span><span class="o">=</span><span class="s2">&quot;token&quot;</span><span class="p">,</span>
+    <span class="n">event_type_column</span><span class="o">=</span><span class="s2">&quot;channel&quot;</span><span class="p">,</span>
+    <span class="n">snapshot_events</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;depth&quot;</span><span class="p">,),</span>
+    <span class="n">levels</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">LevelLayout</span><span class="p">(</span>
+        <span class="n">style</span><span class="o">=</span><span class="s2">&quot;nested&quot;</span><span class="p">,</span> <span class="n">bids_column</span><span class="o">=</span><span class="s2">&quot;buys&quot;</span><span class="p">,</span> <span class="n">asks_column</span><span class="o">=</span><span class="s2">&quot;sells&quot;</span><span class="p">,</span>
+        <span class="n">price_field</span><span class="o">=</span><span class="s2">&quot;px&quot;</span><span class="p">,</span> <span class="n">size_field</span><span class="o">=</span><span class="s2">&quot;qty&quot;</span><span class="p">,</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+<span class="n">other</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;05_vendor_data_onramp_house&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">house_report</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>
+    <span class="n">other</span><span class="p">,</span> <span class="n">files</span><span class="o">=</span><span class="p">[</span><span class="n">house</span> <span class="o">/</span> <span class="s2">&quot;day.parquet&quot;</span><span class="p">],</span> <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">house_layout</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;vendor: </span><span class="si">{</span><span class="n">house_report</span><span class="o">.</span><span class="n">vendor</span><span class="si">}</span><span class="s2">, rows: </span><span class="si">{</span><span class="n">house_report</span><span class="o">.</span><span class="n">rows</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">other</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT outcome, side, price, size FROM book_deltas&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">to_string</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
+<span class="n">other</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">vendor: house-feed, rows: 2
+ outcome side  price  size
+       0  buy   0.31  40.0
+       0 sell   0.33  35.0</pre></div></div>
+<h2 id="the-same-three-steps-from-a-shell">The same three steps from a shell<a class="headerlink" href="#the-same-three-steps-from-a-shell" title="Permanent link">#</a></h2>
+<p>Market definitions travel as a JSON file rather than as flags, because a market
+is a dozen fields and a flag list would be neither readable nor versionable.
+<code>--min-coverage</code> exits non-zero rather than letting a short load pass quietly,
+which is what makes this usable in a scheduled backfill.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">spec_path</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;data/cache/onramp-specs.json&quot;</span><span class="p">)</span>
+<span class="n">spec_path</span><span class="o">.</span><span class="n">write_text</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">payloads</span><span class="p">),</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">python -m h5i_db.venues markets  market.db </span><span class="si">{</span><span class="n">spec_path</span><span class="si">}</span>
+<span class="s2">python -m h5i_db.venues ingest   market.db </span><span class="si">{</span><span class="n">spec_path</span><span class="si">}</span><span class="s2"> --root </span><span class="si">{</span><span class="n">mirror</span><span class="si">}</span><span class="s2"> </span><span class="se">\\</span>
+<span class="s2">    --start-ns </span><span class="si">{</span><span class="n">start</span><span class="si">}</span><span class="s2"> --end-ns </span><span class="si">{</span><span class="n">expiry</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2"> --min-coverage 0.95</span>
+<span class="s2">python -m h5i_db.venues inspect  market.db</span>
+<span class="s2">&quot;&quot;&quot;</span><span class="o">.</span><span class="n">strip</span><span class="p">())</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">python -m h5i_db.venues markets  market.db data/cache/onramp-specs.json
+python -m h5i_db.venues ingest   market.db data/cache/onramp-specs.json --root data/cache/onramp-mirror \
+    --start-ns 1777636800000000000 --end-ns 1777657500000000001 --min-coverage 0.95
+python -m h5i_db.venues inspect  market.db</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">h5i_db.venues.__main__</span> <span class="kn">import</span> <span class="n">main</span> <span class="k">as</span> <span class="n">venues_cli</span>
+
+<span class="n">cli_db</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;05_vendor_data_onramp_cli&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">venues_cli</span><span class="p">([</span><span class="s2">&quot;markets&quot;</span><span class="p">,</span> <span class="n">cli_db</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">spec_path</span><span class="p">)])</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="k">assert</span> <span class="n">venues_cli</span><span class="p">([</span><span class="s2">&quot;ingest&quot;</span><span class="p">,</span> <span class="n">cli_db</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">spec_path</span><span class="p">),</span> <span class="s2">&quot;--root&quot;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">mirror</span><span class="p">)])</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="k">assert</span> <span class="n">venues_cli</span><span class="p">([</span><span class="s2">&quot;inspect&quot;</span><span class="p">,</span> <span class="n">cli_db</span><span class="p">])</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="c1"># The gate fires when the window is wider than the data.</span>
+<span class="n">code</span> <span class="o">=</span> <span class="n">venues_cli</span><span class="p">([</span>
+    <span class="s2">&quot;ingest&quot;</span><span class="p">,</span> <span class="n">cli_db</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">spec_path</span><span class="p">),</span> <span class="s2">&quot;--root&quot;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">mirror</span><span class="p">),</span>
+    <span class="s2">&quot;--start-ns&quot;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">start</span><span class="p">),</span> <span class="s2">&quot;--end-ns&quot;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">week</span><span class="p">),</span> <span class="s2">&quot;--min-coverage&quot;</span><span class="p">,</span> <span class="s2">&quot;0.95&quot;</span><span class="p">,</span>
+<span class="p">])</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">exit code when coverage falls short: </span><span class="si">{</span><span class="n">code</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">{
+  &quot;vendor&quot;: &quot;markets&quot;,
+  &quot;rows&quot;: 120,
+  &quot;replayed&quot;: false,
+  &quot;tables&quot;: {
+    &quot;instruments&quot;: {
+      &quot;table&quot;: &quot;instruments&quot;,
+      &quot;rows&quot;: 80,
+      &quot;chunks&quot;: 1,
+      &quot;replayed_chunks&quot;: 0,
+      &quot;replayed&quot;: false
+    },
+    &quot;resolutions&quot;: {
+      &quot;table&quot;: &quot;resolutions&quot;,
+      &quot;rows&quot;: 40,
+      &quot;chunks&quot;: 1,
+      &quot;replayed_chunks&quot;: 0,
+      &quot;replayed&quot;: false
+    }
+  },
+  &quot;sources&quot;: [],
+  &quot;requested_window&quot;: null,
+  &quot;loaded_window&quot;: null,
+  &quot;coverage&quot;: null,
+  &quot;gaps&quot;: [],
+  &quot;skipped&quot;: [],
+  &quot;unknown_instruments&quot;: []
+}</pre><pre class="">{
+  &quot;vendor&quot;: &quot;pmxt&quot;,
+  &quot;rows&quot;: 5440,
+  &quot;replayed&quot;: false,
+  &quot;tables&quot;: {
+    &quot;book_deltas&quot;: {
+      &quot;table&quot;: &quot;book_deltas&quot;,
+      &quot;rows&quot;: 4480,
+      &quot;chunks&quot;: 1,
+      &quot;replayed_chunks&quot;: 0,
+      &quot;replayed&quot;: false
+    },
+    &quot;trades&quot;: {
+      &quot;table&quot;: &quot;trades&quot;,
+      &quot;rows&quot;: 960,
+      &quot;chunks&quot;: 1,
+      &quot;replayed_chunks&quot;: 0,
+      &quot;replayed&quot;: false
+    }
+  },
+  &quot;sources&quot;: [
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T120000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18681,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T130000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18588,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T140000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18891,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T150000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18560,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T160000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18836,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T170000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18789,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T180000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 7218,
+      &quot;rows_read&quot;: 160,
+      &quot;rows_kept&quot;: 160
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T190000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 7261,
+      &quot;rows_read&quot;: 160,
+      &quot;rows_kept&quot;: 160
+    }
+  ],
+  &quot;requested_window&quot;: null,
+  &quot;loaded_window&quot;: [
+    1777636800000000000,
+    1777662900000000000
+  ],
+  &quot;coverage&quot;: null,
+  &quot;gaps&quot;: [],
+  &quot;skipped&quot;: [],
+  &quot;unknown_instruments&quot;: []
+}
+{
+  &quot;database&quot;: &quot;/home/koukyosyumei/Dev/h5i-db-cookbook/data/dbs/05_vendor_data_onramp_cli.db&quot;,
+  &quot;tables&quot;: {
+    &quot;book_deltas&quot;: {
+      &quot;rows&quot;: 4480,
+      &quot;versions&quot;: 2,
+      &quot;head&quot;: 1
+    },
+    &quot;trades&quot;: {
+      &quot;rows&quot;: 960,
+      &quot;versions&quot;: 2,
+      &quot;head&quot;: 1
+    },
+    &quot;instruments&quot;: {
+      &quot;rows&quot;: 80,
+      &quot;versions&quot;: 2,
+      &quot;head&quot;: 1
+    },
+    &quot;resolutions&quot;: {
+      &quot;rows&quot;: 40,
+      &quot;versions&quot;: 2,
+      &quot;head&quot;: 1
+    }
+  }
+}</pre><pre class="">{
+  &quot;vendor&quot;: &quot;pmxt&quot;,
+  &quot;rows&quot;: 5440,
+  &quot;replayed&quot;: true,
+  &quot;tables&quot;: {
+    &quot;book_deltas&quot;: {
+      &quot;table&quot;: &quot;book_deltas&quot;,
+      &quot;rows&quot;: 4480,
+      &quot;chunks&quot;: 1,
+      &quot;replayed_chunks&quot;: 1,
+      &quot;replayed&quot;: true
+    },
+    &quot;trades&quot;: {
+      &quot;table&quot;: &quot;trades&quot;,
+      &quot;rows&quot;: 960,
+      &quot;chunks&quot;: 1,
+      &quot;replayed_chunks&quot;: 1,
+      &quot;replayed&quot;: true
+    }
+  },
+  &quot;sources&quot;: [
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T120000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18681,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T130000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18588,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T140000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18891,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T150000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18560,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T160000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18836,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T170000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 18789,
+      &quot;rows_read&quot;: 480,
+      &quot;rows_kept&quot;: 480
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T180000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 7218,
+      &quot;rows_read&quot;: 160,
+      &quot;rows_kept&quot;: 160
+    },
+    {
+      &quot;path&quot;: &quot;data/cache/onramp-mirror/20260501T190000Z.parquet&quot;,
+      &quot;size_bytes&quot;: 7261,
+      &quot;rows_read&quot;: 160,
+      &quot;rows_kept&quot;: 160
+    }
+  ],
+  &quot;requested_window&quot;: [
+    1777636800000000000,
+    1778241600000000000
+  ],
+  &quot;loaded_window&quot;: [
+    1777636800000000000,
+    1777662900000000000
+  ],
+  &quot;coverage&quot;: 0.043154761904761904,
+  &quot;gaps&quot;: [],
+  &quot;skipped&quot;: [],
+  &quot;unknown_instruments&quot;: []
+}
+
+exit code when coverage falls short: 3</pre><pre class="stderr">coverage 0.0432 is below the required 0.9500</pre></div></div>
+<h2 id="the-tables-are-now-replayable">The tables are now replayable<a class="headerlink" href="#the-tables-are-now-replayable" title="Permanent link">#</a></h2>
+<p>Which is the whole point. A snapshot pins what was ingested, and the run reads
+it through the same path as any other h5i-db data.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;mirror-v1&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="s2">&quot;resolutions&quot;</span><span class="p">],</span>
+            <span class="n">note</span><span class="o">=</span><span class="s2">&quot;ingested from the vendor mirror&quot;</span><span class="p">)</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span>
+
+<span class="c1"># One order, timed a microsecond after a quote instant so it transacts at the</span>
+<span class="c1"># price it was decided from. Recipe 05/07 builds real strategies on this data.</span>
+<span class="n">quotes</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
+    <span class="sa">f</span><span class="s2">&quot;&quot;&quot;</span>
+<span class="s2">    SELECT instrument_id, ts_init,</span>
+<span class="s2">           max(CASE WHEN side = &#39;sell&#39; THEN price END) AS ask</span>
+<span class="s2">    FROM h5i(&#39;book_deltas&#39;, &#39;mirror-v1&#39;)</span>
+<span class="s2">    WHERE outcome = 0</span>
+<span class="s2">    GROUP BY instrument_id, ts_init</span>
+<span class="s2">    ORDER BY ts_init, instrument_id</span>
+<span class="s2">    LIMIT 200</span>
+<span class="s2">    &quot;&quot;&quot;</span>
+<span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">decision</span> <span class="o">=</span> <span class="n">quotes</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">quotes</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span><span class="p">]</span>
+<span class="n">backtest</span><span class="o">.</span><span class="n">create_signal_table</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;signals&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="n">backtest</span><span class="o">.</span><span class="n">signal_table</span><span class="p">([{</span>
+    <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">decision</span><span class="o">.</span><span class="n">ts_init</span><span class="o">.</span><span class="n">to_pydatetime</span><span class="p">()</span> <span class="o">+</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timedelta</span><span class="p">(</span><span class="n">microseconds</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">to_pytimedelta</span><span class="p">(),</span>
+    <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">decision</span><span class="o">.</span><span class="n">instrument_id</span><span class="p">,</span> <span class="s2">&quot;outcome&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span>
+    <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;buy&quot;</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">10.0</span><span class="p">,</span> <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="s2">&quot;onramp&quot;</span><span class="p">,</span>
+<span class="p">}]))</span>
+
+<span class="n">config</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">BacktestConfig</span><span class="p">(</span>
+    <span class="n">run_id</span><span class="o">=</span><span class="s2">&quot;onramp-probe&quot;</span><span class="p">,</span>
+    <span class="n">data</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">DataConfig</span><span class="p">(</span><span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;mirror-v1&quot;</span><span class="p">),</span>
+    <span class="n">portfolio</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">PortfolioConfig</span><span class="p">(</span><span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">),</span>
+    <span class="n">execution</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">ExecutionConfig</span><span class="p">(</span><span class="n">fee_kind</span><span class="o">=</span><span class="s2">&quot;kalshi&quot;</span><span class="p">,</span> <span class="n">fee_rate</span><span class="o">=</span><span class="mf">0.07</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">inspection</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">inspect</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;replay fidelity: </span><span class="si">{</span><span class="n">inspection</span><span class="o">.</span><span class="n">fidelity</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;config accepted: </span><span class="si">{</span><span class="n">inspection</span><span class="o">.</span><span class="n">ok</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">stats</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">inspection</span><span class="o">.</span><span class="n">tables</span><span class="o">.</span><span class="n">items</span><span class="p">()):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  </span><span class="si">{</span><span class="n">name</span><span class="si">:</span><span class="s2">12</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">stats</span><span class="p">[</span><span class="s1">&#39;row_count&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">&gt;7,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+
+<span class="n">result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>
+<span class="n">fill</span> <span class="o">=</span> <span class="n">result</span><span class="o">.</span><span class="n">fills</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">filled </span><span class="si">{</span><span class="n">fill</span><span class="o">.</span><span class="n">quantity</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> at </span><span class="si">{</span><span class="n">fill</span><span class="o">.</span><span class="n">price</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2">, &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;decision ask was </span><span class="si">{</span><span class="n">decision</span><span class="o">.</span><span class="n">ask</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">fill</span><span class="o">.</span><span class="n">price</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">decision</span><span class="o">.</span><span class="n">ask</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">replay fidelity: ReplayFidelity.SNAPSHOT_L2
+config accepted: True
+  book_deltas    3,840 rows
+  instruments       80 rows
+  resolutions       40 rows
+  signals            1 rows
+  trades           960 rows</pre><pre class="">
+filled 10 at 0.508, decision ask was 0.508</pre></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>Ingest is three steps: parse the market payloads, write <code>instruments</code> and
+  <code>resolutions</code>, then normalise the archive into <code>book_deltas</code> and <code>trades</code>.
+  Recipe 05/07 picks up from the snapshot this leaves behind.</li>
+<li>Outcome identity is positional and every way of breaking it is refused.
+  A token two markets claim, a resolution with no observability instant, a
+  token list that does not match the outcome list: all errors, because the
+  silent versions of those mistakes are unrecoverable later.</li>
+<li>Re-running an import is a replay. Commits are keyed by the hash of the
+  normalised rows, so a restarted backfill adds nothing and two sources for
+  one hour converge.</li>
+<li><code>coverage</code> compares the requested window with the loaded one and is <code>None</code>
+  when nothing was requested. Unknown event types and unusable files are
+  counted in <code>report.skipped</code>, never dropped quietly.</li>
+<li>A vendor dialect is an <code>ArchiveLayout</code> literal, so a third vendor needs no
+  new code. This recipe ingested a house format to prove it.</li>
+<li>h5i-db features doing the work: content-addressed idempotency keys turning
+  a re-import into a replay, a named snapshot pinning what was ingested, and
+  <code>versions()</code> showing that the second pass wrote nothing.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/05_prediction_markets/05_settlement_and_selection_risk/"><span class="dir">← Previous</span><span class="pn-title">Two ways a prediction-market backtest lies to you</span></a><a class="next" href="/cookbook/05_prediction_markets/07_end_to_end_workflow/"><span class="dir">Next →</span><span class="pn-title">The whole loop, once</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#a-stand-in-mirror">A stand-in mirror</a></li><li><a href="#step-one-what-the-markets-are">Step one: what the markets are</a></li><li><a href="#step-two-write-the-definitions">Step two: write the definitions</a></li><li><a href="#step-three-ingest-the-archive">Step three: ingest the archive</a></li><li><a href="#run-it-again">Run it again</a></li><li><a href="#coverage-is-a-reported-fact-not-an-assumption">Coverage is a reported fact, not an assumption</a></li><li><a href="#what-the-importer-will-not-guess">What the importer will not guess</a></li><li><a href="#a-vendor-dialect-is-data">A vendor dialect is data</a></li><li><a href="#the-same-three-steps-from-a-shell">The same three steps from a shell</a></li><li><a href="#the-tables-are-now-replayable">The tables are now replayable</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

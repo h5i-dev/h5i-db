@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"APIReference","@id":"https://db.h5i.dev/api/dataframe/#article","headline":"h5i_db DataFrame builder: Python query API","name":"h5i_db DataFrame builder: Python query API","description":"Build queries as Python, not SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, and ASOF joins.","url":"https://db.h5i.dev/api/dataframe/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/api/dataframe/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Python API","item":"https://db.h5i.dev/api/"},{"@type":"ListItem","position":3,"name":"DataFrame builder","item":"https://db.h5i.dev/api/dataframe/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"APIReference","@id":"https://db.h5i.dev/api/dataframe/#article","headline":"h5i_db DataFrame builder: Python query API","name":"h5i_db DataFrame builder: Python query API","description":"Build queries as Python, not SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, and ASOF joins.","url":"https://db.h5i.dev/api/dataframe/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/api/dataframe/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Python API","item":"https://db.h5i.dev/api/"},{"@type":"ListItem","position":3,"name":"DataFrame builder","item":"https://db.h5i.dev/api/dataframe/"}]}]}</script>
 </head>
 <body>
 
@@ -75,7 +75,7 @@
 <h1 id="dataframe-builder">DataFrame builder<a class="headerlink" href="#dataframe-builder" title="Permanent link">#</a></h1>
 <p><code>db.table(...)</code> starts a <strong>lazy</strong> query you build up with methods instead of
 writing a SQL string. Nothing runs until a terminal method like <code>.collect()</code>.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span>
 
 <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="s2">&quot;2026-07-01T00:00:00Z&quot;</span><span class="p">)</span>
    <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">([</span><span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;MSFT&quot;</span><span class="p">]))</span>
@@ -248,7 +248,7 @@ build time.</p>
 <p><code>col(name)</code> references a column, <code>lit(value)</code> a constant. The name is one
 identifier and is never split on <code>.</code>, so a column really named <code>a.b</code> works;
 pass <code>col("price", relation="l")</code> to qualify a side of a join.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">when</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">when</span>
 
 <span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">*</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span>              <span class="c1"># arithmetic</span>
 <span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">100</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;size&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">5</span><span class="p">)</span>   <span class="c1"># &amp; | ~ , not and/or/not</span>
@@ -288,7 +288,7 @@ always quoted so case survives (<code>col("Symbol")</code> finds a field named
 <p>A <code>when(...).then(...)</code> chain is already a complete expression (a <code>CASE</code>
 with no <code>ELSE</code> yields NULL), so it can be aliased without <code>.otherwise()</code>.</p>
 <p>The idiomatic OHLCV query, built:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
 
 <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">time_bucket</span><span class="p">(</span><span class="s2">&quot;5m&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
@@ -409,7 +409,7 @@ copies. Project explicitly to avoid the ambiguity.</p>
 </div>
 <p>Comparing one table at two pinned versions, the "same query across N
 versions" pattern:</p>
-<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">mean_px</span><span class="p">(</span><span class="n">version</span><span class="p">):</span>
+<div class="highlight"><pre><span></span><code><span class="k">def</span> <span class="nf">mean_px</span><span class="p">(</span><span class="n">version</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
               <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
               <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;px&quot;</span><span class="p">)))</span>
@@ -493,7 +493,7 @@ naming that column, as it would be for a DataFrame.</p>
 <p><code>sql_expr()</code> embeds a raw fragment anywhere an expression is accepted. Full
 SQL coverage through builder verbs is deliberately not a goal, so reach for
 this rather than waiting for a method:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">sql_expr</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">sql_expr</span>
 
 <span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
    <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span>

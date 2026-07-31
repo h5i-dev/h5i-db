@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop/#article","headline":"A crash-safe paper-trading loop with full order attribution","name":"A crash-safe paper-trading loop with full order attribution","description":"The hard part of a live loop is not the strategy. It is answering, a week later, \"why did we send that order?\".","url":"https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"A crash-safe paper-trading loop with full order attribution","item":"https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop/#article","headline":"A crash-safe paper-trading loop with full order attribution","name":"A crash-safe paper-trading loop with full order attribution","description":"The hard part of a live loop is not the strategy. It is answering, a week later, \"why did we send that order?\".","url":"https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"A crash-safe paper-trading loop with full order attribution","item":"https://db.h5i.dev/cookbook/03_risk_and_production/05_live_paper_trading_loop/"}]}]}</script>
 </head>
 <body>
 
@@ -88,13 +88,50 @@ signal input on demand.</p>
 <p>Crash safety comes for free. Every commit is an atomic manifest swap, so a
 <code>kill -9</code> mid-write leaves the previous head fully consistent, and the loop
 restarts by asking the database where the feed stopped.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>paper trading</td>
+<td>running the full live loop without sending real orders</td>
+</tr>
+<tr>
+<td>attribution</td>
+<td>answering which input produced which order, after the fact</td>
+</tr>
+<tr>
+<td><code>tail</code></td>
+<td>read exactly the rows committed after a version you name</td>
+</tr>
+<tr>
+<td>high-water mark</td>
+<td>the last version the loop processed, stored so it can resume</td>
+</tr>
+<tr>
+<td>crash safety</td>
+<td>a commit is an atomic manifest swap, so a kill mid-write leaves the old head intact</td>
+</tr>
+<tr>
+<td>time travel</td>
+<td>reading a table as it was at an earlier version, here to replay an order's input</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_paper&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -259,7 +296,7 @@ in the database against whatever the <code>trades</code> head is at that moment.
 <span class="n">chunks</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">feed</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;chunk&quot;</span><span class="p">,</span> <span class="n">sort</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">feed</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> ticks -&gt; </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">chunks</span><span class="p">)</span><span class="si">}</span><span class="s2"> five-minute deliveries&quot;</span><span class="p">)</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">signal_frame</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">signal_frame</span><span class="p">(</span><span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Latest fast/slow EWMA crossover per symbol, at any read point.&quot;&quot;&quot;</span>
     <span class="n">bars</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
@@ -493,7 +530,7 @@ timeout.</p>
 per table, so <code>compact()</code> merges them, as its own audited commit.</p>
 <p>Note the trade-off: a compact commit breaks the pure-append chain for <code>tail()</code>
 ranges that span it, so compact <em>behind</em> your consumers' read positions.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">eq</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">equity_track</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;equity&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
 <span class="n">posn</span> <span class="o">=</span> <span class="p">(</span>
@@ -546,7 +583,7 @@ positions: 78 segments -&gt; 1 (v79, op=compact)</pre></div></div>
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/04_data_quality_gates/"><span class="dir">← Previous</span><span class="pn-title">Data-quality gates: staging, policy, and previewable remediation</span></a><a class="next" href="/cookbook/03_risk_and_production/06_multi_writer_conflicts/"><span class="dir">Next →</span><span class="pn-title">Multi-writer coordination: optimistic locking, conflicts, and retries</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-tables-feed-orders-positions-all-append-only">2. Tables: feed, orders, positions, all append-only</a></li><li><a href="#3-the-signal">3. The signal</a></li><li><a href="#4-the-event-loop-append-chunk-signal-append-orders-mark">4. The event loop: append chunk, signal, append orders, mark</a></li><li><a href="#5-restart-recovery-the-database-is-the-checkpoint">5. Restart recovery: the database is the checkpoint</a></li><li><a href="#6-order-attribution-replay-the-exact-signal-input">6. Order attribution: replay the exact signal input</a></li><li><a href="#7-the-reader-side-streaming-new-orders-with-tail">7. The reader side: streaming new orders with tail()</a></li><li><a href="#8-session-wrap-up-equity-curve-and-blotter-hygiene">8. Session wrap-up: equity curve and blotter hygiene</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-tables-feed-orders-positions-all-append-only">2. Tables: feed, orders, positions, all append-only</a></li><li><a href="#3-the-signal">3. The signal</a></li><li><a href="#4-the-event-loop-append-chunk-signal-append-orders-mark">4. The event loop: append chunk, signal, append orders, mark</a></li><li><a href="#5-restart-recovery-the-database-is-the-checkpoint">5. Restart recovery: the database is the checkpoint</a></li><li><a href="#6-order-attribution-replay-the-exact-signal-input">6. Order attribution: replay the exact signal input</a></li><li><a href="#7-the-reader-side-streaming-new-orders-with-tail">7. The reader side: streaming new orders with tail()</a></li><li><a href="#8-session-wrap-up-equity-curve-and-blotter-hygiene">8. Session wrap-up: equity curve and blotter hygiene</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

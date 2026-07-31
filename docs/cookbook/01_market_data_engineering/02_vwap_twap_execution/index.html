@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/02_vwap_twap_execution/#article","headline":"VWAP, TWAP and execution benchmarks","name":"VWAP, TWAP and execution benchmarks","description":"Execution desks live and die by benchmark arithmetic: interval VWAP, TWAP, arrival price, slippage in basis points.","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/02_vwap_twap_execution/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/02_vwap_twap_execution/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"VWAP, TWAP and execution benchmarks","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/02_vwap_twap_execution/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/02_vwap_twap_execution/#article","headline":"VWAP, TWAP and execution benchmarks","name":"VWAP, TWAP and execution benchmarks","description":"Execution desks live and die by benchmark arithmetic: interval VWAP, TWAP, arrival price, slippage in basis points.","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/02_vwap_twap_execution/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/02_vwap_twap_execution/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"VWAP, TWAP and execution benchmarks","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/02_vwap_twap_execution/"}]}]}</script>
 </head>
 <body>
 
@@ -91,14 +91,59 @@ benchmarks with one operator.</p>
 <li>benchmark a simulated parent order, 50k shares of AAPL worked over an
    hour, against interval VWAP and arrival mid.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VWAP</td>
+<td>volume-weighted average price, the average price the whole market paid</td>
+</tr>
+<tr>
+<td>TWAP</td>
+<td>time-weighted average price, which ignores volume and so diverges from VWAP</td>
+</tr>
+<tr>
+<td>arrival price</td>
+<td>the price at the instant the order reached the desk</td>
+</tr>
+<tr>
+<td>slippage</td>
+<td>the gap between the price you expected and the price you got</td>
+</tr>
+<tr>
+<td>basis point (bp)</td>
+<td>one hundredth of a percent; execution costs are quoted in bp</td>
+</tr>
+<tr>
+<td>parent order</td>
+<td>one large order worked over time as many small child executions</td>
+</tr>
+<tr>
+<td>mid</td>
+<td>the average of bid and ask, the usual stand-in for "the price"</td>
+</tr>
+<tr>
+<td>ASOF join</td>
+<td>join each left row to the most recent right row at or before its timestamp</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span><span class="p">,</span> <span class="n">wavg</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span><span class="p">,</span> <span class="n">wavg</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;mde_vwap&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -592,7 +637,7 @@ volume printed above or below the day's average price.</p>
 <p>The running view makes the mechanics visible. <code>vwap()</code> also works as a
 <em>window</em> function, so cumulative VWAP needs no manual <code>sum(pv)/sum(v)</code>
 bookkeeping.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">aapl_window</span><span class="p">(</span><span class="n">t_lo</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">t_hi</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">aapl_window</span><span class="p">(</span><span class="n">t_lo</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">t_hi</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
         <span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">t_lo</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">t_hi</span>
     <span class="p">)</span>
@@ -807,7 +852,7 @@ as implementation shortfall.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/01_market_data_engineering/01_ohlcv_bars/"><span class="dir">← Previous</span><span class="pn-title">OHLCV bars from tick data</span></a><a class="next" href="/cookbook/01_market_data_engineering/03_gapfill_resample/"><span class="dir">Next →</span><span class="pn-title">Regular grids for irregular markets: gapfill and resample</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-full-day-and-interval-vwap">2. Full-day and interval VWAP</a></li><li><a href="#3-twap-vs-vwap">3. TWAP vs VWAP</a></li><li><a href="#4-benchmarking-a-parent-order">4. Benchmarking a parent order</a></li><li><a href="#5-vwap-and-kdb-style-wavg-are-the-same-statistic">5. vwap and kdb-style wavg are the same statistic</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-full-day-and-interval-vwap">2. Full-day and interval VWAP</a></li><li><a href="#3-twap-vs-vwap">3. TWAP vs VWAP</a></li><li><a href="#4-benchmarking-a-parent-order">4. Benchmarking a parent order</a></li><li><a href="#5-vwap-and-kdb-style-wavg-are-the-same-statistic">5. vwap and kdb-style wavg are the same statistic</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

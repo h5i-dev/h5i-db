@@ -214,6 +214,68 @@ def test_polymarket_payloads_become_specs_with_positional_outcomes():
         )
 
 
+def test_a_market_need_not_resolve_to_a_winner():
+    """A refund and a partial settlement are results, not missing winners.
+
+    Flattening either to a winner is wrong by the full notional: a voided
+    binary pays both sides half, so calling one of them the winner doubles
+    it and zeroes the other.
+    """
+    base = {
+        "condition_id": CONDITION,
+        "outcomes": '["Yes","No"]',
+        "closed": True,
+        "umaResolutionTime": "2026-05-01T12:15:00Z",
+    }
+
+    voided = venues.polymarket_markets_from_json([{**base, "is_50_50_outcome": True}])[0]
+    assert voided.is_resolved and voided.voided
+    assert voided.winner_outcome is None and voided.payouts is None
+
+    # Gamma reports payouts as shares of the pot, so an even split arrives
+    # as [1, 1] rather than [0.5, 0.5] -- and is still a refund, not a split.
+    even = venues.polymarket_markets_from_json([{**base, "payouts": ["1", "1"]}])[0]
+    assert even.voided
+
+    scalar = venues.polymarket_markets_from_json([{**base, "payouts": ["7", "3"]}])[0]
+    assert scalar.payouts == pytest.approx((0.7, 0.3))
+    assert scalar.winner_outcome is None
+    assert not scalar.voided
+
+    one_sided = venues.polymarket_markets_from_json([{**base, "payouts": ["1", "0"]}])[0]
+    assert one_sided.payouts == pytest.approx((1.0, 0.0))
+
+
+def test_a_spec_refuses_payouts_that_do_not_conserve_a_set():
+    common = dict(
+        instrument_id="m",
+        venue="v",
+        outcome_labels=("Yes", "No"),
+        settlement_observable_ns=1,
+    )
+    with pytest.raises(ValueError, match="mints or burns cash"):
+        venues.MarketSpec(**common, payouts=(0.7, 0.2))
+    with pytest.raises(ValueError, match="at most one of"):
+        venues.MarketSpec(**common, winner_outcome=0, voided=True)
+    with pytest.raises(ValueError, match="payouts for"):
+        venues.MarketSpec(**common, payouts=(1.0,))
+    assert venues.MarketSpec(**common, payouts=(0.7, 0.3)).is_resolved
+    assert venues.MarketSpec(**common, voided=True).is_resolved
+
+
+def test_negative_risk_travels_from_the_payload_to_the_instruments_table():
+    payload = {
+        "condition_id": CONDITION,
+        "outcomes": '["A","B","C"]',
+        "negRisk": True,
+    }
+    spec = venues.polymarket_markets_from_json([payload])[0]
+    assert spec.neg_risk
+    assert not venues.polymarket_markets_from_json(
+        [{"condition_id": CONDITION, "outcomes": '["A","B"]'}]
+    )[0].neg_risk
+
+
 def test_archive_ingest_normalises_every_event_kind():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

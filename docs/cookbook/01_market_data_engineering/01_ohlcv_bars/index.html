@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars/#article","headline":"OHLCV bars from tick data","name":"OHLCV bars from tick data","description":"Rolling ticks into bars is where most tick pipelines pick up their first bug: a bucket boundary off by one, a close taken in file order instead of event\u2026","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"OHLCV bars from tick data","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars/#article","headline":"OHLCV bars from tick data","name":"OHLCV bars from tick data","description":"Rolling ticks into bars is where most tick pipelines pick up their first bug: a bucket boundary off by one, a close taken in file order instead of event\u2026","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"OHLCV bars from tick data","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/01_ohlcv_bars/"}]}]}</script>
 </head>
 <body>
 
@@ -92,14 +92,51 @@ time-travel it like any other.</p>
 <li>persist the 5m bars as a versioned <code>bars_5m</code> table,</li>
 <li>validate the SQL bars against a pandas reference, field by field.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tick</td>
+<td>one event on a market data feed, usually a trade or a quote update</td>
+</tr>
+<tr>
+<td>OHLCV bar</td>
+<td>ticks aggregated into a fixed interval: open, high, low, close, volume</td>
+</tr>
+<tr>
+<td><code>time_bucket</code></td>
+<td>truncate timestamps to a grid, optionally in a named timezone</td>
+</tr>
+<tr>
+<td>session</td>
+<td>one trading day as the exchange defines it, e.g. 09:30-16:00 New York</td>
+</tr>
+<tr>
+<td>DST</td>
+<td>daylight saving time; sessions are fixed in local time, so their UTC offset shifts</td>
+</tr>
+<tr>
+<td>VWAP</td>
+<td>volume-weighted average price, the average price the whole market paid</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">lit</span><span class="p">,</span> <span class="n">time_bucket</span><span class="p">,</span> <span class="n">vwap</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;mde_ohlcv&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -252,7 +289,7 @@ the name of a column that already exists. <code>GROUP BY "ts"</code> would bind 
 raw <code>ts</code> column rather than the bucket, giving one group per tick, silently.
 Bucket to <code>bar</code>, then rename in a following <code>select</code>, which lands a level down
 where the name is free.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">bars</span><span class="p">(</span><span class="n">width</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">bars</span><span class="p">(</span><span class="n">width</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">)</span>
         <span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="n">time_bucket</span><span class="p">(</span><span class="n">width</span><span class="p">,</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">))</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">&quot;bar&quot;</span><span class="p">),</span> <span class="s2">&quot;symbol&quot;</span><span class="p">)</span>
@@ -730,7 +767,7 @@ to float precision.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/00_fundamentals/09_dataframe_builder/"><span class="dir">← Previous</span><span class="pn-title">The DataFrame builder: queries as Python objects</span></a><a class="next" href="/cookbook/01_market_data_engineering/02_vwap_twap_execution/"><span class="dir">Next →</span><span class="pn-title">VWAP, TWAP and execution benchmarks</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-bars-at-any-width">2. Bars at any width</a></li><li><a href="#3-session-aligned-daily-bars">3. Session-aligned daily bars</a></li><li><a href="#4-persist-bars-as-a-versioned-table">4. Persist bars as a versioned table</a></li><li><a href="#5-candlestick-view">5. Candlestick view</a></li><li><a href="#6-validate-against-pandas">6. Validate against pandas</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-bars-at-any-width">2. Bars at any width</a></li><li><a href="#3-session-aligned-daily-bars">3. Session-aligned daily bars</a></li><li><a href="#4-persist-bars-as-a-versioned-table">4. Persist bars as a versioned table</a></li><li><a href="#5-candlestick-view">5. Candlestick view</a></li><li><a href="#6-validate-against-pandas">6. Validate against pandas</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

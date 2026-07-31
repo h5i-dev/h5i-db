@@ -282,6 +282,59 @@ async fn an_invalid_plan_is_refused_before_anything_is_written() {
 }
 
 #[tokio::test]
+async fn reference_prices_reach_the_database_and_come_back_apart() {
+    // A venue's mark and oracle are no use parsed if there is no supported
+    // way to store them: a caller reaching past `write_plan` to
+    // `store::write_references` skips the idempotency the ingest log gives
+    // everything else, so a reload would double the rows.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("refs.db")).await.unwrap();
+
+    let ctxs = r#"[
+        {"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":40}]},
+        [{"markPx":"46000.0","oraclePx":"45995.0","funding":"0.0000125"}]
+    ]"#;
+    let (universe, references) =
+        hyperliquid::parse_meta_and_asset_ctxs(ctxs, UnixNanos::new(HOUR_MS * 1_000_000)).unwrap();
+    assert_eq!(references.len(), 1);
+
+    let plan = IngestPlan::new("hyperliquid")
+        .with_instruments(vec![universe[0].instrument().unwrap()])
+        .with_references(references.clone());
+    assert_eq!(plan.record_count(), 1, "references are records too");
+    assert!(plan.loaded_window().is_some());
+
+    assert!(
+        write_plan(&db, &plan, UnixNanos::new(0))
+            .await
+            .unwrap()
+            .was_written()
+    );
+    // The same plan again is recognised rather than re-written.
+    assert!(
+        !write_plan(&db, &plan, UnixNanos::new(1))
+            .await
+            .unwrap()
+            .was_written()
+    );
+
+    let source = store::reference_source(&db, ReadAt::Latest, None)
+        .await
+        .unwrap();
+    let read: Vec<_> = source.map(|record| record.unwrap()).collect();
+    assert_eq!(read, references, "both prices survive the round trip");
+
+    // A reference for an instrument the plan declares nothing about is
+    // refused like any other stream. (A plan that declares no instruments
+    // at all is a legal top-up onto existing ones, so this one names a
+    // different coin.)
+    let stray = IngestPlan::new("hyperliquid")
+        .with_instruments(vec![hyperliquid::instrument("ETH", 0.01, 0.001).unwrap()])
+        .with_references(references);
+    assert!(write_plan(&db, &stray, UnixNanos::new(2)).await.is_err());
+}
+
+#[tokio::test]
 async fn candles_ingest_as_bars_and_keep_their_close_stamp() {
     let dir = tempfile::tempdir().unwrap();
     let db = Database::create(&dir.path().join("bars.db")).await.unwrap();

@@ -50,6 +50,24 @@ pub enum MarketEvent {
         close: Price,
         volume: Qty,
     },
+    /// Reference prices the venue publishes, which are not the book.
+    ///
+    /// A derivatives venue does not margin you against the mid. Hyperliquid
+    /// keeps three distinct prices: an **oracle** built from spot exchanges,
+    /// a **mark** derived from it and the book, and the book's own mid. The
+    /// mark is what margin, unrealised PnL and liquidation read; the oracle
+    /// is what funding is charged on.
+    ///
+    /// Substituting the mid for either is not a small approximation. A thin
+    /// book or a one-print wick moves the mid far enough to liquidate a
+    /// position the venue would not have touched, and that liquidation then
+    /// looks like a strategy result.
+    Reference {
+        /// The venue's mark, for margin and valuation.
+        mark: Option<Price>,
+        /// The venue's oracle, for funding.
+        oracle: Option<Price>,
+    },
 }
 
 impl MarketEvent {
@@ -62,6 +80,7 @@ impl MarketEvent {
             MarketEvent::Funding { .. } => "funding",
             MarketEvent::Corporate(_) => "corporate",
             MarketEvent::Bar { .. } => "bar",
+            MarketEvent::Reference { .. } => "reference",
         }
     }
 }

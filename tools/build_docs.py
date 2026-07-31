@@ -56,6 +56,9 @@ COOKBOOK_SECTIONS = [
     ("01_market_data_engineering", "Market data engineering"),
     ("02_alpha_research", "Alpha research"),
     ("03_risk_and_production", "Risk & production"),
+    ("04_event_driven_backtesting", "Event-driven backtesting"),
+    ("05_prediction_markets", "Prediction markets"),
+    ("06_performance_analytics", "Performance analytics"),
 ]
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
@@ -397,7 +400,7 @@ def write_llms_full(manual, api):
         "",
         f"Canonical site: {BASE_URL}",
         "This file concatenates the manual and Python API reference as plain "
-        "markdown for LLM ingestion. Cookbook tutorials (36 executed notebooks) "
+        "markdown for LLM ingestion. Cookbook tutorials "
         f"are at {BASE_URL}cookbook/.",
         "",
     ]
@@ -799,8 +802,9 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
         idx_parts = [
             "<h1>Cookbook</h1>",
             '<p class="doc-lede">Executed, end-to-end notebooks: from your first database to '
-            "point-in-time factor research and production risk workflows. Every recipe runs "
-            "top to bottom against real or deterministic synthetic market data.</p>",
+            "event-driven backtesting, prediction markets and performance analytics. "
+            "Every recipe runs top to bottom against real or deterministic synthetic "
+            "market data.</p>",
             '<div class="doc-divider"></div>',
         ]
         for sec_dir, sec_label in COOKBOOK_SECTIONS:
@@ -819,8 +823,9 @@ def build(cookbook_dir: Path, skip_cookbook: bool) -> None:
             url="cookbook/",
             section="cookbook",
             title="Cookbook",
-            description="Executed notebook tutorials for h5i-db: fundamentals, market data "
-                        "engineering, alpha research, and risk & production workflows.",
+            description="Executed notebook tutorials for h5i-db: "
+            + ", ".join(label for _, label in COOKBOOK_SECTIONS).lower()
+            + ".",
             body_html="\n".join(idx_parts),
             toc_tokens=[{"id": s, "name": lbl, "children": []} for s, lbl in COOKBOOK_SECTIONS],
             search_text=" ".join(

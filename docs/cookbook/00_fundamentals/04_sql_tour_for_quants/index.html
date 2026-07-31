@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/04_sql_tour_for_quants/#article","headline":"A SQL tour for quants","name":"A SQL tour for quants","description":"h5i-db's query layer is Apache DataFusion: full SQL with joins, CTEs and window functions.","url":"https://db.h5i.dev/cookbook/00_fundamentals/04_sql_tour_for_quants/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/04_sql_tour_for_quants/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"A SQL tour for quants","item":"https://db.h5i.dev/cookbook/00_fundamentals/04_sql_tour_for_quants/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/00_fundamentals/04_sql_tour_for_quants/#article","headline":"A SQL tour for quants","name":"A SQL tour for quants","description":"h5i-db's query layer is Apache DataFusion: full SQL with joins, CTEs and window functions.","url":"https://db.h5i.dev/cookbook/00_fundamentals/04_sql_tour_for_quants/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/00_fundamentals/04_sql_tour_for_quants/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Fundamentals"},{"@type":"ListItem","position":4,"name":"A SQL tour for quants","item":"https://db.h5i.dev/cookbook/00_fundamentals/04_sql_tour_for_quants/"}]}]}</script>
 </head>
 <body>
 
@@ -86,10 +86,59 @@ phrasebook.</p>
 subject. The rest of the cookbook prefers the lazy DataFrame builder
 (<code>db.table(...)</code> plus verbs, recipe 09), which compiles to exactly these
 statements. Call <code>.sql()</code> on any built query to see the SQL it produced.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>panel</td>
+<td>a dataset with one row per asset per date</td>
+</tr>
+<tr>
+<td>cross-sectional</td>
+<td>comparing assets against each other at one date, not against their own past</td>
+</tr>
+<tr>
+<td>window function</td>
+<td>SQL computing across neighbouring rows without collapsing them, e.g. <code>lag()</code></td>
+</tr>
+<tr>
+<td>CTE</td>
+<td>a named subquery introduced by <code>WITH</code>, so a multi-step query stays readable</td>
+</tr>
+<tr>
+<td><code>time_bucket</code></td>
+<td>truncate timestamps to a grid, optionally in a named timezone</td>
+</tr>
+<tr>
+<td>VWAP</td>
+<td>volume-weighted average price, the average price the whole market paid</td>
+</tr>
+<tr>
+<td>EWMA</td>
+<td>exponentially weighted moving average: recent observations count more</td>
+</tr>
+<tr>
+<td>ASOF join</td>
+<td>join each left row to the most recent right row at or before its timestamp</td>
+</tr>
+<tr>
+<td>quantile</td>
+<td>rank rows into equal-sized buckets, the usual way to score a signal</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;00_sql_tour&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -700,7 +749,7 @@ That gives RiskMetrics-style smoothing in one line.</p>
 <span class="sd">    &quot;&quot;&quot;</span>
 <span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
 
 <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">allclose</span><span class="p">(</span><span class="n">ma</span><span class="p">[</span><span class="s2">&quot;ma20_sugar&quot;</span><span class="p">],</span> <span class="n">ma</span><span class="p">[</span><span class="s2">&quot;ma20_standard&quot;</span><span class="p">])</span>
 <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;rolling_avg == explicit OVER frame, verified on&quot;</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">ma</span><span class="p">),</span> <span class="s2">&quot;rows&quot;</span><span class="p">)</span>
@@ -835,7 +884,7 @@ picture.</p>
   </tbody>
 </table>
 </div></div></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">vol_series</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
@@ -1097,11 +1146,11 @@ correlation comes out as a plain aggregate over a self-joined returns CTE.</p>
   <tbody>
     <tr>
       <th>0</th>
-      <td>-4.11</td>
-      <td>-2.857</td>
-      <td>0.071</td>
-      <td>2.922</td>
-      <td>4.272</td>
+      <td>-4.115</td>
+      <td>-2.913</td>
+      <td>0.066</td>
+      <td>2.916</td>
+      <td>4.329</td>
     </tr>
   </tbody>
 </table>
@@ -1205,7 +1254,7 @@ hint          raise the timeout or narrow the query</pre></div></div>
     <nav class="page-nav"><a class="prev" href="/cookbook/00_fundamentals/03_ingestion_patterns/"><span class="dir">← Previous</span><span class="pn-title">Ingestion patterns: five sources, one table</span></a><a class="next" href="/cookbook/00_fundamentals/05_time_travel_and_versioning/"><span class="dir">Next →</span><span class="pn-title">Time travel and versioning: which version did my backtest see?</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-data">The data</a></li><li><a href="#1-time-range-scans-let-the-manifest-do-the-work">1. Time-range scans: let the manifest do the work</a></li><li><a href="#2-aggregate-group-by-the-cross-sectional-summary">2. Aggregate + GROUP BY: the cross-sectional summary</a></li><li><a href="#3-window-functions-returns-ranks-rolling-risk">3. Window functions: returns, ranks, rolling risk</a></li><li><a href="#4-h5i-sugar-rolling_avg-and-ewma">4. h5i sugar: rolling_avg and ewma</a></li><li><a href="#5-ctes-and-joins-a-returns-to-volatility-to-sector-pipeline">5. CTEs and joins: a returns to volatility to sector pipeline</a></li><li><a href="#6-date-machinery-time_bucket-date_trunc-extract">6. Date machinery: time_bucket, date_trunc, EXTRACT</a></li><li><a href="#7-distributions-and-dependence-approx_percentile_cont-corr">7. Distributions and dependence: approx_percentile_cont, corr</a></li><li><a href="#8-resource-guards-fail-fast-not-slow">8. Resource guards: fail fast, not slow</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#the-data">The data</a></li><li><a href="#1-time-range-scans-let-the-manifest-do-the-work">1. Time-range scans: let the manifest do the work</a></li><li><a href="#2-aggregate-group-by-the-cross-sectional-summary">2. Aggregate + GROUP BY: the cross-sectional summary</a></li><li><a href="#3-window-functions-returns-ranks-rolling-risk">3. Window functions: returns, ranks, rolling risk</a></li><li><a href="#4-h5i-sugar-rolling_avg-and-ewma">4. h5i sugar: rolling_avg and ewma</a></li><li><a href="#5-ctes-and-joins-a-returns-to-volatility-to-sector-pipeline">5. CTEs and joins: a returns to volatility to sector pipeline</a></li><li><a href="#6-date-machinery-time_bucket-date_trunc-extract">6. Date machinery: time_bucket, date_trunc, EXTRACT</a></li><li><a href="#7-distributions-and-dependence-approx_percentile_cont-corr">7. Distributions and dependence: approx_percentile_cont, corr</a></li><li><a href="#8-resource-guards-fail-fast-not-slow">8. Resource guards: fail fast, not slow</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

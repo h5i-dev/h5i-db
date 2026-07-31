@@ -53,12 +53,23 @@ class MarketSpec:
     expiration_ns: Optional[int] = None
     settlement_observable_ns: Optional[int] = None
     winner_outcome: Optional[int] = None
+    #: A payout per outcome, for a scalar or partial settlement. Mutually
+    #: exclusive with `winner_outcome` and `voided`.
+    payouts: Optional[tuple[float, ...]] = None
+    #: The market was voided and a complete set refunded at cost. Not the
+    #: same as a winner: a voided binary pays both sides half, so recording
+    #: it as one is wrong by the full notional on each side.
+    voided: bool = False
+    #: Whether the venue exchanges a complete set for one unit of cash.
+    neg_risk: bool = False
     metadata: Mapping[str, Any] = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "outcome_labels", tuple(self.outcome_labels))
         object.__setattr__(self, "tokens", tuple(self.tokens))
         object.__setattr__(self, "metadata", dict(self.metadata or {}))
+        if self.payouts is not None:
+            object.__setattr__(self, "payouts", tuple(float(p) for p in self.payouts))
         if not self.instrument_id:
             raise ValueError("instrument_id must be non-empty")
         if not self.venue:
@@ -93,7 +104,34 @@ class MarketSpec:
                 f"{self.instrument_id}: winner_outcome {self.winner_outcome} is not "
                 f"one of 0..{len(self.outcome_labels) - 1}"
             )
-        if self.winner_outcome is not None and self.settlement_observable_ns is None:
+        stated = sum(
+            [self.winner_outcome is not None, self.payouts is not None, self.voided]
+        )
+        if stated > 1:
+            raise ValueError(
+                f"{self.instrument_id}: a market resolves one way; give at most "
+                "one of winner_outcome, payouts and voided"
+            )
+        if self.payouts is not None:
+            if len(self.payouts) != len(self.outcome_labels):
+                raise ValueError(
+                    f"{self.instrument_id}: {len(self.payouts)} payouts for "
+                    f"{len(self.outcome_labels)} outcomes"
+                )
+            if any(payout < 0.0 or payout > 1.0 for payout in self.payouts):
+                raise ValueError(
+                    f"{self.instrument_id}: every payout must lie in [0, 1]"
+                )
+            # A set that pays more than a dollar mints cash at settlement and
+            # one that pays less burns it. The tolerance is one tick of the
+            # store's fixed point, not a judgement call.
+            if abs(sum(self.payouts) - 1.0) > 1e-9:
+                raise ValueError(
+                    f"{self.instrument_id}: payouts sum to {sum(self.payouts)} "
+                    "rather than 1; a settlement that does not conserve a "
+                    "complete set mints or burns cash"
+                )
+        if self.is_resolved and self.settlement_observable_ns is None:
             raise ValueError(
                 f"{self.instrument_id}: a resolved market needs "
                 "settlement_observable_ns; settlement is gated on when the "
@@ -130,7 +168,7 @@ class MarketSpec:
 
     @property
     def is_resolved(self) -> bool:
-        return self.winner_outcome is not None
+        return self.winner_outcome is not None or self.payouts is not None or self.voided
 
 
 def _token_index(specs: Sequence[MarketSpec]) -> dict[str, tuple[MarketSpec, int]]:
@@ -273,9 +311,39 @@ def polymarket_markets_from_json(
             )
 
         winner: Optional[int] = None
+        payouts: Optional[tuple[float, ...]] = None
+        voided = bool(_first(payload, "is_50_50_outcome", "is5050Outcome"))
         winner_label = _first(payload, "winning_outcome", "winningOutcome")
         prices = _listish(_first(payload, "outcomePrices", "outcome_prices"))
-        if winner_label is not None:
+
+        # An explicit payout vector settles the question outright, and is the
+        # only form that can express a partial settlement. Gamma reports them
+        # as shares of the pot, so a two-way split arrives as [1, 1] rather
+        # than [0.5, 0.5]; normalising covers both spellings.
+        raw_payouts = _listish(_first(payload, "payouts", "payout_numerators"))
+        if raw_payouts and len(raw_payouts) == len(labels):
+            values = [float(item) for item in raw_payouts]
+            total = sum(values)
+            if total > 0:
+                payouts = tuple(value / total for value in values)
+                # Fixed point cannot hold a third exactly; put the residual on
+                # the largest share so the set still conserves a dollar.
+                drift = 1.0 - sum(payouts)
+                if drift:
+                    largest = max(range(len(payouts)), key=lambda i: payouts[i])
+                    payouts = tuple(
+                        value + drift if index == largest else value
+                        for index, value in enumerate(payouts)
+                    )
+                if len(set(payouts)) == 1:
+                    # Every outcome paying the same is a refund, not a split.
+                    voided, payouts = True, None
+
+        if voided:
+            winner = None
+        elif payouts is not None:
+            winner = None
+        elif winner_label is not None:
             wanted = str(winner_label)
             if wanted not in labels:
                 raise ValueError(
@@ -308,16 +376,17 @@ def polymarket_markets_from_json(
         expiration = _as_nanos(
             _first(payload, "expiration_ns", "endDate", "end_date_iso", "end_date")
         )
-        if winner is not None and observable is None:
+        resolved = winner is not None or payouts is not None or voided
+        if resolved and observable is None:
             # Settlement is gated on observability, so a resolution with no
             # observability instant is unusable. Falling back to expiry would
             # book a result at an instant nobody could have traded on.
             raise ValueError(
-                f"{instrument_id}: resolved to {labels[winner]!r} but the payload "
-                "carries no resolution time; settlement needs the instant the "
-                "result became knowable"
+                f"{instrument_id}: resolved but the payload carries no "
+                "resolution time; settlement needs the instant the result "
+                "became knowable"
             )
-        if require_resolution and winner is None:
+        if require_resolution and not resolved:
             raise ValueError(f"{instrument_id}: no resolution in the payload")
 
         specs.append(
@@ -334,6 +403,9 @@ def polymarket_markets_from_json(
                 expiration_ns=expiration,
                 settlement_observable_ns=observable,
                 winner_outcome=winner,
+                payouts=payouts,
+                voided=voided,
+                neg_risk=bool(_first(payload, "neg_risk", "negRisk")),
                 metadata={
                     key: payload[key]
                     for key in ("slug", "question", "market_slug")
@@ -391,10 +463,23 @@ def write_markets(
             instrument_rows["settlement_observable_ns"].append(
                 spec.settlement_observable_ns
             )
-        if spec.is_resolved:
+            instrument_rows["neg_risk"].append(spec.neg_risk)
+
+        def resolution_row(kind, outcome=None, payout=None, outcome_count=None):
             resolution_rows["ts_init"].append(spec.settlement_observable_ns)
             resolution_rows["instrument_id"].append(spec.instrument_id)
-            resolution_rows["winner_outcome"].append(spec.winner_outcome)
+            resolution_rows["kind"].append(kind)
+            resolution_rows["outcome"].append(outcome)
+            resolution_rows["payout"].append(payout)
+            resolution_rows["outcome_count"].append(outcome_count)
+
+        if spec.voided:
+            resolution_row("void", outcome_count=spec.outcome_count)
+        elif spec.payouts is not None:
+            for outcome, payout in enumerate(spec.payouts):
+                resolution_row("split", outcome=outcome, payout=payout)
+        elif spec.winner_outcome is not None:
+            resolution_row("winner", outcome=spec.winner_outcome)
         else:
             unresolved.append(spec.instrument_id)
 

@@ -7,10 +7,10 @@
 use std::collections::BTreeMap;
 
 use h5i_db_backtest::clock::TimeEvent;
-use h5i_db_backtest::engine::{Context, OrderRequest, Strategy};
+use h5i_db_backtest::engine::{Context, OrderRequest, Strategy, TwapRequest};
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{InstrumentId, OutcomeId};
-use h5i_db_backtest::order::{Fill, OrderId, TimeInForce};
+use h5i_db_backtest::order::{Fill, OrderId, TimeInForce, Trigger};
 use h5i_db_backtest::types::{Price, Qty, Side, UnixNanos};
 use h5i_db_backtest::{BacktestError, Result};
 use pyo3::prelude::*;
@@ -127,6 +127,28 @@ impl PythonStrategy {
                 if optional::<bool>(command, "reduce_only")?.unwrap_or(false) {
                     request = request.reduce_only();
                 }
+                if optional::<bool>(command, "post_only")?.unwrap_or(false) {
+                    request = request.post_only();
+                }
+                // A stop or take-profit: held off the book until the mark
+                // reaches it, which is what makes it different from a limit
+                // at the same price.
+                if let Some(price) = optional::<f64>(command, "trigger_price")? {
+                    let price = Price::from_f64(price)?;
+                    let direction =
+                        optional::<String>(command, "trigger_direction")?.unwrap_or_default();
+                    request = request.with_trigger(match direction.as_str() {
+                        "above" => Trigger::above(price),
+                        "below" => Trigger::below(price),
+                        "stop_loss" | "" => Trigger::stop_loss(side, price),
+                        "take_profit" => Trigger::take_profit(side, price),
+                        other => {
+                            return Err(BacktestError::invalid(format!(
+                                "unknown trigger_direction {other:?}"
+                            )));
+                        }
+                    });
+                }
                 let id = ctx.submit_tracked(request);
                 self.order_ids.insert(client_order_id, id);
             }
@@ -153,6 +175,59 @@ impl PythonStrategy {
                 let name: String = required(command, "name")?;
                 let at: i64 = required(command, "ts")?;
                 ctx.set_timer(name, UnixNanos::new(at));
+            }
+            // The venue's set contract: pay a dollar for one of every
+            // outcome, or hand the set back for a dollar.
+            "mint" | "redeem" => {
+                let instrument = InstrumentId::new(required::<String>(command, "instrument_id")?)?;
+                let sets = Qty::from_f64(required::<f64>(command, "quantity")?)?;
+                if action == "mint" {
+                    ctx.mint(&instrument, sets);
+                } else {
+                    ctx.redeem(&instrument, sets);
+                }
+            }
+            // Worked over time by the venue, not by a client-side loop.
+            "twap" => {
+                let instrument = InstrumentId::new(required::<String>(command, "instrument_id")?)?;
+                let outcome = OutcomeId(optional(command, "outcome")?.unwrap_or(0_u16));
+                let side = Side::parse(&required::<String>(command, "side")?)?;
+                let quantity = Qty::from_f64(required::<f64>(command, "quantity")?)?;
+                let duration: i64 = required(command, "duration_nanos")?;
+                let mut twap = TwapRequest::new(instrument, outcome, side, quantity, duration);
+                if let Some(interval) = optional::<i64>(command, "interval_nanos")? {
+                    twap = twap.interval_nanos(interval);
+                }
+                if let Some(tag) = optional::<String>(command, "tag")? {
+                    twap = twap.with_tag(tag);
+                }
+                if optional::<bool>(command, "reduce_only")?.unwrap_or(false) {
+                    twap = twap.reduce_only();
+                }
+                ctx.twap(twap);
+            }
+            "convert" => {
+                let instrument = InstrumentId::new(required::<String>(command, "instrument_id")?)?;
+                let quantity = Qty::from_f64(required::<f64>(command, "quantity")?)?;
+                let held: Vec<u16> = required(command, "outcomes")?;
+                ctx.convert(
+                    &instrument,
+                    held.into_iter().map(OutcomeId).collect(),
+                    quantity,
+                );
+            }
+            // Not an instruction to the venue: a statement of belief, kept
+            // so the run can be scored against it afterwards.
+            "forecast" => {
+                let instrument = InstrumentId::new(required::<String>(command, "instrument_id")?)?;
+                let outcome = OutcomeId(optional(command, "outcome")?.unwrap_or(0_u16));
+                let probability = Price::from_f64(required::<f64>(command, "probability")?)?;
+                ctx.record_tagged_forecast(
+                    &instrument,
+                    outcome,
+                    probability,
+                    optional::<String>(command, "tag")?,
+                )?;
             }
             other => {
                 return Err(BacktestError::invalid(format!(
@@ -303,6 +378,10 @@ fn add_market_fields(out: &Bound<'_, PyDict>, event: &MarketEvent) -> PyResult<(
         MarketEvent::BookSnapshot { bids, asks } => {
             out.set_item("bid_levels", bids.len())?;
             out.set_item("ask_levels", asks.len())?;
+        }
+        MarketEvent::Reference { mark, oracle } => {
+            out.set_item("mark", mark.map(|price| price.to_f64()))?;
+            out.set_item("oracle", oracle.map(|price| price.to_f64()))?;
         }
         MarketEvent::Gap | MarketEvent::Corporate(_) => {}
     }

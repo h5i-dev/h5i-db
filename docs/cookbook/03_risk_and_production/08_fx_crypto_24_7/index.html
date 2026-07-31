@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7/#article","headline":"FX and crypto: 24/7 data without an exchange session","name":"FX and crypto: 24/7 data without an exchange session","description":"Equity tooling leans on the session. The exchange defines \"the day\", the open and the close.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"FX and crypto: 24/7 data without an exchange session","item":"https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7/#article","headline":"FX and crypto: 24/7 data without an exchange session","name":"FX and crypto: 24/7 data without an exchange session","description":"Equity tooling leans on the session. The exchange defines \"the day\", the open and the close.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"FX and crypto: 24/7 data without an exchange session","item":"https://db.h5i.dev/cookbook/03_risk_and_production/08_fx_crypto_24_7/"}]}]}</script>
 </head>
 <body>
 
@@ -89,14 +89,51 @@ arrivals, with no Tokyo/London/NY liquidity clock and no weekend halt. We
 model the FX weekend explicitly, removing Fri 21:00 to Sun 21:00 UTC ticks for
 the FX pairs while keeping BTC trading through it. Below we flag where real
 data would show structure this data cannot.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>session</td>
+<td>one trading day as an exchange defines it, which FX and crypto simply do not have</td>
+</tr>
+<tr>
+<td>daily close convention</td>
+<td>the cut a desk agrees to call the close: NY 5pm, the Tokyo cut, UTC midnight</td>
+</tr>
+<tr>
+<td>IANA timezone</td>
+<td>a named zone such as <code>America/New_York</code>, which carries its own DST rules</td>
+</tr>
+<tr>
+<td>rolling window</td>
+<td>a statistic over the last N rows or N hours, recomputed at every row</td>
+</tr>
+<tr>
+<td>gapfill</td>
+<td>put an irregular series onto a regular time grid</td>
+</tr>
+<tr>
+<td>weekend halt</td>
+<td>FX stops from Friday evening to Sunday evening; crypto never does</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span><span class="p">,</span> <span class="n">time_bucket</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_fx&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -275,7 +312,7 @@ York conventions, because each cuts the 24/7 flow at a different instant.</p>
 <p>The common FX "NY 5pm" cut is local 17:00 rather than midnight.
 <code>time_bucket</code>'s optional origin argument can shift the boundary if you need
 that exact convention.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">daily_close</span><span class="p">(</span><span class="n">timezone</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">daily_close</span><span class="p">(</span><span class="n">timezone</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
     <span class="n">out</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;ticks&quot;</span><span class="p">)</span>
         <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;pair&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;EURUSD&quot;</span><span class="p">)</span>
@@ -596,7 +633,7 @@ vol estimation.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/07_options_iv_surface/"><span class="dir">← Previous</span><span class="pn-title">Options: implied-vol surfaces as versioned marks</span></a><a class="next" href="/cookbook/03_risk_and_production/09_fixed_income_curves/"><span class="dir">Next →</span><span class="pn-title">Fixed income: versioned curve marks, restatements, carry &amp; rolldown</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-store-the-ticks">2. Store the ticks</a></li><li><a href="#3-what-is-a-day-three-answers-from-the-same-ticks">3. What is "a day"? Three answers from the same ticks</a></li><li><a href="#4-hourly-bars-stored-then-rolling-24h-realized-vol">4. Hourly bars, stored, then rolling 24h realized vol</a></li><li><a href="#5-the-liquidity-clock-method-on-synthetic-structure-on-real-data">5. The liquidity clock: method on synthetic, structure on real data</a></li><li><a href="#6-regular-grids-with-gapfill-and-the-phantom-return-trap">6. Regular grids with gapfill, and the phantom-return trap</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-store-the-ticks">2. Store the ticks</a></li><li><a href="#3-what-is-a-day-three-answers-from-the-same-ticks">3. What is "a day"? Three answers from the same ticks</a></li><li><a href="#4-hourly-bars-stored-then-rolling-24h-realized-vol">4. Hourly bars, stored, then rolling 24h realized vol</a></li><li><a href="#5-the-liquidity-clock-method-on-synthetic-structure-on-real-data">5. The liquidity clock: method on synthetic, structure on real data</a></li><li><a href="#6-regular-grids-with-gapfill-and-the-phantom-return-trap">6. Regular grids with gapfill, and the phantom-return trap</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

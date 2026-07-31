@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/02_reproducible_backtests/#article","headline":"Reproducible backtests: pin the data, not just the code","name":"Reproducible backtests: pin the data, not just the code","description":"Every quant team has lived this incident. A backtest from March cannot be reproduced in July.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/02_reproducible_backtests/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/02_reproducible_backtests/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Reproducible backtests: pin the data, not just the code","item":"https://db.h5i.dev/cookbook/03_risk_and_production/02_reproducible_backtests/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/02_reproducible_backtests/#article","headline":"Reproducible backtests: pin the data, not just the code","name":"Reproducible backtests: pin the data, not just the code","description":"Every quant team has lived this incident. A backtest from March cannot be reproduced in July.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/02_reproducible_backtests/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/02_reproducible_backtests/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Reproducible backtests: pin the data, not just the code","item":"https://db.h5i.dev/cookbook/03_risk_and_production/02_reproducible_backtests/"}]}]}</script>
 </head>
 <body>
 
@@ -93,16 +93,53 @@ copy.</p>
    results, asserted,</li>
 <li>finish with a minimal run-registry pattern.</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">hashlib</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>restatement</td>
+<td>a vendor correcting historical data after the fact</td>
+</tr>
+<tr>
+<td>snapshot</td>
+<td>a named, checksummed pin of table versions; O(1) because it copies nothing</td>
+</tr>
+<tr>
+<td>pin</td>
+<td>fixing a run's inputs to an exact version or snapshot, so a rerun reads the same bytes</td>
+</tr>
+<tr>
+<td>Sharpe ratio</td>
+<td>annualized return divided by annualized volatility: reward per unit of risk</td>
+</tr>
+<tr>
+<td>survivorship bias</td>
+<td>testing only on assets that still exist, which deletes every failure from the sample</td>
+</tr>
+<tr>
+<td>run registry</td>
+<td>a table recording what each run consumed, so a result can be traced back</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">hashlib</span>
+<span class="kn">import</span> <span class="nn">json</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">sql_expr</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_repro&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -239,7 +276,7 @@ panel has 20 symbols per timestamp, so ts-only order is not enough.</p>
  &#x27;segments_total&#x27;: 1,
  &#x27;segments_added&#x27;: 1,
  &#x27;segments_deduped&#x27;: 0,
- &#x27;committed_at_ns&#x27;: 1785195763099222101}</pre></div></div>
+ &#x27;committed_at_ns&#x27;: 1785448905725499231}</pre></div></div>
 <h2 id="2-a-backtest-that-takes-its-read-point-as-a-parameter">2. A backtest that takes its read point as a parameter<a class="headerlink" href="#2-a-backtest-that-takes-its-read-point-as-a-parameter" title="Permanent link">#</a></h2>
 <p>One design decision makes reproducibility possible: the backtest never
 hardcodes its read point.</p>
@@ -250,7 +287,7 @@ function of that read point plus params.
 than a relation name spliced into a query string.</p>
 <p>The strategy itself is deliberately plain: 126-day momentum, monthly
 rebalance, top-5 equal weight. The point is the plumbing, not the alpha.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">run_backtest</span><span class="p">(</span><span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">lookback</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">126</span><span class="p">,</span> <span class="n">top_n</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">run_backtest</span><span class="p">(</span><span class="n">snapshot</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">lookback</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">126</span><span class="p">,</span> <span class="n">top_n</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Momentum backtest against any read point of `prices`. Deterministic.&quot;&quot;&quot;</span>
     <span class="n">px</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="n">snapshot</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="n">version</span><span class="p">)</span>
@@ -332,7 +369,7 @@ incident, reduced to two lines.</p>
 <div class="nb-output"><div class="nb-output-label">output</div><pre class="">run 1 (pinned data): sharpe=0.973911
 run 2 (live table):  sharpe=0.854794
 divergence: 0.1191 Sharpe units</pre></div></div>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
 <span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">run1</span><span class="p">[</span><span class="s2">&quot;curve&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">index</span><span class="p">,</span> <span class="n">run1</span><span class="p">[</span><span class="s2">&quot;curve&quot;</span><span class="p">],</span> <span class="n">label</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;pinned v1 data (sharpe </span><span class="si">{</span><span class="n">run1</span><span class="p">[</span><span class="s1">&#39;sharpe&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
@@ -468,7 +505,7 @@ directory, because the snapshot name in the row <em>is</em> the data dependency.
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/01_var_expected_shortfall/"><span class="dir">← Previous</span><span class="pn-title">VaR and Expected Shortfall with an auditable risk table</span></a><a class="next" href="/cookbook/03_risk_and_production/03_eod_snapshots_audit/"><span class="dir">Next →</span><span class="pn-title">EOD snapshots and the audit trail regulators actually ask for</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-a-backtest-that-takes-its-read-point-as-a-parameter">2. A backtest that takes its read point as a parameter</a></li><li><a href="#3-pin-the-read-point-then-run">3. Pin the read point, then run</a></li><li><a href="#4-the-vendor-restates-history">4. The vendor restates history</a></li><li><a href="#5-the-naive-re-run-diverges">5. The naive re-run diverges</a></li><li><a href="#6-the-pinned-re-run-is-bit-identical-asserted">6. The pinned re-run is bit-identical, asserted</a></li><li><a href="#7-a-minimal-run-registry">7. A minimal run registry</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-a-backtest-that-takes-its-read-point-as-a-parameter">2. A backtest that takes its read point as a parameter</a></li><li><a href="#3-pin-the-read-point-then-run">3. Pin the read point, then run</a></li><li><a href="#4-the-vendor-restates-history">4. The vendor restates history</a></li><li><a href="#5-the-naive-re-run-diverges">5. The naive re-run diverges</a></li><li><a href="#6-the-pinned-re-run-is-bit-identical-asserted">6. The pinned re-run is bit-identical, asserted</a></li><li><a href="#7-a-minimal-run-registry">7. A minimal run registry</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Operate reproducible backtests · h5i-db docs</title>
+  <meta name="description" content="A backtest is a claim about the past, and it is worth what the evidence behind it is worth.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Operate reproducible backtests · h5i-db docs">
+  <meta property="og:description" content="A backtest is a claim about the past, and it is worth what the evidence behind it is worth.">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Operate reproducible backtests · h5i-db docs">
+  <meta name="twitter:description" content="A backtest is a claim about the past, and it is worth what the evidence behind it is worth.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/#article","headline":"Operate reproducible backtests","name":"Operate reproducible backtests","description":"A backtest is a claim about the past, and it is worth what the evidence behind it is worth.","url":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Event-driven backtesting"},{"@type":"ListItem","position":4,"name":"Operate reproducible backtests","item":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Event-driven backtesting</div><ul><li><a href="/cookbook/04_event_driven_backtesting/01_first_event_driven_run/">Your first event-driven backtest</a></li><li><a href="/cookbook/04_event_driven_backtesting/02_execution_realism/">Stress-test execution assumptions</a></li><li><a href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/" class="active">Operate reproducible backtests</a></li><li><a href="/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/">A production data contract for Kaggle Polymarket L2</a></li><li><a href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/">Causal signal replay on real Polymarket books</a></li><li><a href="/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/">Order lifecycle and account risk</a></li><li><a href="/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/">Path-dependent Python strategies</a></li><li><a href="/cookbook/04_event_driven_backtesting/08_equity_bars_to_event_driven/">From a vectorized equity backtest to an event-driven one</a></li><li><a href="/cookbook/04_event_driven_backtesting/09_market_making_inventory/">Market making: inventory, latency, and being run over</a></li><li><a href="/cookbook/04_event_driven_backtesting/10_execution_algorithms/">Execution algorithms and the cost of not finishing</a></li><li><a href="/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/">Calibrating costs from your own fills</a></li><li><a href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/">Searching a strategy space without fooling yourself</a></li><li><a href="/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/">Replaying an account&#x27;s ledger</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Event-driven backtesting</span>
+<span class="sep">/</span>
+<span>Operate reproducible backtests</span></div>
+<h1>Operate reproducible backtests</h1>
+<p>A backtest is a claim about the past, and it is worth what the evidence
+behind it is worth. Six months later a reviewer wants to run it again and
+get the same number.</p>
+<p>The obstacle is that a research database keeps ingesting. Late prints land,
+vendors restate, and the same run reads a larger table than it did. Pinning
+the code is not enough, because the data moved underneath it.</p>
+<p>Reproducibility is an operational property, not a random seed. This recipe
+pins a market-data cut, appends late data, proves that pinned runs remain
+unchanged, and inspects the run manifests needed for review.</p>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>reproducibility</td>
+<td>a rerun reading the same bytes and producing the same numbers, months later</td>
+</tr>
+<tr>
+<td>pin</td>
+<td>fixing a run's inputs to an exact version or snapshot</td>
+</tr>
+<tr>
+<td>late data</td>
+<td>rows for a period that arrive after that period was already read</td>
+</tr>
+<tr>
+<td>coverage gate</td>
+<td>a check that the pinned window actually contains the data the run assumed</td>
+</tr>
+<tr>
+<td>run manifest</td>
+<td>the record of what a run consumed and produced, which is what review reads</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<p>Build one 240-second tape, then split it into an approved 180-second cut and
+a late-arriving tail. This models a research database that continues to
+ingest after a run is certified.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>input</th>
+<th style="text-align: right;">rows</th>
+<th>role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>instruments</code></td>
+<td style="text-align: right;">2</td>
+<td>Stable venue and contract metadata</td>
+</tr>
+<tr>
+<td>initial <code>book_deltas</code></td>
+<td style="text-align: right;">360</td>
+<td>Approved L2 cut</td>
+</tr>
+<tr>
+<td>initial <code>trades</code></td>
+<td style="text-align: right;">180</td>
+<td>Approved print cut</td>
+</tr>
+<tr>
+<td>late tail</td>
+<td style="text-align: right;">180 book rows + 60 trades</td>
+<td>Subsequent ingestion</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">datetime</span> <span class="k">as</span> <span class="nn">dt</span>
+
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow.compute</span> <span class="k">as</span> <span class="nn">pc</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">full</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_backtest_fixture</span><span class="p">(</span><span class="n">steps</span><span class="o">=</span><span class="mi">240</span><span class="p">)</span>
+<span class="n">base</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2026</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">cutoff</span> <span class="o">=</span> <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">181</span><span class="p">)</span>
+
+<span class="n">initial_book</span> <span class="o">=</span> <span class="n">full</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+    <span class="n">pc</span><span class="o">.</span><span class="n">less</span><span class="p">(</span><span class="n">full</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">][</span><span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">cutoff</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="n">late_book</span> <span class="o">=</span> <span class="n">full</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+    <span class="n">pc</span><span class="o">.</span><span class="n">greater_equal</span><span class="p">(</span><span class="n">full</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">][</span><span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">cutoff</span><span class="p">)</span>
+<span class="p">)</span>
+<span class="n">initial_trades</span> <span class="o">=</span> <span class="n">full</span><span class="p">[</span><span class="s2">&quot;trades&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">pc</span><span class="o">.</span><span class="n">less</span><span class="p">(</span><span class="n">full</span><span class="p">[</span><span class="s2">&quot;trades&quot;</span><span class="p">][</span><span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">cutoff</span><span class="p">))</span>
+<span class="n">late_trades</span> <span class="o">=</span> <span class="n">full</span><span class="p">[</span><span class="s2">&quot;trades&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+    <span class="n">pc</span><span class="o">.</span><span class="n">greater_equal</span><span class="p">(</span><span class="n">full</span><span class="p">[</span><span class="s2">&quot;trades&quot;</span><span class="p">][</span><span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">cutoff</span><span class="p">)</span>
+<span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;initial book: </span><span class="si">{</span><span class="n">initial_book</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;late book: </span><span class="si">{</span><span class="n">late_book</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+<span class="n">initial_book</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">tail</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">initial book: 360 rows
+late book: 120 rows</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_init</th>
+      <th>ts_event</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>action</th>
+      <th>side</th>
+      <th>price</th>
+      <th>size</th>
+      <th>event_index</th>
+      <th>is_last</th>
+      <th>source_vendor</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>355</th>
+      <td>2026-06-01 14:02:58</td>
+      <td>2026-06-01 14:02:58</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>0.5500</td>
+      <td>110.0</td>
+      <td>178</td>
+      <td>True</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>356</th>
+      <td>2026-06-01 14:02:59</td>
+      <td>2026-06-01 14:02:59</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>buy</td>
+      <td>0.5416</td>
+      <td>120.0</td>
+      <td>179</td>
+      <td>False</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>357</th>
+      <td>2026-06-01 14:02:59</td>
+      <td>2026-06-01 14:02:59</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>0.5516</td>
+      <td>120.0</td>
+      <td>179</td>
+      <td>True</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>358</th>
+      <td>2026-06-01 14:03:00</td>
+      <td>2026-06-01 14:03:00</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>buy</td>
+      <td>0.5432</td>
+      <td>80.0</td>
+      <td>180</td>
+      <td>False</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>359</th>
+      <td>2026-06-01 14:03:00</td>
+      <td>2026-06-01 14:03:00</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>0.5532</td>
+      <td>80.0</td>
+      <td>180</td>
+      <td>True</td>
+      <td>cookbook-sim</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Create and load the approved cut. The table schemas are identical across
+initial and late batches, which lets append preserve one logical history.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span>
+    <span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;04_reproducible_backtest_operations&quot;</span><span class="p">),</span>
+    <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span>
+    <span class="s2">&quot;instruments&quot;</span><span class="p">,</span>
+    <span class="n">full</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span>
+    <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="n">initial_book</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">initial_trades</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="n">full</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">],</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;reference data&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="n">initial_book</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;approved 180-second book cut&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">initial_trades</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;approved 180-second trade cut&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span>
+    <span class="s2">&quot;approved-cut&quot;</span><span class="p">,</span>
+    <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="s2">&quot;trades&quot;</span><span class="p">],</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;Input approved by research controls&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[{&#x27;sequence&#x27;: 0,
+  &#x27;op&#x27;: &#x27;create&#x27;,
+  &#x27;committed_at_ns&#x27;: 1785448965134837533,
+  &#x27;rows&#x27;: 0,
+  &#x27;bytes&#x27;: 0,
+  &#x27;segments&#x27;: 0,
+  &#x27;execution_mode&#x27;: &#x27;direct&#x27;},
+ {&#x27;sequence&#x27;: 1,
+  &#x27;op&#x27;: &#x27;append&#x27;,
+  &#x27;committed_at_ns&#x27;: 1785448965193424941,
+  &#x27;rows&#x27;: 360,
+  &#x27;bytes&#x27;: 8283,
+  &#x27;segments&#x27;: 1,
+  &#x27;note&#x27;: &#x27;approved 180-second book cut&#x27;,
+  &#x27;execution_mode&#x27;: &#x27;direct&#x27;}]</pre></div></div>
+<p>The strategy opens inside the approved cut and closes in the late tail. The
+same signals table is used for every run, so only the market-data read point
+changes.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td><code>timestamp[ns]</code></td>
+<td>Order-intent arrival time</td>
+</tr>
+<tr>
+<td><code>instrument_id</code></td>
+<td><code>string</code></td>
+<td>Contract identifier</td>
+</tr>
+<tr>
+<td><code>side</code></td>
+<td><code>string</code></td>
+<td>Buy to open, sell to close</td>
+</tr>
+<tr>
+<td><code>quantity</code></td>
+<td><code>float64</code></td>
+<td>Units requested</td>
+</tr>
+<tr>
+<td><code>tag</code></td>
+<td><code>string</code></td>
+<td>Stable audit label</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">signals</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">signal_table</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">),</span>
+            <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="s2">&quot;RATE-CUT-YES&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;buy&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">50.0</span><span class="p">,</span>
+            <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="s2">&quot;open-approved&quot;</span><span class="p">,</span>
+        <span class="p">},</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">210</span><span class="p">),</span>
+            <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="s2">&quot;RATE-CUT-YES&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;sell&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">50.0</span><span class="p">,</span>
+            <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="s2">&quot;close-late&quot;</span><span class="p">,</span>
+        <span class="p">},</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">signals</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">signals</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">signals</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">2 rows x 10 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>kind</th>
+      <th>limit_price</th>
+      <th>time_in_force</th>
+      <th>tag</th>
+      <th>reduce_only</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 14:00:30</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>50.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>open-approved</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 14:03:30</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>sell</td>
+      <td>50.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>close-late</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Store strategy intent after creating the market snapshot. The run fork pins
+the strategy table separately, so the snapshot remains a pure market-data
+approval point.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">backtest</span><span class="o">.</span><span class="n">create_signal_table</span><span class="p">(</span><span class="n">db</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="n">signals</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;approved strategy intent&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;table&#x27;: &#x27;signals&#x27;,
+ &#x27;sequence&#x27;: 1,
+ &#x27;op&#x27;: &#x27;append&#x27;,
+ &#x27;rows_total&#x27;: 2,
+ &#x27;segments_total&#x27;: 1,
+ &#x27;segments_added&#x27;: 1,
+ &#x27;segments_deduped&#x27;: 0,
+ &#x27;committed_at_ns&#x27;: 1785448965294975372}</pre></div></div>
+<p>Run against the approved cut before late ingestion. Only the opening signal
+is reached because replay ends with the pinned data.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">first</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="s2">&quot;approved-before-late-data&quot;</span><span class="p">,</span>
+    <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">,</span>
+    <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span>
+    <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;approved-cut&quot;</span><span class="p">,</span>
+    <span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">10_000_000_000</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">first</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;run_id&#x27;: &#x27;approved-before-late-data&#x27;,
+ &#x27;fork&#x27;: &#x27;bt-approved-before-late-data&#x27;,
+ &#x27;digest&#x27;: &#x27;e9d3cff467107b62fbdb005189f3a5e5d289eba406d16f3e63f55245cd9e4543&#x27;,
+ &#x27;starting_cash&#x27;: 10000.0,
+ &#x27;final_cash&#x27;: 9974.47,
+ &#x27;realized_pnl&#x27;: 0.0,
+ &#x27;commissions&#x27;: 0.0,
+ &#x27;funding_paid&#x27;: 0.0,
+ &#x27;fills&#x27;: 1,
+ &#x27;orders&#x27;: 1,
+ &#x27;records_processed&#x27;: 360,
+ &#x27;simulated_through_ns&#x27;: 1780322580000000000,
+ &#x27;equity_points&#x27;: 19,
+ &#x27;settlement_applied&#x27;: False,
+ &#x27;coverage&#x27;: None,
+ &#x27;liquidations&#x27;: 0,
+ &#x27;rejected_for_margin&#x27;: 0,
+ &#x27;self_trades_prevented&#x27;: 0,
+ &#x27;calibration_samples&#x27;: [],
+ &#x27;set_operations&#x27;: [],
+ &#x27;forecasts&#x27;: 0,
+ &#x27;mark_points&#x27;: 19,
+ &#x27;expirations&#x27;: [],
+ &#x27;metrics&#x27;: {&#x27;orders_submitted&#x27;: 1,
+  &#x27;orders_filled&#x27;: 1,
+  &#x27;orders_cancelled_unfilled&#x27;: 0,
+  &#x27;orders_rejected_margin&#x27;: 0,
+  &#x27;orders_rejected_risk&#x27;: 0,
+  &#x27;orders_rejected_self_trade&#x27;: 0,
+  &#x27;orders_rejected_naked_short&#x27;: 0,
+  &#x27;orders_rejected_expired&#x27;: 0,
+  &#x27;fills_taker&#x27;: 1,
+  &#x27;fills_maker&#x27;: 0,
+  &#x27;book_gaps&#x27;: 0,
+  &#x27;liquidations&#x27;: 0,
+  &#x27;set_operations&#x27;: 0,
+  &#x27;set_operations_rejected&#x27;: 0,
+  &#x27;instruments_expired&#x27;: 0},
+ &#x27;warnings&#x27;: [&#x27;RATE-CUT-YES outcome 0 left unsettled: no resolution is known for this market&#x27;]}</pre></div></div>
+<p>Append the late tail as normal ingestion. Existing versions and the named
+snapshot remain readable; no data is copied into the snapshot.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="n">late_book</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;late-arriving final minute&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">late_trades</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;late-arriving final minute&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">{&#x27;sequence&#x27;: 2, &#x27;op&#x27;: &#x27;append&#x27;, &#x27;committed_at_ns&#x27;: 1785448965781930488, &#x27;rows&#x27;: 480, &#x27;bytes&#x27;: 13672, &#x27;segments&#x27;: 2, &#x27;note&#x27;: &#x27;late-arriving final minute&#x27;, &#x27;execution_mode&#x27;: &#x27;direct&#x27;}</pre></div></div>
+<p>Re-run the approved snapshot and run once at latest. The pinned result must
+remain identical. The latest run can reach the closing signal and therefore
+represents a different research input.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">pinned_again</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="s2">&quot;approved-after-late-data&quot;</span><span class="p">,</span>
+    <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">,</span>
+    <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span>
+    <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;approved-cut&quot;</span><span class="p">,</span>
+    <span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">10_000_000_000</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">latest</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="s2">&quot;latest-after-late-data&quot;</span><span class="p">,</span>
+    <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">,</span>
+    <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span>
+    <span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">10_000_000_000</span><span class="p">,</span>
+<span class="p">)</span>
+
+<span class="n">comparison</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="p">{</span><span class="s2">&quot;run&quot;</span><span class="p">:</span> <span class="s2">&quot;pinned before append&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">first</span><span class="p">},</span>
+        <span class="p">{</span><span class="s2">&quot;run&quot;</span><span class="p">:</span> <span class="s2">&quot;pinned after append&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">pinned_again</span><span class="p">},</span>
+        <span class="p">{</span><span class="s2">&quot;run&quot;</span><span class="p">:</span> <span class="s2">&quot;latest after append&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">latest</span><span class="p">},</span>
+    <span class="p">]</span>
+<span class="p">)</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;run&quot;</span><span class="p">)</span>
+<span class="n">comparison</span><span class="p">[</span>
+    <span class="p">[</span>
+        <span class="s2">&quot;fills&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;orders&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;records_processed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;final_cash&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;realized_pnl&quot;</span><span class="p">,</span>
+    <span class="p">]</span>
+<span class="p">]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>fills</th>
+      <th>orders</th>
+      <th>records_processed</th>
+      <th>final_cash</th>
+      <th>realized_pnl</th>
+    </tr>
+    <tr>
+      <th>run</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>pinned before append</th>
+      <td>1</td>
+      <td>1</td>
+      <td>360</td>
+      <td>9974.47</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>pinned after append</th>
+      <td>1</td>
+      <td>1</td>
+      <td>360</td>
+      <td>9974.47</td>
+      <td>0.00</td>
+    </tr>
+    <tr>
+      <th>latest after append</th>
+      <td>2</td>
+      <td>2</td>
+      <td>480</td>
+      <td>10002.48</td>
+      <td>2.48</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Assert the evidence reviewers care about. Pinned runs have identical
+economics and event counts. Latest intentionally differs.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">stable_fields</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">&quot;fills&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;orders&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;records_processed&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;final_cash&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;realized_pnl&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;commissions&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="k">assert</span> <span class="nb">all</span><span class="p">(</span><span class="n">first</span><span class="p">[</span><span class="n">field</span><span class="p">]</span> <span class="o">==</span> <span class="n">pinned_again</span><span class="p">[</span><span class="n">field</span><span class="p">]</span> <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="n">stable_fields</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">latest</span><span class="p">[</span><span class="s2">&quot;records_processed&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">first</span><span class="p">[</span><span class="s2">&quot;records_processed&quot;</span><span class="p">]</span>
+<span class="k">assert</span> <span class="n">latest</span><span class="p">[</span><span class="s2">&quot;fills&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">first</span><span class="p">[</span><span class="s2">&quot;fills&quot;</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;Pinned result survived subsequent ingestion unchanged.&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">Pinned result survived subsequent ingestion unchanged.</pre></div></div>
+<p>Coverage gates turn incomplete data into a hard failure. Here the approved
+cut cannot satisfy a window extending through the late tail.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">try</span><span class="p">:</span>
+    <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+        <span class="n">db</span><span class="p">,</span>
+        <span class="s2">&quot;coverage-must-fail&quot;</span><span class="p">,</span>
+        <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">,</span>
+        <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span>
+        <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;approved-cut&quot;</span><span class="p">,</span>
+        <span class="n">window</span><span class="o">=</span><span class="p">(</span>
+            <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span>
+            <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">240</span><span class="p">),</span>
+        <span class="p">),</span>
+        <span class="n">minimum_coverage</span><span class="o">=</span><span class="mf">0.95</span><span class="p">,</span>
+    <span class="p">)</span>
+<span class="k">except</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">InvalidInputError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Rejected as intended: </span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="k">raise</span> <span class="ne">AssertionError</span><span class="p">(</span><span class="s2">&quot;the incomplete approved cut passed its coverage gate&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">Rejected as intended: [invalid_input] coverage 74.9% of [1780322401000000000, 1780322640000000000) is below the required 95.0%; the window loaded [1780322401000000000, 1780322580000000001) and is missing 59999999999 ns</pre></div></div>
+<p>Each run fork carries a one-row manifest and detailed result tables. Keep
+the manifest, source snapshot name, strategy version, and configuration in
+the review packet. The fill table remains the execution source of truth.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">audit_rows</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">report</span> <span class="ow">in</span> <span class="p">(</span>
+    <span class="p">(</span><span class="s2">&quot;pinned-before&quot;</span><span class="p">,</span> <span class="n">first</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;pinned-after&quot;</span><span class="p">,</span> <span class="n">pinned_again</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;latest&quot;</span><span class="p">,</span> <span class="n">latest</span><span class="p">),</span>
+<span class="p">):</span>
+    <span class="n">run_db</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="n">report</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">])</span>
+    <span class="n">manifest</span> <span class="o">=</span> <span class="n">run_db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;bt_run&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">to_dict</span><span class="p">()</span>
+    <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;label&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">label</span>
+    <span class="n">manifest</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">]</span>
+    <span class="n">audit_rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">manifest</span><span class="p">)</span>
+    <span class="n">run_db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+<span class="n">audit</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">audit_rows</span><span class="p">)</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;label&quot;</span><span class="p">)</span>
+<span class="n">audit</span><span class="p">[</span>
+    <span class="p">[</span>
+        <span class="s2">&quot;run_id&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;config_digest&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;records_processed&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;final_cash&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;realized_pnl&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;fork&quot;</span><span class="p">,</span>
+    <span class="p">]</span>
+<span class="p">]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>run_id</th>
+      <th>config_digest</th>
+      <th>records_processed</th>
+      <th>final_cash</th>
+      <th>realized_pnl</th>
+      <th>fork</th>
+    </tr>
+    <tr>
+      <th>label</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>pinned-before</th>
+      <td>approved-before-late-data</td>
+      <td>e9d3cff467107b62fbdb005189f3a5e5d289eba406d16f...</td>
+      <td>360</td>
+      <td>9974.47</td>
+      <td>0.00</td>
+      <td>bt-approved-before-late-data</td>
+    </tr>
+    <tr>
+      <th>pinned-after</th>
+      <td>approved-after-late-data</td>
+      <td>12f787c49cafa9216a356ff23148b1ce5ffc74e9412420...</td>
+      <td>360</td>
+      <td>9974.47</td>
+      <td>0.00</td>
+      <td>bt-approved-after-late-data</td>
+    </tr>
+    <tr>
+      <th>latest</th>
+      <td>latest-after-late-data</td>
+      <td>6162db326c6a1fca96c66b6df1eabb3953f6d2df70f579...</td>
+      <td>480</td>
+      <td>10002.48</td>
+      <td>2.48</td>
+      <td>bt-latest-after-late-data</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>Pin market data before accepting a backtest result.</li>
+<li>Keep strategy intent versioned separately from the historical data cut.</li>
+<li>Re-running a named snapshot is stable after later appends.</li>
+<li>Coverage gates reject truncated windows before they produce plausible metrics.</li>
+<li>Preserve the run fork, manifest, digest, and fills as one reviewable artifact.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/04_event_driven_backtesting/02_execution_realism/"><span class="dir">← Previous</span><span class="pn-title">Stress-test execution assumptions</span></a><a class="next" href="/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/"><span class="dir">Next →</span><span class="pn-title">A production data contract for Kaggle Polymarket L2</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A production data contract for Kaggle Polymarket L2 · h5i-db</title>
+  <meta name="description" content="A public dataset is not a research input. It is a pile of files carrying whatever timestamps, units and duplicate rows the recorder happened to produce…">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="A production data contract for Kaggle Polymarket L2 · h5i-db">
+  <meta property="og:description" content="A public dataset is not a research input. It is a pile of files carrying whatever timestamps, units and duplicate rows the recorder happened to produce…">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="A production data contract for Kaggle Polymarket L2 · h5i-db">
+  <meta name="twitter:description" content="A public dataset is not a research input. It is a pile of files carrying whatever timestamps, units and duplicate rows the recorder happened to produce…">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/#article","headline":"A production data contract for Kaggle Polymarket L2","name":"A production data contract for Kaggle Polymarket L2","description":"A public dataset is not a research input. It is a pile of files carrying whatever timestamps, units and duplicate rows the recorder happened to produce\u2026","url":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Event-driven backtesting"},{"@type":"ListItem","position":4,"name":"A production data contract for Kaggle Polymarket L2","item":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Event-driven backtesting</div><ul><li><a href="/cookbook/04_event_driven_backtesting/01_first_event_driven_run/">Your first event-driven backtest</a></li><li><a href="/cookbook/04_event_driven_backtesting/02_execution_realism/">Stress-test execution assumptions</a></li><li><a href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/">Operate reproducible backtests</a></li><li><a href="/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/" class="active">A production data contract for Kaggle Polymarket L2</a></li><li><a href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/">Causal signal replay on real Polymarket books</a></li><li><a href="/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/">Order lifecycle and account risk</a></li><li><a href="/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/">Path-dependent Python strategies</a></li><li><a href="/cookbook/04_event_driven_backtesting/08_equity_bars_to_event_driven/">From a vectorized equity backtest to an event-driven one</a></li><li><a href="/cookbook/04_event_driven_backtesting/09_market_making_inventory/">Market making: inventory, latency, and being run over</a></li><li><a href="/cookbook/04_event_driven_backtesting/10_execution_algorithms/">Execution algorithms and the cost of not finishing</a></li><li><a href="/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/">Calibrating costs from your own fills</a></li><li><a href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/">Searching a strategy space without fooling yourself</a></li><li><a href="/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/">Replaying an account&#x27;s ledger</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Event-driven backtesting</span>
+<span class="sep">/</span>
+<span>A production data contract for Kaggle Polymarket L2</span></div>
+<h1>A production data contract for Kaggle Polymarket L2</h1>
+<p>A public dataset is not a research input. It is a pile of files carrying
+whatever timestamps, units and duplicate rows the recorder happened to
+produce, under a license that may not permit what you want to do.</p>
+<p>A data contract is the layer between the two. It states what the tables
+guarantee, checks each guarantee rather than assuming it, and records
+exactly which bytes it read. Without one, an unreproducible result is
+indistinguishable from a wrong one.</p>
+<p>This recipe turns a bounded slice of the
+<a href="https://www.kaggle.com/datasets/marvingozo/polymarket-tick-level-orderbook-dataset">Marvingozo Polymarket dataset</a>
+into canonical, versioned h5i-db tables. The objective is not an
+alpha claim. It is the evidence layer a credible backtest needs:</p>
+<ul>
+<li>exact source-file hashes and license;</li>
+<li>explicit timestamp repair;</li>
+<li>atomic full-book events;</li>
+<li>one normalized YES contract;</li>
+<li>a named h5i-db snapshot before any strategy is created.</li>
+</ul>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>data contract</td>
+<td>the stated guarantees about what a table holds, checked rather than assumed</td>
+</tr>
+<tr>
+<td>L2</td>
+<td>several order book price levels per side, with the size resting at each</td>
+</tr>
+<tr>
+<td>book event</td>
+<td>one atomic update to the order book, applied in full or not at all</td>
+</tr>
+<tr>
+<td>timestamp repair</td>
+<td>correcting times that arrive in the wrong unit, order, or zone</td>
+</tr>
+<tr>
+<td>source hash</td>
+<td>the checksum of each input file, recorded so the ingest is traceable</td>
+</tr>
+<tr>
+<td>YES contract</td>
+<td>the binary contract that pays 1.00 if the event happens and 0.00 if it does not</td>
+</tr>
+<tr>
+<td>snapshot</td>
+<td>a named, checksummed pin of table versions, taken before any strategy exists</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<h2 id="download-only-what-the-recipe-uses">Download only what the recipe uses<a class="headerlink" href="#download-only-what-the-recipe-uses" title="Permanent link">#</a></h2>
+<p>The four files total roughly 165 MB compressed. We intentionally do not
+download a 1–2 GB daily tick file. Run the printed commands from the
+repository root if the cache is empty. Kaggle authentication is required.</p>
+<p>The dataset is <strong>CC BY-NC 4.0</strong>: this recipe and its derived work are for
+non-commercial/academic use unless you obtain separate rights.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">pathlib</span> <span class="kn">import</span> <span class="n">Path</span>
+
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">CACHE</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;data/cache/kaggle-polymarket&quot;</span><span class="p">)</span>
+<span class="n">missing</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">kaggle_missing_files</span><span class="p">(</span><span class="n">CACHE</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">missing</span><span class="p">:</span>
+    <span class="n">commands</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">kaggle_download_commands</span><span class="p">(</span><span class="n">CACHE</span><span class="p">)</span>
+    <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span><span class="s2">&quot;Run these bounded downloads:</span><span class="se">\n</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="se">\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">commands</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;dataset=</span><span class="si">{</span><span class="n">cu</span><span class="o">.</span><span class="n">KAGGLE_POLYMARKET_DATASET</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;license=</span><span class="si">{</span><span class="n">cu</span><span class="o">.</span><span class="n">KAGGLE_POLYMARKET_LICENSE</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">dataset=marvingozo/polymarket-tick-level-orderbook-dataset
+license=CC BY-NC 4.0</pre></div></div>
+<p>Hashing the inputs is part of reproducibility. A Kaggle slug and filename
+are not immutable identifiers; a publisher can replace a file in a new
+dataset version.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">manifest</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">kaggle_source_manifest</span><span class="p">(</span><span class="n">CACHE</span><span class="p">)</span>
+<span class="n">manifest</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[[</span><span class="s2">&quot;remote_path&quot;</span><span class="p">,</span> <span class="s2">&quot;bytes&quot;</span><span class="p">,</span> <span class="s2">&quot;sha256&quot;</span><span class="p">,</span> <span class="s2">&quot;license&quot;</span><span class="p">]]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>remote_path</th>
+      <th>bytes</th>
+      <th>sha256</th>
+      <th>license</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>features/ml_features_1m_v2.parquet</td>
+      <td>32260516</td>
+      <td>2d0a18fea3a6de1d3fda02c21eec4d1a1ee77dfe900445...</td>
+      <td>CC BY-NC 4.0</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>labels/market_targets.parquet</td>
+      <td>15356673</td>
+      <td>901fb2fcb1a69dbf1e898d032e58b21d2f1147ee22ea1b...</td>
+      <td>CC BY-NC 4.0</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>labels/trades.parquet</td>
+      <td>34051625</td>
+      <td>244a33af8615f43690fa8def1efa41b300be0edb2f080f...</td>
+      <td>CC BY-NC 4.0</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>snapshots/snapshots_2026-03-09.parquet</td>
+      <td>84170155</td>
+      <td>806d49605b59334aebad7770a7c8e4bc5a51e36c8b7e94...</td>
+      <td>CC BY-NC 4.0</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="predicate-push-down-before-materialising">Predicate-push down before materialising<a class="headerlink" href="#predicate-push-down-before-materialising" title="Permanent link">#</a></h2>
+<p>The loader lazily intersects one day of snapshots, feature bars, trades,
+and closed-market labels. It selects the overlapping market with the most
+prints, then reads only that market. Ten levels per side are retained.</p>
+<p>The current feature artifact spans March 6–11 even though the dataset
+README describes 21-day coverage. The loader therefore verifies overlap
+from Parquet metadata and values instead of trusting the prose.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sample</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">load_kaggle_sample</span><span class="p">(</span><span class="n">CACHE</span><span class="p">,</span> <span class="n">depth_levels</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">question</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;market=</span><span class="si">{</span><span class="n">sample</span><span class="o">.</span><span class="n">market_id</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;eventual resolution target=</span><span class="si">{</span><span class="n">sample</span><span class="o">.</span><span class="n">target</span><span class="si">}</span><span class="s2"> (audit only, never a feature)&quot;</span><span class="p">)</span>
+<span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">audit</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s2">&quot;value&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_frame</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">Will global temperature increase by between 1.10ºC and 1.14ºC in February 2026?
+market=0x7d4e693277c1d7990a5227146ee70f56750c73be6f9d129e8558be936848dc85
+eventual resolution target=0 (audit only, never a feature)</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>value</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>dataset</th>
+      <td>marvingozo/polymarket-tick-level-orderbook-dat...</td>
+    </tr>
+    <tr>
+      <th>license</th>
+      <td>CC BY-NC 4.0</td>
+    </tr>
+    <tr>
+      <th>sample_date</th>
+      <td>2026-03-09</td>
+    </tr>
+    <tr>
+      <th>source_snapshot_rows</th>
+      <td>227</td>
+    </tr>
+    <tr>
+      <th>source_feature_rows</th>
+      <td>1390</td>
+    </tr>
+    <tr>
+      <th>source_trade_rows</th>
+      <td>198</td>
+    </tr>
+    <tr>
+      <th>canonical_book_rows</th>
+      <td>4540</td>
+    </tr>
+    <tr>
+      <th>canonical_trade_rows</th>
+      <td>198</td>
+    </tr>
+    <tr>
+      <th>depth_levels</th>
+      <td>10</td>
+    </tr>
+    <tr>
+      <th>trade_aggressor_known</th>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>clock_adjustments</th>
+      <td>227</td>
+    </tr>
+    <tr>
+      <th>crossed_snapshots_dropped</th>
+      <td>0</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="validate-the-causal-and-book-contracts">Validate the causal and book contracts<a class="headerlink" href="#validate-the-causal-and-book-contracts" title="Permanent link">#</a></h2>
+<p><code>timestamp_created_at</code> is later than <code>timestamp_received</code> in this snapshot
+file, so the two source clocks cannot be interpreted literally as event and
+arrival time. The loader preserves event time and conservatively sets
+<code>ts_init = max(created, received)</code>. Every correction is counted.</p>
+<p>The dataset's bundled <code>target</code> column is deliberately removed from the
+feature table. Keeping it would leak the eventual market resolution into
+every training row.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">book</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">book_deltas</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">features</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">features</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+
+<span class="k">assert</span> <span class="s2">&quot;target&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">features</span><span class="o">.</span><span class="n">columns</span>
+<span class="k">assert</span> <span class="p">(</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">]</span> <span class="o">&gt;=</span> <span class="n">book</span><span class="p">[</span><span class="s2">&quot;ts_event&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+<span class="k">assert</span> <span class="n">sample</span><span class="o">.</span><span class="n">audit</span><span class="p">[</span><span class="s2">&quot;crossed_snapshots_dropped&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="k">assert</span> <span class="n">book</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;event_index&quot;</span><span class="p">)[</span><span class="s2">&quot;is_last&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span><span class="o">.</span><span class="n">eq</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+<span class="k">assert</span> <span class="n">book</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">between</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="n">inclusive</span><span class="o">=</span><span class="s2">&quot;both&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+<span class="k">assert</span> <span class="p">(</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span>
+    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">book</span><span class="p">[</span><span class="s1">&#39;event_index&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">nunique</span><span class="p">()</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> atomic snapshots, &quot;</span>
+    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">book</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> canonical levels, &quot;</span>
+    <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sample</span><span class="o">.</span><span class="n">audit</span><span class="p">[</span><span class="s1">&#39;clock_adjustments&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> clock repairs&quot;</span>
+<span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">227 atomic snapshots, 4,540 canonical levels, 227 clock repairs</pre></div></div>
+<p>A top-of-book chart is a fast visual contract test. Crosses, inverted
+sides, or discontinuous timestamps are much easier to spot here than in a
+strategy tearsheet.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">bids</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">book</span><span class="p">[</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;buy&quot;</span><span class="p">]</span>
+    <span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="s2">&quot;event_index&quot;</span><span class="p">,</span> <span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">as_index</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span>
+    <span class="o">.</span><span class="n">max</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;price&quot;</span><span class="p">:</span> <span class="s2">&quot;bid&quot;</span><span class="p">})</span>
+<span class="p">)</span>
+<span class="n">asks</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">book</span><span class="p">[</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;sell&quot;</span><span class="p">]</span>
+    <span class="o">.</span><span class="n">groupby</span><span class="p">([</span><span class="s2">&quot;event_index&quot;</span><span class="p">,</span> <span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">as_index</span><span class="o">=</span><span class="kc">False</span><span class="p">)[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span>
+    <span class="o">.</span><span class="n">min</span><span class="p">()</span>
+    <span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;price&quot;</span><span class="p">:</span> <span class="s2">&quot;ask&quot;</span><span class="p">})</span>
+<span class="p">)</span>
+<span class="n">tops</span> <span class="o">=</span> <span class="n">bids</span><span class="o">.</span><span class="n">merge</span><span class="p">(</span><span class="n">asks</span><span class="p">,</span> <span class="n">on</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;event_index&quot;</span><span class="p">,</span> <span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">validate</span><span class="o">=</span><span class="s2">&quot;one_to_one&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="p">(</span><span class="n">tops</span><span class="p">[</span><span class="s2">&quot;bid&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="n">tops</span><span class="p">[</span><span class="s2">&quot;ask&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+
+<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">10</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">tops</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">tops</span><span class="p">[</span><span class="s2">&quot;bid&quot;</span><span class="p">],</span> <span class="n">where</span><span class="o">=</span><span class="s2">&quot;post&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;best bid&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">tops</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">],</span> <span class="n">tops</span><span class="p">[</span><span class="s2">&quot;ask&quot;</span><span class="p">],</span> <span class="n">where</span><span class="o">=</span><span class="s2">&quot;post&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;best ask&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">title</span><span class="o">=</span><span class="s2">&quot;Polymarket YES top of book — bounded Kaggle sample&quot;</span><span class="p">,</span> <span class="n">ylabel</span><span class="o">=</span><span class="s2">&quot;price&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+<span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA90AAAGGCAYAAABmGOKbAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjEsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvctoD+AAAAAlwSFlzAAAPYQAAD2EBqD+naQAAcnxJREFUeJzt3Xd4VMX+x/HPJqRDQkhogdCrVGkSinQQVECKWMACArafV68FUbBywQpeC9JVRFFEQUVFEVBROiK9SA+9hQSSkDq/P3KzZlM3ZbO7yfv1PPskO2fOnDnn7O7Z786cGYsxxggAAAAAABQ5D2dXAAAAAACAkoqgGwAAAAAAByHoBgAAAADAQQi6AQAAAABwEIJuAAAAAAAchKAbAAAAAAAHIegGAAAAAMBBCLoBAAAAAHAQgm4AAAAAAByEoBuAW/j5559lsVj0yy+/OLsqBbZ48WJZLBZt3rzZ2VVBAU2ZMkW1a9eWp6enGjVqlGO+0NBQ3XfffcVYM9fYdk5csU751bVrV7Vv397ly3SmvXv3ymKxaMGCBc6uitNxLABkRNANwGHuu+8+WSwW68Pb21u1a9fWv/71L128eNHZ1XN71atX1/Dhw/PMt337dvn6+uaYd9OmTfLy8tKYMWMkSW3atLE5b5kfV69eta4bHx+vadOmqVWrVgoODlaFChXUvn17vf766zp//nyR7YMrWLZsmZ555hm99dZbSkpK0t69e51dJZQSbdq0Ua1atbKk//nnn6pcubJq1KjB6xEAXBhBNwCHi4qKkjFG58+f16RJkzRz5kz17t1bKSkpzq5aqdC8eXO9/PLL+uSTT7Ro0SKbZfHx8RoxYoRq1aqladOmWdNr1qwpY0y2D19fX0mSMUY33XSTJkyYoEceeUT79+/X0aNH9X//93+aNm2annjiiWLdT0f79ddf5e/vrwEDBsjDg8snnGvVqlXq2rWrQkNDtXbt2lx7XgAAnItvDQCKTWBgoO68806NGTNGW7Zs0W+//ebsKpUajz/+uLp06aL7779fJ0+etKY/+eSTOnDggD7++GMFBATkq8x169Zp1apVevLJJ3XPPfeoYsWKKleunO6880799ddfatmyZRHvhXOdP39efn5+zq4GoMWLF6tfv35q2rSp1qxZo+rVqzu7SgCAXBB0Ayh26S0ykZGRkqTDhw/rjjvuUMWKFeXj46OGDRtq0qRJSk5OzrGMXbt2yWKx6I033siybP/+/fLw8NDkyZMl/XMv9aZNmzRp0iSFhYUpKChId999t+Lj42WM0UsvvaTq1atbWzIzd43euXOnTRdrPz8/NWvWTFOnTpUxxpov47amTJmimjVrysPDQ8ePH892Py5evKiuXbuqcuXKWr9+vTX9s88+U0REhAICAhQQEKDu3bvrjz/+kCQlJyfLYrHoxIkT+uSTT6x1atOmTY7Hy8PDQx999JFSUlJ0zz33yBijn376SdOnT9ezzz5boPtK028RqFatWpZllSpV0qOPPprjuvbsQ2pqql5//XU1btxYPj4+Cg0N1dChQ7V//36bstLvF167dq3atWsnPz8/1alTx6blPjd5bef8+fOyWCz68MMPdeHCBWtd33rrrTzLtqdO9u6nvfmy884776hMmTIaN26czeu1uBXV8bh69aosFoteeOGFLOt36tRJnTp1sklLf41s3bpVnTp1kp+fn2rWrKm33347y/qJiYl6+umnFRYWpoCAAPXs2TPXY5zbe7WgZeZm5syZGjZsmHr06KGff/5ZFSpUsC67dOmSzeeUj4+PGjRooOeff16JiYk25Rw+fFi33HKLypUrp5CQED3wwAM6d+6cLBaLJk2aVOC82YmPj9fEiRPVoEED+fj4qFKlSrrnnnt0+vTpXNdLTU3V5MmT1bhxYwUEBCg8PFy33XabTVd6e/d5/fr1slgsWrp0qd5//33Vrl1bZcuW1cCBA3XhwgVJ0nvvvac6derI19dX3bt31+HDh23qk7GM9957T7Vq1ZKvr6/at2+vX3/9Nc/jUJhjAcDNGQBwkFGjRhlJJioqyib9kUceMZLMqlWrTGRkpKlYsaK59tprzZYtW8ylS5fMxx9/bPz9/c3QoUOt66xYscJIMqtXr7amdenSxdStW9ekpqbalP/oo48aT09Pc+LECWOMMV988YWRZIYNG2bee+89c/HiRbNu3ToTGhpqxo4dayZOnGjefvttc/HiRbNhwwZTqVIlc9ttt+W6b+fPnzdz5swxvr6+Ztq0adb09G0NGTLEvP766+bs2bPm66+/NidPnrQu27RpkzHGmP3795v69eubJk2amMOHD1vLeOGFF0yZMmXMq6++ak6ePGlOnz5tHn/8cePt7W3++OMPa75q1aqZO++8055TYfXRRx8ZSebFF1801apVM23btjVJSUk2eVq3bm1q1qyZZ1knT540fn5+5tprrzVHjhzJVz3S5bYP9957r/Hx8TGzZ882UVFRZvv27aZ9+/YmODjYHDhwwJovJCTE9OzZ09x0001m9+7d5sKFC2batGnG09PTvPTSS3nWwd7t3H333SYkJMSu/cpPnezdfn6Ox6hRo4wxxiQnJ5uHHnrIeHl5mblz59pVd0co6uMRHx9vJJnnn38+y7Y6duxoOnbsmGX7ffr0MUOGDDG7d+82UVFRZsKECUaSWbFihU3eO+64w5QtW9Z8+umn5tKlS2bjxo2md+/epnXr1ua6666zyWvvezU/ZWYn/T350ksvGUlmxIgRWd632YmKijKLFy82wcHB5vHHH7emX7x40YSHh5tmzZqZzZs3m0uXLpnPPvvMjBgxwkgyL7/8coHy7tmzx0gyH3/8sTUtISHBdOzY0VSrVs188803Jjo62uzatct06tTJ1K9f38TExORY/0mTJpmAgACzbNkyc+XKFXP69GnzxRdfmNGjR+d7n9etW2ckmUGDBpmXXnrJnDt3zuzcudPUqVPH3Hjjjea9994zzz//vDl79qzZvXu3qVevnunUqZNN2ellDBw40IwfP96cPn3aHD582AwdOtR4e3ub9evXO+xYAHBvBN0AHCZz0B0TE2M+/fRT4+vra1q2bGmSkpLMgw8+aMqUKWMOHjxos+6UKVOMJLNmzRpjTPZB9+eff24kmeXLl1vT4uLiTHBwsLnxxhutaenB7v3332+zjWeeecb4+PiYBx54wCZ94sSJxtPT064vQPfdd59p1KhRlm2NGDEiS96MQfcvv/xiKlSoYHr37m2io6OteQ4ePGg8PT1tviymi4iIMF26dLE+L0jQbYwxQ4YMMZKMv7+/2bdvX5blrVu3NpKyfWQOED7//HNToUIF4+HhYdq0aWPuu+8+8/HHH5vz58/bVZec9mHbtm1GknnmmWds0k+dOmV8fX1t1gkJCTEBAQFZtnnPPfcYX19fc/HixRy3n5/t5DfotqdO9m4/v8dj1KhRJjo62txwww0mODjYrFq1yq56O0pRH4+CBN2BgYE2PwCmpKSY6tWr2/y4l779KVOm2Ky/devWLK9/e9+r+SkzJxnfk717987yQ2NeXnjhBVOuXDnr85dfftlYLBazc+dOm3yvvPJKlkA6P3mzCzTfe++9LJ/dxhhz4sQJ4+PjY15//fUc692zZ0/TuXPnfO1rusz7nB4w33TTTTb5pk+fbiSZwYMH26TPnDnTSLL5jEwvo0ePHjZ5ExISTLVq1Uz37t2taUV9LAC4N7qXA3C44OBgWSwWVahQQePHj9eoUaO0YsUKlSlTRitXrlTLli1Vp04dm3WGDBkiSVq5cmWO5d5yyy2qWrWqpk+fbk1buHChoqKiNGrUqCz5+/bta/O8UaNGSkhIUM+ePW3SGzdurJSUFB09etQmfd68eWrfvr0CAwOtXRnnzJmjAwcOZNlW//79c6z3/Pnz1atXL91666367rvvFBgYaF32ww8/KCUlRUOHDs2yXo8ePfTHH3/k2u3eHundQe+66y41aNAg2zw5DaSWsQu8JN166606ceKEvv32W9100006c+aMxowZo7p162rhwoUFruOqVaskSYMGDbJJr1Klijp27JjlddGhQweFhITYpA0cOFBXr17V2rVri2w7+WFPnezdfn7refz4cXXs2FF///231q1bp27duhV4P4pKUR6PgujYsaPKly9vfe7h4aHGjRvr0KFD1rT08jO/f1u2bJll9HB736v5KTM3lSpVUvv27fXzzz9r3rx5OeZbsmSJunbtqvLly8vDw8PaDf/y5cs6c+aMJGn16tWqXbu2mjRpYrNudp9b+cmbnW+//VahoaHq2rWrTXpYWJgaN26ca7fsFi1a6I8//tCzzz6rHTt25HhrhD37nC6764AkXX/99TbpjRs3liSb10e6zPvu7e2tvn37as2aNUpKSspxfwpzLAC4N4JuAA6XPnp5UlKSjhw5onfffVehoaGSpAsXLqhKlSpZ1klPy23aKS8vL40ePVrfffed9f7w999/X5UqVdJNN92UJX/VqlVtnpcrVy7X9EuXLlnT3n33XY0aNUq33HKLdu3apaSkJBlj9Oijj2YbBGd3n3O6hQsXysvLS/fff7/KlCljsyz9vr6OHTuqTJky8vT0lIeHhzw8PKz3ucfExORYtj18fHxs/haWr6+v+vXrp+eff17ffPONDhw4oGrVqunee++1npf8Sr/HMqfXRubXReXKlbPkS0/L7TWU3+3khz11snf7+a3nli1btHPnTg0cOFANGza0q77Dhw/Pdaq43B7Zvd9y2vfs0gq6n9nJKTDL/D6X0gZ3zPg+T99+bnVNZ+97NT9l5sbPz08rVqxQp06dNHr0aJsfG9MtXbpUgwYNUtu2bfXnn38qISFBxhjr2BfpAeGFCxdUqVKlLOtnl5afvNk5ffq0zp8/rzJlytgcJ4vFor/++st6fLLz0ksv6YknntCHH36o5s2bq2LFirrzzju1Z8+efO9zusJcB9LldC6TkpJy/XwuzLEA4N4IugE4VYUKFbK0REiypqUH5zkZO3asLBaLZs6cqc2bN2vz5s2666675OXllSWvxWLJtoyc0jOaP3++IiIiNG7cOIWHh1uD5cwD7aTLbvvpPv30U7Vo0UJdu3bNMuBS+v5u27ZNycnJSklJUWpqqlJTU62tzRkHTnJFYWFhGjNmjBISErRp06YClZG+jzm9NjK/LnJ7DWVuXS3MdvLDnjrZu/381nPAgAGaNm2apk6dqn/96192DZ62YMGCHKeJy+uxbNmyPMsvyuPh4+MjX19fXb58OUu+EydOZLt9e97n6fXIra7p7H2v5qfMvJQtW1Y//PCDunfvroceeijLYH7z589XeHi4Xn/9ddWpU8f6OZT5cyokJERnz57NUn52afnJm53Q0FDVqlVLycnJNscp/Rjl1hPF399fr776qk6cOKG///5b//nPf/T777+rc+fO1mDY3n1OV5jrQLqczqWXl5dNz6XMCnMsALg3gm4ATtWjRw9t3bo1S1fuL7/80ro8N2FhYRowYIDmzJlj/QKaXdfyopC5ZfjMmTP66aef8l1OcHCwVqxYoXbt2ql379768ccfrcv69esnDw8Pff7553mWExAQoISEhHxvv6isWrVKX331VbbL0gOfjN15s5PTPqSf9yVLltiknzlzRn/88UeW18XatWuto6mn+/rrr+Xr66sOHTrkuP38bic/7KmTvdsvSD0fffRRzZs3T++9957uueeeQt+WUFhFeTwsFotq166tnTt32uTbsWOHjh07VuA6du/eXVJaN+CMtm/friNHjtik2ftezU+Z9vD399eyZcvUt29fPfbYY3rttddslmf+nIqPj9fixYtt0rp166bDhw9r9+7dNunZ/XiSn7zZufnmm3XkyBFt3LjRrvw5qVevnsaOHasXX3xRFy5csKmPPftclDKfy8TERC1fvlydO3fO9QfXojoWANyQo28aB1B65TR6eUbHjh0zoaGhpnXr1mbr1q0mOjrafPLJJ6Zs2bJm0KBB1nzZDaSWbtWqVdZBhjp06JBleeZRw9MtWbLESDLr1q2zSf/2229tBnEzJm0wIQ8PD/Pxxx+bK1eumD///NN06tTJ3HzzzSbjR2lO28puWUJCghkyZIjx8vIyn3/+uTXfiy++aLy8vMzLL79sDh8+bOLi4szu3bvNW2+9ZR2V2hhjBg0aZGrVqmUiIyNzOrzZOnz4sJFk/vWvf2W73N7Ry9OP0/Dhw82mTZtMfHy8OXXqlHnvvfeMt7e3ue666/IcYTm3fbjrrruMr6+vmTdvnomKijI7duwwHTt2NEFBQWb//v3WfCEhIaZHjx6mf//+Zu/evebixYvmv//9r/H09Mx2oK2Cbie/A6nZWyd7t5+f45HxdbJkyRLj4+NjBgwYYK5evWpX/YuaI47H1KlTjYeHh5k/f765fPmyWbdunRk4cKC59tprsx1ILeMxSTd48GBTt25dm7TbbrvNlCtXznz22WcmOjrabNq0ydxwww3ZjjRu73s1P2VmJ7v3ZEJCgunfv7+RZB0B/oMPPjCSzJtvvmliYmLM7t27zQ033GAGDRpkJFnfZ+kjkrdo0cJs2bLFREdHm0WLFpm77rorx9HL7cmb3eBhV69eNZ06dTLh4eFm0aJF5uzZs+bSpUtmw4YN5pFHHjGzZ8/Ocb9vueUWM2vWLPP333+bq1evmr///tv06tXLhIaGWgegtHef0wdBW7Jkic02Nm3aZCSZL774wiY9faC7hQsXWtPSyxgwYICZMGGCOXPmjDly5Ii57bbbjJeXl1m7dq3DjgUA90bQDcBh7Am6jTHmwIEDZtiwYSYkJMR4eXmZevXqmRdffNEkJiZa8+QWdBtjzDXXXGMkZTstUlEE3YmJiWb8+PGmevXqxs/Pz1x33XXml19+MePGjStw0G1M2gjK9913n/Hw8DCzZs2yqVu3bt1MUFCQ8fPzM02aNDGPP/64OXr0qDXP/v37TefOnY2/v7+RZFq3bp3tscnMnqA7/UeM7B5bt241xhiTlJRkli1bZm6//XZTv3594+PjYwICAkyLFi3M888/by5fvpxnXXLbh+TkZPPKK6+Yhg0bGi8vLxMcHGwGDRpk9uzZY1NGekD122+/mdatWxsfHx9Tq1Yt88Ybb9h1POzdTn6DbnvrZO/283s8Mlq5cqUpW7as6d69u13npag54ngkJSWZxx9/3FSsWNH4+/ubvn37mmPHjuU4erm9QffVq1fNk08+aapUqWL8/PxM165dzZ49e0yXLl2yDZDtea/mt8zMcvohLDEx0TobwYQJE4wxxrz++uumdu3axtfX1zRv3twsWbLEvPPOOzYBqDHGHDp0yAwYMMAEBASY4OBgM3bsWBMZGWkkmddee81mO/bmzS7QTN//yZMnm2bNmhlfX18THBxs2rdvb959910TGxub437v2bPH3H///dbPl+rVq5sRI0aYvXv32uSzZ5+LMuhesmSJeeutt0yNGjWMj4+Padu2bZYZAor6WABwbxZj7LjRCwBcXPv27bVr1y6dOnVKZcuWdXZ1UIxCQ0M1cOBAzZkzx9lVAdzatm3b1LJlS82fP18jRowosrwlxfr16xUREaElS5Zo4MCBzq4OADfCPd0A3N6RI0e0YcMG3X777QTcAFBAX375pSwWS5bpswqbFwBKuzJ5ZwEA1xUfH6/nnntOXl5eevLJJ51dHQBwC+PGjVNERIQ6deqk5ORkffXVV3rjjTc0cuRI1axZs8B5AQBZ0dINwG09/fTTCggI0G+//aaPPvpI9evXd3aVAMAt3H333frkk0/UokUL1axZU//973/1zDPPaMaMGYXKCwDIinu6AQAAAABwEFq6AQAAAABwEIJuAAAAAAAchIHUcpCamqqTJ0+qXLlyslgszq4OAAAAACAbxhhdvnxZYWFh8vBwvXZlgu4cnDx5UuHh4c6uBgAAAADADpGRkapevbqzq5EFQXcOypUrJyntxAUGBjq5NgAAAACA7MTExCg8PNwaw7kagu4cpHcpDwwMJOgGAAAAABfnqrcFu16HdwAAAAAASgiCbgAAAAAAHISgGwAAAAAAB+GebgAAAAClWkpKipKSkpxdDeTC29vbJacDswdBNwAAAIBSyRij06dP69KlS86uCvLg4eGh2rVry9vb29lVyTeCbgAAAAClUnrAXalSJfn7+7vs6NelXWpqqk6ePKlTp06pRo0abneeCLoBAAAAlDopKSnWgDskJMTZ1UEeKlasqJMnTyo5OVleXl7Ork6+uGeneAAAAAAohPR7uP39/Z1cE9gjvVt5SkqKk2uSfwTdAAAAAEotd+uqXFq583ki6AYAAAAAN7Jv3z6XGPzNnnr8/fffunjxYq55Dh48qAsXLhRhzVwLQTcAAEBpZYyUGJv2MMbZtQFgpx49emjp0qUO3cbff/+tqKioQtfj5ptv1qeffpprnmHDhumDDz7IbxXdBkE3AABAaWSMNK+PNDks7THvBgJvAFZ9+/bV559/XuhyGjRoUOoHqiPoBgAAKI2S4qTIDf88j1yflgbArRw/fjzXrtkXL17U4cOHcxyALC4uTocOHbIOLCdJhw4dUmJiok6ePKmdO3dq586dBa7Hm2++qT59+tikGWN06NAhxcbG5lluSUDQDQAAAABu5pdfflH16tXVoUMHValSRWPHjlVqaqp1+dmzZ9WvXz/VqlVLPXr0UHBwsN58802bMp544glVrFhRvXv3VsWKFTV+/HilpqZq4sSJOnPmjObOnavbbrtNt912W4Hrkbl7+a5du9SwYUNde+21qlWrlm655RZduXKlCI+M6yHoBgAAAACltcDGJSY75WHyeXvHkiVLtGzZMh07dkxbt27VokWL9OGHH1qXDx48WFWrVtXZs2d16NAhrVu3TpMmTdL3338vSVq3bp3effddbd++XQcOHNC5c+dUoUIFJSQk6JNPPlF4eLgmTpyYZ0t3XvXIfHzvuusutWrVShcuXNDZs2dVq1Yt7du3L1/77m7KOLsCAAAAAOAK4pNSdM1zPzpl27tf6iN/b/vDs7vuukstW7aUJDVt2lQjR47U7NmzNXLkSG3ZskW///67XnvtNR05ckTGGFksFnXp0kVLly5Vv379dOXKFZUpU0Zly5aVJHl5eenJJ5/Md71zq0dmW7Zs0Z9//qmvvvpKZcqk7eukSZM0c+bMfG/XnRB0AwAAAICbueaaa2yeN2nSRPPnz5ck7dmzRx4eHho9enSW9apWrSpJ6t69u/r06aN69eqpZ8+e6tGjh4YNG6aKFSsWWT0yO3jwoPz9/VWzZk1rWkBAgGrVqpWvbbobgm4AAAAAkOTn5andL/XJO6ODtp0f8fHxNs/j4uIUEBAgSfL29pYxRuvXr7e2ZGfm6empL7/8UkePHtXKlSv1+eefa+LEidqyZYvq1KlTJPXIzN/fX4mJiUpJSZGnp6fNOiUZ93QDAAAAgCSLxSJ/7zJOeVgslnzVdfXq1TbPV61apWuvvVaSFBERIQ8PDy1evDjLeomJiTZ/a9asqZEjR2r58uXy9fXVzz//LEny9fW1GdG8IPXIrEWLFkpNTdXvv/9uTTtw4IAiIyPz3I47o6UbAAAAANzMjz/+qGeffVY33nijli9frm+//VZ//PGHJCk8PFxPPfWU/u///k9RUVHq0KGDTpw4oc8//1y9evXSfffdp0WLFunLL7/U8OHDVatWLa1Zs0ZRUVFq166dJKlx48b67rvv1LFjR3l7e6tp06b5rkdmNWrU0N13362RI0dq2rRp8vPz07hx4+ThUbLbggm6AQAAAMCNNGrUSJMnT9bWrVv11FNPyd/fX8uWLbMGzJI0efJktWzZUgsWLNCCBQtUu3Zt3X777Ro8eLAkafjw4SpXrpzmz5+vyMhI1apVS8uXL7cOivbqq69qwoQJGj16tBISErIdwdyeejRo0EAhISHW59OnT9dLL72kl19+WVWqVNG4ceO0ZMkShYaGOuhoOZ/F5Hds+lIiJiZGQUFBio6OVmBgoLOrAwAAULQSY6XJYbZpz5yUvLO/FxMoaa5evarDhw+rdu3a8vX1dXZ1kIfczperx24lux0fAAAAAAAnIugGAAAAAMBBCLoBAAAAAHAQgm4AAAAAAByEoBsAAAAAAAch6AYAAAAAwEEIugEAAAAAcBCCbgAAAAAAHISgGwAAAAAAByHoBgAAAAA30rZtW33xxRfOrkahlZT9yIvTg+6UlBStWbNGixcv1r59++xeb/PmzVqwYIHOnDmT7fJz587phx9+0IoVK3T+/Pmiqi4AAAAAONWpU6cUGxvr0G107txZCxYscOg2imM/XEEZZ248KipKffr00enTp9WkSRP9/vvvGjt2rN54440c1/npp580fvx4xcXFae/evVq9erUqV65sXW6M0ZgxY/TDDz+oefPmiouL0+bNmzVt2jSNHj26OHYLAAAAANzaqVOndOXKFWdXo0Rwakv3s88+q5iYGO3atUs//PCDfvzxR02dOlUrVqzIcZ2EhATNmDEjxzzGGF133XU6fPiwvv/+e/3yyy+aOnWqHnjgAR09etRRuwIAAAAAxebcuXMaOXKkmjZtquuuu05fffWVzXJjjN5++21dd911atiwoQYOHKgtW7bY5Pnhhx/Us2dPNWjQQH379tXq1aslSf3799eRI0c0fvx4Va9eXdWrV8+2DkOHDlX16tUVHh6utm3bavz48VlarnPaRna+/PJL1a9fX7/++mtBDonLclrQbYzRwoULNWrUKJUrV06S1KFDB7Vr106ffPJJjuvdfPPNatu2bY7L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wEAzcuRIk5qaas3z5Zdfmnr16plOnTqZfv36mXLlypkBAwaYq1evFrrstWvXmvDwcNO0aVPTr18/ExQUZJ555plcy33mmWdMWFiY6datm+nWrZvx9/c3r732mk2eDRs2mG7dupkGDRoYSWbhwoUFODqu4fDhw6ZevXqmXr16pmvXrsbPz8+8//77NnlefPFFEx4ebvr06WO6dOli/Pz8zHPPPZdn2Z988olp3Lix9ZoRGRlZoO0XZJ2ClJsZQXchNW3a1AwbNsz6/OWXXzaBgYHmwoUL1rSPP/7YJCcnW5+//fbbxsPDI8sXjPyWvW7dOiPJ/PDDD9Y8U6dONVWrVjXx8fGFqrM9edzByZMnjZ+fn3nnnXeMMWlfPPr162fat29vzXPo0CHz66+/2qw3bNgw07x580KX/cYbb5jy5cubY8eOWfMMHTrU3HzzzU6psyv69ttvjaenp9m0aZMxxpjz58+bGjVqmCeeeMKaZ82aNebgwYPW57GxsaZevXrmwQcfLHTZAwcONO3atbNekGNiYky9evVyDUbsKff06dMmODjY/Pvf/7ZetKOjo90yYBg3bpypWbOmOX/+vDHGmM2bNxtPT0+zdOlSa56lS5eaS5cuWZ///fffxsPDw3z66aeFKjslJcVUrlzZ5svkzp07jY+Pj/n999+LvVxX1bFjR9O3b1+TkpJijDHmnXfeMb6+vjY/8H3yySc2P4LMnz/fSMozYMir7F27dhkPDw+bL4rz5s0zwcHBuV7n5s6da/bv32++/fbbbIPuI0eOmCVLlth86R07dqypVKmSTZo7iIqKMkFBQebll1+2pt12222mcePG1n05depUlgB7zJgxJjw8vNBlz5kzx/j5+Zl9+/ZZ84waNcp07tw517Jff/11c+7cOTNu3Lhcg253/FzLbPXq1UaS+e2334wxaZ/XDRo0MPfff781z/r1683evXutz69evWqaNWtm7rrrrkKXPXz4cNOsWTMTGxtrjEm7zjVt2tRMnDgxx3L37dtnFixYYK5evWquu+66bIPuyZMnmwoVKti8v2677Ta3/L7w8ssvmypVqlh/cE//zF6wYIE1z7fffmv93Dcm7Yd1X19fM2vWrEKXXatWLXPPPfdY31d///238ff3z/XH9FmzZlnPqTHGfPXVV0aSzY9iP/30k1m5cqX1/eTOQXefPn1M165drdeaDz74wJQpU8b8/fff1jwLFy60adhIPyYZG5ey89FHH5ldu3ZZ30/ZBd32bL8g6xSk3MwIugth69atRpLZsGGDNe3SpUvG29vbfPjhhzmu9+OPPxpJubZ22lP2W2+9ZcqWLWuz3vHjx40k88033xS43ILulyt65513TNmyZW1+4fzpp5+MpFzfKBMnTjS1a9cudNlDhgwxN9xwg816n332mfHw8DDnzp0r9jq7omHDhplu3brZpD333HOmSpUqua7XrVs3M2LEiEKXXaVKFTNp0iSbPA8//LC55pprClXu888/b4KDg/P8dd0dVKtWLcsXv+7du5shQ4bkuE5iYqIJCAgwM2fOLFTZBw4cMJKy9OBp2bKlGTNmTLGX64oOHz5sJNl88bt69aopV66ceeutt3Jcb8OGDUaS2bVrV6HK/vDDD43FYrEJ6K9cuWIkmfnz5+dZ/5yC7uykXz9PnDiRZ15X8vHHHxsvLy+bfdy4cWOWL9+Zvfnmm6ZChQqFLvu+++6z+eHWGGOWL19uJNn8oJmTvILut956yyxdutRs27bN7X4QSTdq1CjTtm1bm7TXXnvNBAYGWn9wys7NN99sbrnllkKXXa9ePfP000/b5Hn66adNjRo17Kp/TkH3888/b+rWrWuTNn78eNOoUSO7ynUlDRs2NI899phNWv/+/bN8z8ooOTnZhIaGmjfffLNQZZ8+fdpIMsuWLbPJ06lTJ3PHHXfYvQ8pKSnG09PTzJ07N8sydw+6z5w5YywWi03P2OTkZFOxYsUs37My2rVrV5a4Izc5Bd0F2b496xR0vzLjnu5C2LFjhySpadOm1rSgoCCFh4dbl6Xbvn27du/erZMnT2rmzJl68cUXVa1atUKVHRYWptjYWB0/flzVq1eXJO3du1dS2r07N998c4HKzc9+ubodO3aofv368vHxsaY1a9ZMkrRz507Vq1fPmr5y5UqdPn1ae/fu1Ycffqjp06cXuuywsDB9//33SklJkaenp6S0c5SamqqdO3eqa9euxVpnV7Rjxw716NHDJq1Zs2Y6ffq0zp8/r9DQUGv6Z599Zr239OTJk5oxY0ahyw4LC7O+b9Lt3btXe/fuVWJiYrb3ydtT7m+//aYuXbooISFBK1asUNmyZdWqVSsFBgbadVxcRVRUlE6cOGHzeSCl7e/y5ctt0s6fP6+ff/5Zly9f1ueff66OHTtq+PDhhSq7SpUq8vDw0N69e9WlSxdJafdhR0ZG2rxHiqNcV5XdZ7aPj48aNGiQ5TM7/Z7BM2fOaNasWXr88cd1zTXXFKrssLAwGWO0b98+6z2QGa9FI0aMKIK9TPPzzz8rJCREVatWLbIyi8OOHTtUvXp1lS9f3pqWPnbEjh071Lp1a2v6mjVrFBkZqQMHDmjOnDl69913C112WFiYli1bpoSEBOvrO/0cbd++3e7xF3Iyb948VatWTRs3blS9evW0aNEit7sndceOHdl+ZsTExOjYsWOqVauWNf3LL79UbGysNmzYoF27dmnp0qWFLjuna9GxY8d06dIlm/ObHw899JB++ukn3XHHHerdu7eOHj2qhQsXatasWQUqz1kSEhK0f/9+PfXUUzbpzZo104cffmiTdunSJS1fvlyxsbH68ssv1aRJE40aNapQZYeEhMjHx0d79+7VjTfeKCntHt/Dhw8rKirK7v345ZdflJKSkuX1UBLs2rVLxhibffP09NQ111yT5Vr0999/a8uWLTp//rxmz56tBx54QO3atSu27ednnYKUmx2C7kKIjo6Wt7d3lsEoQkJCdOnSJZu0Xbt2acmSJTpy5IhSU1PzfLPZU/aAAQPUsmVL9enTRw899JDi4+M1e/ZsBQUFKTo6usDl5me/XF10dHSWQevSB4TLvC9r1qzRjh07tGPHDtWsWVM1a9YsdNmPPvqo5s+fr5tvvlmDBw/WwYMHtXjxYuv6xV1nV5TX/mYMupcuXaq4uDht2rRJ3bt3z3NwP3vKnjhxooYOHarAwEC1bt1av/zyi/bt26fU1FRdvnw5223YU+7Zs2eVkpKiVq1aqUGDBjpz5oyOHDmi+fPnWy/Y7iD9dZrd/mZ+PV64cEFLly7VxYsXtX37do0ZMybXANaesgMCAvTEE0/oqaee0pkzZ1S1alV9/PHH8vPzy/U95IhyXVV+ztHff/+tJUuWKDIyUrGxsWrRokWhy+7evbs6d+6sAQMG6F//+peMMZoxY4ZCQkKK9Fj+8ssveuutt/Tee+/ZPXCVq8juM8PHx0f+/v5ZztG6deu0ceNG7d69W5UrV84zILan7AceeEAzZsxQ3759dccddygyMlKLFi2yrl9QHh4eWr58ufr06SMp7fOvZ8+euvfee7Vy5coCl+sM+bn2fvvtt4qKitKmTZvUoUOHHAfGyk/ZEyZMUL9+/TR69GhFRERo3bp12rJli3X9ggbdgYGBioiI0BdffKErV67oyJEjql27ts2PCO7g8uXLMsbY9TkXHR2tpUuXKioqSlu3btU999yT64CE9pRdpkwZPfvss3r++ecVHR2tGjVq6LPPPpPFYrH7PXT+/Hndd999GjRoUKEDTFeUn2vR4cOHtXTpUp04cUIXL17M1+C4RbH9/KxTkHKzQ9BdCD4+PkpMTFRSUpLNCKBXrlzJMtL07bffrttvv12SNH/+fN16663auXOnGjVqpD/++EORkZHWvMOGDbOrbG9vb61du1Zz587V1q1b5e/vryVLlqhLly45jmBuT7n52S9X5+PjoytXrtikpT/PvC8vvPCCpLTRQx944AHdeOONOnTokLy8vPT1118rPj5ekhQaGqqePXvaVXbt2rW1Z88ezZkzR7///ruqV6+u+fPnKyIiItdzVBR1dhf52d/PPvtMUlqLZJcuXTRmzBh9+eWXunLlipYtW2bN16hRI7Vs2dKusgcOHKhNmzbps88+02+//aa2bduqc+fOGjNmjAICAgpcZ19fX61bt05//vmn9Ue2f//73xoxYoTOnDnjNucoPWjObn8zn5+GDRtaz9HBgwfVpk0bhYSE6LHHHtPhw4e1YcMGa97OnTvbXfarr76qTp066eeff9bRo0f15JNPasmSJTn+wuyocl1Vxv3NuH9XrlzJMjp5//791b9/f0nSN998owEDBqhhw4Zq166dNm3apIMHD1rzDho0yK6yPT09tXLlSn344YfavHmzvLy89Omnn+rWW2+1azYNe2zatEkDBgzQY489ptGjRxdJmcUpu8+M1NRUXb16Ncv7KGNr27hx43TjjTfqyJEjKlu2rL7//nvFxMRISgum+vXrZ1fZVapU0e7duzV79mytXbtWlStX1qJFi9S8efNCnSMPDw9rwC1J5cuX1+OPP64777xTV65cKbLzXxzycy1Kb/28evWqevfurbvuuks//vijrl69atPqXa9ePbVp08ausnv16qW//vpLn3zyiX777Tc1b95cXbt21fDhwwt1HCdOnKgvv/zSOgOAJN1///3q27ev9u3bZ+2F5+rycy2qWbOm9Vp0/PhxtW7dWuXKldPEiRN1/Phx/f7779a8ERER1mAqr7InTpyodu3aafny5Vq7dq3uv/9+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d955p3X5zp07rdMPffDBB+all14y1apVM926dctzLvW8yjYm7T366KOPmg8++MDce++9eU6jY4wxf/75p1m4cKF56qmnjCQzd+5cs3DhQmuAefjwYVOhQgXTokULs3DhQptHxvmN3cUjjzxiQkNDzWuvvWaee+454+3tbaZPn25dPn/+fNO5c2fzyiuvmHnz5plHH33UBAQEZBnRuiBlG2NMixYtzMsvv2xmz55tunfvbmrWrGkOHz6ca7k//vijWbhwoenfv7+pXr269fin/7D/ySefmA4dOpgpU6aYWbNmmcGDBxs/Pz+zePHi/B8gJ0tISDBt27Y1LVu2NO+++64ZMWKE8ff3txldfvTo0WbYsGHmnXfeMTNnzjTDhg0zPj4+5uuvvy502X/99ZeJiIgwb7/9tpk2bZqpV6+e6dWrV46NKMakBWnp56RevXqmd+/eZuHChTZTyW7YsMH4+PiYoUOHmrlz55oJEyaYsmXLmvHjxxfiaDnHoUOHTGhoqBkwYICZPn266dy5s6lbt67ND3atW7c2Dz/8sJk9e7b573//ayIiIkzVqlXznJPenrJnzZplBg4caGbNmmWef/55u+bpjoiIMOXKlTOzZs2y+QzL+H3h1KlTZuHCheaTTz4xkswjjzxiFi5caJ2W1J18++23pkyZMubRRx81//3vf03t2rXNgAEDrMsPHTpkmjRpYp599lkzb94885///MfUqlXLRERE5Pkj0Pbt283ChQvNxIkTjSTz3nvvmYULF5ojR47Yvf2C1Lmg5WZmMcYY+9vFkZ1Vq1Zp8eLFSkhIUM+ePXXbbbfZDPJy7Ngxffzxxzpw4IAqV66s7t27W+9jKGzZV69e1fvvv28dfXTkyJG5jopub7n25nEHqamp+vjjj/Xrr7/K399ft912mzp16mSTZ+PGjVqyZInOnj2r8PBwDR061DoKb2HLPnnypN5//32dOHFCbdq00T333JNlkLrirLMrunz5st5//33t2rVLVatW1ZgxY2y6dBlj9PXXX2v16tVKSEhQvXr1dNddd+U5eI09ZUvSli1bNH/+fCUkJKhXr14aNGhQnq91e8pNTEzUnDlztGnTJgUHB6tfv37q2bNnPo6M6zh8+LBmzZqlkydPqnHjxnrwwQdtRmKPj4/Xxx9/rM2bN8vPz0/NmzfXnXfeadc4EHmVLaUNovf999+rbNmyuvXWW9W+fXunleuq1q5dq08//VRxcXG6/vrrddddd8nDw8O6/PTp0/roo4+0b98+hYaGqnPnzrrpppvs+lzPq+ykpCTNmjVLmzdvVo0aNXTvvffm2W11/vz5Nl0I0z3xxBNq06aNdu7cqUmTJmW77uTJk93udidJ+vzzz/XTTz/J29tbQ4YMydL9f9u2bfriiy908uRJVa9eXQMHDlSrVq2KpOxz585p+vTpOnLkiFq0aKGRI0fmOZvCs88+a3Off7rZs2erXLlyNnU+ffq06tSpo+HDh7vdyOXp4uLiNGPGDG3btk2VKlXSfffdp4YNG9rk+e6777RixQrFx8erTp06GjFihMLCwoqk7O3bt+vDDz9UbGysunXrpltvvdXmfZZZQkKC7r777izp4eHhev31163Pjxw5oo8++khHjx5VcHCwevfubdNF2p0cP35cM2bM0LFjx9SwYUM98MADNgNcJSYmasGCBdq4caO8vLzUtGlTjRgxIs/vXfaULUnff/+9vv76a/n5+Wnw4MHq3LlzrmXeeeedSklJyZI+bNgw3XLLLZLS3kNTpkzJkqdXr165jrruqjZt2qQFCxYoJiZGERERGjlypPXWFynt9qMPP/xQe/bsUXBwsDp06KCBAwfm+lqXpEWLFumrr77Kkv7www/bfEfOa/sFqXNBy82IoBsAAAAAAAfJ/ScFAAAAAABQYATdAAAAAAA4CEE3AAAAAAAOQtANAAAAAICDEHQDAAAAAOAgBN0AAAAAADgIQTcAAAAAAA5C0A0AAAAAgIMQdAMAAAAA4CAE3QAAAAAAOAhBNwAAAAAADkLQDQAAAACAg/w/Zz84/Y1uBr8AAAAASUVORK5CYII=" alt="output figure" loading="lazy"></div></div>
+<h2 id="commit-the-approved-research-cut">Commit the approved research cut<a class="headerlink" href="#commit-the-approved-research-cut" title="Permanent link">#</a></h2>
+<p>Raw Parquets remain disposable cache files. Canonical tables and the
+external-byte manifest become versioned h5i-db inputs. The resolution label
+is not ingested into the strategy feature table.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;04_kaggle_polymarket_contract&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">tables</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;instruments&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">instruments</span><span class="p">,</span> <span class="s2">&quot;ts_init&quot;</span><span class="p">),</span>
+    <span class="s2">&quot;book_deltas&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">book_deltas</span><span class="p">,</span> <span class="s2">&quot;ts_init&quot;</span><span class="p">),</span>
+    <span class="s2">&quot;trades&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">trades</span><span class="p">,</span> <span class="s2">&quot;ts_init&quot;</span><span class="p">),</span>
+    <span class="s2">&quot;features_1m&quot;</span><span class="p">:</span> <span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">features</span><span class="p">,</span> <span class="s2">&quot;ts_init&quot;</span><span class="p">),</span>
+<span class="p">}</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="p">(</span><span class="n">table</span><span class="p">,</span> <span class="n">time_column</span><span class="p">)</span> <span class="ow">in</span> <span class="n">tables</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="n">time_column</span><span class="p">)</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;bounded CC BY-NC Kaggle Polymarket sample&quot;</span><span class="p">)</span>
+
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span>
+    <span class="s2">&quot;kaggle-polymarket-2026-03-09&quot;</span><span class="p">,</span>
+    <span class="n">tables</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">tables</span><span class="p">),</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;Validated one-market research cut; source hashes recorded above&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">tables</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>[&#x27;book_deltas&#x27;, &#x27;features_1m&#x27;, &#x27;instruments&#x27;, &#x27;trades&#x27;]</pre></div></div>
+<h2 id="what-this-cut-can-and-cannot-prove">What this cut can and cannot prove<a class="headerlink" href="#what-this-cut-can-and-cannot-prove" title="Permanent link">#</a></h2>
+<p>These full snapshots are suitable for conservative snapshot replay and
+spread/depth studies. They are not the tick-by-tick delta stream, so they
+cannot reveal every queue transition between snapshots. Do not call a
+queue-position result from this sample “exact.”</p>
+<p>For exact queue replay, apply the same contract to one daily
+<code>orderbook_YYYY-MM-DD.parquet</code> file with a lazy <code>market_id</code> filter. Never
+call <code>read_parquet</code> on the whole daily file: the publisher estimates roughly
+300 million rows and 50 GB of RAM per day.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/"><span class="dir">← Previous</span><span class="pn-title">Operate reproducible backtests</span></a><a class="next" href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/"><span class="dir">Next →</span><span class="pn-title">Causal signal replay on real Polymarket books</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#download-only-what-the-recipe-uses">Download only what the recipe uses</a></li><li><a href="#predicate-push-down-before-materialising">Predicate-push down before materialising</a></li><li><a href="#validate-the-causal-and-book-contracts">Validate the causal and book contracts</a></li><li><a href="#commit-the-approved-research-cut">Commit the approved research cut</a></li><li><a href="#what-this-cut-can-and-cannot-prove">What this cut can and cannot prove</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

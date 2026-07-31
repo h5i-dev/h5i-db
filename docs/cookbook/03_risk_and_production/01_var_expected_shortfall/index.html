@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/#article","headline":"VaR and Expected Shortfall with an auditable risk table","name":"VaR and Expected Shortfall with an auditable risk table","description":"A risk number nobody can reproduce is a liability.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"VaR and Expected Shortfall with an auditable risk table","item":"https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/#article","headline":"VaR and Expected Shortfall with an auditable risk table","name":"VaR and Expected Shortfall with an auditable risk table","description":"A risk number nobody can reproduce is a liability.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"VaR and Expected Shortfall with an auditable risk table","item":"https://db.h5i.dev/cookbook/03_risk_and_production/01_var_expected_shortfall/"}]}]}</script>
 </head>
 <body>
 
@@ -92,13 +92,54 @@ thread.</p>
 pipeline, append-only commits as the audit trail, where <code>versions()</code> shows
 every EOD run with its note and wall-clock commit time, and <code>compact()</code> to
 keep the table healthy after many small daily appends.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VaR</td>
+<td>the loss a book will not exceed on a given day at a chosen confidence</td>
+</tr>
+<tr>
+<td>Expected Shortfall</td>
+<td>the average loss on the days that do breach VaR, which is what VaR ducks</td>
+</tr>
+<tr>
+<td>historical VaR</td>
+<td>read straight off the empirical distribution of past returns</td>
+</tr>
+<tr>
+<td>parametric VaR</td>
+<td>assume a distribution, usually normal, and read the quantile from it</td>
+</tr>
+<tr>
+<td>confidence level</td>
+<td>the 95% or 99% in the VaR statement</td>
+</tr>
+<tr>
+<td>exception</td>
+<td>a day whose loss exceeded the forecast; 99% VaR should produce them 1% of the time</td>
+</tr>
+<tr>
+<td>Kupiec POF test</td>
+<td>a test of whether the observed exception count matches the confidence claimed</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_var&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -317,15 +358,15 @@ it is exactly the kind of detail an auditor will ask about.</p>
   variance, where the degrees of freedom are fitted once on the full
   standardized sample. A cheap fat-tail fix.</li>
 </ul>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">scipy</span><span class="w"> </span><span class="kn">import</span> <span class="n">stats</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">from</span> <span class="nn">scipy</span> <span class="kn">import</span> <span class="n">stats</span>
 
 <span class="n">r</span> <span class="o">=</span> <span class="n">port</span><span class="p">[</span><span class="s2">&quot;port_ret&quot;</span><span class="p">]</span>
 <span class="n">W</span> <span class="o">=</span> <span class="mi">252</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">hist_var</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">q</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">hist_var</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">q</span><span class="p">):</span>
     <span class="k">return</span> <span class="o">-</span><span class="n">np</span><span class="o">.</span><span class="n">quantile</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">q</span><span class="p">)</span>
 
-<span class="k">def</span><span class="w"> </span><span class="nf">hist_es</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">q</span><span class="p">):</span>
+<span class="k">def</span> <span class="nf">hist_es</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">q</span><span class="p">):</span>
     <span class="n">cut</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">quantile</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">q</span><span class="p">)</span>
     <span class="k">return</span> <span class="o">-</span><span class="n">x</span><span class="p">[</span><span class="n">x</span> <span class="o">&lt;=</span> <span class="n">cut</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
 
@@ -396,7 +437,7 @@ run Kupiec's proportion-of-failures likelihood-ratio test, which is
 asymptotically chi-squared with 1 degree of freedom.</p>
 <p>A well-calibrated 95% VaR should be breached on about 5% of days. Rejecting
 the null means the model's coverage is wrong.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">kupiec_pof</span><span class="p">(</span><span class="n">returns</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">var</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">p</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">kupiec_pof</span><span class="p">(</span><span class="n">returns</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">var</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">,</span> <span class="n">p</span><span class="p">:</span> <span class="nb">float</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
     <span class="n">mask</span> <span class="o">=</span> <span class="n">var</span><span class="o">.</span><span class="n">notna</span><span class="p">()</span>
     <span class="n">ret</span><span class="p">,</span> <span class="n">v</span> <span class="o">=</span> <span class="n">returns</span><span class="p">[</span><span class="n">mask</span><span class="p">],</span> <span class="n">var</span><span class="p">[</span><span class="n">mask</span><span class="p">]</span>
     <span class="n">n</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">ret</span><span class="p">)</span>
@@ -624,7 +665,7 @@ the last two years, straight from SQL.</p>
 </table>
 </div></div></div></div>
 <h2 id="6-pl-against-the-var-band-breaches-marked">6. P&amp;L against the VaR band, breaches marked<a class="headerlink" href="#6-pl-against-the-var-band-breaches-marked" title="Permanent link">#</a></h2>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
 <span class="n">plot_df</span> <span class="o">=</span> <span class="n">metrics</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s2">&quot;2024-07-01&quot;</span><span class="p">:]</span>
 <span class="n">breach95</span> <span class="o">=</span> <span class="n">plot_df</span><span class="p">[</span><span class="n">plot_df</span><span class="p">[</span><span class="s2">&quot;pnl&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="o">-</span><span class="n">plot_df</span><span class="p">[</span><span class="s2">&quot;var95&quot;</span><span class="p">]]</span>
@@ -662,10 +703,10 @@ the last two years, straight from SQL.</p>
 <div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
 </pre></div>
 </div>
-    <nav class="page-nav"><a class="prev" href="/cookbook/02_alpha_research/11_retrieval_augmented_forecasting/"><span class="dir">← Previous</span><span class="pn-title">Retrieval-augmented forecasting: historical analogs as a knowledge base</span></a><a class="next" href="/cookbook/03_risk_and_production/02_reproducible_backtests/"><span class="dir">Next →</span><span class="pn-title">Reproducible backtests: pin the data, not just the code</span></a></nav>
+    <nav class="page-nav"><a class="prev" href="/cookbook/02_alpha_research/13_mean_reversion/"><span class="dir">← Previous</span><span class="pn-title">Short-horizon mean reversion, and the edge it would have needed</span></a><a class="next" href="/cookbook/03_risk_and_production/02_reproducible_backtests/"><span class="dir">Next →</span><span class="pn-title">Reproducible backtests: pin the data, not just the code</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-portfolio-pl-series-in-one-sql-statement">2. Portfolio P&amp;L series in one SQL statement</a></li><li><a href="#3-rolling-historical-var-es-plus-parametric-flavors">3. Rolling historical VaR / ES, plus parametric flavors</a></li><li><a href="#4-kupiec-pof-backtest-is-95-really-95">4. Kupiec POF backtest: is 95% really 95%?</a></li><li><a href="#5-the-audit-trail-a-versioned-risk_metrics-table">5. The audit trail: a versioned risk_metrics table</a></li><li><a href="#6-pl-against-the-var-band-breaches-marked">6. P&amp;L against the VaR band, breaches marked</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-portfolio-pl-series-in-one-sql-statement">2. Portfolio P&amp;L series in one SQL statement</a></li><li><a href="#3-rolling-historical-var-es-plus-parametric-flavors">3. Rolling historical VaR / ES, plus parametric flavors</a></li><li><a href="#4-kupiec-pof-backtest-is-95-really-95">4. Kupiec POF backtest: is 95% really 95%?</a></li><li><a href="#5-the-audit-trail-a-versioned-risk_metrics-table">5. The audit trail: a versioned risk_metrics table</a></li><li><a href="#6-pl-against-the-var-band-breaches-marked">6. P&amp;L against the VaR band, breaches marked</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

@@ -38,6 +38,8 @@ pub const SIGNALS: &str = "signals";
 pub const COMMANDS: &str = "commands";
 /// Perpetual funding rates.
 pub const FUNDING: &str = "funding";
+/// Venue-published mark and oracle prices, which are not the book.
+pub const REFERENCES: &str = "references";
 /// What has already been ingested, so a reload is a no-op.
 pub const INGEST_LOG: &str = "ingest_log";
 
@@ -157,17 +159,61 @@ pub fn instruments() -> SchemaRef {
         float("lot_size"),
         opt_int("expiration_ns"),
         opt_int("settlement_observable_ns"),
+        // Whether the venue exchanges a complete set of these outcomes for
+        // one unit of cash. Nullable because most instruments predate the
+        // column and false is the safe reading of its absence: a market
+        // that cannot be minted is only a missing capability, whereas a
+        // market wrongly believed mintable creates cash.
+        Field::new("neg_risk", DataType::Boolean, true),
+        // A significant-figure price cap, where the venue has one. Absent
+        // means the tick grid is the whole rule, which is the common case.
+        Field::new("price_significant_figures", DataType::UInt8, true),
+        Field::new("price_max_decimals", DataType::UInt8, true),
     ]))
 }
 
 /// `resolutions`: how a market ended.
+///
+/// Shaped for the payouts a market can actually produce, not just the
+/// common one. A single winner is one row; a scalar or partial settlement
+/// is one row per outcome carrying its payout; a void is one row naming the
+/// arity it refunds across. `kind` says which, so no row has to be read in
+/// the light of another's absence.
 pub fn resolutions() -> SchemaRef {
     Arc::new(Schema::new(vec![
         // The instant the result became observable, which is what gates
         // settlement -- not the instant the underlying event occurred.
         ts("ts_init"),
         text("instrument_id"),
-        Field::new("winner_outcome", DataType::UInt16, false),
+        // "winner" | "split" | "void"
+        text("kind"),
+        // The winning outcome on a `winner` row, the outcome this payout
+        // belongs to on a `split` row, and absent on a `void`.
+        Field::new("outcome", DataType::UInt16, true),
+        // What one contract on `outcome` pays. Only a `split` carries it.
+        Field::new("payout", DataType::Float64, true),
+        // How many outcomes a `void` refunds across.
+        Field::new("outcome_count", DataType::UInt16, true),
+    ]))
+}
+
+/// `references`: the mark and oracle prices a venue publishes.
+///
+/// Separate from the book because they are separate facts. A derivatives
+/// venue margins against its own mark and charges funding on its own
+/// oracle; storing only the book leaves a replay to substitute the mid for
+/// both, which liquidates positions the venue would not have.
+pub fn references() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        ts("ts_init"),
+        ts("ts_event"),
+        text("instrument_id"),
+        outcome(),
+        // Either may be absent: a venue can publish one and not the other,
+        // and a null must not be read as a zero price.
+        Field::new("mark", DataType::Float64, true),
+        Field::new("oracle", DataType::Float64, true),
+        opt_text("source_vendor"),
     ]))
 }
 
@@ -228,6 +274,9 @@ pub fn signals() -> SchemaRef {
         opt_text("time_in_force"),
         opt_text("tag"),
         Field::new("reduce_only", DataType::Boolean, true),
+        // Add-liquidity-only. Absent reads as false, which is the
+        // reading that cannot silently turn a taker into a maker.
+        Field::new("post_only", DataType::Boolean, true),
     ]))
 }
 
@@ -261,6 +310,9 @@ pub fn commands() -> SchemaRef {
         opt_text("time_in_force"),
         opt_text("tag"),
         Field::new("reduce_only", DataType::Boolean, true),
+        // Add-liquidity-only. Absent reads as false, which is the
+        // reading that cannot silently turn a taker into a maker.
+        Field::new("post_only", DataType::Boolean, true),
     ]))
 }
 
@@ -381,6 +433,7 @@ pub fn market_data_tables() -> Vec<(&'static str, SchemaRef, TableOptions)> {
         (INSTRUMENTS, instruments(), market_data_options()),
         (RESOLUTIONS, resolutions(), market_data_options()),
         (FUNDING, funding(), market_data_options()),
+        (REFERENCES, references(), market_data_options()),
     ]
 }
 

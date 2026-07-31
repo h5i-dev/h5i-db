@@ -88,9 +88,12 @@ serde = { version = "1", features = ["derive"] }
 # re-serializing parsed JSON, which requires parse∘serialize to be the
 # identity for f64. serde_json's default float parse is lossy (~1 ulp), which
 # made every full-mantissa aggregate state fail verification and rebuild.
-serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "raw_value"] }
 
 blake3 = "1"
+# Hyperliquid publishes its market-data archive as LZ4 frames, which is the
+# only source of book history the venue offers.
+lz4_flex = { version = "0.13", default-features = false, features = ["frame"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", default-features = false, features = [
     "clock",

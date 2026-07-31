@@ -162,6 +162,138 @@ the last mark, `settled_pnl` is what it became at resolution, and the
 difference is reported as an explicit adjustment rather than folded in
 silently.
 
+### Not every market picks a winner
+
+A `Resolution` carries a `Payout`, which is one of three things:
+
+| Payout | What happened |
+|---|---|
+| `Winner(outcome)` | one outcome took the whole dollar |
+| `Split(payouts)` | a scalar or partial settlement, payouts summing to one |
+| `Void { outcomes }` | the question was unanswerable; a complete set refunds at cost |
+
+The last two are not edge cases worth skipping. A voided binary pays both
+sides fifty cents; recording it as a winner is wrong by the full notional on
+each side, in opposite directions. `Resolution::split` refuses a payout
+vector that does not sum to exactly one, because a settlement that does not
+conserve a complete set mints or burns cash.
+
+## Trading stops before resolving
+
+A market's `expiration` is when trading stops, and the engine enforces it:
+an order submitted after it is rejected, an order whose latency carries it
+past it is rejected on arrival, and a resting order is cancelled at the
+bell rather than left working against a book that no longer exists.
+
+Data keeps arriving after a market closes -- late prints, a book teardown,
+the settlement itself -- and observing it is fine. Filling against it is not.
+
+## Outcomes cannot be borrowed
+
+There is no stock loan for a share of "YES". A venue will not let you sell
+an outcome you do not hold, so neither will the engine: a sell beyond the
+held position is rejected with a message naming the trade that expresses the
+same view. To be short YES, buy NO. It costs `1 - p` and pays the same.
+
+This matters twice over. A short's worst case is `1 - p`, not `p`, so
+collateralising it at the mark understates the requirement by up to the
+whole notional -- selling a three-cent longshot posts three cents against
+ninety-seven cents of risk. `CashMargin` charges the complement on a
+probability short for that reason.
+
+`EngineBuilder::allow_naked_shorts(true)` lifts the constraint. It is for
+measuring what the constraint costs, not for producing a result to act on.
+
+## Complete sets
+
+Prediction-market venues will exchange a complete set of outcomes against
+one unit of cash, in both directions. That is the contract that makes the
+sum-to-one relationship *transactable* rather than merely observable, and
+without it complete-set market making and the arbitrage that pins a book to
+a dollar are both unreachable.
+
+```rust
+ctx.mint(&market, sets);    // pay one per set, receive one of every outcome
+ctx.redeem(&market, sets);  // hand the set back, receive one per set
+```
+
+A Python callback strategy returns the same operations as actions:
+
+```python
+return [
+    {"action": "mint", "instrument_id": market, "quantity": 100.0},
+    {"action": "redeem", "instrument_id": market, "quantity": 100.0},
+    {"action": "convert", "instrument_id": market,
+     "outcomes": [0, 1], "quantity": 50.0},
+]
+```
+
+Three things about how this is modelled:
+
+- **Legs are fills.** A mint emits one fill per outcome, priced so the legs
+  sum to exactly one per set. `Portfolio::replay` rebuilds every position
+  from `bt_fills` alone, and a position that moved without a fill to explain
+  it is a run whose stored result and audit disagree.
+- **It is not instant.** Set operations queue behind the same insertion
+  latency as an order. A mint that lands immediately is an arbitrage nobody
+  could have taken.
+- **It costs a flat fee, not a rate.** `SetOperationCosts` is charged once
+  per operation, because a mint is one chain transaction. That is what makes
+  a one-cent complete-set edge unprofitable at small size and profitable at
+  large; a model without it reports every such edge as free money.
+
+Minting is allowed only where the venue actually offers it:
+`Instrument::supports_complete_set` is true for any two-outcome market, and
+for a wider one only when `neg_risk` says the venue wired the outcomes into
+a single exclusive set. A group of independent conditions displayed under
+one heading is several instruments here, not one with many outcomes, and
+minting across them would create a dollar out of nothing.
+
+### Negative-risk conversion
+
+`ctx.convert(market, held, quantity)` is Polymarket's conversion, addressed
+the way its adapter is: `held` names the outcomes whose NO side you hold.
+
+In this crate's N-outcome model it is provably a redemption. NO(i) is
+"everything except i", so a basket of NO over `k` outcomes holds each named
+outcome `k - 1` times and each unnamed one `k` times -- that is `k - 1`
+complete sets plus the residual. The venue hands back `k - 1` in cash and
+keeps the residual, which is exactly what redeeming `k - 1` sets does. The
+primitive is offered under its own name because strategies reason in NO
+contracts and the derivation is not obvious; a test pins the equivalence.
+
+## Scoring a forecast
+
+A market price on a prediction market *is* a forecast, so the natural
+question about a strategy is whether it forecast better. Fills cannot answer
+it: they record what a strategy did, not what it believed.
+
+```rust
+ctx.record_forecast(&market, outcome, Price::from_f64(0.65)?)?;
+```
+
+```python
+return [{"action": "forecast", "instrument_id": market,
+         "outcome": 0, "probability": 0.65}]
+```
+
+`RunReport::calibration_samples()` joins those statements to the market's
+own price at the same instant and to what the outcome actually paid, giving
+the triples a Brier score, a reliability curve or an advantage-over-market
+series is computed from. The Python report returns them as
+`calibration_samples`, ready for `h5i_db.quant.calibration`.
+
+Two kinds of forecast are dropped rather than scored, and both are reported
+by `unscored_forecasts()` so the sample is never quietly smaller than it
+looks: a market with no known resolution, and a market that paid every
+outcome the same. Against a void, every forecast scores identically --
+including a confidently wrong one -- so including it does not measure a
+forecaster, it dilutes the sample that does.
+
+The market's own probabilities are sampled onto the equity curve's clock as
+`mark_curve`, for the comparison series. Turn it off with
+`record_mark_curve(false)` on a run spanning thousands of markets.
+
 ## Venue models
 
 Four small traits carry every behavioural variation:
@@ -182,6 +314,227 @@ synthetic depth all reuse one matching path.
 charge, `rate · quantity · p · (1 - p)`, which peaks at even odds and
 vanishes at certainty. A flat `notional × rate` is the wrong shape and
 overcharges the tails, which is where these markets trade most.
+
+## Perpetuals
+
+A derivatives venue does not value your position at the mid, and modelling
+it as if it did produces losses that look like strategy results.
+
+### Three prices, not one
+
+Hyperliquid publishes an **oracle** built from spot exchanges and a **mark**
+derived from it and the book. Margin, unrealised PnL and liquidation read
+the mark; funding is charged on the oracle; the book's mid is neither.
+
+`MarketEvent::Reference` carries both, in a `references` table alongside
+`trades` and `funding`. The engine keeps the book-derived, venue-mark and
+oracle prices apart and exposes one effective mark, so `MarkSource` is a
+policy rather than a rewrite. It defaults to using the venue's mark where
+one exists, which is a no-op on data that carries none.
+
+Two consequences worth stating:
+
+- A thin book or a one-print wick moves the mid far enough to liquidate a
+  position the venue was still valuing calmly. On the mark it does not.
+- Funding on the mid reintroduces exactly the manipulation the oracle
+  exists to prevent, and at hourly settlement that compounds over a carry.
+
+Reference records replay at priority 7, ahead of the book, for the same
+reason corporate actions do: every per-record check that prices against the
+mark must already have it.
+
+### Prices the venue will actually accept
+
+Hyperliquid caps a price at five significant figures **and** at
+`6 - szDecimals` decimal places, per coin. A flat tick cannot say that: it
+accepts prices the venue refuses at the top of a range and refuses ones it
+accepts at the bottom. `PriceRule::SignificantFigures` says it, and
+`hyperliquid::parse_meta` derives it per coin along with `maxLeverage`,
+`onlyIsolated` and the lot size.
+
+Delisted coins are kept, not dropped. Dropping them is survivorship bias
+applied at ingestion, where it is hardest to notice.
+
+### Data
+
+`candleSnapshot` returns bars and the REST `l2Book` returns only the book as
+it is right now, so the archive is the only source of book history the venue
+offers. `read_archive_lz4` reads the hourly files; `parse_ws_message`
+handles a live capture, dispatching `l2Book` and `trades` by the coin in the
+payload so one call covers a capture spanning many markets.
+
+`s3://hyperliquid-archive` (us-east-1) is a **Requester Pays** bucket:
+anonymous reads get a 403 whatever headers you send, and you need an AWS
+account and pay the transfer. Pull from us-east-1 and the transfer is free;
+you pay only GET requests, which are a fraction of a cent.
+
+```bash
+aws s3 ls s3://hyperliquid-archive/market_data/20250101/0/l2Book/ \
+    --request-payer requester
+aws s3 cp s3://hyperliquid-archive/market_data/20250101/0/l2Book/BTC.lz4 . \
+    --request-payer requester
+```
+
+Measured on `20250101/0`: 166 coins, 77 MB compressed for the hour, so
+roughly 1.8 GB a day and 670 GB a year. BTC alone is 700 KB an hour, 6,301
+snapshots, one every 0.57 seconds.
+
+Two things the archive is **not**:
+
+- **It has no trades.** `market_data/<date>/<hour>/` contains `l2Book/` and
+  nothing else. Prints have to come from a live websocket capture, and
+  without them the queue-position fill model has nothing to work with. This
+  is the single biggest remaining gap for a Hyperliquid market-making
+  backtest.
+- **It is not bucketed by venue time.** Files are grouped by when the
+  archiver received a message, so the `00` hour file opens with a message
+  the venue stamped at `23:59:59.877` the day before. Load a window with an
+  hour of slack on each side.
+
+Each line is `{"time": <archiver receive, ISO nanoseconds>, "ver_num": 1,
+"raw": <the live websocket envelope>}`, and the venue's own stamp is inside
+at `raw.data.time`. **Both matter.** The archiver trails the venue by 57 ms
+at the median and 3.2 seconds at the worst, so the outer stamp is `ts_init`
+and the inner one is `ts_event`; reading only the inner one hands a strategy
+up to three seconds of look-ahead on every book update. `read_archive` keeps
+them apart, and clamps `ts_init` to at least `ts_event` so a skewed clock
+cannot claim a message was known before it was sent.
+
+The live endpoints need no credentials, which is where
+`tests/fixtures/hyperliquid` came from. Refresh them with:
+
+```bash
+curl -sX POST https://api.hyperliquid.xyz/info \
+  -H 'Content-Type: application/json' -d '{"type":"metaAndAssetCtxs"}'
+```
+
+Fixtures captured from the venue are worth the bytes. A hand-written one
+tests that a parser matches what its author believed; a real one tests that
+it matches what the venue sends. The `fundingHistory` request shape here was
+wrong -- it nested its arguments under `req`, which the API rejects with a
+422 that names no field -- for exactly as long as only the first kind
+existed.
+
+Two shapes to know, both caught this way: `fundingHistory` takes its
+arguments flat while `candleSnapshot` nests them under `req`, and funding
+timestamps carry tens of milliseconds of jitter around the hour rather than
+landing on it exactly.
+
+`ArchiveRead` counts what produced nothing and `require_yield` refuses a
+file that is mostly junk -- usually the wrong channel or the wrong
+decompression, and worse to replay as a thin book than to refuse outright.
+
+Trades matter more than they look: without prints the queue model has
+nothing to consume the size ahead of a resting order, so every touched
+limit fills immediately.
+
+`asset_ctxs/<date>.csv.lz4` is the historical mark and oracle — a daily CSV
+at one-minute cadence across the universe. Its `funding` column is the
+standing rate sampled once a minute, **not** a payment, so
+`asset_context_records` deliberately emits reference prices and no funding
+events; sixty samples an hour would charge a carry sixty times. Settlements
+come from `fundingHistory`.
+
+`hyperliquid_archive::load_archive` walks a synced directory and commits it,
+so the whole path is one call:
+
+```rust
+let spec = ArchiveSpec::new("./archive").date("20250101").coin("BTC");
+load_archive(&db, &spec, &universe, known_at).await?;
+```
+
+Coins filter on the *file name*, so a one-coin load reads 700 KB instead of
+77 MB. A date, hour or coin that is not on disk lands in `ArchiveLoad::missing`
+rather than reading as no data — an incomplete sync found at replay time
+looks like a thin book. Instruments come from a supplied `meta` universe,
+not from the archive, which carries prices and no metadata.
+
+### Post-only
+
+`OrderRequest::post_only()` is Hyperliquid's ALO. It is checked on arrival,
+not on submission, because what matters is the book the venue sees when the
+order gets there -- an order sent into a wide market and delivered into a
+crossed one is rejected, which is the risk a maker takes. A post-only order
+that later fills does so as a maker, since by construction it could never
+have taken.
+
+### Stops and take-profits
+
+`OrderRequest::with_trigger` holds an order off the book until a price
+reaches it. That is the difference from a limit at the same price: a limit
+is liquidity someone can trade against, and a stop is not — so resting one
+would invent depth that was never there. Untriggered orders carry their own
+`OrderStatus::Untriggered`.
+
+They fire on the **mark**, not the book, for the same reason margin does: a
+one-print wick should not stop you out of a position the venue still values
+calmly. Once fired the order is ordinary and meets the book from there, so a
+stop can and does fill well below its trigger — the gap it exists to protect
+against is the gap it suffers.
+
+```rust
+ctx.submit(
+    OrderRequest::market(market, outcome, Side::Sell, size)
+        .with_trigger(Trigger::stop_loss(Side::Sell, price)),
+);
+```
+
+```python
+return [{"action": "submit", "client_order_id": "stop", "instrument_id": m,
+         "side": "sell", "quantity": 1.0,
+         "trigger_price": 90.0, "trigger_direction": "stop_loss"}]
+```
+
+### TWAP
+
+Hyperliquid's TWAP is a native order type, not a client-side loop: the venue
+slices it into equal children on a fixed cadence (thirty seconds) and works
+them until the duration is up.
+
+```rust
+ctx.twap(TwapRequest::new(market, outcome, Side::Buy, size, duration_nanos));
+```
+
+Modelling it as one large market order gets the answer wrong in the
+direction that flatters. A size worth slicing is a size that moves the book,
+and the whole reason to slice is that it does — so the children here are
+ordinary market orders crossing through the same matching path, and a TWAP
+into a thin book suffers exactly the slippage that book implies. The last
+slice carries the rounding, so the schedule works exactly the size it was
+given rather than quietly working less and reporting a better average.
+
+### Fees that fall with volume
+
+`TieredFees` prices on rolling traded notional. Every serious venue does
+this and most simulators do not, which decides whether a market-making
+strategy has a positive expectancy at all: at the top of a real schedule the
+maker fee is *negative*.
+
+A fill is priced at the tier reached before it, and volume ages out of a
+trailing window (`hyperliquid::FEE_VOLUME_WINDOW_NANOS` is fourteen days).
+The schedule is supplied rather than baked in -- venues republish theirs, and
+a stale table compiled into a backtester is worse than none because it looks
+authoritative.
+
+### Margin
+
+`PerInstrumentMargin` grants leverage per coin, which is how the venue
+grants it: forty times on the majors and three on the long tail.
+`hyperliquid::margin_from_meta` builds one from the universe, falling back
+for an unlisted coin to the *tightest* leverage in it rather than the
+loosest.
+
+Two policies that both default to the previous behaviour:
+
+- `LiquidationPolicy::Partial` closes positions, largest maintenance
+  requirement first, only until the account is above maintenance again. A
+  venue closes what it must, not what it can, and the two produce materially
+  different results from the same data.
+- `EngineBuilder::isolate(instrument)` margins one instrument on its own
+  collateral. The bucket is sized at the position's entry and stays there,
+  so it does not top itself up from cross cash as the trade moves against
+  you -- an isolated position can lose exactly its bucket, and a cross
+  account in profit will not rescue it.
 
 ## Kalshi data
 

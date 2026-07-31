@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/quant/#article","headline":"Quant workflows","name":"Quant workflows","description":"Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.","url":"https://db.h5i.dev/manual/quant/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/quant/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Quant workflows","item":"https://db.h5i.dev/manual/quant/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/quant/#article","headline":"Quant workflows","name":"Quant workflows","description":"Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.","url":"https://db.h5i.dev/manual/quant/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/quant/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Quant workflows","item":"https://db.h5i.dev/manual/quant/"}]}]}</script>
 </head>
 <body>
 
@@ -82,7 +82,7 @@ computation runs against a <strong>pinned read</strong>, so a number can be repr
 later or refused as unreproducible. And every panel-scale computation
 compiles to SQL, so the data stays in the engine and only the aggregate
 comes back.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">quant</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">quant</span>
 
 <span class="n">panel</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">build_panel</span><span class="p">(</span>
     <span class="n">db</span><span class="p">,</span> <span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">,</span>
@@ -234,7 +234,7 @@ crypto bars.</p>
 <p>A sweep runs a parameter grid with one fork per combination. Trials cannot
 contaminate each other or the base data, and they compare in one query
 because forks share their base's segments.</p>
-<div class="highlight"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">trial</span><span class="p">(</span><span class="n">fork_db</span><span class="p">,</span> <span class="n">params</span><span class="p">):</span>
+<div class="highlight"><pre><span></span><code><span class="k">def</span> <span class="nf">trial</span><span class="p">(</span><span class="n">fork_db</span><span class="p">,</span> <span class="n">params</span><span class="p">):</span>
     <span class="n">panel</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">build_panel</span><span class="p">(</span><span class="n">fork_db</span><span class="p">,</span> <span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">,</span>
                               <span class="n">quantiles</span><span class="o">=</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;quantiles&quot;</span><span class="p">],</span> <span class="n">periods</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,))</span>
     <span class="n">row</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">ic_decay</span><span class="p">()</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span><span class="o">.</span><span class="n">to_pylist</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>

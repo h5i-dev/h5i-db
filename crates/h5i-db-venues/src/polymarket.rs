@@ -267,6 +267,15 @@ pub fn instrument_from_market(body: &str) -> Result<(Instrument, TokenMap)> {
     if let Ok(tick) = number(&json, "minimum_tick_size") {
         instrument = instrument.with_tick_size(Price::from_f64(tick)?);
     }
+    // Gamma spells it `neg_risk` on the CLOB payload and `negRisk` on the
+    // markets payload. Absent means no: a market wrongly believed to trade
+    // as a set is one a strategy could mint cash out of.
+    let neg_risk = ["neg_risk", "negRisk"]
+        .iter()
+        .filter_map(|key| json.get(*key).and_then(Value::as_bool))
+        .next_back()
+        .unwrap_or(false);
+    instrument = instrument.with_neg_risk(neg_risk);
     if let Some(end) = json.get("end_date_iso").and_then(Value::as_str)
         && let Some(ns) = parse_iso8601_ns(end)
     {
@@ -296,6 +305,58 @@ pub fn resolution_from_market(body: &str, observable_at: UnixNanos) -> Result<Op
             what: "market.tokens",
             value: "missing".to_string(),
         })?;
+    let instrument = InstrumentId::new(condition)?;
+    let outcomes = u16::try_from(tokens.len()).map_err(|_| BacktestError::Parse {
+        what: "market.tokens",
+        value: tokens.len().to_string(),
+    })?;
+
+    // An explicit payout vector settles the question outright, and is the
+    // only form that can express a partial settlement. Gamma emits it as
+    // strings, one per token, in token order.
+    if let Some(rows) = json.get("payouts").and_then(Value::as_array) {
+        if rows.len() != tokens.len() {
+            return Err(BacktestError::invalid(format!(
+                "market {instrument} has {} tokens but {} payouts",
+                tokens.len(),
+                rows.len()
+            )));
+        }
+        let mut payouts = Vec::with_capacity(rows.len());
+        for (index, row) in rows.iter().enumerate() {
+            let value = match row {
+                Value::String(text) => text.parse::<f64>().map_err(|_| BacktestError::Parse {
+                    what: "market.payouts",
+                    value: text.clone(),
+                })?,
+                Value::Number(number) => number.as_f64().ok_or(BacktestError::NotFinite {
+                    what: "market.payouts",
+                })?,
+                other => {
+                    return Err(BacktestError::Parse {
+                        what: "market.payouts",
+                        value: other.to_string(),
+                    });
+                }
+            };
+            // Polymarket reports these as shares of the pot rather than as
+            // per-contract prices, so a two-way split arrives as [1, 1]
+            // rather than [0.5, 0.5]. Normalising covers both spellings and
+            // is a no-op on one that already sums to a dollar.
+            let _ = index;
+            payouts.push(Price::from_f64(value)?);
+        }
+        if payouts.iter().all(|price| !price.is_positive()) {
+            return Ok(None);
+        }
+        let normalised = h5i_db_backtest::instrument::normalise_to_one(&payouts)?;
+        return Ok(Some(Resolution::split(
+            instrument,
+            normalised,
+            observable_at,
+        )?));
+    }
+
     let winners: Vec<usize> = tokens
         .iter()
         .enumerate()
@@ -307,18 +368,33 @@ pub fn resolution_from_market(body: &str, observable_at: UnixNanos) -> Result<Op
         })
         .map(|(index, _)| index)
         .collect();
+
+    // A market UMA could not answer refunds a complete set at cost. Gamma
+    // flags it, and the CLOB payload shows it as every token winning.
+    // Recording it as a winner would turn a refund into a full loss for one
+    // side and a doubling for the other.
+    let voided = json
+        .get("is_50_50_outcome")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || (!winners.is_empty() && winners.len() == tokens.len());
+    if voided {
+        return Ok(Some(Resolution::void(instrument, outcomes, observable_at)?));
+    }
+
     match winners.len() {
         0 => Ok(None),
         1 => Ok(Some(Resolution::new(
-            InstrumentId::new(condition)?,
+            instrument,
             OutcomeId(winners[0] as u16),
             observable_at,
         ))),
-        // Two winners is not an ambiguity to resolve by picking one; it is
-        // a market that did not resolve the way this model assumes.
+        // Several winners but not all of them is neither a winner nor a
+        // void, and picking one would be a guess dressed as a result.
         _ => Err(BacktestError::invalid(format!(
-            "market {condition} reports {} winning outcomes",
-            winners.len()
+            "market {instrument} reports {} winning outcomes out of {}",
+            winners.len(),
+            tokens.len()
         ))),
     }
 }
@@ -440,18 +516,115 @@ mod tests {
         let resolution = resolution_from_market(RESOLVED, UnixNanos::new(500))
             .unwrap()
             .unwrap();
-        assert_eq!(resolution.winner, OutcomeId(0));
+        assert_eq!(resolution.winner(), Some(OutcomeId(0)));
         assert_eq!(resolution.observable_at, UnixNanos::new(500));
     }
 
     #[test]
-    fn two_winners_is_an_error_not_a_coin_flip() {
+    fn every_token_winning_is_a_refund_not_a_coin_flip() {
+        // This is how a voided market reaches us: UMA could not answer, the
+        // venue refunds a complete set at cost, and both sides pay half.
+        // Picking one as the winner would be wrong by the whole notional on
+        // each side, in opposite directions.
         let body = r#"{
             "condition_id":"0xbad","closed":true,
             "tokens":[{"token_id":"1","outcome":"A","winner":true},
                       {"token_id":"2","outcome":"B","winner":true}]
         }"#;
+        let resolution = resolution_from_market(body, UnixNanos::new(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolution.winner(), None);
+        assert_eq!(
+            resolution.settlement_price(OutcomeId(0)),
+            Price::from_f64(0.5).unwrap()
+        );
+    }
+
+    #[test]
+    fn the_fifty_fifty_flag_is_honoured_on_its_own() {
+        let body = r#"{
+            "condition_id":"0xbad","closed":true,"is_50_50_outcome":true,
+            "tokens":[{"token_id":"1","outcome":"A","winner":true},
+                      {"token_id":"2","outcome":"B","winner":false}]
+        }"#;
+        let resolution = resolution_from_market(body, UnixNanos::new(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolution.winner(), None);
+    }
+
+    #[test]
+    fn some_but_not_all_winners_is_still_an_error() {
+        // Neither a winner nor a refund. Choosing between them would be a
+        // guess dressed as a result.
+        let body = r#"{
+            "condition_id":"0xbad","closed":true,
+            "tokens":[{"token_id":"1","outcome":"A","winner":true},
+                      {"token_id":"2","outcome":"B","winner":true},
+                      {"token_id":"3","outcome":"C","winner":false}]
+        }"#;
         assert!(resolution_from_market(body, UnixNanos::new(1)).is_err());
+    }
+
+    #[test]
+    fn an_explicit_payout_vector_settles_the_question() {
+        // Gamma reports these as shares of the pot, so a scalar market that
+        // paid 70/30 arrives as [7, 3] rather than [0.7, 0.3].
+        let body = r#"{
+            "condition_id":"0xscalar","closed":true,"payouts":["7","3"],
+            "tokens":[{"token_id":"1","outcome":"A"},
+                      {"token_id":"2","outcome":"B"}]
+        }"#;
+        let resolution = resolution_from_market(body, UnixNanos::new(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            resolution.settlement_price(OutcomeId(0)),
+            Price::from_f64(0.7).unwrap()
+        );
+        assert_eq!(
+            resolution.settlement_price(OutcomeId(1)),
+            Price::from_f64(0.3).unwrap()
+        );
+        assert_eq!(resolution.winner(), None);
+    }
+
+    #[test]
+    fn a_payout_vector_of_the_wrong_length_is_refused() {
+        let body = r#"{
+            "condition_id":"0xbad","closed":true,"payouts":["1"],
+            "tokens":[{"token_id":"1","outcome":"A"},
+                      {"token_id":"2","outcome":"B"}]
+        }"#;
+        assert!(resolution_from_market(body, UnixNanos::new(1)).is_err());
+    }
+
+    #[test]
+    fn a_negative_risk_market_is_recorded_as_one() {
+        // Absent means no: a market wrongly believed to trade as a set is
+        // one a strategy could mint cash out of.
+        let plain = r#"{
+            "condition_id":"0xabc",
+            "tokens":[{"token_id":"111","outcome":"Yes"},
+                      {"token_id":"222","outcome":"No"}]
+        }"#;
+        assert!(!instrument_from_market(plain).unwrap().0.neg_risk);
+
+        for body in [
+            r#"{"condition_id":"0xabc","neg_risk":true,
+                "tokens":[{"token_id":"111","outcome":"A"},
+                          {"token_id":"222","outcome":"B"},
+                          {"token_id":"333","outcome":"C"}]}"#,
+            r#"{"condition_id":"0xabc","negRisk":true,
+                "tokens":[{"token_id":"111","outcome":"A"},
+                          {"token_id":"222","outcome":"B"},
+                          {"token_id":"333","outcome":"C"}]}"#,
+        ] {
+            let (instrument, _) = instrument_from_market(body).unwrap();
+            assert!(instrument.neg_risk, "{body}");
+            assert!(instrument.supports_complete_set());
+        }
     }
 
     #[test]

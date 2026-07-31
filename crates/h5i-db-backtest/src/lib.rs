@@ -47,29 +47,38 @@ pub mod types;
 pub mod window;
 
 pub use account::{
-    Account, CashMargin, LinearMargin, MarginModel, MarginRequirement, MarginState, Valuation,
+    Account, CashMargin, LinearMargin, MarginModel, MarginRequirement, MarginState,
+    PerInstrumentMargin, Valuation,
 };
 pub use book::{BookAction, BookDelta, BookStatus, BookWalk, OrderBook};
 pub use clock::{Clock, TimeEvent};
 pub use corporate::{CorporateAction, SymbolRegistry, Universe};
 pub use currency::{Currency, FxBook, Haircuts};
 pub use engine::{
-    CommandReplay, Context, Engine, EngineBuilder, OrderRequest, ReplayCommand, RiskLimits,
-    RunResult, SignalReplay, Strategy,
+    CommandReplay, Context, Engine, EngineBuilder, Forecast, LiquidationPolicy, MarkPoint,
+    MarkSource, OrderRequest, ReplayCommand, RiskLimits, RunResult, SetOperation,
+    SetOperationCosts, SetOperationKind, SetOperationRequest, SignalReplay, Strategy, TwapProgress,
+    TwapRequest,
 };
 pub use error::{BacktestError, Result};
 pub use event::{MarketEvent, Record};
 pub use execution::{ExecutionClient, ExecutionCommand, SimulatedExecution};
-pub use instrument::{Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId};
+pub use instrument::{
+    Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId, PriceRule,
+    normalise_to_one, uniform_prices,
+};
 pub use l3::{L3Book, MboMessage};
 pub use models::{
-    BookFills, ConstantLatency, FeeModel, FillModel, LatencyModel, NoFees, NoLatency,
-    PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage, VenueModule,
+    BookFills, ConstantLatency, FeeModel, FeeTier, FillModel, LatencyModel, NoFees, NoLatency,
+    PredictionMarketFees, ProportionalFees, QueuePositionFills, TickSlippage, TieredFees,
+    VenueModule,
 };
-pub use order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
+pub use order::{
+    Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce, Trigger, TriggerDirection,
+};
 pub use position::{Portfolio, Position};
 pub use replay::{Replay, ReplayBuilder};
-pub use run::{RunReport, RunSpec, run_in_fork, run_in_place};
-pub use settlement::{Resolution, SettlementReport};
+pub use run::{CalibrationSample, RunReport, RunSpec, UnscoredForecast, run_in_fork, run_in_place};
+pub use settlement::{Payout, Resolution, SettlementReport, validate_resolutions};
 pub use types::{Money, Price, Qty, SCALE, Side, Stamps, UnixNanos, notional};
 pub use window::{Coverage, TimeWindow};

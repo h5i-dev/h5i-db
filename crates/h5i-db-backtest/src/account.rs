@@ -40,17 +40,28 @@ pub trait MarginModel: std::fmt::Debug {
 /// Fully funded: a position costs its whole notional and is never
 /// liquidated. The right model for spot and for prediction markets, where a
 /// contract is prepaid and the worst case is already on deposit.
+///
+/// "Its whole notional" is not the same number on both sides of a
+/// probability contract. A long pays `p` and can lose only that. A short
+/// receives `p` and owes `1` if the outcome comes in, so its worst case is
+/// `1 - p` -- and at `p = 0.03` that is thirty-two times what the mark says.
+/// Charging the mark to both sides collateralises a tail short with three
+/// cents against ninety-seven cents of risk, which is how a backtest sells
+/// longshots for free.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CashMargin;
 
 impl MarginModel for CashMargin {
-    fn initial_margin(
-        &self,
-        _instrument: &Instrument,
-        quantity: Qty,
-        mark: Price,
-    ) -> Result<Money> {
-        Ok(notional(mark, quantity)?.abs())
+    fn initial_margin(&self, instrument: &Instrument, quantity: Qty, mark: Price) -> Result<Money> {
+        // On a probability contract the loser of the trade pays the whole
+        // dollar, so a short's requirement is what it would owe, not what it
+        // received. Elsewhere the two coincide.
+        let per_unit = if instrument.kind.is_probability() && quantity.is_negative() {
+            mark.complement()?
+        } else {
+            mark
+        };
+        Ok(notional(per_unit, quantity)?.abs())
     }
 
     fn maintenance_margin(
@@ -128,6 +139,62 @@ impl MarginModel for LinearMargin {
         mark: Price,
     ) -> Result<Money> {
         self.requirement(self.maintenance_rate, quantity, mark)
+    }
+}
+
+/// Leverage granted per instrument rather than per venue.
+///
+/// A venue does not offer one leverage. Hyperliquid publishes a
+/// `maxLeverage` per coin -- forty on the majors, three on the long tail --
+/// and a model that applies one number across the universe either
+/// over-margins the majors or, much worse, lets a strategy hold a position
+/// in an illiquid coin that the venue would have refused to open.
+///
+/// Maintenance is half the initial requirement at maximum leverage, which
+/// is the rule Hyperliquid documents. Instruments not in the table fall
+/// back to `default_leverage`.
+#[derive(Clone, Debug)]
+pub struct PerInstrumentMargin {
+    by_instrument: BTreeMap<InstrumentId, LinearMargin>,
+    default_model: LinearMargin,
+}
+
+impl PerInstrumentMargin {
+    pub fn new(default_leverage: f64) -> Result<Self> {
+        Ok(Self {
+            by_instrument: BTreeMap::new(),
+            default_model: LinearMargin::from_leverage(default_leverage)?,
+        })
+    }
+
+    /// Grant `leverage` on one instrument.
+    pub fn with_leverage(mut self, instrument: InstrumentId, leverage: f64) -> Result<Self> {
+        self.by_instrument
+            .insert(instrument, LinearMargin::from_leverage(leverage)?);
+        Ok(self)
+    }
+
+    fn model_for(&self, instrument: &Instrument) -> &LinearMargin {
+        self.by_instrument
+            .get(&instrument.id)
+            .unwrap_or(&self.default_model)
+    }
+}
+
+impl MarginModel for PerInstrumentMargin {
+    fn initial_margin(&self, instrument: &Instrument, quantity: Qty, mark: Price) -> Result<Money> {
+        self.model_for(instrument)
+            .initial_margin(instrument, quantity, mark)
+    }
+
+    fn maintenance_margin(
+        &self,
+        instrument: &Instrument,
+        quantity: Qty,
+        mark: Price,
+    ) -> Result<Money> {
+        self.model_for(instrument)
+            .maintenance_margin(instrument, quantity, mark)
     }
 }
 
@@ -497,6 +564,37 @@ mod tests {
                 .maintenance_margin(&instrument, qty(2.0), price(100.0))
                 .unwrap(),
             Money::ZERO
+        );
+    }
+
+    #[test]
+    fn shorting_a_longshot_is_collateralised_at_what_it_could_owe() {
+        // The bug this exists to prevent: selling YES at 0.03 posts three
+        // cents against ninety-seven cents of risk.
+        let model = CashMargin;
+        let market = Instrument::binary("m", "v").unwrap();
+        let mark = Price::from_f64(0.03).unwrap();
+        assert_eq!(
+            model.initial_margin(&market, qty(100.0), mark).unwrap(),
+            money(3.0),
+            "a long can only lose what it paid"
+        );
+        assert_eq!(
+            model.initial_margin(&market, qty(-100.0), mark).unwrap(),
+            money(97.0),
+            "a short owes the whole dollar if the outcome comes in"
+        );
+    }
+
+    #[test]
+    fn outside_a_probability_contract_both_sides_cost_the_mark() {
+        let model = CashMargin;
+        let instrument = perp();
+        assert_eq!(
+            model
+                .initial_margin(&instrument, qty(-2.0), price(100.0))
+                .unwrap(),
+            money(200.0)
         );
     }
 

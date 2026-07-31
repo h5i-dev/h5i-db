@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/07_options_iv_surface/#article","headline":"Options: implied-vol surfaces as versioned marks","name":"Options: implied-vol surfaces as versioned marks","description":"A vol desk's surface is not one object. It is a sequence of marks: EOD snapshots, intraday re-marks, corrections.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/07_options_iv_surface/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/07_options_iv_surface/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Options: implied-vol surfaces as versioned marks","item":"https://db.h5i.dev/cookbook/03_risk_and_production/07_options_iv_surface/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/07_options_iv_surface/#article","headline":"Options: implied-vol surfaces as versioned marks","name":"Options: implied-vol surfaces as versioned marks","description":"A vol desk's surface is not one object. It is a sequence of marks: EOD snapshots, intraday re-marks, corrections.","url":"https://db.h5i.dev/cookbook/03_risk_and_production/07_options_iv_surface/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/03_risk_and_production/07_options_iv_surface/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Risk & production"},{"@type":"ListItem","position":4,"name":"Options: implied-vol surfaces as versioned marks","item":"https://db.h5i.dev/cookbook/03_risk_and_production/07_options_iv_surface/"}]}]}</script>
 </head>
 <body>
 
@@ -94,14 +94,67 @@ clock moves.</p>
 <li>draw the surface,</li>
 <li>use versioning to answer "what did the desk see at yesterday's close?"</li>
 </ol>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>implied volatility</td>
+<td>the volatility that makes a pricing model return the option's market price</td>
+</tr>
+<tr>
+<td>IV surface</td>
+<td>implied volatility across strikes and expiries, as one object</td>
+</tr>
+<tr>
+<td>chain</td>
+<td>all listed options on one underlying at one moment</td>
+</tr>
+<tr>
+<td>ATM</td>
+<td>at the money: a strike near the current price</td>
+</tr>
+<tr>
+<td>term structure</td>
+<td>the shape of IV across expiries, here taken at the money</td>
+</tr>
+<tr>
+<td>delta</td>
+<td>the option's sensitivity to the underlying, also used to label strikes as "25-delta"</td>
+</tr>
+<tr>
+<td>risk reversal</td>
+<td>the IV difference between a call and a put at equal delta, a readout of skew</td>
+</tr>
+<tr>
+<td>butterfly</td>
+<td>the wings against the ATM, a readout of smile curvature</td>
+</tr>
+<tr>
+<td>tenor</td>
+<td>time remaining to expiry, always derived from <code>expiry - ts</code> rather than stored</td>
+</tr>
+<tr>
+<td>mark</td>
+<td>an official price for a position, set once per day or more often</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">sql_expr</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;prod_options&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -645,7 +698,7 @@ time, which is what an auditor will hand you.</p>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;read(as_of=&#39;</span><span class="si">{</span><span class="n">v3_commit_iso</span><span class="si">}</span><span class="s2">&#39;) -&gt; </span><span class="si">{</span><span class="n">as_of_v3</span><span class="o">.</span><span class="n">num_rows</span><span class="si">}</span><span class="s2"> rows,&quot;</span><span class="p">,</span>
       <span class="sa">f</span><span class="s2">&quot;latest mark </span><span class="si">{</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">pa</span><span class="o">.</span><span class="n">compute</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="n">as_of_v3</span><span class="p">[</span><span class="s1">&#39;ts&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">as_py</span><span class="p">())</span><span class="o">.</span><span class="n">date</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
 </pre></div>
-<div class="nb-output"><div class="nb-output-label">output</div><pre class="">read(as_of=&#x27;2026-07-27T23:42:56.718941262+00:00&#x27;) -&gt; 714 rows, latest mark 2026-06-03</pre></div></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">read(as_of=&#x27;2026-07-30T22:02:03.839002274+00:00&#x27;) -&gt; 714 rows, latest mark 2026-06-03</pre></div></div>
 <h2 id="9-intraday-re-marks-are-just-more-versions">9. Intraday re-marks are just more versions<a class="headerlink" href="#9-intraday-re-marks-are-just-more-versions" title="Permanent link">#</a></h2>
 <p>Late in day 5 the desk bumps vols 6% in a risk-off re-mark, and commits the
 new marks 30 minutes after the close.</p>
@@ -723,7 +776,7 @@ desk's two standing questions become two one-liners.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/03_risk_and_production/06_multi_writer_conflicts/"><span class="dir">← Previous</span><span class="pn-title">Multi-writer coordination: optimistic locking, conflicts, and retries</span></a><a class="next" href="/cookbook/03_risk_and_production/08_fx_crypto_24_7/"><span class="dir">Next →</span><span class="pn-title">FX and crypto: 24/7 data without an exchange session</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-one-snapshot-day-is-one-commit">2. One snapshot day is one commit</a></li><li><a href="#3-recover-spot-from-put-call-parity">3. Recover spot from put-call parity</a></li><li><a href="#4-atm-term-structure-per-mark-date">4. ATM term structure per mark date</a></li><li><a href="#5-25-delta-risk-reversal-and-butterfly">5. 25-delta risk reversal and butterfly</a></li><li><a href="#6-the-surface-moneyness-by-tenor">6. The surface, moneyness by tenor</a></li><li><a href="#7-smile-evolution-across-the-week">7. Smile evolution across the week</a></li><li><a href="#8-as-of-queries-the-surface-as-marked-at-t">8. As-of queries: the surface as marked at T</a></li><li><a href="#9-intraday-re-marks-are-just-more-versions">9. Intraday re-marks are just more versions</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-one-snapshot-day-is-one-commit">2. One snapshot day is one commit</a></li><li><a href="#3-recover-spot-from-put-call-parity">3. Recover spot from put-call parity</a></li><li><a href="#4-atm-term-structure-per-mark-date">4. ATM term structure per mark date</a></li><li><a href="#5-25-delta-risk-reversal-and-butterfly">5. 25-delta risk reversal and butterfly</a></li><li><a href="#6-the-surface-moneyness-by-tenor">6. The surface, moneyness by tenor</a></li><li><a href="#7-smile-evolution-across-the-week">7. Smile evolution across the week</a></li><li><a href="#8-as-of-queries-the-surface-as-marked-at-t">8. As-of queries: the surface as marked at T</a></li><li><a href="#9-intraday-re-marks-are-just-more-versions">9. Intraday re-marks are just more versions</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

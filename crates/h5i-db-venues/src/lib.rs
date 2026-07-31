@@ -42,13 +42,14 @@ use h5i_db_backtest::error::{BacktestError, Result};
 use h5i_db_backtest::event::MarketEvent;
 use h5i_db_backtest::event::Record;
 use h5i_db_backtest::instrument::Instrument;
-use h5i_db_backtest::settlement::Resolution;
+use h5i_db_backtest::settlement::{Payout, Resolution};
 use h5i_db_backtest::store;
 use h5i_db_backtest::types::UnixNanos;
 use h5i_db_backtest::window::TimeWindow;
 use h5i_db_core::Database;
 
 pub mod hyperliquid;
+pub mod hyperliquid_archive;
 pub mod kalshi;
 pub mod polymarket;
 
@@ -67,6 +68,9 @@ pub struct IngestPlan {
     pub trades: Vec<Record>,
     /// Perpetual funding, empty for venues that have none.
     pub funding: Vec<Record>,
+    /// Venue-published mark and oracle prices, which are not the book.
+    /// Empty for the venues that publish neither, which is most of them.
+    pub references: Vec<Record>,
     /// How markets resolved. Never read on the strategy path.
     pub resolutions: Vec<Resolution>,
 }
@@ -99,6 +103,11 @@ impl IngestPlan {
         self
     }
 
+    pub fn with_references(mut self, records: Vec<Record>) -> Self {
+        self.references = records;
+        self
+    }
+
     pub fn with_resolutions(mut self, resolutions: Vec<Resolution>) -> Self {
         self.resolutions = resolutions;
         self
@@ -110,13 +119,19 @@ impl IngestPlan {
         self.book_events.extend(other.book_events);
         self.trades.extend(other.trades);
         self.funding.extend(other.funding);
+        self.references.extend(other.references);
         self.resolutions.extend(other.resolutions);
         self.sort();
         self
     }
 
     fn sort(&mut self) {
-        for stream in [&mut self.book_events, &mut self.trades, &mut self.funding] {
+        for stream in [
+            &mut self.book_events,
+            &mut self.trades,
+            &mut self.funding,
+            &mut self.references,
+        ] {
             stream.sort_by_key(|record| record.ts().get());
         }
     }
@@ -134,11 +149,13 @@ impl IngestPlan {
             hasher.update(instrument.id.as_str().as_bytes());
             hasher.update(&instrument.outcome_count().to_le_bytes());
             hasher.update(&instrument.tick_size.raw().to_le_bytes());
+            hasher.update(&[instrument.neg_risk as u8]);
         }
         for (label, stream) in [
             (b"b".as_slice(), &self.book_events),
             (b"t".as_slice(), &self.trades),
             (b"f".as_slice(), &self.funding),
+            (b"r".as_slice(), &self.references),
         ] {
             hasher.update(label);
             for record in stream {
@@ -152,14 +169,31 @@ impl IngestPlan {
         }
         for resolution in &self.resolutions {
             hasher.update(resolution.instrument.as_str().as_bytes());
-            hasher.update(&resolution.winner.0.to_le_bytes());
+            // The whole payout, not just a winner: a void and a one-sided
+            // result are different loads and must not share a digest.
+            match &resolution.payout {
+                Payout::Winner(outcome) => {
+                    hasher.update(b"w");
+                    hasher.update(&outcome.0.to_le_bytes());
+                }
+                Payout::Void { outcomes } => {
+                    hasher.update(b"v");
+                    hasher.update(&outcomes.to_le_bytes());
+                }
+                Payout::Split(payouts) => {
+                    hasher.update(b"s");
+                    for price in payouts {
+                        hasher.update(&price.raw().to_le_bytes());
+                    }
+                }
+            }
             hasher.update(&resolution.observable_at.get().to_le_bytes());
         }
         hasher.finalize().to_hex().to_string()
     }
 
     pub fn record_count(&self) -> usize {
-        self.book_events.len() + self.trades.len() + self.funding.len()
+        self.book_events.len() + self.trades.len() + self.funding.len() + self.references.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -177,6 +211,7 @@ impl IngestPlan {
             .iter()
             .chain(&self.trades)
             .chain(&self.funding)
+            .chain(&self.references)
             .map(|record| record.ts().get());
         let (min, max) = stamps.fold((i64::MAX, i64::MIN), |(lo, hi), ts| {
             (lo.min(ts), hi.max(ts))
@@ -202,6 +237,7 @@ impl IngestPlan {
             ("book_events", &self.book_events),
             ("trades", &self.trades),
             ("funding", &self.funding),
+            ("references", &self.references),
         ] {
             let mut previous: Option<i64> = None;
             for record in stream {
@@ -255,6 +291,22 @@ fn hash_event(hasher: &mut blake3::Hasher, event: &MarketEvent) {
         }
         MarketEvent::Funding { rate } => {
             hasher.update(&rate.raw().to_le_bytes());
+        }
+        MarketEvent::Reference { mark, oracle } => {
+            // An absent price is hashed distinctly from a zero one: they are
+            // different facts, and a load that lost a mark must not share a
+            // digest with one that carried it.
+            for price in [mark, oracle] {
+                match price {
+                    Some(value) => {
+                        hasher.update(b"p");
+                        hasher.update(&value.raw().to_le_bytes());
+                    }
+                    None => {
+                        hasher.update(b"-");
+                    }
+                }
+            }
         }
         MarketEvent::Bar {
             open,
@@ -337,6 +389,9 @@ pub async fn write_plan(
     }
     if !plan.funding.is_empty() {
         store::write_funding(db, &plan.funding).await?;
+    }
+    if !plan.references.is_empty() {
+        store::write_references(db, &plan.references).await?;
     }
     if !plan.resolutions.is_empty() {
         store::write_resolutions(db, &plan.resolutions).await?;

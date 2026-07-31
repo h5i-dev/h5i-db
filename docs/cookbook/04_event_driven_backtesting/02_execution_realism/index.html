@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stress-test execution assumptions · h5i-db docs</title>
+  <meta name="description" content="Every backtest contains execution assumptions, and most of them are never written down. Fills happen at the price you asked for.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/04_event_driven_backtesting/02_execution_realism/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Stress-test execution assumptions · h5i-db docs">
+  <meta property="og:description" content="Every backtest contains execution assumptions, and most of them are never written down. Fills happen at the price you asked for.">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/04_event_driven_backtesting/02_execution_realism/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Stress-test execution assumptions · h5i-db docs">
+  <meta name="twitter:description" content="Every backtest contains execution assumptions, and most of them are never written down. Fills happen at the price you asked for.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/02_execution_realism/#article","headline":"Stress-test execution assumptions","name":"Stress-test execution assumptions","description":"Every backtest contains execution assumptions, and most of them are never written down. Fills happen at the price you asked for.","url":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/02_execution_realism/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/02_execution_realism/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Event-driven backtesting"},{"@type":"ListItem","position":4,"name":"Stress-test execution assumptions","item":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/02_execution_realism/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Event-driven backtesting</div><ul><li><a href="/cookbook/04_event_driven_backtesting/01_first_event_driven_run/">Your first event-driven backtest</a></li><li><a href="/cookbook/04_event_driven_backtesting/02_execution_realism/" class="active">Stress-test execution assumptions</a></li><li><a href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/">Operate reproducible backtests</a></li><li><a href="/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/">A production data contract for Kaggle Polymarket L2</a></li><li><a href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/">Causal signal replay on real Polymarket books</a></li><li><a href="/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/">Order lifecycle and account risk</a></li><li><a href="/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/">Path-dependent Python strategies</a></li><li><a href="/cookbook/04_event_driven_backtesting/08_equity_bars_to_event_driven/">From a vectorized equity backtest to an event-driven one</a></li><li><a href="/cookbook/04_event_driven_backtesting/09_market_making_inventory/">Market making: inventory, latency, and being run over</a></li><li><a href="/cookbook/04_event_driven_backtesting/10_execution_algorithms/">Execution algorithms and the cost of not finishing</a></li><li><a href="/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/">Calibrating costs from your own fills</a></li><li><a href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/">Searching a strategy space without fooling yourself</a></li><li><a href="/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/">Replaying an account&#x27;s ledger</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Event-driven backtesting</span>
+<span class="sep">/</span>
+<span>Stress-test execution assumptions</span></div>
+<h1>Stress-test execution assumptions</h1>
+<p>Every backtest contains execution assumptions, and most of them are never
+written down. Fills happen at the price you asked for. Orders arrive the
+instant you decide. Your limit order is first in the queue. None of those
+hold, and each one flatters the result.</p>
+<p>The professional habit is to vary one assumption at a time against a fixed
+tape, then look at how far the conclusion moves. A strategy whose sign
+depends on the fee model is not a strategy. One that survives every plausible
+setting has earned more work.</p>
+<p>A backtest is fragile when one fill assumption determines the conclusion.
+This recipe runs one signal set through fees, adverse slippage, latency, and
+queue position, then compares the resulting fills and cash.</p>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fee</td>
+<td>the venue's explicit charge per trade</td>
+</tr>
+<tr>
+<td>slippage</td>
+<td>the gap between the price you expected and the price you got</td>
+</tr>
+<tr>
+<td>latency</td>
+<td>the delay between the decision and its arrival at the venue</td>
+</tr>
+<tr>
+<td>queue position</td>
+<td>where your order sits in the line at its price level, which decides whether it fills</td>
+</tr>
+<tr>
+<td>maker / taker</td>
+<td>a maker posts and waits; a taker crosses the spread and trades immediately</td>
+</tr>
+<tr>
+<td>implementation shortfall</td>
+<td>total cost of turning a decision into a position, unfilled quantity included</td>
+</tr>
+<tr>
+<td>sensitivity analysis</td>
+<td>rerunning with one assumption changed, to see whether it drove the conclusion</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<p>The input tape contains 240 L2 snapshots and 240 prints. Prices trend and
+oscillate, so delayed orders receive a measurably different book.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>table</th>
+<th>key columns</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>instruments</code></td>
+<td><code>instrument_id</code>, <code>tick_size</code></td>
+<td>Venue constraints</td>
+</tr>
+<tr>
+<td><code>book_deltas</code></td>
+<td><code>ts_init</code>, <code>side</code>, <code>price</code>, <code>size</code></td>
+<td>Atomic L2 snapshots</td>
+</tr>
+<tr>
+<td><code>trades</code></td>
+<td><code>ts_init</code>, <code>price</code>, <code>size</code>, <code>aggressor</code></td>
+<td>Queue-consuming prints</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">datetime</span> <span class="k">as</span> <span class="nn">dt</span>
+
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">fixture</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_backtest_fixture</span><span class="p">(</span><span class="n">steps</span><span class="o">=</span><span class="mi">240</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">fixture</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">: </span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">table</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">fixture</span><span class="p">[</span><span class="s2">&quot;trades&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">instruments: 2 rows x 10 columns
+book_deltas: 480 rows x 11 columns
+trades: 240 rows x 9 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_init</th>
+      <th>ts_event</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>price</th>
+      <th>size</th>
+      <th>aggressor</th>
+      <th>trade_id</th>
+      <th>source_vendor</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 14:00:01</td>
+      <td>2026-06-01 14:00:01</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>0.4866</td>
+      <td>35.0</td>
+      <td>buy</td>
+      <td>T00001</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 14:00:02</td>
+      <td>2026-06-01 14:00:02</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>0.4883</td>
+      <td>45.0</td>
+      <td>buy</td>
+      <td>T00002</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 14:00:03</td>
+      <td>2026-06-01 14:00:03</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>0.4799</td>
+      <td>55.0</td>
+      <td>sell</td>
+      <td>T00003</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 14:00:04</td>
+      <td>2026-06-01 14:00:04</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>0.4915</td>
+      <td>25.0</td>
+      <td>buy</td>
+      <td>T00004</td>
+      <td>cookbook-sim</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 14:00:05</td>
+      <td>2026-06-01 14:00:05</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>0.4930</td>
+      <td>35.0</td>
+      <td>buy</td>
+      <td>T00005</td>
+      <td>cookbook-sim</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Store and pin the tape once. Every scenario below reads exactly this
+snapshot, so differences come from execution configuration rather than data.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;04_execution_realism&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">fixture</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;execution sensitivity fixture&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span>
+    <span class="s2">&quot;execution-input-v1&quot;</span><span class="p">,</span>
+    <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="s2">&quot;trades&quot;</span><span class="p">],</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;Common tape for execution sensitivity&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;name&#x27;: &#x27;execution-input-v1&#x27;,
+ &#x27;created_at_ns&#x27;: 1785448960338375337,
+ &#x27;note&#x27;: &#x27;Common tape for execution sensitivity&#x27;,
+ &#x27;entries&#x27;: {&#x27;4e34f707-3c78-4aa1-9c89-eafd88d8341c&#x27;: {&#x27;table_name&#x27;: &#x27;book_deltas&#x27;,
+   &#x27;sequence&#x27;: 1,
+   &#x27;manifest_checksum&#x27;: &#x27;78209014cbe23acf6779c0cdc43acdf6ac98c5ef00cd1e22b48ed886b2f0957b&#x27;},
+  &#x27;6d3201d9-b553-47cc-9aa5-c22ddc9c25c2&#x27;: {&#x27;table_name&#x27;: &#x27;trades&#x27;,
+   &#x27;sequence&#x27;: 1,
+   &#x27;manifest_checksum&#x27;: &#x27;9a3dfeaa26ac1107694dd7cfdcf6352047b676e0fba1c904f60efb3c9861b0d5&#x27;},
+  &#x27;d5d0b992-65fa-4304-98f5-22b271058df4&#x27;: {&#x27;table_name&#x27;: &#x27;instruments&#x27;,
+   &#x27;sequence&#x27;: 1,
+   &#x27;manifest_checksum&#x27;: &#x27;595676eff2949693295b34ff65cebda7cc8d64383f39c38ebe42bfb301a58d1f&#x27;}},
+ &#x27;checksum&#x27;: &#x27;3ce78fa46f0a870e5bd788542e6144d331397cabb7d543920bdf922810704cb2&#x27;}</pre></div></div>
+<p>The active strategy alternates market buys and sells. Market intent isolates
+fees, slippage, and latency from passive-fill uncertainty.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts</code></td>
+<td><code>timestamp[ns]</code></td>
+<td>Submission time</td>
+</tr>
+<tr>
+<td><code>side</code></td>
+<td><code>string</code></td>
+<td>Trade direction</td>
+</tr>
+<tr>
+<td><code>quantity</code></td>
+<td><code>float64</code></td>
+<td>Requested units</td>
+</tr>
+<tr>
+<td><code>kind</code></td>
+<td><code>string</code></td>
+<td>Market order for this experiment</td>
+</tr>
+<tr>
+<td><code>tag</code></td>
+<td><code>string</code></td>
+<td>Scenario-independent order label</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">base</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2026</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">active_rows</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">second</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">((</span><span class="mi">20</span><span class="p">,</span> <span class="mi">50</span><span class="p">,</span> <span class="mi">80</span><span class="p">,</span> <span class="mi">110</span><span class="p">,</span> <span class="mi">140</span><span class="p">,</span> <span class="mi">170</span><span class="p">)):</span>
+    <span class="n">active_rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="n">second</span><span class="p">),</span>
+            <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="s2">&quot;RATE-CUT-YES&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;buy&quot;</span> <span class="k">if</span> <span class="n">index</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">&quot;sell&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">75.0</span><span class="p">,</span>
+            <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;active-</span><span class="si">{</span><span class="n">index</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+<span class="n">active_signals</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">signal_table</span><span class="p">(</span><span class="n">active_rows</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">active_signals</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">active_signals</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">active_signals</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">6 rows x 10 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>kind</th>
+      <th>limit_price</th>
+      <th>time_in_force</th>
+      <th>tag</th>
+      <th>reduce_only</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 14:00:20</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>75.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>active-1</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 14:00:50</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>sell</td>
+      <td>75.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>active-2</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 14:01:20</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>75.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>active-3</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 14:01:50</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>sell</td>
+      <td>75.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>active-4</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 14:02:20</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>75.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>active-5</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>2026-06-01 14:02:50</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>sell</td>
+      <td>75.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>active-6</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Store active intent once. Each run receives a unique ID and therefore a
+separate output fork.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">backtest</span><span class="o">.</span><span class="n">create_signal_table</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;active_signals&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;active_signals&quot;</span><span class="p">,</span> <span class="n">active_signals</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;active execution experiment&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;table&#x27;: &#x27;active_signals&#x27;,
+ &#x27;sequence&#x27;: 1,
+ &#x27;op&#x27;: &#x27;append&#x27;,
+ &#x27;rows_total&#x27;: 6,
+ &#x27;segments_total&#x27;: 1,
+ &#x27;segments_added&#x27;: 1,
+ &#x27;segments_deduped&#x27;: 0,
+ &#x27;committed_at_ns&#x27;: 1785448960440367968}</pre></div></div>
+<p>The friction matrix changes one assumption at a time. Prediction-market fees
+use the venue-shaped curve. Proportional fees use maker/taker rates.
+Slippage and queue position are separate modes in the current API.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">scenarios</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;frictionless&quot;</span><span class="p">:</span> <span class="p">{},</span>
+    <span class="s2">&quot;prediction_fee&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;fee_rate&quot;</span><span class="p">:</span> <span class="mf">0.03</span><span class="p">},</span>
+    <span class="s2">&quot;proportional_fee&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;fee_kind&quot;</span><span class="p">:</span> <span class="s2">&quot;proportional&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;fee_rate&quot;</span><span class="p">:</span> <span class="mf">0.001</span><span class="p">,</span>
+        <span class="s2">&quot;maker_rebate&quot;</span><span class="p">:</span> <span class="o">-</span><span class="mf">0.0001</span><span class="p">,</span>
+    <span class="p">},</span>
+    <span class="s2">&quot;20_tick_slippage&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;slippage_ticks&quot;</span><span class="p">:</span> <span class="mi">20</span><span class="p">},</span>
+    <span class="s2">&quot;3_second_latency&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;latency_nanos&quot;</span><span class="p">:</span> <span class="mi">3_000_000_000</span><span class="p">},</span>
+<span class="p">}</span>
+
+<span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="n">scenarios</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">report</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+        <span class="n">db</span><span class="p">,</span>
+        <span class="sa">f</span><span class="s2">&quot;active-</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">,</span>
+        <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;active_signals&quot;</span><span class="p">,</span>
+        <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;execution-input-v1&quot;</span><span class="p">,</span>
+        <span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">5_000_000_000</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">config</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;scenario&quot;</span><span class="p">:</span> <span class="n">name</span><span class="p">,</span>
+            <span class="s2">&quot;fills&quot;</span><span class="p">:</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;fills&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;final_cash&quot;</span><span class="p">:</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;final_cash&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;realized_pnl&quot;</span><span class="p">:</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;realized_pnl&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;commissions&quot;</span><span class="p">:</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;commissions&quot;</span><span class="p">],</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+<span class="n">active_comparison</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;scenario&quot;</span><span class="p">)</span>
+<span class="n">active_comparison</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>fills</th>
+      <th>final_cash</th>
+      <th>realized_pnl</th>
+      <th>commissions</th>
+    </tr>
+    <tr>
+      <th>scenario</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>frictionless</th>
+      <td>6</td>
+      <td>10000.472500</td>
+      <td>0.472500</td>
+      <td>0.000000</td>
+    </tr>
+    <tr>
+      <th>prediction_fee</th>
+      <td>6</td>
+      <td>9997.103450</td>
+      <td>-2.896550</td>
+      <td>3.369050</td>
+    </tr>
+    <tr>
+      <th>proportional_fee</th>
+      <td>6</td>
+      <td>10000.241433</td>
+      <td>0.241432</td>
+      <td>0.231068</td>
+    </tr>
+    <tr>
+      <th>20_tick_slippage</th>
+      <td>6</td>
+      <td>9999.572500</td>
+      <td>-0.427500</td>
+      <td>0.000000</td>
+    </tr>
+    <tr>
+      <th>3_second_latency</th>
+      <td>6</td>
+      <td>10000.412500</td>
+      <td>0.412500</td>
+      <td>0.000000</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Convert each scenario to an implementation-shortfall view. The frictionless
+run is the control, not a claim about achievable execution.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">control_cash</span> <span class="o">=</span> <span class="n">active_comparison</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="s2">&quot;frictionless&quot;</span><span class="p">,</span> <span class="s2">&quot;final_cash&quot;</span><span class="p">]</span>
+<span class="n">active_comparison</span><span class="p">[</span><span class="s2">&quot;cash_shortfall_vs_control&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">control_cash</span> <span class="o">-</span> <span class="n">active_comparison</span><span class="p">[</span><span class="s2">&quot;final_cash&quot;</span><span class="p">]</span>
+<span class="p">)</span>
+<span class="n">active_comparison</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;cash_shortfall_vs_control&quot;</span><span class="p">,</span> <span class="n">ascending</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>fills</th>
+      <th>final_cash</th>
+      <th>realized_pnl</th>
+      <th>commissions</th>
+      <th>cash_shortfall_vs_control</th>
+    </tr>
+    <tr>
+      <th>scenario</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>prediction_fee</th>
+      <td>6</td>
+      <td>9997.103450</td>
+      <td>-2.896550</td>
+      <td>3.369050</td>
+      <td>3.369050</td>
+    </tr>
+    <tr>
+      <th>20_tick_slippage</th>
+      <td>6</td>
+      <td>9999.572500</td>
+      <td>-0.427500</td>
+      <td>0.000000</td>
+      <td>0.900000</td>
+    </tr>
+    <tr>
+      <th>proportional_fee</th>
+      <td>6</td>
+      <td>10000.241433</td>
+      <td>0.241432</td>
+      <td>0.231068</td>
+      <td>0.231067</td>
+    </tr>
+    <tr>
+      <th>3_second_latency</th>
+      <td>6</td>
+      <td>10000.412500</td>
+      <td>0.412500</td>
+      <td>0.000000</td>
+      <td>0.060000</td>
+    </tr>
+    <tr>
+      <th>frictionless</th>
+      <td>6</td>
+      <td>10000.472500</td>
+      <td>0.472500</td>
+      <td>0.000000</td>
+      <td>0.000000</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Passive intent needs a different experiment. The limit is the displayed bid
+at submission time. Queue-aware matching places it behind displayed size and
+requires later sell-aggressor prints to reach it.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">book</span> <span class="o">=</span> <span class="n">fixture</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">arrival</span> <span class="o">=</span> <span class="n">book</span><span class="p">[(</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;event_index&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">30</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;buy&quot;</span><span class="p">)]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">passive_signals</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">signal_table</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">arrival</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pydatetime</span><span class="p">(),</span>
+            <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="s2">&quot;RATE-CUT-YES&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;buy&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">20.0</span><span class="p">,</span>
+            <span class="s2">&quot;kind&quot;</span><span class="p">:</span> <span class="s2">&quot;limit&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;limit_price&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">arrival</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]),</span>
+            <span class="s2">&quot;time_in_force&quot;</span><span class="p">:</span> <span class="s2">&quot;gtc&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="s2">&quot;passive-entry&quot;</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">passive_signals</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows x </span><span class="si">{</span><span class="n">passive_signals</span><span class="o">.</span><span class="n">num_columns</span><span class="si">}</span><span class="s2"> columns&quot;</span><span class="p">)</span>
+<span class="n">passive_signals</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">1 rows x 10 columns</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>kind</th>
+      <th>limit_price</th>
+      <th>time_in_force</th>
+      <th>tag</th>
+      <th>reduce_only</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 14:00:30</td>
+      <td>RATE-CUT-YES</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>20.0</td>
+      <td>limit</td>
+      <td>0.5006</td>
+      <td>gtc</td>
+      <td>passive-entry</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Compare ordinary book matching with conservative and optimistic queue modes.
+Optimistic mode only changes trades whose aggressor is unknown. This tape
+names every aggressor, so both queue runs should agree.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">backtest</span><span class="o">.</span><span class="n">create_signal_table</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;passive_signals&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;passive_signals&quot;</span><span class="p">,</span> <span class="n">passive_signals</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;passive queue experiment&quot;</span><span class="p">)</span>
+
+<span class="n">queue_rows</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">config</span> <span class="ow">in</span> <span class="p">{</span>
+    <span class="s2">&quot;book_only&quot;</span><span class="p">:</span> <span class="p">{},</span>
+    <span class="s2">&quot;queue_conservative&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;queue_position&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">},</span>
+    <span class="s2">&quot;queue_optimistic&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;queue_position&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="s2">&quot;optimistic_queue&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">},</span>
+<span class="p">}</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">report</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+        <span class="n">db</span><span class="p">,</span>
+        <span class="sa">f</span><span class="s2">&quot;passive-</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">,</span>
+        <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;passive_signals&quot;</span><span class="p">,</span>
+        <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;execution-input-v1&quot;</span><span class="p">,</span>
+        <span class="o">**</span><span class="n">config</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">run_db</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="n">report</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">])</span>
+    <span class="n">fills</span> <span class="o">=</span> <span class="n">run_db</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;bt_fills&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="n">run_db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+    <span class="n">queue_rows</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;scenario&quot;</span><span class="p">:</span> <span class="n">name</span><span class="p">,</span>
+            <span class="s2">&quot;fills&quot;</span><span class="p">:</span> <span class="n">report</span><span class="p">[</span><span class="s2">&quot;fills&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;fill_time&quot;</span><span class="p">:</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">fills</span><span class="o">.</span><span class="n">empty</span> <span class="k">else</span> <span class="n">fills</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;ts&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;fill_price&quot;</span><span class="p">:</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">fills</span><span class="o">.</span><span class="n">empty</span> <span class="k">else</span> <span class="n">fills</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;price&quot;</span><span class="p">],</span>
+            <span class="s2">&quot;is_taker&quot;</span><span class="p">:</span> <span class="kc">None</span> <span class="k">if</span> <span class="n">fills</span><span class="o">.</span><span class="n">empty</span> <span class="k">else</span> <span class="n">fills</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="s2">&quot;is_taker&quot;</span><span class="p">],</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+<span class="n">queue_comparison</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">queue_rows</span><span class="p">)</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;scenario&quot;</span><span class="p">)</span>
+<span class="n">queue_comparison</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>fills</th>
+      <th>fill_time</th>
+      <th>fill_price</th>
+      <th>is_taker</th>
+    </tr>
+    <tr>
+      <th>scenario</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>book_only</th>
+      <td>1</td>
+      <td>2026-06-01 14:00:44</td>
+      <td>0.5004</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <th>queue_conservative</th>
+      <td>1</td>
+      <td>2026-06-01 14:00:36</td>
+      <td>0.5006</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>queue_optimistic</th>
+      <td>1</td>
+      <td>2026-06-01 14:00:36</td>
+      <td>0.5006</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Plot cash shortfall rather than raw cash. This makes small execution costs
+visible without truncating the portfolio-value axis.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
+<span class="n">active_comparison</span><span class="p">[</span><span class="s2">&quot;cash_shortfall_vs_control&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">plot</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="n">ax</span><span class="o">=</span><span class="n">ax</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;#4472C4&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;Execution-model cash shortfall&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;Scenario&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;Cash shortfall versus frictionless&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">tick_params</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="n">rotation</span><span class="o">=</span><span class="mi">25</span><span class="p">)</span>
+<span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><img src="data:image/png;base64,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DLcREURFRcHY2DjdOqampjA1NdVGiERERERERJ89nS2YHh8fj99//x3/7FA8fvw4zpw5A3d3d6Xs559/xqBBgwAA7969w6+//qrWZubMmYiOjkabNm0+XfBERERERESfMZ316BkbG+PEiROYMGECSpYsiaioKNy4cQMjRoxQW1rh4sWLOHnyJADA0NAQZ8+exaRJk1CyZEk8fPgQr1+/xqpVq1C5cmVdnQoREREREdFnRefP6EVGRuLSpUuwtLSEi4tLmrGmqQuku7m5KWUvX77E5cuXYWdnBxcXF5iZmWXqNTMztpWIiIiIiOhz8MVOxvKpMNEjIiIiIqIvTWbyGJ09o0dERERERETZg4keERERERGRnvmsllcgos+Tx8jjug5BL+yfV1fXIRAREVEOoVGPXmRkJAICApTt1atXo1KlSujQoQMiIiK0FhwRERERERFlnkaJno+Pj7JA+fPnz9GvXz80b94c0dHRGDlypFYDJCIiIiIioszRaOjmzp074e/vDwDYs2cP3Nzc4Ofnh0ePHqFatWpaDZCIiIiIiIgyR6Mevbi4OKSkpAAAQkJC4OHhAQCwtrZGXFyc9qIjIiIiIiKiTNMo0atduzaGDRuG3377DZs3b0bLli0BAGfOnEGNGjW0GiARERERERFljkaJ3qJFi/D48WNMnz4d06ZNg6urKwBg3rx58PX11WqARERERERElDkaPaNXokQJHDx4ME357t27sxwQERERERERZQ2XVyAiIiIiItIzXF6BiIiIiIhIz3B5BSIiIiIiIj3D5RWIiIiIiIj0DJdXICIiIiIi0jNcXoGIiIiIiEjPcHkFIiIiIiIiPaNRj16qpKQk3L17V1uxEBERERERkRZolOjFxsaiT58+sLCwQLFixZTyrl27IjQ0VFuxERERERERkQY0SvR8fX1x/fp1HDp0SK28U6dOmDJlijbiIiIiIiIiIg1p9Ize5s2bcfDgQZQoUUKtvE6dOujatatWAiMiIiIiIiLNaNSj9+LFCzg6OgIAVCqVUp6QkIDk5GTtREZEREREREQa0SjRq1ChAoKCggCoJ3pLlixB9erVtRMZERERERERaUSjoZtTp06Fl5cXTp8+DQBYsGAB9u7di/3792P//v1aDZCIiIiIiIgyR6MePU9PT2zfvh0XLlyAra0tJk+ejMTERAQHB6NRo0YZPs69e/fQr18/ODk5IXfu3HBzc1N6Cj/m559/RvHixZErVy7Url0bJ06c0OQ0iIiIiIiI9JLG6+g1bNgQQUFBePnyJV69eoUDBw6gYcOGmTrGnDlz4ObmhpMnT+L69eto3LgxWrZsiUuXLqXbZsWKFRgzZgzmzZuH27dvo06dOmjatCkePnyo6akQERERERHpFZWIiK6DSJWSkgJTU1MsW7YMvXv3/mCdMmXKwN3dHYsWLQIAiAgKFSqEnj17YubMmRl6nZiYGNjY2CA6OhrW1tZai59IX3mMPK7rEPTC/nl1dR0CERERfcEyk8dk+Bm9UqVKZTiA69evZ7huqrdv3+J///sfLC0t0bhx4w/WefXqFa5du4Zp06YpZSqVCo0aNcJff/2V6dckIiIiIiLSRxlO9AYPHpwtAezbtw8tWrRAcnIybG1tsXHjRhQtWvSDdZ88eQIAcHBwUCvPmzcvzp49m+5rJCQkICEhQdmOiYnJeuBERERERESfKZ0neh4eHoiPj0dERASWL1+ONm3a4MiRI5lapsHAwAAfG4Hq5+eHKVOmaCNcIiIiIiKiz57Gk7Foi0qlgpGREfLnz49JkyahTJkyCAgI+GDd/PnzA3i/YPs/PX/+HPny5Uv3NcaNG4fo6GjlhxO3EBERERGRPtMo0QsPD0fnzp1RpEgR5MqVK81PViQnJ6fbO2dvbw8XFxccPnxYKRMRHDp0CHXq1En3mKamprC2tlb7ISIiIiIi0lcaLZjeu3dvREdHY8qUKbCzs9Pohd++fYs+ffpgzJgxKF26NKKjo7Fo0SJcunQJCxcuVOr1798fp06dQmhoKABg5MiRGDFiBFq0aIFatWrB398fkZGRGDBggEZxEBERERER6RuNEr3jx48jLCwMBQoU0PiFLS0t4eXlhYEDByI0NBQWFhaoXLkygoOD4ebmptRLTk5GUlKSst2vXz9ERUXh22+/xfPnz1GuXDns3r073QlciIiIiIiIchqN1tErXrw4Tp48ibx582ZHTGpSUlIgIjA0NNTaMbmOHlHmcB097eA6ekRERJQVmcljNHpGz9vbG5MnT1bracsuBgYGWk3yiIiIiIiI9J1GQze3bt2K0NBQbNiwAU5OTlCpVGr7P7amHREREREREWUvjRI9Ly8veHl5aTsWIiIiIiIi0gKNEr2xY8dqOw4iIiIiIiLSkiwvmJ6cnIzk5GRtxEJERERERERaoHGit2rVKpQrVw7m5uYwNzdHuXLlsGrVKm3GRkRERERERBrQKNFbsGABvvvuO3h6emLt2rVYt24dPD09MWDAACxYsEDbMRIREREREVEmaPSM3k8//YQ1a9agTZs2SlmHDh1Qr149jBgxAsOGDdNagERERERERJQ5GvXohYeHw93dPU25u7s7Hj16lOWgiIiIiIiISHMaJXrOzs4IDAxMU759+3Y4OztnOSgiIiIiIiLSnEZDN8ePH49evXph//79qFGjBgDg1KlTWLduHX755RetBkhERERERESZo1Gi17NnTzg6OsLf3x9BQUFQqVQoU6YMdu7ciaZNm2o7RiIiIiIiIsoEjRI9AGjatCmTOiIiIiIios9QlhdMJyIiIiIios9Lhnv0SpUqBQC4fv268nt6rl+/nrWoiIiIiIiISGMZTvQGDx78wd+JiIiIiIjo86JRoveh7VSLFi3KWkRERERERESUJRo9ozdkyBCN9hEREREREVH20+pkLPfv34e9vb02D0lERERERESZlKnlFcqVK/fB3wEgJSUFDx48QLt27bQTGREREREREWkkU4lenz59AADff/+98nsqY2NjFC1aFJ6entqLjoiIiIiIiDItU4ne8OHDAQB58uRBt27dsiMeIiIiIiIiyiKNntHr1q0bnj17lqb8Q2VERERERET0aWmU6C1duhRTpkxJUz5lyhQsW7Ysy0ERERERERGR5jI1dDPV3LlzERwcnKZ81KhR8PT0xIABAzJ8rHfv3uH69eswMjJC8eLFYWJi8tH6N27cwOPHj9XKLC0tUb169Qy/JhERERERkT7TKNF7/PgxrKys0pRbWVnh4cOHGTqGiGDq1KlYsmQJ8uXLh9jYWMTGxmLp0qVo06ZNuu1+/PFHbNmyBWXLllXKnJ2dsWLFisyfCBERERERkR7SKNGrWLEifv/9d4wcOVKtfMWKFShfvnyGjiEiEBGEhYXB1tYWADBt2jR07twZt2/fhqOjY7ptGzRogM2bN2sSOhERERERkd7TKNGbPHkyWrZsiVOnTsHNzQ0igiNHjuDPP//Ejh07MnQMAwMDTJ48Wa2sX79++OGHH3DhwoWPJnpxcXE4ffo0bGxsULx4cRgZaXQaREREREREekmjDMnT0xNBQUGYOXMmJk6cCJVKhcqVKyMoKAiNGzfWOJjTp08DAEqUKPHResHBwXjy5AmePn0KlUqFZcuWoVWrVunWT0hIQEJCgrIdExOjcYxERERERESfO41m3QSAxo0b48CBA3j16hUiIyNx4MCBLCV5z58/x+DBg9G5c2e4uLikW69FixZ4/Pgxzp8/j0ePHqFnz57w8vLCzZs3023j5+cHGxsb5adw4cIax0lERERERPS50zjR06ZXr17B09MThQoVwi+//PLRuq1bt0bu3LkBvB/+OW3aNJiamn50yOi4ceMQHR2t/GR0whgiIiIiIqIvUYaHbpYqVQoAcP36deX39Fy/fj3DAURFRaFp06YwMzPD3r17YWlpmeG2AGBoaAh7e/s0Sy78k6mpKUxNTTN1XCIiIiIioi9VhhO9wYMHf/D3rIiOjkbTpk1hZGSEvXv3fnDJhrCwMMTExKB69eoQEcTGxqolg2FhYbh3716GZ/skIiIiIiLSdyoRkcw2SkpKyvJMl+/evYObmxvu3LmDX375BdbW1so+V1dXZdbNPn364OTJk7h8+TISExNRqVIleHt7o2zZsnjw4AFmzZqFAgUK4PDhw/+52HqqmJgY2NjYIDo6Wu11iejDPEYe13UIemH/vLq6DoGIiIi+YJnJYzTK1kxMTJCSkqJRcKliY2NhamqK0qVL48cff1TbN3r0aHz11VcA3id9ycnJyusePHgQixcvxrJly2BnZ4cJEybg22+/5RILRERERERE/59GPXr58+fHxYsXkS9fvuyIKduxR48oc9ijpx3s0SMiIqKsyEweo9Gsm/3798f48eMRFxenUYBERERERESUfTQa7xgYGIjQ0FBs3LgRzs7OaZ6NO3v2rFaCIyIiIiIioszTKNHz8vKCl5eXtmMhIiIiIiIiLchwojdr1iyMHTsWANCpUycULVo0u2IiIiIiIiKiLMjwM3rjx49H6rwtzs7O2RYQERERERERZU2Ge/QcHR2xa9cu1K37fta4qKiodOva2tpmNS4iIiIiIiLSUIYTPV9fX7Rr1w5JSUkAADs7u3TrarBiAxEREREREWlJhhO9gQMHonPnzrh//z4qV66MM2fOZGdcREREREREpKFMzbppZ2cHOzs7LF26FNWqVcuumIiIiIiIiCgLNFowfcCAAdqOg4iIiIiIiLREo0SPiIiIiIiIPl9M9IiIiIiIiPQMEz0iIiIiIiI9o1GiFxkZ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iIiIiIiINKBRoterVy8cOHAADx8+xJAhQ7Bnzx6UKVMGVatWxfz587UdIxEREREREWWCRoleqgIFCmDkyJE4f/48zp8/j+TkZIwYMUJbsREREREREZEGNJqMJVVKSgoOHTqENWvWYMuWLUhOTkb37t21FRsRERERERFpQKMevQsXLmDUqFEoXLgwmjVrhqdPn2Lp0qV49uwZ/vjjD23HSERERERERJmgUY9elSpVUKtWLYwbNw6dOnVCnjx5tB0XERERERERaUijRO/27dsoVqyYtmMhIiIiIiIiLdBo6CaTPCIiIiIios9XliZj0YaTJ09i2bJluH79OpYsWYIqVap8tL6/vz+2bt2qVla8eHGsWbMmO8MkIiIiIiL6Yug00fP19UVwcDDat2+P33//HTExMf/Z5s6dO7CwsMDMmTOVMgsLi+wMk4iIiIiI6Iui00TPx8cHM2bMwKNHjzB27NgMt7O3t0etWrWyMTIiIiIiIqIvl04TPRsbG43anTlzBu7u7rCxsUH9+vUxePBgmJiYaDk6IiIiIiKiL1OGE71SpUpl+KDXr1/XKJiMsLCwQLdu3dCgQQOEh4dj+vTp2LJlC44cOQJDQ8MPtklISEBCQoKynZEhokRERERERF+qDCd6gwcPzs44MszPzw+mpqbKdv369VGqVCls2rQJnTp1SrfNlClTPlWIREREREREOvXFJXr/TPIAoESJEihatCguXryYbqI3btw4jBgxQtmOiYlB4cKFszVOIiIiIiIiXdH58gpZlZSUhIiICFhaWqZbx9TUNE2CSEREREREpK8++2f0/Pz8cPnyZaxZswaJiYmYP38+vv/+e5iYmCApKQljxoxBbGwsOnTooLXXJCIiIiIi+pLpdOjmrl27MG3aNCQmJgIABg4cCGtra/Tp0wd9+vQBANy+fRsXL14EABgbG+PNmzcoUKAAHB0d8eTJE9ja2mL79u0oXbq01uMjIiIiIiL6EqlERHT14i9evMDt27fTlBcqVAiFChUC8H6B9Ddv3qBChQrK/sTERNy8eRN2dnZwdHSESqXK1OvGxMTAxsYG0dHRsLa2ztpJEOUAHiOP6zoEvbB/Xl1dh0BERERfsMzkMTp9Ri9v3rzImzfvR+sUK1YsTZmJiQnKli2bXWERERERERF90TRO9G7duoXAwEA8ePAASUlJavsWLVqU5cCI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" alt="output figure" loading="lazy"></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>Change one execution assumption at a time against a pinned tape.</li>
+<li>Report implementation shortfall relative to a clearly labelled control.</li>
+<li>Use market orders to study active frictions and limit orders to study queues.</li>
+<li>Queue position requires prints with trustworthy aggressor classification.</li>
+<li>Treat sensitivity across plausible models as model risk, not as error bars.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/04_event_driven_backtesting/01_first_event_driven_run/"><span class="dir">← Previous</span><span class="pn-title">Your first event-driven backtest</span></a><a class="next" href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/"><span class="dir">Next →</span><span class="pn-title">Operate reproducible backtests</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

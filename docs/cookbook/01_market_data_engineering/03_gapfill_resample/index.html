@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/03_gapfill_resample/#article","headline":"Regular grids for irregular markets: gapfill and resample","name":"Regular grids for irregular markets: gapfill and resample","description":"Illiquid names do not trade every minute. Almost everything downstream wants a regular time grid anyway: covariance matrices, joins against liquid\u2026","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/03_gapfill_resample/","inLanguage":"en","dateModified":"2026-07-29","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/03_gapfill_resample/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"Regular grids for irregular markets: gapfill and resample","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/03_gapfill_resample/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/03_gapfill_resample/#article","headline":"Regular grids for irregular markets: gapfill and resample","name":"Regular grids for irregular markets: gapfill and resample","description":"Illiquid names do not trade every minute. Almost everything downstream wants a regular time grid anyway: covariance matrices, joins against liquid\u2026","url":"https://db.h5i.dev/cookbook/01_market_data_engineering/03_gapfill_resample/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/01_market_data_engineering/03_gapfill_resample/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Market data engineering"},{"@type":"ListItem","position":4,"name":"Regular grids for irregular markets: gapfill and resample","item":"https://db.h5i.dev/cookbook/01_market_data_engineering/03_gapfill_resample/"}]}]}</script>
 </head>
 <body>
 
@@ -85,14 +85,51 @@ visible, <code>'locf'</code> carries the last observation forward, and <code>'in
 draws a line between neighbours.</p>
 <p>The policy you pick is a modelling decision with real P&amp;L consequences. This
 recipe ends on the classic trap, phantom returns from stale locf prices.</p>
-<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">pyarrow</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pa</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>illiquid</td>
+<td>traded rarely, so many intervals contain no trades at all</td>
+</tr>
+<tr>
+<td>gapfill / resample</td>
+<td>put an irregular series onto a regular time grid</td>
+</tr>
+<tr>
+<td>locf</td>
+<td>last observation carried forward, one of the three fill policies</td>
+</tr>
+<tr>
+<td>interpolate</td>
+<td>draw a straight line between the two observations either side of a hole</td>
+</tr>
+<tr>
+<td>phantom return</td>
+<td>a return computed across a repeated stale price, which nobody could trade</td>
+</tr>
+<tr>
+<td>covariance matrix</td>
+<td>pairwise return covariances, the input to most portfolio risk models</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">h5i_db</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">time_bucket</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">cookbook_utils</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">cu</span>
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">count_star</span><span class="p">,</span> <span class="n">time_bucket</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
 
 <span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;mde_gapfill&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
@@ -486,7 +523,7 @@ which we keep the mid.</p>
 zero. Stale prices masquerade as "no move".</p>
 <p>Below we compute the same return series both ways, using intraday pairs only
 and excluding the overnight gap.</p>
-<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">session_returns</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">session_returns</span><span class="p">(</span><span class="n">df</span><span class="p">:</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pd</span><span class="o">.</span><span class="n">Series</span><span class="p">:</span>
     <span class="n">d</span> <span class="o">=</span> <span class="n">df</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
     <span class="n">mins</span> <span class="o">=</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">hour</span> <span class="o">*</span> <span class="mi">60</span> <span class="o">+</span> <span class="n">d</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">minute</span>
     <span class="n">d</span> <span class="o">=</span> <span class="n">d</span><span class="p">[(</span><span class="n">mins</span> <span class="o">&gt;=</span> <span class="mi">13</span> <span class="o">*</span> <span class="mi">60</span> <span class="o">+</span> <span class="mi">30</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">mins</span> <span class="o">&lt;</span> <span class="mi">20</span> <span class="o">*</span> <span class="mi">60</span><span class="p">)]</span>
@@ -540,7 +577,7 @@ and make carry-forward an explicit, documented step at the point of use.</p>
     <nav class="page-nav"><a class="prev" href="/cookbook/01_market_data_engineering/02_vwap_twap_execution/"><span class="dir">← Previous</span><span class="pn-title">VWAP, TWAP and execution benchmarks</span></a><a class="next" href="/cookbook/01_market_data_engineering/04_asof_join_trades_quotes/"><span class="dir">Next →</span><span class="pn-title">ASOF joins: trades vs quotes, signing and spreads</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-bars-with-holes">2. Bars with holes</a></li><li><a href="#3-gapfill-onto-a-regular-grid">3. gapfill onto a regular grid</a></li><li><a href="#4-the-three-fill-policies-side-by-side">4. The three fill policies, side by side</a></li><li><a href="#5-resample-alias-and-the-row-count-guard">5. resample alias, and the row-count guard</a></li><li><a href="#6-phantom-returns-why-the-fill-mode-is-a-modelling-decision">6. Phantom returns: why the fill mode is a modelling decision</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data">1. The data</a></li><li><a href="#2-bars-with-holes">2. Bars with holes</a></li><li><a href="#3-gapfill-onto-a-regular-grid">3. gapfill onto a regular grid</a></li><li><a href="#4-the-three-fill-policies-side-by-side">4. The three fill policies, side by side</a></li><li><a href="#5-resample-alias-and-the-row-count-guard">5. resample alias, and the row-count guard</a></li><li><a href="#6-phantom-returns-why-the-fill-mode-is-a-modelling-decision">6. Phantom returns: why the fill mode is a modelling decision</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

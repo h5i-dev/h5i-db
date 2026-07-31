@@ -103,6 +103,37 @@ def _signals(db, rows):
     db.append("signals", backtest.signal_table(rows))
 
 
+RESOLUTIONS = pa.schema(
+    [
+        pa.field("ts_init", pa.timestamp("ns"), nullable=False),
+        pa.field("instrument_id", pa.string(), nullable=False),
+        pa.field("kind", pa.string(), nullable=False),
+        pa.field("outcome", pa.uint16()),
+        pa.field("payout", pa.float64()),
+        pa.field("outcome_count", pa.uint16()),
+    ]
+)
+
+
+def _resolve(db, kind="winner", outcome=0, payout=None, outcome_count=None):
+    """Write how the seeded market ended, after the data it traded on."""
+    db.create_table("resolutions", RESOLUTIONS, time_column="ts_init")
+    db.append(
+        "resolutions",
+        pa.table(
+            {
+                "ts_init": [dt.datetime(2024, 1, 1, 0, 0, 5)],
+                "instrument_id": [MARKET],
+                "kind": [kind],
+                "outcome": [outcome],
+                "payout": [payout],
+                "outcome_count": [outcome_count],
+            },
+            schema=RESOLUTIONS,
+        ),
+    )
+
+
 def test_a_run_from_python_produces_fills_and_a_fork():
     with tempfile.TemporaryDirectory() as tmp:
         db = _seeded(tmp)
@@ -653,6 +684,116 @@ def test_python_event_strategy_is_explicit_and_receives_fills():
         assert result.config.data.strategy_id == "tests.BuyOnThirdSecond:v1"
         verified = result.verify(strategy=BuyOnThirdSecond())
         assert verified["verified"]
+        db.close()
+
+
+def test_a_callback_strategy_can_trade_the_venues_set_contract():
+    """Mint a complete set and hand it back, from Python.
+
+    A set costs exactly one unit of cash however the book divides it, so a
+    mint followed by a redeem is cash-neutral. That invariant is the whole
+    point of modelling the operation: without it, a strategy cannot supply
+    both sides of a book without first buying them.
+    """
+
+    class MintAndRedeem(backtest.EventStrategy):
+        def __init__(self):
+            self.seen = 0
+
+        def on_event(self, context, event):
+            self.seen += 1
+            if self.seen == 1:
+                return {"action": "mint", "instrument_id": MARKET, "quantity": 20.0}
+            if self.seen == 4:
+                return {"action": "redeem", "instrument_id": MARKET, "quantity": 20.0}
+            return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        result = backtest.run_strategy(
+            db,
+            "set-contract",
+            MintAndRedeem(),
+            strategy_id="tests.MintAndRedeem:v1",
+            starting_cash=500.0,
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+
+        operations = result["set_operations"]
+        assert [op["kind"] for op in operations] == ["mint", "redeem"]
+        assert all(op["rejected"] is None for op in operations)
+        assert operations[0]["cash_delta"] == pytest.approx(20.0)
+        assert operations[1]["cash_delta"] == pytest.approx(-20.0)
+        assert result["final_cash"] == pytest.approx(500.0)
+        assert result["metrics"]["set_operations"] == 2
+        db.close()
+
+
+def test_a_python_forecast_becomes_a_scored_calibration_sample():
+    """The triple `quant.calibration` needs, produced by the run itself.
+
+    Fills say what a strategy did; only the strategy knows what it believed,
+    so the forecast has to come from the callback rather than be inferred
+    from the price it traded against.
+    """
+
+    class Forecaster(backtest.EventStrategy):
+        def on_event(self, context, event):
+            return {
+                "action": "forecast",
+                "instrument_id": MARKET,
+                "outcome": 0,
+                "probability": 0.65,
+                "tag": "model-a",
+            }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _resolve(db, kind="winner", outcome=0)
+        result = backtest.run_strategy(
+            db,
+            "forecasting",
+            Forecaster(),
+            strategy_id="tests.Forecaster:v1",
+            starting_cash=500.0,
+        )
+
+        samples = result["calibration_samples"]
+        assert len(samples) == result["forecasts"] > 0
+        first = samples[0]
+        assert first["forecast"] == pytest.approx(0.65)
+        assert first["realized"] == pytest.approx(1.0)
+        assert first["tag"] == "model-a"
+        # The market's own probability at the same instant, which is what
+        # the forecast is scored against.
+        assert 0.0 < first["market"] < 1.0
+        db.close()
+
+
+def test_a_voided_market_is_dropped_from_the_scored_sample():
+    class Forecaster(backtest.EventStrategy):
+        def on_event(self, context, event):
+            return {
+                "action": "forecast",
+                "instrument_id": MARKET,
+                "outcome": 0,
+                "probability": 0.95,
+            }
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _resolve(db, kind="void", outcome=None, outcome_count=2)
+        result = backtest.run_strategy(
+            db,
+            "voided",
+            Forecaster(),
+            strategy_id="tests.Forecaster:v1",
+            starting_cash=500.0,
+        )
+
+        assert result["forecasts"] > 0
+        assert result["calibration_samples"] == []
+        assert any("were not scored" in warning for warning in result["warnings"])
         db.close()
 
 

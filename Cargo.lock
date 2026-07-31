@@ -1942,6 +1942,8 @@ dependencies = [
  "chrono",
  "h5i-db-backtest",
  "h5i-db-core",
+ "lz4_flex",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

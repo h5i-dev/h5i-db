@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Order lifecycle and account risk · h5i-db docs</title>
+  <meta name="description" content="Most backtests model an order as a single event. It is sent and it fills. Real orders have a life.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Order lifecycle and account risk · h5i-db docs">
+  <meta property="og:description" content="Most backtests model an order as a single event. It is sent and it fills. Real orders have a life.">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Order lifecycle and account risk · h5i-db docs">
+  <meta name="twitter:description" content="Most backtests model an order as a single event. It is sent and it fills. Real orders have a life.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/#article","headline":"Order lifecycle and account risk","name":"Order lifecycle and account risk","description":"Most backtests model an order as a single event. It is sent and it fills. Real orders have a life.","url":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Event-driven backtesting"},{"@type":"ListItem","position":4,"name":"Order lifecycle and account risk","item":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Event-driven backtesting</div><ul><li><a href="/cookbook/04_event_driven_backtesting/01_first_event_driven_run/">Your first event-driven backtest</a></li><li><a href="/cookbook/04_event_driven_backtesting/02_execution_realism/">Stress-test execution assumptions</a></li><li><a href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/">Operate reproducible backtests</a></li><li><a href="/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/">A production data contract for Kaggle Polymarket L2</a></li><li><a href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/">Causal signal replay on real Polymarket books</a></li><li><a href="/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/" class="active">Order lifecycle and account risk</a></li><li><a href="/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/">Path-dependent Python strategies</a></li><li><a href="/cookbook/04_event_driven_backtesting/08_equity_bars_to_event_driven/">From a vectorized equity backtest to an event-driven one</a></li><li><a href="/cookbook/04_event_driven_backtesting/09_market_making_inventory/">Market making: inventory, latency, and being run over</a></li><li><a href="/cookbook/04_event_driven_backtesting/10_execution_algorithms/">Execution algorithms and the cost of not finishing</a></li><li><a href="/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/">Calibrating costs from your own fills</a></li><li><a href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/">Searching a strategy space without fooling yourself</a></li><li><a href="/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/">Replaying an account&#x27;s ledger</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Event-driven backtesting</span>
+<span class="sep">/</span>
+<span>Order lifecycle and account risk</span></div>
+<h1>Order lifecycle and account risk</h1>
+<p>Most backtests model an order as a single event. It is sent and it fills.
+Real orders have a life. They rest, they get repriced as the market moves,
+they lose queue priority when they do, they get cancelled when they go
+stale, and they get rejected outright when they would breach a limit.</p>
+<p>Modelling only the fill hides two things that cost real money. Repricing
+sends you to the back of the queue. And a risk limit that lives in your
+notebook is not a risk limit.</p>
+<p>A production backtest needs more than timestamped entries. Quotes are
+amended, stale orders are cancelled, and account limits must reject unsafe
+intent before it reaches the simulated venue. This recipe exercises that
+complete lifecycle with stable client order IDs and inspects the resulting
+audit trail.</p>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>order lifecycle</td>
+<td>submit, amend, cancel, fill, expire: everything an order does after it is sent</td>
+</tr>
+<tr>
+<td>amend</td>
+<td>changing the price or size of a resting order rather than replacing it</td>
+</tr>
+<tr>
+<td>client order ID</td>
+<td>your own stable identifier for an order, so its whole history joins up</td>
+</tr>
+<tr>
+<td>preflight</td>
+<td>a check that rejects unsafe or unsupported intent before it reaches the venue</td>
+</tr>
+<tr>
+<td>account limit</td>
+<td>a cap on exposure, order size or cash that the engine enforces natively</td>
+</tr>
+<tr>
+<td>audit trail</td>
+<td>the record of what was requested, what was rejected, and why</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">datetime</span> <span class="k">as</span> <span class="nn">dt</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">INSTRUMENT_ID</span> <span class="o">=</span> <span class="s2">&quot;RATE-CUT-YES&quot;</span>
+<span class="n">MARKET_CUT</span> <span class="o">=</span> <span class="s2">&quot;lifecycle-market-cut&quot;</span>
+<span class="n">SECOND</span> <span class="o">=</span> <span class="mi">1_000_000_000</span>
+
+<span class="n">fixture</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_backtest_fixture</span><span class="p">(</span><span class="n">steps</span><span class="o">=</span><span class="mi">120</span><span class="p">,</span> <span class="n">instrument_id</span><span class="o">=</span><span class="n">INSTRUMENT_ID</span><span class="p">)</span>
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;06_order_lifecycle_and_risk&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">fixture</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;deterministic lifecycle fixture&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span>
+    <span class="n">MARKET_CUT</span><span class="p">,</span>
+    <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="s2">&quot;trades&quot;</span><span class="p">],</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;Approved market-data cut for lifecycle examples&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;name&#x27;: &#x27;lifecycle-market-cut&#x27;,
+ &#x27;created_at_ns&#x27;: 1785448976902500906,
+ &#x27;note&#x27;: &#x27;Approved market-data cut for lifecycle examples&#x27;,
+ &#x27;entries&#x27;: {&#x27;12ae4747-2c89-496d-a640-bfc6d4e9bffe&#x27;: {&#x27;table_name&#x27;: &#x27;book_deltas&#x27;,
+   &#x27;sequence&#x27;: 1,
+   &#x27;manifest_checksum&#x27;: &#x27;1966a20362ae1179d027646be70be674b99b7e58a4ff7b2ed0123a9c9f0df7a5&#x27;},
+  &#x27;60d9625a-5ecd-4691-b00d-bb3d80e0bdca&#x27;: {&#x27;table_name&#x27;: &#x27;trades&#x27;,
+   &#x27;sequence&#x27;: 1,
+   &#x27;manifest_checksum&#x27;: &#x27;75eb4a8f8e4be341004ec9a4c3905d8e58fabfc370e5c0b1f9a2204bca6bb8ac&#x27;},
+  &#x27;e48fbdc5-3b05-4faa-a420-ec1fea67bbc3&#x27;: {&#x27;table_name&#x27;: &#x27;instruments&#x27;,
+   &#x27;sequence&#x27;: 1,
+   &#x27;manifest_checksum&#x27;: &#x27;c0a4f66d8c997482c878aa37be12f0354898e8abdb40171b0e1f142389d5444c&#x27;}},
+ &#x27;checksum&#x27;: &#x27;ffe2f0f22ad1330b99660c2034f222a70c23e3a75ddccd700b77050d0ca1c167&#x27;}</pre></div></div>
+<h2 id="declare-the-lifecycle">Declare the lifecycle<a class="headerlink" href="#declare-the-lifecycle" title="Permanent link">#</a></h2>
+<p><code>client_order_id</code> belongs to the strategy, not the engine. Later rows use
+that stable name to address the exact order created by <code>submit</code>. Submit
+fields are nullable in the storage schema because cancel rows only need an
+ID; the builder validates the fields required by each action.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">base</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">datetime</span><span class="p">(</span><span class="mi">2026</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">14</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
+<span class="n">lifecycle</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">command_table</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">10</span><span class="p">),</span>
+            <span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;submit&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;client_order_id&quot;</span><span class="p">:</span> <span class="s2">&quot;yes-quote-001&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">INSTRUMENT_ID</span><span class="p">,</span>
+            <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;buy&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">20.0</span><span class="p">,</span>
+            <span class="s2">&quot;kind&quot;</span><span class="p">:</span> <span class="s2">&quot;limit&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;limit_price&quot;</span><span class="p">:</span> <span class="mf">0.25</span><span class="p">,</span>
+            <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="s2">&quot;passive-quote&quot;</span><span class="p">,</span>
+        <span class="p">},</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">30</span><span class="p">),</span>
+            <span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;amend&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;client_order_id&quot;</span><span class="p">:</span> <span class="s2">&quot;yes-quote-001&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">10.0</span><span class="p">,</span>
+            <span class="s2">&quot;limit_price&quot;</span><span class="p">:</span> <span class="mf">0.26</span><span class="p">,</span>
+        <span class="p">},</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">60</span><span class="p">),</span>
+            <span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;cancel&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;client_order_id&quot;</span><span class="p">:</span> <span class="s2">&quot;yes-quote-001&quot;</span><span class="p">,</span>
+        <span class="p">},</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">backtest</span><span class="o">.</span><span class="n">create_command_table</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;lifecycle_commands&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+    <span class="s2">&quot;lifecycle_commands&quot;</span><span class="p">,</span>
+    <span class="n">lifecycle</span><span class="p">,</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;submit, reprice/resize, then cancel one quote&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">lifecycle</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>action</th>
+      <th>client_order_id</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>kind</th>
+      <th>limit_price</th>
+      <th>time_in_force</th>
+      <th>tag</th>
+      <th>reduce_only</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 14:00:10</td>
+      <td>submit</td>
+      <td>yes-quote-001</td>
+      <td>RATE-CUT-YES</td>
+      <td>0.0</td>
+      <td>buy</td>
+      <td>20.0</td>
+      <td>limit</td>
+      <td>0.25</td>
+      <td>NaN</td>
+      <td>passive-quote</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 14:00:30</td>
+      <td>amend</td>
+      <td>yes-quote-001</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>10.0</td>
+      <td>NaN</td>
+      <td>0.26</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>None</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 14:01:00</td>
+      <td>cancel</td>
+      <td>yes-quote-001</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>None</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>The typed configuration captures every material assumption. Preflight checks
+the market pin, schemas, coverage, and the strongest fidelity supported by
+the feed before the expensive replay starts.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">lifecycle_config</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">BacktestConfig</span><span class="p">(</span>
+    <span class="n">run_id</span><span class="o">=</span><span class="s2">&quot;lifecycle&quot;</span><span class="p">,</span>
+    <span class="n">portfolio</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">PortfolioConfig</span><span class="p">(</span><span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">),</span>
+    <span class="n">data</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">DataConfig</span><span class="p">(</span>
+        <span class="n">commands</span><span class="o">=</span><span class="s2">&quot;lifecycle_commands&quot;</span><span class="p">,</span>
+        <span class="n">snapshot</span><span class="o">=</span><span class="n">MARKET_CUT</span><span class="p">,</span>
+    <span class="p">),</span>
+    <span class="n">execution</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">ExecutionConfig</span><span class="p">(</span>
+        <span class="n">fee_kind</span><span class="o">=</span><span class="s2">&quot;prediction_market&quot;</span><span class="p">,</span>
+        <span class="n">fee_rate</span><span class="o">=</span><span class="mf">0.02</span><span class="p">,</span>
+        <span class="n">latency_nanos</span><span class="o">=</span><span class="mi">2_000_000</span><span class="p">,</span>
+    <span class="p">),</span>
+    <span class="n">risk</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">RiskConfig</span><span class="p">(</span>
+        <span class="n">max_order_quantity</span><span class="o">=</span><span class="mf">25.0</span><span class="p">,</span>
+        <span class="n">max_abs_position</span><span class="o">=</span><span class="mf">50.0</span><span class="p">,</span>
+        <span class="n">max_open_orders</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+    <span class="p">),</span>
+    <span class="n">output</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">OutputConfig</span><span class="p">(</span><span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">5</span> <span class="o">*</span> <span class="n">SECOND</span><span class="p">),</span>
+    <span class="n">metadata</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;research_ticket&quot;</span><span class="p">:</span> <span class="s2">&quot;PM-142&quot;</span><span class="p">,</span> <span class="s2">&quot;owner&quot;</span><span class="p">:</span> <span class="s2">&quot;market-making&quot;</span><span class="p">},</span>
+<span class="p">)</span>
+<span class="n">inspection</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">inspect</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">lifecycle_config</span><span class="p">)</span>
+<span class="n">inspection</span><span class="o">.</span><span class="n">to_dict</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;ok&#x27;: True,
+ &#x27;config_digest&#x27;: &#x27;58983ab2fbcf3104c71021aa7a11c3526d48303c84c9d1aec835814aab6cb6ed&#x27;,
+ &#x27;fidelity&#x27;: &#x27;snapshot_l2&#x27;,
+ &#x27;tables&#x27;: {&#x27;book_deltas&#x27;: {&#x27;row_count&#x27;: 240,
+   &#x27;min_time&#x27;: Timestamp(&#x27;2026-06-01 14:00:01&#x27;),
+   &#x27;max_time&#x27;: Timestamp(&#x27;2026-06-01 14:02:00&#x27;),
+   &#x27;columns&#x27;: (&#x27;ts_init&#x27;,
+    &#x27;ts_event&#x27;,
+    &#x27;instrument_id&#x27;,
+    &#x27;outcome&#x27;,
+    &#x27;action&#x27;,
+    &#x27;side&#x27;,
+    &#x27;price&#x27;,
+    &#x27;size&#x27;,
+    &#x27;event_index&#x27;,
+    &#x27;is_last&#x27;,
+    &#x27;source_vendor&#x27;),
+   &#x27;actions&#x27;: {&#x27;snapshot&#x27;: 240}},
+  &#x27;instruments&#x27;: {&#x27;row_count&#x27;: 2,
+   &#x27;min_time&#x27;: Timestamp(&#x27;2026-06-01 14:00:00&#x27;),
+   &#x27;max_time&#x27;: Timestamp(&#x27;2026-06-01 14:00:00&#x27;),
+   &#x27;columns&#x27;: (&#x27;ts_init&#x27;,
+    &#x27;instrument_id&#x27;,
+    &#x27;venue&#x27;,
+    &#x27;kind&#x27;,
+    &#x27;outcome&#x27;,
+    &#x27;outcome_label&#x27;,
+    &#x27;tick_size&#x27;,
+    &#x27;lot_size&#x27;,
+    &#x27;expiration_ns&#x27;,
+    &#x27;settlement_observable_ns&#x27;)},
+  &#x27;lifecycle_commands&#x27;: {&#x27;row_count&#x27;: 3,
+   &#x27;min_time&#x27;: Timestamp(&#x27;2026-06-01 14:00:10&#x27;),
+   &#x27;max_time&#x27;: Timestamp(&#x27;2026-06-01 14:01:00&#x27;),
+   &#x27;columns&#x27;: (&#x27;ts&#x27;,
+    &#x27;action&#x27;,
+    &#x27;client_order_id&#x27;,
+    &#x27;instrument_id&#x27;,
+    &#x27;outcome&#x27;,
+    &#x27;side&#x27;,
+    &#x27;quantity&#x27;,
+    &#x27;kind&#x27;,
+    &#x27;limit_price&#x27;,
+    &#x27;time_in_force&#x27;,
+    &#x27;tag&#x27;,
+    &#x27;reduce_only&#x27;)},
+  &#x27;trades&#x27;: {&#x27;row_count&#x27;: 120,
+   &#x27;min_time&#x27;: Timestamp(&#x27;2026-06-01 14:00:01&#x27;),
+   &#x27;max_time&#x27;: Timestamp(&#x27;2026-06-01 14:02:00&#x27;),
+   &#x27;columns&#x27;: (&#x27;ts_init&#x27;,
+    &#x27;ts_event&#x27;,
+    &#x27;instrument_id&#x27;,
+    &#x27;outcome&#x27;,
+    &#x27;price&#x27;,
+    &#x27;size&#x27;,
+    &#x27;aggressor&#x27;,
+    &#x27;trade_id&#x27;,
+    &#x27;source_vendor&#x27;)}},
+ &#x27;capabilities&#x27;: {&#x27;market_orders&#x27;: True,
+  &#x27;limit_orders&#x27;: True,
+  &#x27;queue_position&#x27;: False,
+  &#x27;exact_intraday_path&#x27;: False},
+ &#x27;issues&#x27;: [{&#x27;severity&#x27;: &#x27;warning&#x27;,
+   &#x27;code&#x27;: &#x27;snapshot_only&#x27;,
+   &#x27;message&#x27;: &#x27;periodic snapshots cannot reconstruct queue transitions between events&#x27;,
+   &#x27;remediation&#x27;: None}]}</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">inspection</span><span class="o">.</span><span class="n">raise_for_errors</span><span class="p">()</span>
+<span class="n">lifecycle_result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">lifecycle_config</span><span class="p">)</span>
+<span class="n">orders</span> <span class="o">=</span> <span class="n">lifecycle_result</span><span class="o">.</span><span class="n">orders</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">orders</span><span class="p">[</span>
+    <span class="p">[</span>
+        <span class="s2">&quot;order_id&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;side&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;limit_price&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;quantity&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;filled&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;status&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;reject_reason&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;tag&quot;</span><span class="p">,</span>
+    <span class="p">]</span>
+<span class="p">]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>order_id</th>
+      <th>side</th>
+      <th>limit_price</th>
+      <th>quantity</th>
+      <th>filled</th>
+      <th>status</th>
+      <th>reject_reason</th>
+      <th>tag</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>1</td>
+      <td>buy</td>
+      <td>0.26</td>
+      <td>10.0</td>
+      <td>0.0</td>
+      <td>cancelled</td>
+      <td>NaN</td>
+      <td>passive-quote</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>The quote was intentionally away from the market, so the expected outcome is
+cancellation rather than a fill. <code>explain()</code> makes silence inspectable, and
+<code>verify()</code> reruns the persisted config and compares every authoritative
+output table.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">assert</span> <span class="n">lifecycle_result</span><span class="p">[</span><span class="s2">&quot;fills&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="k">assert</span> <span class="n">orders</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">&quot;cancelled&quot;</span><span class="p">]</span>
+<span class="n">explanation</span> <span class="o">=</span> <span class="n">lifecycle_result</span><span class="o">.</span><span class="n">explain</span><span class="p">()</span>
+<span class="n">verification</span> <span class="o">=</span> <span class="n">lifecycle_result</span><span class="o">.</span><span class="n">verify</span><span class="p">()</span>
+<span class="k">assert</span> <span class="n">verification</span><span class="p">[</span><span class="s2">&quot;verified&quot;</span><span class="p">]</span>
+<span class="n">explanation</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;warnings&#x27;: [&quot;1 order(s) were cancelled without filling; the usual cause is acting before the instrument&#x27;s first book update, or a limit the book never reached&quot;,
+  &#x27;1 orders, no fills: 1 found no liquidity at their price&#x27;],
+ &#x27;status_counts&#x27;: {&#x27;cancelled&#x27;: 1},
+ &#x27;rejection_reasons&#x27;: {},
+ &#x27;orders_without_fills&#x27;: 1,
+ &#x27;orders_sweeping_multiple_levels&#x27;: 0,
+ &#x27;fidelity&#x27;: &#x27;snapshot_l2&#x27;}</pre></div></div>
+<h2 id="prove-that-risk-rejects-before-venue-execution">Prove that risk rejects before venue execution<a class="headerlink" href="#prove-that-risk-rejects-before-venue-execution" title="Permanent link">#</a></h2>
+<p>Risk controls are native engine constraints, not notebook-side filters. The
+oversized market order is recorded as rejected, never enters latency or
+matching, and carries a durable reason in <code>bt_orders</code>.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">risk_commands</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">command_table</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">base</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">seconds</span><span class="o">=</span><span class="mi">20</span><span class="p">),</span>
+            <span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;submit&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;client_order_id&quot;</span><span class="p">:</span> <span class="s2">&quot;oversized-entry&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">INSTRUMENT_ID</span><span class="p">,</span>
+            <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;buy&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="mf">100.0</span><span class="p">,</span>
+            <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="s2">&quot;must-reject&quot;</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="p">]</span>
+<span class="p">)</span>
+<span class="n">backtest</span><span class="o">.</span><span class="n">create_command_table</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;risk_commands&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;risk_commands&quot;</span><span class="p">,</span> <span class="n">risk_commands</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;risk rejection demonstration&quot;</span><span class="p">)</span>
+
+<span class="n">risk_config</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">BacktestConfig</span><span class="p">(</span>
+    <span class="n">run_id</span><span class="o">=</span><span class="s2">&quot;risk-rejection&quot;</span><span class="p">,</span>
+    <span class="n">portfolio</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">PortfolioConfig</span><span class="p">(</span><span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000.0</span><span class="p">),</span>
+    <span class="n">data</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">DataConfig</span><span class="p">(</span><span class="n">commands</span><span class="o">=</span><span class="s2">&quot;risk_commands&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="n">MARKET_CUT</span><span class="p">),</span>
+    <span class="n">risk</span><span class="o">=</span><span class="n">backtest</span><span class="o">.</span><span class="n">RiskConfig</span><span class="p">(</span>
+        <span class="n">max_order_quantity</span><span class="o">=</span><span class="mf">25.0</span><span class="p">,</span>
+        <span class="n">max_abs_position</span><span class="o">=</span><span class="mf">50.0</span><span class="p">,</span>
+        <span class="n">max_open_orders</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span>
+    <span class="p">),</span>
+<span class="p">)</span>
+<span class="n">risk_result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">risk_config</span><span class="p">)</span>
+<span class="n">risk_order</span> <span class="o">=</span> <span class="n">risk_result</span><span class="o">.</span><span class="n">orders</span><span class="o">.</span><span class="n">to_pylist</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span>
+<span class="k">assert</span> <span class="n">risk_result</span><span class="p">[</span><span class="s2">&quot;fills&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="k">assert</span> <span class="n">risk_order</span><span class="p">[</span><span class="s2">&quot;status&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;rejected&quot;</span>
+<span class="k">assert</span> <span class="s2">&quot;max_order_quantity&quot;</span> <span class="ow">in</span> <span class="n">risk_order</span><span class="p">[</span><span class="s2">&quot;reject_reason&quot;</span><span class="p">]</span>
+<span class="n">risk_result</span><span class="o">.</span><span class="n">explain</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre>{&#x27;warnings&#x27;: [&#x27;1 orders, no fills: 1 refused by configured risk limits&#x27;],
+ &#x27;status_counts&#x27;: {&#x27;rejected&#x27;: 1},
+ &#x27;rejection_reasons&#x27;: {&#x27;quantity 100 exceeds max_order_quantity 25&#x27;: 1},
+ &#x27;orders_without_fills&#x27;: 1,
+ &#x27;orders_sweeping_multiple_levels&#x27;: 0,
+ &#x27;fidelity&#x27;: &#x27;snapshot_l2&#x27;}</pre></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>Stable client IDs make amend/cancel workflows independent of engine IDs.</li>
+<li>Amendments follow venue-like queue rules; repricing or increasing size
+  loses priority.</li>
+<li>Position limits include all live orders, not only already-filled exposure.</li>
+<li>Rejection reasons are persisted and queryable, so a zero-fill run is
+  diagnosable.</li>
+<li>Typed configs, preflight, and semantic verification form one reproducible
+  operational contract.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/"><span class="dir">← Previous</span><span class="pn-title">Causal signal replay on real Polymarket books</span></a><a class="next" href="/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/"><span class="dir">Next →</span><span class="pn-title">Path-dependent Python strategies</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#declare-the-lifecycle">Declare the lifecycle</a></li><li><a href="#prove-that-risk-rejects-before-venue-execution">Prove that risk rejects before venue execution</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

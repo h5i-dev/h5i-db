@@ -24,10 +24,11 @@
 
 use serde_json::Value;
 
+use h5i_db_backtest::account::PerInstrumentMargin;
 use h5i_db_backtest::error::{BacktestError, Result};
 use h5i_db_backtest::event::{MarketEvent, Record};
-use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId};
-use h5i_db_backtest::types::{Price, Qty, Stamps, UnixNanos};
+use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId, PriceRule};
+use h5i_db_backtest::types::{Price, Qty, Side, Stamps, UnixNanos};
 
 /// Mainnet info endpoint.
 pub const MAINNET_INFO_URL: &str = "https://api.hyperliquid.xyz/info";
@@ -55,12 +56,21 @@ pub fn candles_request(coin: &str, interval: &str, start_ms: i64, end_ms: i64) -
 }
 
 /// Body for a funding history request.
+/// Note the shape: `fundingHistory` takes its arguments **flat**, unlike
+/// `candleSnapshot`, which nests them under `req`. The API rejects the
+/// nested form with a 422 that says only "Failed to deserialize the JSON
+/// body into the target type", which is why this is spelled out here and
+/// pinned by a test against a live capture.
 pub fn funding_request(coin: &str, start_ms: i64, end_ms: Option<i64>) -> String {
-    let mut req = serde_json::json!({ "coin": coin, "startTime": start_ms });
+    let mut body = serde_json::json!({
+        "type": "fundingHistory",
+        "coin": coin,
+        "startTime": start_ms,
+    });
     if let Some(end) = end_ms {
-        req["endTime"] = Value::from(end);
+        body["endTime"] = Value::from(end);
     }
-    serde_json::json!({ "type": "fundingHistory", "req": req }).to_string()
+    body.to_string()
 }
 
 /// Body for an L2 book snapshot request.
@@ -68,7 +78,447 @@ pub fn l2_book_request(coin: &str) -> String {
     serde_json::json!({ "type": "l2Book", "coin": coin }).to_string()
 }
 
-/// A perpetual instrument for a Hyperliquid coin.
+/// Body for the perpetual universe request.
+pub fn meta_request() -> String {
+    serde_json::json!({ "type": "meta" }).to_string()
+}
+
+/// Body for the universe plus its live contexts (mark, oracle, funding).
+pub fn meta_and_asset_ctxs_request() -> String {
+    serde_json::json!({ "type": "metaAndAssetCtxs" }).to_string()
+}
+
+/// Hyperliquid's own limit on a perpetual price's significant figures.
+pub const MAX_SIGNIFICANT_FIGURES: u8 = 5;
+/// Decimal places available to a perpetual price before `szDecimals`.
+pub const PERP_MAX_DECIMALS: u8 = 6;
+/// The same budget for spot, which gets two more places.
+pub const SPOT_MAX_DECIMALS: u8 = 8;
+
+/// One coin's entry in the perpetual universe.
+///
+/// These are the fields that decide what a strategy may even *send*, and
+/// they are per coin rather than per venue. Hard-coding a tick and a
+/// leverage across a universe -- which is what
+/// [`instrument`] leaves a caller to do -- gets both wrong for most of it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AssetMeta {
+    pub name: String,
+    /// Decimal places a *size* may carry. It also sets the price grid:
+    /// a price gets `6 - sz_decimals` decimals on a perpetual.
+    pub sz_decimals: u8,
+    /// The most leverage the venue will grant on this coin.
+    pub max_leverage: u32,
+    /// Whether the venue refuses cross margin here.
+    pub only_isolated: bool,
+    pub is_delisted: bool,
+}
+
+impl AssetMeta {
+    /// How many decimal places a price on this coin may carry.
+    ///
+    /// Hyperliquid spends one budget on both sides of the pair: a coin whose
+    /// size is fine-grained gets a coarse price, and vice versa. A universal
+    /// tick cannot express that, which is why this is derived per coin.
+    pub fn price_decimals(&self) -> u8 {
+        PERP_MAX_DECIMALS.saturating_sub(self.sz_decimals)
+    }
+
+    /// The canonical instrument for this coin.
+    pub fn instrument(&self) -> Result<Instrument> {
+        let lot = 10_f64.powi(-(self.sz_decimals as i32));
+        Instrument::perpetual(format!("{}-PERP", self.name), "hyperliquid")?
+            .with_lot_size(Qty::from_f64(lot)?)
+            .with_price_rule(PriceRule::SignificantFigures {
+                significant_figures: MAX_SIGNIFICANT_FIGURES,
+                max_decimals: self.price_decimals(),
+            })
+    }
+}
+
+/// Parse a `meta` (or the first half of a `metaAndAssetCtxs`) response.
+///
+/// A delisted coin is kept rather than dropped: a backtest over a window in
+/// which it still traded needs its instrument, and refusing to load it
+/// would be survivorship bias applied at ingestion, which is the hardest
+/// place to notice it.
+pub fn parse_meta(body: &str) -> Result<Vec<AssetMeta>> {
+    parse_meta_value(&parse_json(body)?)
+}
+
+fn parse_meta_value(json: &Value) -> Result<Vec<AssetMeta>> {
+    let universe = json
+        .get("universe")
+        .and_then(Value::as_array)
+        .ok_or(BacktestError::Parse {
+            what: "meta.universe",
+            value: "missing".to_string(),
+        })?;
+    let mut out = Vec::with_capacity(universe.len());
+    for entry in universe {
+        let name = entry
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or(BacktestError::Parse {
+                what: "meta.universe[].name",
+                value: "missing".to_string(),
+            })?;
+        let sz_decimals =
+            entry
+                .get("szDecimals")
+                .and_then(Value::as_u64)
+                .ok_or(BacktestError::Parse {
+                    what: "meta.universe[].szDecimals",
+                    value: "missing".to_string(),
+                })?;
+        if sz_decimals > PERP_MAX_DECIMALS as u64 {
+            return Err(BacktestError::invalid(format!(
+                "{name}: szDecimals {sz_decimals} would leave a perpetual \
+                 price no decimal places at all"
+            )));
+        }
+        let max_leverage = entry
+            .get("maxLeverage")
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+            .max(1);
+        out.push(AssetMeta {
+            name: name.to_string(),
+            sz_decimals: sz_decimals as u8,
+            max_leverage: max_leverage as u32,
+            only_isolated: entry
+                .get("onlyIsolated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            is_delisted: entry
+                .get("isDelisted")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+    Ok(out)
+}
+
+/// The window Hyperliquid's fee tiers count volume over: fourteen days.
+pub const FEE_VOLUME_WINDOW_NANOS: i64 = 14 * 24 * 60 * 60 * 1_000_000_000;
+
+/// Build a margin model from the universe's per-coin `maxLeverage`.
+///
+/// The venue grants forty times on the majors and three on the long tail.
+/// One leverage across the universe either over-margins the majors or, far
+/// worse, holds a position in an illiquid coin that the venue would have
+/// refused to open at that size.
+///
+/// Maintenance lands at half the initial requirement at maximum leverage,
+/// which is the rule Hyperliquid documents.
+pub fn margin_from_meta(universe: &[AssetMeta]) -> Result<PerInstrumentMargin> {
+    // The fallback is the tightest leverage in the universe rather than the
+    // loosest: a coin that arrives without metadata should be harder to
+    // hold than the majors, not easier.
+    let floor = universe
+        .iter()
+        .map(|asset| asset.max_leverage)
+        .min()
+        .unwrap_or(1)
+        .max(1);
+    let mut margin = PerInstrumentMargin::new(floor as f64)?;
+    for asset in universe {
+        margin = margin.with_leverage(
+            perp_instrument_id(&asset.name)?,
+            asset.max_leverage.max(1) as f64,
+        )?;
+    }
+    Ok(margin)
+}
+
+/// One token in the spot universe.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SpotToken {
+    pub name: String,
+    /// Decimal places a *size* may carry, which also sets the price grid.
+    pub sz_decimals: u8,
+    pub index: u32,
+}
+
+/// One spot pair.
+///
+/// Named two ways, and both matter. A canonical pair is addressed by
+/// `BASE/QUOTE` (`PURR/USDC`); everything else is addressed by its index
+/// (`@1`). The websocket and the archive use whichever the venue uses, so
+/// [`SpotPair::wire_name`] is what a payload's `coin` will say.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SpotPair {
+    pub name: String,
+    pub index: u32,
+    pub base: u32,
+    pub quote: u32,
+    pub is_canonical: bool,
+}
+
+impl SpotPair {
+    /// What a payload's `coin` field says for this pair.
+    pub fn wire_name(&self) -> String {
+        if self.is_canonical {
+            self.name.clone()
+        } else {
+            format!("@{}", self.index)
+        }
+    }
+}
+
+/// The spot universe: pairs and the tokens they are built from.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SpotMeta {
+    pub tokens: Vec<SpotToken>,
+    pub universe: Vec<SpotPair>,
+}
+
+impl SpotMeta {
+    pub fn token(&self, index: u32) -> Option<&SpotToken> {
+        self.tokens.iter().find(|token| token.index == index)
+    }
+
+    pub fn pair(&self, wire_name: &str) -> Option<&SpotPair> {
+        self.universe
+            .iter()
+            .find(|pair| pair.wire_name() == wire_name)
+    }
+
+    /// The canonical instrument for a spot pair.
+    ///
+    /// Spot gets **eight** decimal places to spend rather than a
+    /// perpetual's six, and the base token's `szDecimals` eats into it the
+    /// same way. Reusing the perpetual budget here would refuse prices the
+    /// venue quotes all day.
+    pub fn instrument(&self, pair: &SpotPair) -> Result<Instrument> {
+        let base = self.token(pair.base).ok_or_else(|| {
+            BacktestError::invalid(format!(
+                "spot pair {} names base token {} which the universe does \
+                 not describe",
+                pair.name, pair.base
+            ))
+        })?;
+        if base.sz_decimals > SPOT_MAX_DECIMALS {
+            return Err(BacktestError::invalid(format!(
+                "{}: szDecimals {} would leave a spot price no decimal \
+                 places at all",
+                base.name, base.sz_decimals
+            )));
+        }
+        let lot = 10_f64.powi(-(base.sz_decimals as i32));
+        let mut instrument = Instrument::perpetual(
+            spot_instrument_id(&pair.wire_name())?.as_str(),
+            "hyperliquid",
+        )?;
+        instrument.kind = h5i_db_backtest::instrument::InstrumentKind::Spot;
+        instrument
+            .with_lot_size(Qty::from_f64(lot)?)
+            .with_price_rule(PriceRule::SignificantFigures {
+                significant_figures: MAX_SIGNIFICANT_FIGURES,
+                max_decimals: SPOT_MAX_DECIMALS.saturating_sub(base.sz_decimals),
+            })
+    }
+}
+
+/// Body for the spot universe request.
+pub fn spot_meta_request() -> String {
+    serde_json::json!({ "type": "spotMeta" }).to_string()
+}
+
+/// Parse a `spotMeta` response.
+pub fn parse_spot_meta(body: &str) -> Result<SpotMeta> {
+    let json = parse_json(body)?;
+    let tokens = json
+        .get("tokens")
+        .and_then(Value::as_array)
+        .ok_or(BacktestError::Parse {
+            what: "spotMeta.tokens",
+            value: "missing".to_string(),
+        })?;
+    let mut parsed_tokens = Vec::with_capacity(tokens.len());
+    for token in tokens {
+        parsed_tokens.push(SpotToken {
+            name: token
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or(BacktestError::Parse {
+                    what: "spotMeta.tokens[].name",
+                    value: "missing".to_string(),
+                })?
+                .to_string(),
+            sz_decimals: token.get("szDecimals").and_then(Value::as_u64).ok_or(
+                BacktestError::Parse {
+                    what: "spotMeta.tokens[].szDecimals",
+                    value: "missing".to_string(),
+                },
+            )? as u8,
+            index: token
+                .get("index")
+                .and_then(Value::as_u64)
+                .ok_or(BacktestError::Parse {
+                    what: "spotMeta.tokens[].index",
+                    value: "missing".to_string(),
+                })? as u32,
+        });
+    }
+
+    let universe = json
+        .get("universe")
+        .and_then(Value::as_array)
+        .ok_or(BacktestError::Parse {
+            what: "spotMeta.universe",
+            value: "missing".to_string(),
+        })?;
+    let mut parsed_pairs = Vec::with_capacity(universe.len());
+    for pair in universe {
+        let indices = pair
+            .get("tokens")
+            .and_then(Value::as_array)
+            .ok_or(BacktestError::Parse {
+                what: "spotMeta.universe[].tokens",
+                value: "missing".to_string(),
+            })?;
+        if indices.len() != 2 {
+            return Err(BacktestError::invalid(format!(
+                "a spot pair has a base and a quote; got {} token indices",
+                indices.len()
+            )));
+        }
+        parsed_pairs.push(SpotPair {
+            name: pair
+                .get("name")
+                .and_then(Value::as_str)
+                .ok_or(BacktestError::Parse {
+                    what: "spotMeta.universe[].name",
+                    value: "missing".to_string(),
+                })?
+                .to_string(),
+            index: pair
+                .get("index")
+                .and_then(Value::as_u64)
+                .ok_or(BacktestError::Parse {
+                    what: "spotMeta.universe[].index",
+                    value: "missing".to_string(),
+                })? as u32,
+            base: indices[0].as_u64().ok_or(BacktestError::Parse {
+                what: "spotMeta.universe[].tokens[0]",
+                value: "not an index".to_string(),
+            })? as u32,
+            quote: indices[1].as_u64().ok_or(BacktestError::Parse {
+                what: "spotMeta.universe[].tokens[1]",
+                value: "not an index".to_string(),
+            })? as u32,
+            is_canonical: pair
+                .get("isCanonical")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        });
+    }
+    Ok(SpotMeta {
+        tokens: parsed_tokens,
+        universe: parsed_pairs,
+    })
+}
+
+/// Parse a `metaAndAssetCtxs` response into the universe and its reference
+/// prices.
+///
+/// The response is a two-element array: the `meta` object, then one context
+/// per coin **in universe order**. That positional pairing is the whole
+/// contract, so a length mismatch is refused rather than zipped to the
+/// shorter one -- a short zip silently attributes one coin's mark to
+/// another.
+///
+/// `at` is when the snapshot was taken. The payload carries no timestamp of
+/// its own, and inventing one from the wall clock is how a reference price
+/// ends up stamped before the book it was read alongside.
+pub fn parse_meta_and_asset_ctxs(
+    body: &str,
+    at: UnixNanos,
+) -> Result<(Vec<AssetMeta>, Vec<Record>)> {
+    let json = parse_json(body)?;
+    let pair = json.as_array().ok_or(BacktestError::Parse {
+        what: "metaAndAssetCtxs",
+        value: "expected a two-element array".to_string(),
+    })?;
+    if pair.len() != 2 {
+        return Err(BacktestError::Parse {
+            what: "metaAndAssetCtxs",
+            value: format!("expected two elements, got {}", pair.len()),
+        });
+    }
+    let universe = parse_meta_value(&pair[0])?;
+    let contexts = pair[1].as_array().ok_or(BacktestError::Parse {
+        what: "metaAndAssetCtxs[1]",
+        value: "expected an array of contexts".to_string(),
+    })?;
+    if contexts.len() != universe.len() {
+        return Err(BacktestError::invalid(format!(
+            "the universe has {} coins but {} contexts; the pairing is \
+             positional and a short zip would attribute one coin's mark to \
+             another",
+            universe.len(),
+            contexts.len()
+        )));
+    }
+
+    let mut records = Vec::new();
+    for (asset, context) in universe.iter().zip(contexts) {
+        let mark = optional_number(context, "markPx")?;
+        let oracle = optional_number(context, "oraclePx")?;
+        if mark.is_none() && oracle.is_none() {
+            continue;
+        }
+        records.push(Record::new(
+            Stamps::immediate(at),
+            perp_instrument_id(&asset.name)?,
+            OutcomeId::FIRST,
+            MarketEvent::Reference { mark, oracle },
+        ));
+    }
+    Ok((universe, records))
+}
+
+/// Parse an `activeAssetCtx` websocket payload into a reference record.
+///
+/// The live counterpart of [`parse_meta_and_asset_ctxs`], which is what a
+/// recorder captures continuously rather than polling.
+pub fn parse_asset_ctx(body: &str, at: UnixNanos) -> Result<Option<Record>> {
+    let json = parse_json(body)?;
+    let envelope = json.get("data").unwrap_or(&json);
+    let Some(coin) = envelope.get("coin").and_then(Value::as_str) else {
+        return Ok(None);
+    };
+    let context = envelope.get("ctx").unwrap_or(envelope);
+    let mark = optional_number(context, "markPx")?;
+    let oracle = optional_number(context, "oraclePx")?;
+    if mark.is_none() && oracle.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(Record::new(
+        Stamps::immediate(at),
+        perp_instrument_id(coin)?,
+        OutcomeId::FIRST,
+        MarketEvent::Reference { mark, oracle },
+    )))
+}
+
+/// A numeric field that may be absent, and must stay absent when it is.
+///
+/// A missing mark is not a zero mark. Defaulting it would value every
+/// position in that coin at nothing and liquidate the account.
+fn optional_number(value: &Value, field: &'static str) -> Result<Option<Price>> {
+    match value.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => Ok(Some(Price::from_f64(number(value, field)?)?)),
+    }
+}
+
+/// A perpetual instrument for a Hyperliquid coin, with a hand-supplied grid.
+///
+/// Prefer [`parse_meta`] and [`AssetMeta::instrument`]: the venue publishes
+/// the grid per coin, and a hand-supplied tick is a guess that the venue
+/// will disagree with on most of the universe.
 pub fn instrument(coin: &str, tick_size: f64, lot_size: f64) -> Result<Instrument> {
     Ok(
         Instrument::perpetual(format!("{coin}-PERP"), "hyperliquid")?
@@ -179,8 +629,11 @@ pub fn parse_funding(body: &str, instrument_id: &str) -> Result<Vec<Record>> {
 /// The payload is `{ coin, time, levels: [[bids], [asks]] }`, each level
 /// `{ px, sz, n }` with `px` and `sz` as strings.
 pub fn parse_l2_book(body: &str, instrument_id: &str) -> Result<Record> {
-    let json = parse_json(body)?;
-    let at = UnixNanos::new(millis(&json, "time")? * MS);
+    book_from_value(&parse_json(body)?, &InstrumentId::new(instrument_id)?)
+}
+
+fn book_from_value(json: &Value, id: &InstrumentId) -> Result<Record> {
+    let at = UnixNanos::new(millis(json, "time")? * MS);
     let levels = json
         .get("levels")
         .and_then(Value::as_array)
@@ -212,13 +665,684 @@ pub fn parse_l2_book(body: &str, instrument_id: &str) -> Result<Record> {
 
     Ok(Record::new(
         Stamps::immediate(at),
-        InstrumentId::new(instrument_id)?,
+        id.clone(),
         OutcomeId::FIRST,
         MarketEvent::BookSnapshot {
             bids: side(0)?,
             asks: side(1)?,
         },
     ))
+}
+
+/// Which side of a trade was the aggressor.
+///
+/// Hyperliquid labels a print with the side of the taker: `"B"` when a
+/// buyer lifted, `"A"` when a seller hit. Anything else is left as unknown
+/// rather than guessed, because a guessed aggressor biases every
+/// queue-position fill that reads it -- and the queue model is the whole
+/// reason to carry trades at all.
+fn aggressor(value: &Value) -> Option<Side> {
+    match value.get("side").and_then(Value::as_str) {
+        Some("B") | Some("b") => Some(Side::Buy),
+        Some("A") | Some("a") => Some(Side::Sell),
+        _ => None,
+    }
+}
+
+/// Parse a `trades` payload into print records.
+///
+/// Prints are what make a *maker* fill modellable. Without them the queue
+/// model has nothing to consume the size ahead of a resting order, so every
+/// touched limit fills immediately -- the single most flattering assumption
+/// a market-making backtest can make.
+///
+/// Accepts either the bare array the websocket `trades` channel sends or a
+/// single trade object.
+pub fn parse_trades(body: &str, instrument_id: &str) -> Result<Vec<Record>> {
+    let json = parse_json(body)?;
+    let id = InstrumentId::new(instrument_id)?;
+    trades_from_value(&json, &id)
+}
+
+fn trades_from_value(json: &Value, id: &InstrumentId) -> Result<Vec<Record>> {
+    let rows = match json {
+        Value::Array(rows) => rows.as_slice(),
+        Value::Object(_) => std::slice::from_ref(json),
+        other => {
+            return Err(BacktestError::Parse {
+                what: "trades",
+                value: other.to_string(),
+            });
+        }
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let at = UnixNanos::new(millis(row, "time")? * MS);
+        out.push(Record::new(
+            Stamps::immediate(at),
+            id.clone(),
+            OutcomeId::FIRST,
+            MarketEvent::Trade {
+                price: Price::from_f64(number(row, "px")?)?,
+                size: Qty::from_f64(number(row, "sz")?)?,
+                aggressor: aggressor(row),
+            },
+        ));
+    }
+    out.sort_by_key(|record| record.ts().get());
+    Ok(out)
+}
+
+/// The coin a websocket payload is about, if it names one.
+fn payload_coin(data: &Value) -> Option<&str> {
+    data.get("coin")
+        .and_then(Value::as_str)
+        .or_else(|| data.as_array()?.first()?.get("coin")?.as_str())
+}
+
+/// How a coin becomes an instrument id.
+///
+/// The archive and the websocket both key by coin (`"BTC"`), while the
+/// canonical instrument is `"BTC-PERP"`. Naming the mapping rather than
+/// hard-coding a suffix at four call sites keeps a spot universe, whose
+/// coins look like `"@1"`, expressible later.
+pub fn perp_instrument_id(coin: &str) -> Result<InstrumentId> {
+    InstrumentId::new(format!("{coin}-PERP"))
+}
+
+/// The same for a spot pair, whose `coin` is `BASE/QUOTE` or `@index`.
+pub fn spot_instrument_id(coin: &str) -> Result<InstrumentId> {
+    InstrumentId::new(format!("{coin}-SPOT"))
+}
+
+/// Whether a `coin` field names a spot pair rather than a perpetual.
+///
+/// The venue's own naming is the discriminator and it is unambiguous: a
+/// perpetual is a bare ticker, a canonical spot pair carries a slash, and
+/// everything else on spot is `@index`. Guessing wrong would attribute a
+/// spot book to a perpetual instrument, which is two different markets with
+/// two different price grids.
+pub fn is_spot_coin(coin: &str) -> bool {
+    coin.starts_with('@') || coin.contains('/')
+}
+
+/// Route a payload's `coin` to the instrument it belongs to.
+pub fn instrument_id_for(coin: &str) -> Result<InstrumentId> {
+    if is_spot_coin(coin) {
+        spot_instrument_id(coin)
+    } else {
+        perp_instrument_id(coin)
+    }
+}
+
+/// Parse one websocket message into records, or nothing for a channel this
+/// module does not model.
+///
+/// Handles `l2Book` and `trades`. A `subscriptionResponse`, a `pong` or any
+/// other channel yields an empty vector rather than an error: a reader
+/// walking a live capture must not stop at the first heartbeat.
+///
+/// The instrument comes from the payload's own `coin`, mapped through
+/// [`perp_instrument_id`], so one call handles a capture spanning many
+/// markets.
+pub fn parse_ws_message(body: &str) -> Result<Vec<Record>> {
+    records_from_envelope(&parse_json(body)?)
+}
+
+/// Instrument ids reused across a read.
+///
+/// `InstrumentId` is an `Arc<str>` precisely so a record can carry one
+/// cheaply. Building a fresh one per line defeats that: a million-line
+/// hour would hold a million separate allocations of the same handful of
+/// strings, and every map comparison would walk the bytes instead of
+/// hitting the pointer.
+#[derive(Default)]
+pub struct InstrumentCache {
+    by_coin: std::collections::HashMap<String, InstrumentId>,
+}
+
+impl InstrumentCache {
+    pub fn get(&mut self, coin: &str) -> Result<InstrumentId> {
+        if let Some(id) = self.by_coin.get(coin) {
+            return Ok(id.clone());
+        }
+        let id = instrument_id_for(coin)?;
+        self.by_coin.insert(coin.to_string(), id.clone());
+        Ok(id)
+    }
+}
+
+fn records_from_envelope(json: &Value) -> Result<Vec<Record>> {
+    records_from_envelope_cached(json, &mut InstrumentCache::default())
+}
+
+// -- the archive fast path --------------------------------------------------
+//
+// Reading an hour of one coin spends most of its time in JSON, not in the
+// engine: measured on a real file, 32 us a record of which the engine is
+// 0.6, and building a `serde_json::Value` for every line is 17.7 of the
+// rest. Deserialising straight into these shapes is 2.8x faster than
+// walking that DOM.
+//
+// It is a *fast path*, not a replacement. Anything that does not match --
+// a channel this module ignores, a number sent unquoted, a shape the venue
+// changes tomorrow -- falls through to the tolerant `Value` reader below,
+// so the fast path can only ever change how long a line takes to read and
+// never what it reads.
+
+#[derive(serde::Deserialize)]
+struct RawLine<'a> {
+    time: Option<&'a str>,
+    #[serde(borrow)]
+    raw: Option<&'a serde_json::value::RawValue>,
+    channel: Option<&'a str>,
+    #[serde(borrow)]
+    data: Option<&'a serde_json::value::RawValue>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawEnvelope<'a> {
+    channel: &'a str,
+    #[serde(borrow)]
+    data: &'a serde_json::value::RawValue,
+}
+
+#[derive(serde::Deserialize)]
+struct RawLevel<'a> {
+    px: &'a str,
+    sz: &'a str,
+}
+
+#[derive(serde::Deserialize)]
+struct RawBook<'a> {
+    coin: &'a str,
+    time: i64,
+    #[serde(borrow)]
+    levels: Vec<Vec<RawLevel<'a>>>,
+}
+
+#[derive(serde::Deserialize)]
+struct RawTrade<'a> {
+    coin: &'a str,
+    side: Option<&'a str>,
+    px: &'a str,
+    sz: &'a str,
+    time: i64,
+}
+
+fn decimal(text: &str) -> Option<Price> {
+    Price::from_f64(text.parse::<f64>().ok()?).ok()
+}
+
+fn size(text: &str) -> Option<Qty> {
+    Qty::from_f64(text.parse::<f64>().ok()?).ok()
+}
+
+/// Read one archive line without building a DOM.
+///
+/// `None` means "not a shape this understands" -- never "no records" --
+/// so the caller falls back rather than dropping data.
+fn records_fast(line: &str, cache: &mut InstrumentCache) -> Option<Vec<Record>> {
+    let parsed: RawLine<'_> = serde_json::from_str(line).ok()?;
+    let known_at = parsed.time.and_then(parse_archive_time);
+    // A line carrying no channel or no data is definitively no records --
+    // a heartbeat, a subscription acknowledgement -- so it is answered here
+    // rather than falling back. A live capture is full of them, and paying
+    // a DOM parse for each would undo the point of this path.
+    let (channel, data) = match parsed.raw {
+        Some(raw) => match serde_json::from_str::<RawEnvelope<'_>>(raw.get()) {
+            Ok(envelope) => (envelope.channel, envelope.data),
+            Err(_) => return Some(Vec::new()),
+        },
+        None => match (parsed.channel, parsed.data) {
+            (Some(channel), Some(data)) => (channel, data),
+            _ => return Some(Vec::new()),
+        },
+    };
+
+    let mut records = match channel {
+        "l2Book" => {
+            let book: RawBook<'_> = serde_json::from_str(data.get()).ok()?;
+            if book.levels.len() != 2 {
+                return None;
+            }
+            let side = |rows: &Vec<RawLevel<'_>>| -> Option<Vec<(Price, Qty)>> {
+                rows.iter()
+                    .map(|level| Some((decimal(level.px)?, size(level.sz)?)))
+                    .collect()
+            };
+            let bids = side(&book.levels[0])?;
+            let asks = side(&book.levels[1])?;
+            vec![Record::new(
+                Stamps::immediate(UnixNanos::new(book.time * MS)),
+                cache.get(book.coin).ok()?,
+                OutcomeId::FIRST,
+                MarketEvent::BookSnapshot { bids, asks },
+            )]
+        }
+        "trades" => {
+            let trades: Vec<RawTrade<'_>> = serde_json::from_str(data.get()).ok()?;
+            let mut out = Vec::with_capacity(trades.len());
+            for trade in trades {
+                out.push(Record::new(
+                    Stamps::immediate(UnixNanos::new(trade.time * MS)),
+                    cache.get(trade.coin).ok()?,
+                    OutcomeId::FIRST,
+                    MarketEvent::Trade {
+                        price: decimal(trade.px)?,
+                        size: size(trade.sz)?,
+                        aggressor: match trade.side {
+                            Some("B") | Some("b") => Some(Side::Buy),
+                            Some("A") | Some("a") => Some(Side::Sell),
+                            _ => None,
+                        },
+                    },
+                ));
+            }
+            out.sort_by_key(|record| record.ts().get());
+            out
+        }
+        // A channel this module does not model really is no records, and
+        // that is a legitimate answer rather than a fallback.
+        _ => return Some(Vec::new()),
+    };
+    if let Some(known_at) = known_at {
+        for record in &mut records {
+            let ts_init = UnixNanos::new(known_at).max(record.stamps.ts_event);
+            record.stamps = Stamps::new(record.stamps.ts_event, ts_init).ok()?;
+        }
+    }
+    Some(records)
+}
+
+fn records_from_envelope_cached(json: &Value, cache: &mut InstrumentCache) -> Result<Vec<Record>> {
+    // Archive lines wrap the live envelope and add the instant the archiver
+    // received it. That is `ts_init` -- when this system could first have
+    // known the message -- and the venue's own stamp inside is `ts_event`.
+    //
+    // Keeping them apart is not bookkeeping. Measured over an hour of BTC,
+    // the archiver trails the venue by 57ms at the median and 3.2s at the
+    // worst, so stamping both from the venue's clock hands a strategy up to
+    // three seconds of look-ahead on every book update -- the exact failure
+    // the dual stamp exists to prevent, arriving through the data loader
+    // rather than the engine.
+    let known_at = json
+        .get("time")
+        .and_then(Value::as_str)
+        .and_then(parse_archive_time);
+    let envelope = json.get("raw").unwrap_or(json);
+    let Some(channel) = envelope.get("channel").and_then(Value::as_str) else {
+        return Ok(Vec::new());
+    };
+    let Some(data) = envelope.get("data") else {
+        return Ok(Vec::new());
+    };
+    let Some(coin) = payload_coin(data) else {
+        return Ok(Vec::new());
+    };
+    // A capture can span both universes; the venue's naming says which.
+    let id = cache.get(coin)?;
+    let mut records = match channel {
+        "l2Book" => vec![book_from_value(data, &id)?],
+        "trades" => trades_from_value(data, &id)?,
+        _ => return Ok(Vec::new()),
+    };
+    if let Some(known_at) = known_at {
+        for record in &mut records {
+            // Never earlier than the event: a clock that says otherwise is
+            // skewed, and the honest reading of skew is "known immediately",
+            // not "known before it happened".
+            let ts_init = UnixNanos::new(known_at).max(record.stamps.ts_event);
+            record.stamps = Stamps::new(record.stamps.ts_event, ts_init)?;
+        }
+    }
+    Ok(records)
+}
+
+/// The archive's own timestamp: `2025-01-01T00:00:02.238437296`, UTC, with
+/// no zone suffix and up to nanosecond precision.
+///
+/// Deliberately narrow, like the Polymarket parser: only the exact shape
+/// the archive uses is accepted, and anything else yields `None` rather
+/// than a plausible wrong instant.
+fn parse_archive_time(text: &str) -> Option<i64> {
+    let (date, time) = text.split_once('T')?;
+    let mut date_parts = date.split('-');
+    let year: i32 = date_parts.next()?.parse().ok()?;
+    let month: u32 = date_parts.next()?.parse().ok()?;
+    let day: u32 = date_parts.next()?.parse().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+
+    let time = time.strip_suffix('Z').unwrap_or(time);
+    let (clock, fraction) = match time.split_once('.') {
+        Some((clock, fraction)) => (clock, fraction),
+        None => (time, ""),
+    };
+    let mut clock_parts = clock.split(':');
+    let hour: u32 = clock_parts.next()?.parse().ok()?;
+    let minute: u32 = clock_parts.next()?.parse().ok()?;
+    let second: u32 = clock_parts.next()?.parse().ok()?;
+    if clock_parts.next().is_some()
+        || fraction.len() > 9
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    // Right-pad to nanoseconds so ".238" and ".238437296" both scale.
+    // Done arithmetically: this runs once per archive line, and a format!
+    // per line is an allocation per line for no reason.
+    let mut nanos: i64 = 0;
+    for byte in fraction.bytes() {
+        nanos = nanos * 10 + (byte - b'0') as i64;
+    }
+    for _ in fraction.len()..9 {
+        nanos *= 10;
+    }
+
+    let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
+    let time = chrono::NaiveTime::from_hms_opt(hour, minute, second)?;
+    date.and_time(time)
+        .and_utc()
+        .timestamp_nanos_opt()?
+        .checked_add(nanos)
+}
+
+/// One row of the archive's daily `asset_ctxs` file: what the venue thought
+/// a coin was worth, once a minute.
+///
+/// This is the only *historical* source of marks and oracles the venue
+/// publishes -- `metaAndAssetCtxs` answers for right now, and the hourly
+/// `market_data` files carry books alone.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AssetContext {
+    pub at: UnixNanos,
+    pub coin: String,
+    /// The hourly funding rate *prevailing* at this minute.
+    ///
+    /// **Not a payment.** The file samples the rate sixty times an hour;
+    /// turning each sample into a funding event would charge a position
+    /// sixty times over. Settlements come from `fundingHistory`, which is
+    /// why [`asset_context_records`] emits reference prices and no funding.
+    pub funding_rate: Price,
+    pub open_interest: Qty,
+    /// The mark's deviation from the oracle, which is what funding is
+    /// derived from.
+    pub premium: Price,
+    pub oracle: Price,
+    pub mark: Price,
+    pub mid: Price,
+    pub impact_bid: Price,
+    pub impact_ask: Price,
+}
+
+const ASSET_CTX_COLUMNS: [&str; 12] = [
+    "time",
+    "coin",
+    "funding",
+    "open_interest",
+    "prev_day_px",
+    "day_ntl_vlm",
+    "premium",
+    "oracle_px",
+    "mark_px",
+    "mid_px",
+    "impact_bid_px",
+    "impact_ask_px",
+];
+
+/// Parse a decompressed `asset_ctxs/<date>.csv` file.
+///
+/// The header is checked against the columns this expects rather than
+/// trusted by position. A venue that inserts a column would otherwise shift
+/// every field silently, and reading a mark out of the open-interest column
+/// is the kind of error that produces plausible numbers for a long time.
+pub fn parse_asset_ctxs_csv(body: &str) -> Result<Vec<AssetContext>> {
+    let mut lines = body.lines();
+    let header = lines.next().ok_or(BacktestError::Parse {
+        what: "asset_ctxs",
+        value: "empty file".to_string(),
+    })?;
+    let columns: Vec<&str> = header.trim().split(',').collect();
+    if columns != ASSET_CTX_COLUMNS {
+        return Err(BacktestError::invalid(format!(
+            "asset_ctxs header is {columns:?}, expected {ASSET_CTX_COLUMNS:?}; \
+             reading these by position after a schema change would put a \
+             mark in the open-interest column"
+        )));
+    }
+
+    let mut out = Vec::new();
+    for (index, line) in lines.enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() != ASSET_CTX_COLUMNS.len() {
+            return Err(BacktestError::invalid(format!(
+                "asset_ctxs row {} has {} fields, expected {}",
+                index + 2,
+                fields.len(),
+                ASSET_CTX_COLUMNS.len()
+            )));
+        }
+        let number = |at: usize, what: &'static str| -> Result<f64> {
+            fields[at].parse::<f64>().map_err(|_| BacktestError::Parse {
+                what,
+                value: fields[at].to_string(),
+            })
+        };
+        let at = parse_archive_time(fields[0]).ok_or(BacktestError::Parse {
+            what: "asset_ctxs.time",
+            value: fields[0].to_string(),
+        })?;
+        out.push(AssetContext {
+            at: UnixNanos::new(at),
+            coin: fields[1].to_string(),
+            funding_rate: Price::from_f64(number(2, "asset_ctxs.funding")?)?,
+            open_interest: Qty::from_f64(number(3, "asset_ctxs.open_interest")?)?,
+            premium: Price::from_f64(number(6, "asset_ctxs.premium")?)?,
+            oracle: Price::from_f64(number(7, "asset_ctxs.oracle_px")?)?,
+            mark: Price::from_f64(number(8, "asset_ctxs.mark_px")?)?,
+            mid: Price::from_f64(number(9, "asset_ctxs.mid_px")?)?,
+            impact_bid: Price::from_f64(number(10, "asset_ctxs.impact_bid_px")?)?,
+            impact_ask: Price::from_f64(number(11, "asset_ctxs.impact_ask_px")?)?,
+        });
+    }
+    out.sort_by_key(|context| context.at.get());
+    Ok(out)
+}
+
+/// [`parse_asset_ctxs_csv`] over an LZ4 frame, which is how the archive
+/// ships it.
+pub fn read_asset_ctxs_lz4(bytes: &[u8]) -> Result<Vec<AssetContext>> {
+    let mut decoded = Vec::new();
+    std::io::Read::read_to_end(&mut lz4_flex::frame::FrameDecoder::new(bytes), &mut decoded)
+        .map_err(|error| BacktestError::Parse {
+            what: "asset_ctxs lz4 frame",
+            value: error.to_string(),
+        })?;
+    let text = String::from_utf8(decoded).map_err(|error| BacktestError::Parse {
+        what: "asset_ctxs utf8",
+        value: error.to_string(),
+    })?;
+    parse_asset_ctxs_csv(&text)
+}
+
+/// Turn parsed contexts into replayable reference records.
+///
+/// Only the mark and the oracle: those are prices, and the engine values,
+/// margins and funds against them. The funding *rate* in the same row is a
+/// sample of a standing rate rather than a payment due, so it deliberately
+/// produces no [`MarketEvent::Funding`] -- sixty samples an hour would
+/// charge a carry sixty times.
+///
+/// `coins` filters the universe, because a day is a hundred and sixty-odd
+/// of them and a run usually wants a handful.
+pub fn asset_context_records(
+    contexts: &[AssetContext],
+    coins: Option<&[String]>,
+) -> Result<Vec<Record>> {
+    let mut out = Vec::with_capacity(contexts.len());
+    for context in contexts {
+        if let Some(coins) = coins
+            && !coins.iter().any(|coin| coin == &context.coin)
+        {
+            continue;
+        }
+        out.push(Record::new(
+            Stamps::immediate(context.at),
+            perp_instrument_id(&context.coin)?,
+            OutcomeId::FIRST,
+            MarketEvent::Reference {
+                mark: Some(context.mark),
+                oracle: Some(context.oracle),
+            },
+        ));
+    }
+    out.sort_by_key(|record| record.ts().get());
+    Ok(out)
+}
+
+/// Wrap one websocket message in the archive's own line format.
+///
+/// The archive has **no trades**: `market_data/<date>/<hour>/` contains
+/// `l2Book/` and nothing else. Prints therefore have to come from a live
+/// capture, and without them the queue-position fill model has nothing to
+/// consume the size ahead of a resting order -- every touched limit fills
+/// immediately, which is the most flattering assumption a market-making
+/// backtest can make.
+///
+/// So a recorder should write this shape, and then one reader handles both
+/// sources. `received_at` is when the capture saw the message: it becomes
+/// `ts_init`, keeping a recording as honest about knowability as the
+/// venue's own archive is.
+///
+/// ```no_run
+/// # use h5i_db_venues::hyperliquid::archive_line;
+/// # use h5i_db_backtest::types::UnixNanos;
+/// // In a recorder loop, for each frame off the socket:
+/// let line = archive_line(UnixNanos::new(1_735_689_602_238_437_296), r#"{"channel":"trades","data":[]}"#)?;
+/// # Ok::<(), h5i_db_backtest::BacktestError>(())
+/// ```
+pub fn archive_line(received_at: UnixNanos, message: &str) -> Result<String> {
+    let raw: Value = serde_json::from_str(message).map_err(|error| BacktestError::Parse {
+        what: "websocket message",
+        value: error.to_string(),
+    })?;
+    Ok(serde_json::json!({
+        "time": format_archive_time(received_at),
+        "ver_num": 1,
+        "raw": raw,
+    })
+    .to_string())
+}
+
+/// The inverse of [`parse_archive_time`], so a recording and a download are
+/// byte-comparable.
+pub fn format_archive_time(at: UnixNanos) -> String {
+    let seconds = at.get().div_euclid(1_000_000_000);
+    let nanos = at.get().rem_euclid(1_000_000_000);
+    let stamp = chrono::DateTime::from_timestamp(seconds, nanos as u32).unwrap_or_default();
+    format!("{}{:09}", stamp.format("%Y-%m-%dT%H:%M:%S."), nanos)
+}
+
+/// Read a decompressed archive stream: one JSON envelope per line.
+///
+/// Hyperliquid publishes its history as hourly LZ4 files of newline-
+/// delimited messages, and it is the only source of book history at all --
+/// `candleSnapshot` returns bars, and the REST `l2Book` returns only the
+/// book as it is right now. A backtest that wants depth has to read this.
+///
+/// Takes already-decompressed bytes so the frame format stays the caller's
+/// business; [`read_archive_lz4`] is the convenience wrapper.
+///
+/// A line that is blank, unparseable, or on a channel this module does not
+/// model is skipped and counted. An archive with a few corrupt lines is
+/// normal and refusing the whole hour over one of them would be worse than
+/// reporting it -- but the count is returned, not swallowed, so a caller
+/// can refuse a file that is mostly junk.
+pub fn read_archive<R: std::io::BufRead>(reader: R) -> Result<ArchiveRead> {
+    let mut out = ArchiveRead::default();
+    let mut cache = InstrumentCache::default();
+    for line in reader.lines() {
+        let line = line.map_err(|error| BacktestError::Parse {
+            what: "hyperliquid archive",
+            value: error.to_string(),
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        out.lines += 1;
+        if let Some(records) = records_fast(&line, &mut cache) {
+            if records.is_empty() {
+                out.skipped += 1;
+            } else {
+                out.records.extend(records);
+            }
+            continue;
+        }
+        match serde_json::from_str::<Value>(&line) {
+            Ok(json) => match records_from_envelope_cached(&json, &mut cache) {
+                Ok(records) if records.is_empty() => out.skipped += 1,
+                Ok(records) => out.records.extend(records),
+                Err(_) => out.malformed += 1,
+            },
+            Err(_) => out.malformed += 1,
+        }
+    }
+    out.records.sort_by_key(|record| record.ts().get());
+    Ok(out)
+}
+
+/// [`read_archive`], decompressing an LZ4 frame first.
+pub fn read_archive_lz4(bytes: &[u8]) -> Result<ArchiveRead> {
+    let decoded = lz4_flex::frame::FrameDecoder::new(bytes);
+    read_archive(std::io::BufReader::new(decoded))
+}
+
+/// What one archive file yielded, including what it did not.
+#[derive(Clone, Default, Debug)]
+pub struct ArchiveRead {
+    pub records: Vec<Record>,
+    /// Non-blank lines seen.
+    pub lines: u64,
+    /// Lines on a channel this module does not model.
+    pub skipped: u64,
+    /// Lines that were not readable as an envelope.
+    pub malformed: u64,
+}
+
+impl ArchiveRead {
+    /// The share of lines that produced nothing.
+    ///
+    /// A file whose lines are mostly skipped is usually the wrong channel
+    /// or the wrong decompression, and is worth refusing rather than
+    /// replaying as a thin book.
+    pub fn barren_ratio(&self) -> f64 {
+        if self.lines == 0 {
+            return 0.0;
+        }
+        (self.skipped + self.malformed) as f64 / self.lines as f64
+    }
+
+    /// Refuse a read whose lines mostly produced nothing.
+    pub fn require_yield(&self, minimum: f64) -> Result<()> {
+        let produced = 1.0 - self.barren_ratio();
+        if produced < minimum {
+            return Err(BacktestError::invalid(format!(
+                "only {:.1}% of {} archive lines produced records ({} skipped, \
+                 {} malformed); check the channel and the decompression \
+                 before replaying this as market data",
+                produced * 100.0,
+                self.lines,
+                self.skipped,
+                self.malformed
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -253,12 +1377,17 @@ mod tests {
         assert_eq!(parsed["req"]["startTime"], 1640995200000i64);
         assert_eq!(parsed["req"]["endTime"], 1641002400000i64);
 
+        // `fundingHistory` takes its arguments flat, unlike `candleSnapshot`.
+        // Nesting them under `req` -- which this emitted until a live capture
+        // caught it -- gets a 422 whose message names no field.
         let funding: Value = serde_json::from_str(&funding_request("BTC", 1, None)).unwrap();
         assert_eq!(funding["type"], "fundingHistory");
-        assert!(
-            funding["req"].get("endTime").is_none(),
-            "omitted when absent"
-        );
+        assert_eq!(funding["coin"], "BTC");
+        assert_eq!(funding["startTime"], 1i64);
+        assert!(funding.get("req").is_none(), "not nested");
+        assert!(funding.get("endTime").is_none(), "omitted when absent");
+        let bounded: Value = serde_json::from_str(&funding_request("BTC", 1, Some(9))).unwrap();
+        assert_eq!(bounded["endTime"], 9i64);
 
         let book: Value = serde_json::from_str(&l2_book_request("ETH")).unwrap();
         assert_eq!(book["type"], "l2Book");
@@ -404,5 +1533,323 @@ mod tests {
         assert_eq!(btc.venue, "hyperliquid");
         assert_eq!(btc.outcome_count(), 1, "a perp has one outcome");
         assert_eq!(btc.tick_size, Price::from_f64(0.5).unwrap());
+    }
+
+    const META: &str = r#"{"universe":[
+        {"name":"BTC","szDecimals":5,"maxLeverage":40},
+        {"name":"ETH","szDecimals":4,"maxLeverage":25,"onlyIsolated":false},
+        {"name":"KPEPE","szDecimals":0,"maxLeverage":10,"onlyIsolated":true,
+         "isDelisted":true}
+    ]}"#;
+
+    #[test]
+    fn the_universe_carries_a_grid_per_coin_not_per_venue() {
+        let universe = parse_meta(META).unwrap();
+        assert_eq!(universe.len(), 3);
+        // The budget is shared between size and price: BTC's fine size
+        // leaves one decimal on the price, KPEPE's whole-unit size leaves
+        // six. One tick across the venue is wrong for both.
+        assert_eq!(universe[0].price_decimals(), 1);
+        assert_eq!(universe[1].price_decimals(), 2);
+        assert_eq!(universe[2].price_decimals(), 6);
+        assert_eq!(universe[0].max_leverage, 40);
+        assert!(universe[2].only_isolated);
+    }
+
+    #[test]
+    fn an_instrument_from_metadata_accepts_what_the_venue_accepts() {
+        let universe = parse_meta(META).unwrap();
+        let btc = universe[0].instrument().unwrap();
+        assert_eq!(btc.id.as_str(), "BTC-PERP");
+        assert_eq!(btc.lot_size, Qty::from_f64(0.00001).unwrap());
+        assert_eq!(btc.tick_size, Price::from_f64(0.1).unwrap());
+        // Five figures spent on the integer part, so a tenth is refused
+        // here and accepted on a cheaper coin.
+        assert!(btc.check_price(Price::from_f64(50_000.5).unwrap()).is_err());
+        assert!(btc.check_price(Price::from_units(50_001).unwrap()).is_ok());
+
+        let kpepe = universe[2].instrument().unwrap();
+        assert!(
+            kpepe
+                .check_price(Price::from_f64(0.001234).unwrap())
+                .is_ok()
+        );
+        assert!(
+            kpepe
+                .check_price(Price::from_f64(1.001234).unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_delisted_coin_is_kept_rather_than_dropped() {
+        // Dropping it would be survivorship bias applied at ingestion,
+        // where it is hardest to notice.
+        let universe = parse_meta(META).unwrap();
+        assert!(universe[2].is_delisted);
+        assert!(universe[2].instrument().is_ok());
+    }
+
+    #[test]
+    fn malformed_universe_entries_are_refused() {
+        assert!(parse_meta(r#"{"universe":[{"szDecimals":2}]}"#).is_err());
+        assert!(parse_meta(r#"{"universe":[{"name":"X"}]}"#).is_err());
+        assert!(parse_meta(r#"{}"#).is_err());
+        // szDecimals larger than the price budget would leave no price grid.
+        assert!(parse_meta(r#"{"universe":[{"name":"X","szDecimals":9}]}"#).is_err());
+    }
+
+    #[test]
+    fn the_metadata_request_bodies_match_the_documented_wire_format() {
+        assert_eq!(meta_request(), r#"{"type":"meta"}"#);
+        assert_eq!(
+            meta_and_asset_ctxs_request(),
+            r#"{"type":"metaAndAssetCtxs"}"#
+        );
+    }
+
+    // -- trades ------------------------------------------------------------
+
+    const TRADES: &str = r#"[
+        {"coin":"BTC","side":"B","px":"50000.0","sz":"0.1","time":1700000002000,"tid":2},
+        {"coin":"BTC","side":"A","px":"49999.0","sz":"0.2","time":1700000001000,"tid":1},
+        {"coin":"BTC","px":"49998.0","sz":"0.3","time":1700000003000,"tid":3}
+    ]"#;
+
+    #[test]
+    fn trades_carry_the_aggressor_the_queue_model_needs() {
+        let records = parse_trades(TRADES, "BTC-PERP").unwrap();
+        assert_eq!(records.len(), 3);
+        // Sorted by time, not by arrival in the payload.
+        assert_eq!(records[0].ts(), UnixNanos::new(1_700_000_001_000 * MS));
+
+        let sides: Vec<Option<Side>> = records
+            .iter()
+            .map(|record| match record.event {
+                MarketEvent::Trade { aggressor, .. } => aggressor,
+                _ => panic!("expected a trade"),
+            })
+            .collect();
+        // "A" is a seller hitting, "B" a buyer lifting, and a print with no
+        // side stays unknown rather than being guessed into one.
+        assert_eq!(sides, vec![Some(Side::Sell), Some(Side::Buy), None]);
+    }
+
+    #[test]
+    fn a_single_trade_object_parses_like_a_batch_of_one() {
+        let one = r#"{"coin":"BTC","side":"B","px":"1.5","sz":"2","time":1700000000000}"#;
+        assert_eq!(parse_trades(one, "BTC-PERP").unwrap().len(), 1);
+        assert!(parse_trades("7", "BTC-PERP").is_err());
+    }
+
+    // -- websocket and archive --------------------------------------------
+
+    const WS_BOOK: &str = r#"{"channel":"l2Book","data":{"coin":"BTC","time":1700000000000,
+        "levels":[[{"px":"49999.0","sz":"1.0","n":1}],[{"px":"50001.0","sz":"2.0","n":1}]]}}"#;
+    const WS_TRADES: &str = r#"{"channel":"trades","data":[
+        {"coin":"ETH","side":"A","px":"3000.0","sz":"1.5","time":1700000000500}]}"#;
+
+    #[test]
+    fn a_websocket_message_names_its_own_instrument() {
+        // One call handles a capture spanning many markets, because the
+        // coin travels in the payload rather than in the call site.
+        let book = parse_ws_message(WS_BOOK).unwrap();
+        assert_eq!(book.len(), 1);
+        assert_eq!(book[0].instrument.as_str(), "BTC-PERP");
+        assert!(matches!(book[0].event, MarketEvent::BookSnapshot { .. }));
+
+        let trades = parse_ws_message(WS_TRADES).unwrap();
+        assert_eq!(trades[0].instrument.as_str(), "ETH-PERP");
+    }
+
+    #[test]
+    fn a_channel_this_module_does_not_model_yields_nothing_rather_than_failing() {
+        // A reader walking a live capture must not stop at the first
+        // heartbeat or subscription acknowledgement.
+        for body in [
+            r#"{"channel":"pong"}"#,
+            r#"{"channel":"subscriptionResponse","data":{"method":"subscribe"}}"#,
+            r#"{"channel":"allMids","data":{"mids":{"BTC":"50000"}}}"#,
+            r#"{"not":"an envelope"}"#,
+        ] {
+            assert!(parse_ws_message(body).unwrap().is_empty(), "{body}");
+        }
+    }
+
+    #[test]
+    fn an_archive_reads_newline_delimited_envelopes_in_time_order() {
+        // The archive wraps the live envelope; both shapes must read.
+        let lines = format!(
+            "{}\n\n{}\n{{\"time\":\"x\",\"raw\":{}}}\n",
+            WS_TRADES.replace('\n', ""),
+            WS_BOOK.replace('\n', ""),
+            WS_TRADES.replace('\n', "")
+        );
+        let read = read_archive(std::io::Cursor::new(lines)).unwrap();
+        assert_eq!(read.lines, 3);
+        assert_eq!(read.records.len(), 3);
+        assert_eq!(read.malformed, 0);
+        let stamps: Vec<i64> = read.records.iter().map(|r| r.ts().get()).collect();
+        assert!(stamps.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
+    fn a_mostly_barren_archive_is_reported_and_can_be_refused() {
+        // Usually the wrong channel or the wrong decompression. Replaying
+        // it as a thin book is worse than saying so.
+        let lines = "{\"channel\":\"pong\"}\nnot json\n{\"channel\":\"pong\"}\n";
+        let read = read_archive(std::io::Cursor::new(lines)).unwrap();
+        assert_eq!(read.lines, 3);
+        assert_eq!(read.skipped, 2);
+        assert_eq!(read.malformed, 1);
+        assert!(read.records.is_empty());
+        assert_eq!(read.barren_ratio(), 1.0);
+        assert!(read.require_yield(0.5).is_err());
+
+        let good = read_archive(std::io::Cursor::new(WS_BOOK.replace('\n', ""))).unwrap();
+        assert!(good.require_yield(0.5).is_ok());
+    }
+
+    // -- reference prices --------------------------------------------------
+
+    const META_AND_CTXS: &str = r#"[
+        {"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":40},
+                     {"name":"ETH","szDecimals":4,"maxLeverage":25}]},
+        [{"markPx":"50000.0","oraclePx":"49995.0","funding":"0.0000125"},
+         {"markPx":"3000.0","oraclePx":"3000.5","funding":"-0.00001"}]
+    ]"#;
+
+    #[test]
+    fn a_venue_publishes_a_mark_and_an_oracle_that_are_not_the_mid() {
+        let at = UnixNanos::new(1_700_000_000 * MS);
+        let (universe, references) = parse_meta_and_asset_ctxs(META_AND_CTXS, at).unwrap();
+        assert_eq!(universe.len(), 2);
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].instrument.as_str(), "BTC-PERP");
+        assert_eq!(references[0].ts(), at);
+        match references[0].event {
+            MarketEvent::Reference { mark, oracle } => {
+                assert_eq!(mark, Some(Price::from_f64(50_000.0).unwrap()));
+                assert_eq!(oracle, Some(Price::from_f64(49_995.0).unwrap()));
+            }
+            _ => panic!("expected a reference"),
+        }
+    }
+
+    #[test]
+    fn the_universe_and_its_contexts_are_paired_positionally_or_refused() {
+        // A short zip would attribute one coin's mark to another, which is
+        // undetectable downstream.
+        let mismatched = r#"[
+            {"universe":[{"name":"BTC","szDecimals":5},{"name":"ETH","szDecimals":4}]},
+            [{"markPx":"50000.0"}]
+        ]"#;
+        let err = parse_meta_and_asset_ctxs(mismatched, UnixNanos::new(1)).unwrap_err();
+        assert!(err.to_string().contains("positional"), "{err}");
+        assert!(parse_meta_and_asset_ctxs(r#"[{"universe":[]}]"#, UnixNanos::new(1)).is_err());
+    }
+
+    #[test]
+    fn a_missing_mark_stays_missing_rather_than_becoming_zero() {
+        // Defaulting it would value every position in that coin at nothing
+        // and liquidate the account.
+        let body = r#"[
+            {"universe":[{"name":"BTC","szDecimals":5}]},
+            [{"oraclePx":"49995.0"}]
+        ]"#;
+        let (_, references) = parse_meta_and_asset_ctxs(body, UnixNanos::new(1)).unwrap();
+        match references[0].event {
+            MarketEvent::Reference { mark, oracle } => {
+                assert_eq!(mark, None);
+                assert!(oracle.is_some());
+            }
+            _ => panic!("expected a reference"),
+        }
+
+        // A context with neither price is not a record at all.
+        let empty = r#"[{"universe":[{"name":"BTC","szDecimals":5}]},[{}]]"#;
+        let (_, none) = parse_meta_and_asset_ctxs(empty, UnixNanos::new(1)).unwrap();
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn the_live_asset_context_parses_the_same_way() {
+        let body = r#"{"channel":"activeAssetCtx","data":{"coin":"BTC",
+            "ctx":{"markPx":"50000.0","oraclePx":"49995.0"}}}"#;
+        let record = parse_asset_ctx(body, UnixNanos::new(7)).unwrap().unwrap();
+        assert_eq!(record.instrument.as_str(), "BTC-PERP");
+        assert_eq!(record.ts(), UnixNanos::new(7));
+        assert!(
+            parse_asset_ctx(r#"{"data":{"ctx":{}}}"#, UnixNanos::new(1))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn the_fast_path_and_the_tolerant_path_agree_line_for_line() {
+        // The fast path may only change how long a line takes to read, never
+        // what it reads, so every shape this module handles is decoded both
+        // ways and compared. Anything the fast path declines falls through,
+        // and declining is only ever a performance decision.
+        let real = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/hyperliquid/archive_l2book_btc.jsonl"),
+        )
+        .unwrap();
+        let live = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/hyperliquid/live_btc_capture.jsonl"),
+        )
+        .unwrap();
+
+        let mut compared = 0;
+        let mut declined = 0;
+        for line in real
+            .lines()
+            .chain(live.lines())
+            .chain([
+                WS_BOOK,
+                WS_TRADES,
+                r#"{"channel":"pong"}"#,
+                r#"{"channel":"allMids","data":{"mids":{"BTC":"50000"}}}"#,
+                r#"{"not":"an envelope"}"#,
+                // Numbers unquoted, which the venue does not send but the
+                // tolerant path accepts: the fast path must decline, not
+                // disagree.
+                r#"{"channel":"trades","data":[{"coin":"BTC","side":"B","px":1.5,"sz":2,"time":1700000000000}]}"#,
+            ])
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+        {
+            let json: Value = match serde_json::from_str(line) {
+                Ok(json) => json,
+                Err(_) => continue,
+            };
+            let slow = records_from_envelope(&json).unwrap_or_default();
+            match records_fast(line, &mut InstrumentCache::default()) {
+                Some(fast) => {
+                    assert_eq!(fast, slow, "disagreement on: {line}");
+                    compared += 1;
+                }
+                None => declined += 1,
+            }
+        }
+        assert!(compared > 30, "only {compared} lines compared");
+        assert_eq!(declined, 1, "only the unquoted-number line should decline");
+    }
+
+    #[test]
+    fn an_lz4_frame_round_trips_into_records() {
+        // The archive is published compressed; reading it must not need a
+        // shell pipeline.
+        let line = WS_BOOK.replace('\n', "");
+        let mut encoder = lz4_flex::frame::FrameEncoder::new(Vec::new());
+        std::io::Write::write_all(&mut encoder, line.as_bytes()).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let read = read_archive_lz4(&compressed).unwrap();
+        assert_eq!(read.records.len(), 1);
+        assert_eq!(read.records[0].instrument.as_str(), "BTC-PERP");
     }
 }
