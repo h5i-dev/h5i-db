@@ -1,0 +1,32 @@
+{
+ "engine": "nautilus_trader",
+ "engine_version": "1.230.0",
+ "event_count": 200000,
+ "rounds": 7,
+ "samples_ms": {
+  "unsubscribed": [
+   748.496852,
+   705.403047,
+   774.386402,
+   718.598825,
+   729.670283,
+   688.460805,
+   716.529421
+  ],
+  "subscribed": [
+   902.932871,
+   872.853308,
+   892.333075,
+   814.287816,
+   956.021481,
+   848.286009,
+   851.470138
+  ]
+ },
+ "median_ms": {
+  "unsubscribed": 718.598825,
+  "subscribed": 872.853308
+ },
+ "engine_us_per_event": 3.592994125,
+ "boundary_us_per_event": 0.7712724149999997
+}
