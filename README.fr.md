@@ -17,9 +17,11 @@ et pensés pour les agents, au service de la recherche quantitative. Embarqués,
 - **Un backtester événementiel efficace :** 3,05 M d'événements/s à travers le
   noyau de rejeu, soit 11,7× NautilusTrader et 31× LEAN sur une charge partagée
   portant sur le haut du carnet.
-- **Prise en charge native des marchés courants :** les payloads Kalshi,
-  Polymarket et Hyperliquid se décodent en un unique jeu de tables canoniques,
-  chacun avec la vraie courbe de frais et le funding du venue.
+- **Prise en charge native des places :** Hyperliquid, Polymarket, Kalshi, et
+  tout ce qui sait écrire les tables canoniques — le point d'extension est le
+  schéma et non une API de plugins, si bien qu'un chargeur est un script, dans
+  le langage de votre choix.
+  [Ce que couvre chaque place](crates/h5i-db-venues/README.md).
 - **Analyse statistique professionnelle :** métriques de facteurs et de
   performance à parité `alphalens` et `empyrical`, plus le Sharpe dégonflé et la
   détection de la probabilité de surapprentissage.
@@ -204,39 +206,6 @@ requête inter-forks, celle qui en vaut la peine est `promote`, et le reste est 
 requise, puis en échec ou avec avertissement, puis terminés et non vus, puis en
 cours, puis vus. Parcourir une liste ne marque rien comme revu ; un essai ne compte
 comme vu que lorsque son détail est ouvert.
-
----
-
-## Places de marché
-
-Les payloads se décodent en un seul jeu de tables canoniques — `instruments`,
-`book_deltas`, `trades`, `bars`, `funding`, `references`, `resolutions` — si
-bien que le noyau n'apprend jamais la forme d'une place. Tout ce qui sait
-écrire ces tables est un chargeur, dans n'importe quel langage. Ces trois-là
-sont livrées avec des parseurs testés sur des payloads enregistrés.
-
-| | Kalshi | Polymarket | Hyperliquid |
-|---|---|---|---|
-| Instruments | métadonnées de marché REST | un marché, N issues | univers perp et spot |
-| Carnet L2 | instantanés REST + WS, deltas à séquence vérifiée | instantanés `book`, deltas `price_change` | REST + WS |
-| Transactions | ✓ direct et historique, un seul parseur | ✓ | ✓ |
-| Barres | ✓ candlesticks | ✗ | ✓ candles |
-| Funding | s.o. | s.o. | ✓ |
-| Prix mark et oracle | s.o. | s.o. | ✓ contextes d'actif |
-| Marge et levier | s.o. | s.o. | ✓ plafond par coin, indicateur isolated-only |
-| Règlement | ✓ dès qu'observable | ✓ depuis la résolution du marché | s.o. |
-| Mint et redeem d'un lot complet | ✗ | ✓ marchés neg-risk | s.o. |
-| Modèle de frais | quadratique, arrondi de la place | proportionnel + rabais maker | paliers de volume glissants sur 14 jours |
-| Archive historique | ✗¹ | dispositions pmxt, telonex, Kaggle | flux horaire + contextes d'actif |
-
-¹ Kalshi ne publie aucun delta historique de carnet : un backtest fidèle à la
-position en file d'attente suppose donc d'avoir capté à l'avance le flux
-WebSocket authentifié. Un numéro de séquence manquant lève un trou plutôt que
-d'interpoler par-dessus.
-
-« s.o. » signifie que la place n'a pas cette notion : un perpétuel ne se
-règle jamais, et un marché de prédiction entièrement collatéralisé n'a ni
-levier ni funding.
 
 ---
 

@@ -16,9 +16,10 @@ escritos en Rust.**
 - **Backtester orientado a eventos y eficiente:** 3,05 M de eventos/s a través
   del núcleo de replay, 11,7× NautilusTrader y 31× LEAN en una carga compartida
   sobre el tope del libro.
-- **Soporte nativo de los mercados más usados:** los payloads de Kalshi,
-  Polymarket e Hyperliquid se decodifican en un único conjunto canónico de tablas,
-  cada uno con la curva de comisiones y el funding reales del venue.
+- **Soporte nativo de mercados:** Hyperliquid, Polymarket, Kalshi y cualquier
+  cosa que escriba las tablas canónicas — el punto de extensión es el esquema, no
+  una API de plugins, así que un cargador es un script en el lenguaje que sea.
+  [Qué cubre cada mercado](crates/h5i-db-venues/README.md).
 - **Análisis estadístico profesional:** métricas de factores y de rendimiento
   con paridad `alphalens` y `empyrical`, además de Sharpe deflactado y detección de
   la probabilidad de sobreajuste.
@@ -202,39 +203,6 @@ ordena las pruebas por lo que necesita a una persona a continuación: decisión
 requerida, luego fallidas o con avisos, luego terminadas y no vistas, luego en
 ejecución, luego vistas. Recorrer una lista no marca el trabajo como revisado; una
 prueba cuenta como vista solo cuando se abre su detalle.
-
----
-
-## Mercados soportados
-
-Los payloads se decodifican en un único conjunto de tablas canónicas —
-`instruments`, `book_deltas`, `trades`, `bars`, `funding`, `references`,
-`resolutions` — así que el núcleo nunca aprende la forma de un mercado.
-Cualquier cosa que escriba esas tablas es un cargador, en el lenguaje que sea.
-Estos tres vienen con parsers probados contra payloads grabados.
-
-| | Kalshi | Polymarket | Hyperliquid |
-|---|---|---|---|
-| Instrumentos | metadatos REST del mercado | un mercado, N resultados | universos de perpetuos y spot |
-| Libro L2 | instantáneas REST + WS, deltas con secuencia verificada | instantáneas `book`, deltas `price_change` | REST + WS |
-| Operaciones | ✓ en vivo e histórico, un solo parser | ✓ | ✓ |
-| Barras | ✓ candlesticks | ✗ | ✓ candles |
-| Funding | n/d | n/d | ✓ |
-| Precio mark y de oráculo | n/d | n/d | ✓ contextos de activo |
-| Margen y apalancamiento | n/d | n/d | ✓ tope por moneda, marca de solo aislado |
-| Liquidación final | ✓ en cuanto es observable | ✓ desde la resolución del mercado | n/d |
-| Mint y redeem de un lote completo | ✗ | ✓ mercados neg-risk | n/d |
-| Modelo de comisiones | cuadrático, con redondeo del mercado | proporcional + rebaja de maker | tramos de volumen móvil de 14 días |
-| Archivo histórico | ✗¹ | disposiciones pmxt, telonex y Kaggle | feed horario + contextos de activo |
-
-¹ Kalshi no publica deltas históricos del libro, así que un backtest fiel a la
-posición en cola exige haber capturado de antemano el flujo WebSocket
-autenticado. Si falta un número de secuencia se levanta un hueco en lugar de
-interpolar sobre él.
-
-«n/d» significa que el mercado no tiene ese concepto: un perpetuo nunca
-liquida, y un mercado de predicción totalmente colateralizado no tiene
-apalancamiento ni funding.
 
 ---
 

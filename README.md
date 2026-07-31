@@ -14,9 +14,10 @@ Embedded, written in Rust.**
 - **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- **Native support for popular markets:** Kalshi, Polymarket and Hyperliquid
-  payloads decode into one canonical set of tables, each with the venue's real fee
-  curve and funding.
+- **Native venue support:** Hyperliquid, Polymarket, Kalshi and anything else
+  that writes the canonical tables — the extension point is the schema, not a
+  plugin API, so a loader is a script in any language.
+  [What each venue covers](crates/h5i-db-venues/README.md).
 - **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.
@@ -189,37 +190,6 @@ dropped.
 trials by what needs a human next: decision required, then failed or warned, then
 finished and unseen, then running, then seen. Scanning a list does not mark work
 reviewed; a trial counts as seen only when its detail is opened.
-
----
-
-## Venues
-
-Payloads decode into one canonical set of tables — `instruments`,
-`book_deltas`, `trades`, `bars`, `funding`, `references`, `resolutions` — so
-the kernel never learns a venue's shape. Anything that writes those tables is
-a loader, in any language. These three ship with parsers tested against
-recorded payloads.
-
-| | Kalshi | Polymarket | Hyperliquid |
-|---|---|---|---|
-| Instruments | REST market metadata | one market, N outcomes | perp and spot universes |
-| L2 book | REST + WS snapshots, sequence-checked deltas | `book` snapshots, `price_change` deltas | REST + WS |
-| Trades | ✓ live and historical, one parser | ✓ | ✓ |
-| Bars | ✓ candlesticks | ✗ | ✓ candles |
-| Funding | n/a | n/a | ✓ |
-| Mark and oracle price | n/a | n/a | ✓ per-asset contexts |
-| Margin and leverage | n/a | n/a | ✓ per-coin cap, isolated-only flag |
-| Settlement | ✓ once observable | ✓ from market resolution | n/a |
-| Complete-set mint and redeem | ✗ | ✓ neg-risk markets | n/a |
-| Fee model | quadratic, exchange rounding | proportional + maker rebate | 14-day rolling volume tiers |
-| Historical archive | ✗¹ | pmxt, telonex, Kaggle layouts | hourly feed + asset contexts |
-
-¹ Kalshi publishes no historical order-book deltas, so a queue-accurate
-backtest needs prospective capture of the authenticated WebSocket stream. A
-missing sequence number raises a gap rather than interpolating across it.
-
-`n/a` means the venue has no such concept: a perpetual never resolves, and a
-fully collateralized prediction market has no leverage or funding.
 
 ---
 
