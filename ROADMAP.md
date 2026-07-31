@@ -2012,3 +2012,149 @@ reads as at depth 2 (asserted with `assert_eq!`, not a bound). That is
 the property BranchBench found every system missing (Dolt's reads
 degrade 5-4000x with depth), and it holds here because a shadow manifest
 names its segments by path, so there is no chain to walk.
+
+---
+
+# Part XI — Live execution without a backtest tax (2026-07-31)
+
+Live execution is a stated non-goal today (`README.md`: "the backtester never
+routes a real order"). This part does not change that. It records what the
+2026-07-31 measurement work established about *whether the goal could be
+adopted later without giving up the kernel*, so that the answer is written
+down rather than re-derived, and so the seams that already exist are not
+removed by someone who does not know why they are there.
+
+## The finding that motivates it
+
+Splitting NautilusTrader the same way we split ourselves — an arm whose
+strategy never subscribes, so the engine streams every quote through its
+message bus and venue but never calls Python — decomposed the gap:
+
+| | engine, no Python | strategy boundary | total |
+|---|---:|---:|---:|
+| h5i | **0.329 µs/event** | ~0.77 | ~1.10 |
+| NautilusTrader | **3.593 µs/event** | 0.771 | 4.364 |
+
+The engine term is 10.9×, and it is the whole of our path-dependent
+advantage: our boundary is no better than theirs and possibly worse. The
+composition inverts — Nautilus spends 82% of a run in the engine and 18%
+crossing into Python; we spend roughly a quarter and three quarters.
+
+**The 3.593 µs is what their engine costs with zero callbacks attached.**
+That is not waste. It is the price of a message bus: events are published to
+a topic, components subscribe handlers at runtime, and dispatch is a lookup
+plus a handler walk plus dynamic dispatch, on every event. It buys the thing
+we do not have — the same strategy code running live and in backtest, with
+components addable without touching the engine.
+
+So the honest statement of our 10.9× is not that we are faster at the same
+job. It is that we are solving a smaller one.
+
+## Why the tax is avoidable
+
+Because live is not throughput-bound.
+
+```text
+  h5i kernel                      3,000,000 events/s
+  Nautilus engine (bus, no Python)  278,000 events/s
+  a real venue feed, all symbols     10,000 – 100,000 events/s
+```
+
+At 100k events/s a 3.6 µs dispatch is a third of one core. The bus is cheap
+in live and expensive only in backtest, where the point is to replay 200k
+events as fast as the machine allows. The cost is therefore not inherent to
+having live execution; it is inherent to using **one dispatch mechanism for
+both modes**, which is the choice Nautilus made in exchange for code
+identity.
+
+The alternative is to share everything except dispatch.
+
+```text
+                backtest                          live
+                ────────                          ────
+  inbound  Parquet → decode → RecordSource   socket → adapter → RecordSource
+                          │                                   │
+                          └─────────────┬─────────────────────┘
+                                        ▼
+                    ┌────────────────────────────────────┐
+                    │  Replay (k-way merge)              │  shared
+                    ├────────────────────────────────────┤
+                    │  Engine::step()                    │  shared
+                    │  books · order lifecycle · risk    │
+                    │  · portfolio · settlement          │
+                    ├────────────────────────────────────┤
+                    │  strategy.on_event()               │  shared, direct call
+                    └────────────────┬───────────────────┘
+                                     ▼ intent only
+                    ┌────────────────────────────────────┐
+                    │  ExecutionClient                   │  the seam
+                    └───────┬────────────────────┬───────┘
+                            ▼                    ▼
+                  SimulatedExecution        LiveExecution → venue
+                  fills made by engine      fills return from venue
+```
+
+## Seams that already exist
+
+Two of the three edges are in the codebase, and both were built for this.
+
+**Outbound.** `ExecutionClient` (`execution.rs`) is documented as the live
+seam: "The simulator implements it; a live adapter would implement the same
+one … if simulation and production reach the venue through different code,
+they diverge, and nothing detects it because there is no shared surface to
+compare." It carries *intent* — submit, cancel, amend — and deliberately
+never a fill, because in production fills can only come the other way.
+
+**Inbound.** `RecordSource` is `Box<dyn Iterator<Item = Result<Record>>>`. A
+channel receiver is an `Iterator`, so a live feed is a `RecordSource` with no
+engine change at all. Ordering also survives: the merge keys on `ts_init`,
+"when this system could first have known it", which for a live receiver is
+arrival order and therefore monotonic by construction.
+
+## What is actually hard, none of it performance
+
+1. **Fills reverse direction.** The engine produces fills today, in
+   `match_resting`. Live must accept them from the venue instead. This is the
+   large change — a mode distinction in the middle of the engine, not at its
+   edges — and the fact that a seam exists for the outbound half does not
+   make it small.
+2. **`step()` is synchronous.** A strategy that takes 10 ms blocks the loop
+   for 10 ms. Backtest does not care; live needs a stated backpressure policy
+   (drop, queue, or block). A design decision, not an optimization.
+3. **Throughput and tail latency are different objectives.** The kernel is
+   tuned for the former. Anything that batches to help throughput can hurt
+   p99, so the hot path needs auditing against a latency budget rather than
+   an events/s number.
+4. **Single-threaded stays correct, and is normal.** One thread owning state,
+   fed by queues, is how most execution systems are built. Determinism in
+   backtest comes from the total order key, which live has no need to
+   enforce.
+
+## The divergence risk, and the test that answers it
+
+Sharing everything is precisely why Nautilus put both modes on one bus. Two
+dispatch paths can drift, and a bug in one that is absent in the other is the
+worst kind: it appears only in production.
+
+Three mitigations, in order of strength. The engine, order lifecycle, risk,
+portfolio and settlement stay **one implementation** — only dispatch differs,
+and dispatch is small enough to review as a unit. `ExecutionClient` keeps a
+shared surface at the venue edge, which is what it was for. And the
+divergence becomes **testable**: record a live session into the canonical
+tables, replay it through the backtest path, and assert the strategy's
+decisions are identical. That is the shape `result.verify()` already has.
+
+A live session recorded this way is a fork, so live-to-backtest
+reproducibility falls out of the storage design rather than needing to be
+built.
+
+## Status
+
+Design only. Nothing here is implemented or measured, and the 0.329 µs figure
+holds under the assumption that there is no live path — whether it survives
+one is not knowable until there is one to measure. What is established is
+that a design exists in which backtest pays nothing for live's flexibility,
+and that half of its seams are already load-bearing in the current code.
+
+Do not remove `ExecutionClient`'s intent-only contract, or narrow
+`RecordSource` to a concrete type, without reading this part first.
