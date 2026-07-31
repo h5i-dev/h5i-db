@@ -35,7 +35,116 @@ use crate::position::Portfolio;
 use crate::types::{Money, Price, Qty, Side, UnixNanos, notional};
 
 /// A key identifying one tradable book.
-type BookKey = (InstrumentId, OutcomeId);
+///
+/// A dense integer rather than `(InstrumentId, OutcomeId)`, which is what it
+/// used to be. The id is an `Arc<str>`, so keying the engine's per-record
+/// maps by it meant every lookup walked a tree comparing strings and every
+/// insert cloned an `Arc` -- six maps deep, on every record. Measured against
+/// instrument count, that showed up as the kernel costing 0.389 µs an event
+/// at one instrument and 0.712 at 1024: 45% of the work at the top end was
+/// growth in `N` rather than anything the run asked for.
+///
+/// The instrument set is fixed when the engine is built, so the mapping is
+/// computed once ([`Slots`]) and the hot path carries the integer.
+type BookKey = Slot;
+
+/// One outcome of one instrument, as a dense index.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug, Default)]
+pub struct Slot(u32);
+
+/// The instrument-to-slot mapping, built once per run.
+///
+/// Also the outcome check the hot path used to make separately: resolving a
+/// slot fails for exactly the cases `InstrumentSet::get` followed by
+/// `check_outcome` used to fail for, so one lookup replaces two plus the six
+/// string-keyed descents that followed it.
+#[derive(Clone, Debug, Default)]
+struct Slots {
+    /// Instrument to (first slot, outcome count).
+    by_instrument: std::collections::HashMap<InstrumentId, (u32, u16)>,
+    /// Slot back to the venue's own terms, for results and for anything
+    /// that has to report what it acted on.
+    back: Vec<(InstrumentId, OutcomeId)>,
+}
+
+impl Slot {
+    /// A slot no map ever holds.
+    ///
+    /// Key construction used to be infallible: building `(id, outcome)`
+    /// could not fail, and only the lookup that followed could miss. Callers
+    /// lean on that, treating a miss as "nothing here yet". Handing them
+    /// this for an unregistered pair keeps the property, so a lookup misses
+    /// where it used to miss instead of erroring in a path with no error to
+    /// return.
+    const MISSING: Self = Self(u32::MAX);
+}
+
+impl Slots {
+    /// Assign slots in sorted instrument order, so two runs over the same
+    /// set agree on every index and anything iterating them is
+    /// deterministic.
+    fn build(instruments: &InstrumentSet) -> Self {
+        let mut slots = Self::default();
+        for id in instruments.ids() {
+            // `ids()` came from this set, so the lookup cannot miss.
+            let Ok(instrument) = instruments.get(&id) else {
+                continue;
+            };
+            let count = instrument.outcome_count();
+            let base = slots.back.len() as u32;
+            slots.by_instrument.insert(id.clone(), (base, count));
+            for outcome in instrument.outcome_ids() {
+                slots.back.push((id.clone(), outcome));
+            }
+        }
+        slots
+    }
+
+    fn resolve(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Result<Slot> {
+        let Some((base, count)) = self.by_instrument.get(instrument) else {
+            return Err(BacktestError::UnknownInstrument(instrument.to_string()));
+        };
+        if outcome.0 >= *count {
+            // The same variant `Instrument::check_outcome` raised before this
+            // path replaced it. Callers match on it, and a bad outcome is a
+            // different fault from an unknown instrument.
+            return Err(BacktestError::UnknownOutcome {
+                instrument: instrument.to_string(),
+                outcome: outcome.0,
+                count: *count,
+            });
+        }
+        Ok(Slot(base + outcome.0 as u32))
+    }
+
+    /// The slot for a pair, or [`Slot::MISSING`] when there is none.
+    ///
+    /// The infallible form, for the paths that only ever went on to look a
+    /// map up and handle the miss.
+    fn key(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Slot {
+        match self.by_instrument.get(instrument) {
+            Some((base, count)) if outcome.0 < *count => Slot(base + outcome.0 as u32),
+            _ => Slot::MISSING,
+        }
+    }
+
+    /// What a slot names.
+    ///
+    /// Only ever called on slots read back out of the engine's own maps,
+    /// which never hold [`Slot::MISSING`]; the fallback is there so a bug
+    /// cannot turn into a panic in a run someone is waiting on.
+    fn name(&self, slot: Slot) -> &(InstrumentId, OutcomeId) {
+        static UNKNOWN: std::sync::OnceLock<(InstrumentId, OutcomeId)> = std::sync::OnceLock::new();
+        self.back.get(slot.0 as usize).unwrap_or_else(|| {
+            UNKNOWN.get_or_init(|| {
+                (
+                    InstrumentId::new("<unknown>").expect("literal is a valid id"),
+                    OutcomeId::FIRST,
+                )
+            })
+        })
+    }
+}
 
 #[derive(Default)]
 struct QueueLevels {
@@ -49,14 +158,13 @@ struct RestingIndex {
 }
 
 impl RestingIndex {
-    fn insert(&mut self, order: &Order) {
+    /// The slot is passed in rather than derived: the index has no
+    /// instrument table, and the caller resolved it for this record already.
+    fn insert(&mut self, order: &Order, slot: Slot) {
         let Some(limit) = order.limit_price() else {
             return;
         };
-        let market = self
-            .markets
-            .entry((order.instrument.clone(), order.outcome))
-            .or_default();
+        let market = self.markets.entry(slot).or_default();
         let levels = match order.side {
             Side::Buy => &mut market.buys,
             Side::Sell => &mut market.sells,
@@ -67,11 +175,11 @@ impl RestingIndex {
         }
     }
 
-    fn remove(&mut self, order: &Order) {
+    fn remove(&mut self, order: &Order, slot: Slot) {
         let Some(limit) = order.limit_price() else {
             return;
         };
-        let key = (order.instrument.clone(), order.outcome);
+        let key = slot;
         let mut remove_market = false;
         if let Some(market) = self.markets.get_mut(&key) {
             let levels = match order.side {
@@ -484,6 +592,9 @@ enum Command {
 /// ahead because there is nothing here through which to do it.
 pub struct Context<'a> {
     now: UnixNanos,
+    /// Callers name an instrument and an outcome; the maps are keyed by
+    /// slot, so the translation lives here rather than in every accessor.
+    slots: &'a Slots,
     books: &'a BTreeMap<BookKey, OrderBook>,
     marks: &'a BTreeMap<BookKey, Price>,
     oracles: &'a BTreeMap<BookKey, Price>,
@@ -507,7 +618,7 @@ impl<'a> Context<'a> {
     }
 
     pub fn book(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Option<&OrderBook> {
-        self.books.get(&(instrument.clone(), outcome))
+        self.books.get(&self.slots.key(instrument, outcome))
     }
 
     pub fn best_bid(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Option<Price> {
@@ -574,7 +685,9 @@ impl<'a> Context<'a> {
     /// The price this run values the position at: the venue's mark where it
     /// publishes one, the book otherwise.
     pub fn mark(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Option<Price> {
-        self.marks.get(&(instrument.clone(), outcome)).copied()
+        self.marks
+            .get(&self.slots.key(instrument, outcome))
+            .copied()
     }
 
     /// The venue's oracle price, where it publishes one.
@@ -583,7 +696,9 @@ impl<'a> Context<'a> {
     /// the spread between oracle and book is the premium that funding is
     /// computed from, and a basis strategy is trading exactly that.
     pub fn oracle(&self, instrument: &InstrumentId, outcome: OutcomeId) -> Option<Price> {
-        self.oracles.get(&(instrument.clone(), outcome)).copied()
+        self.oracles
+            .get(&self.slots.key(instrument, outcome))
+            .copied()
     }
 
     /// Pay one unit of cash per set and receive one contract on every
@@ -939,7 +1054,10 @@ pub struct RunResult {
     pub simulated_through: Option<UnixNanos>,
     pub records_processed: u64,
     /// The last mark seen per book, for valuing what stayed open.
-    pub marks: BTreeMap<BookKey, Price>,
+    /// In the venue's own terms, not the engine's internal slots: this is
+    /// read by settlement and written to storage, and a dense index means
+    /// nothing outside the run that issued it.
+    pub marks: BTreeMap<(InstrumentId, OutcomeId), Price>,
     /// The equity curve, sampled on a fixed interval of simulated time.
     pub equity: Vec<EquityPoint>,
     /// Net funding paid out over the run. Negative means funding was
@@ -976,6 +1094,8 @@ pub struct RunResult {
 pub struct Engine {
     clock: Clock,
     instruments: InstrumentSet,
+    /// Instrument and outcome to dense slot, computed once. See [`BookKey`].
+    slots: Slots,
     books: BTreeMap<BookKey, OrderBook>,
     portfolio: Portfolio,
     cash: Money,
@@ -1233,7 +1353,7 @@ impl Engine {
         // `InstrumentId` is an atomic bump, and rebuilding the same key in
         // each of the three consumers pays it three times on the hottest
         // path in the engine.
-        let key: BookKey = (record.instrument.clone(), record.outcome);
+        let key: BookKey = self.slots.resolve(&record.instrument, record.outcome)?;
 
         // 2. The venue sees the data before anyone else.
         self.apply_to_books(record, &key)?;
@@ -1390,7 +1510,7 @@ impl Engine {
             };
             let fires = self
                 .marks
-                .get(&(order.instrument.clone(), order.outcome))
+                .get(&self.slots.key(&order.instrument, order.outcome))
                 .is_some_and(|price| trigger.fires_at(*price));
             if fires {
                 ready.push(*id);
@@ -1554,7 +1674,7 @@ impl Engine {
                     if &position.instrument != instrument {
                         continue;
                     }
-                    let key = (instrument.clone(), position.outcome);
+                    let key = self.slots.key(instrument, position.outcome);
                     let Some(mark) = self.marks.get(&key).copied() else {
                         continue;
                     };
@@ -1641,7 +1761,7 @@ impl Engine {
             model,
             self.cross_positions(),
             &self.instruments,
-            &self.marks,
+            |id, outcome| self.marks.get(&self.slots.key(id, outcome)).copied(),
         )?;
         // Cash is held in the reporting currency. Positions settling in
         // another one need a rate to join it, and a position whose currency
@@ -1652,7 +1772,7 @@ impl Engine {
         let mut unconvertible = Vec::new();
         let mut unrealized = Money::ZERO;
         for position in self.cross_positions() {
-            let key = (position.instrument.clone(), position.outcome);
+            let key = self.slots.key(&position.instrument, position.outcome);
             let Some(mark) = self.marks.get(&key) else {
                 continue;
             };
@@ -1698,7 +1818,7 @@ impl Engine {
         // same on every run without depending on portfolio iteration order.
         let mut doomed: Vec<(InstrumentId, OutcomeId, Qty, Money)> = Vec::new();
         for position in self.portfolio.open_positions() {
-            let key = (position.instrument.clone(), position.outcome);
+            let key = self.slots.key(&position.instrument, position.outcome);
             let Some(mark) = self.marks.get(&key).copied() else {
                 continue;
             };
@@ -1731,7 +1851,7 @@ impl Engine {
             {
                 break;
             }
-            let key = (instrument.clone(), outcome);
+            let key = self.slots.key(&instrument, outcome);
             let Some(mark) = self.marks.get(&key).copied() else {
                 continue;
             };
@@ -1841,7 +1961,7 @@ impl Engine {
         if state.incomplete {
             return Ok(true);
         }
-        let key = (order.instrument.clone(), order.outcome);
+        let key = self.slots.key(&order.instrument, order.outcome);
         let Some(mark) = self.marks.get(&key) else {
             return Ok(true);
         };
@@ -1871,7 +1991,7 @@ impl Engine {
         let mut position_value = Money::ZERO;
         let mut unrealized = Money::ZERO;
         for position in self.portfolio.open_positions() {
-            let key = (position.instrument.clone(), position.outcome);
+            let key = self.slots.key(&position.instrument, position.outcome);
             let Some(mark) = self.marks.get(&key) else {
                 continue;
             };
@@ -1901,7 +2021,8 @@ impl Engine {
         if !self.record_mark_curve {
             return;
         }
-        for ((instrument, outcome), price) in &self.marks {
+        for (slot, price) in &self.marks {
+            let (instrument, outcome) = self.slots.name(*slot);
             let is_probability = self
                 .instruments
                 .get(instrument)
@@ -1922,6 +2043,7 @@ impl Engine {
     fn with_context<T>(&mut self, f: impl FnOnce(&mut Context<'_>) -> Result<T>) -> Result<T> {
         let mut ctx = Context {
             now: self.clock.now(),
+            slots: &self.slots,
             books: &self.books,
             marks: &self.marks,
             oracles: &self.oracles,
@@ -1952,7 +2074,7 @@ impl Engine {
         // it up before paying for the key clone `entry` needs.
         let book = match self.books.get_mut(key) {
             Some(book) => book,
-            None => self.books.entry(key.clone()).or_default(),
+            None => self.books.entry(*key).or_default(),
         };
         match &record.event {
             MarketEvent::BookSnapshot { bids, asks } => {
@@ -1973,10 +2095,10 @@ impl Engine {
             }
             MarketEvent::Reference { mark, oracle } => {
                 if let Some(price) = mark {
-                    self.venue_marks.insert(key.clone(), *price);
+                    self.venue_marks.insert(*key, *price);
                 }
                 if let Some(price) = oracle {
-                    self.oracles.insert(key.clone(), *price);
+                    self.oracles.insert(*key, *price);
                 }
             }
             MarketEvent::Funding { rate } => {
@@ -1994,19 +2116,13 @@ impl Engine {
         Ok(())
     }
 
-    /// Store a price under `key`, without cloning the key when it is
-    /// already there.
+    /// Store a price under `key`.
     ///
-    /// Every record updates a mark, and after the first one for a book the
-    /// entry always exists -- so the clone `insert` needs is paid on every
-    /// record to be used once.
+    /// This used to avoid an `insert` because the key was an `InstrumentId`
+    /// and inserting cloned an `Arc` on every record to be used once. The
+    /// key is an integer now, so there is nothing left to dodge.
     fn upsert(map: &mut BTreeMap<BookKey, Price>, key: &BookKey, price: Price) {
-        match map.get_mut(key) {
-            Some(slot) => *slot = price,
-            None => {
-                map.insert(key.clone(), price);
-            }
-        }
+        map.insert(*key, price);
     }
 
     /// Record what the book says, and derive the effective mark from it.
@@ -2069,7 +2185,7 @@ impl Engine {
             if &position.instrument != instrument {
                 continue;
             }
-            let key = (position.instrument.clone(), position.outcome);
+            let key = self.slots.key(&position.instrument, position.outcome);
             let Some(mark) = self.oracles.get(&key).or_else(|| self.marks.get(&key)) else {
                 continue;
             };
@@ -2115,21 +2231,22 @@ impl Engine {
                     };
                     let (quantity, price) =
                         CorporateAction::split_position(ratio, order.quantity, limit)?;
-                    self.resting_index.remove(&order);
+                    let slot = self.slots.resolve(&order.instrument, order.outcome)?;
+                    self.resting_index.remove(&order, slot);
                     if let Some(order) = self.orders.get_mut(&id) {
                         order.quantity = quantity;
                         order.kind = OrderKind::Limit { limit: price };
                     }
                     if let Some(order) = self.orders.get(&id) {
-                        self.resting_index.insert(order);
+                        self.resting_index.insert(order, slot);
                     }
                 }
                 // Marks are quoted prices, and the quote is now post-split.
                 let keys: Vec<BookKey> = self
                     .marks
                     .keys()
-                    .filter(|(id, _)| id == instrument)
-                    .cloned()
+                    .copied()
+                    .filter(|slot| &self.slots.name(*slot).0 == instrument)
                     .collect();
                 for key in keys {
                     if let Some(mark) = self.marks.get(&key).copied() {
@@ -2289,8 +2406,9 @@ impl Engine {
         }
 
         let was_resting = self.resting.contains(&id);
+        let slot = self.slots.resolve(&order.instrument, order.outcome)?;
         if loses_priority && was_resting {
-            self.resting_index.remove(&order);
+            self.resting_index.remove(&order, slot);
         }
         self.orders.insert(id, updated);
         self.metrics.orders_amended += 1;
@@ -2307,7 +2425,7 @@ impl Engine {
             if let Some(order) = self.orders.get(&id).cloned() {
                 self.join_queue(&order);
                 if was_resting {
-                    self.resting_index.insert(&order);
+                    self.resting_index.insert(&order, slot);
                 }
             }
         }
@@ -2424,7 +2542,9 @@ impl Engine {
     /// is the rejection condition rather than the fill condition.
     fn crossing_price(&self, order: &Order) -> Option<Price> {
         let limit = order.limit_price()?;
-        let book = self.books.get(&(order.instrument.clone(), order.outcome))?;
+        let book = self
+            .books
+            .get(&self.slots.key(&order.instrument, order.outcome))?;
         match order.side {
             Side::Buy => book
                 .best_ask()
@@ -2632,7 +2752,7 @@ impl Engine {
             if let Some(trigger) = order.trigger {
                 let reference = self
                     .marks
-                    .get(&(order.instrument.clone(), order.outcome))
+                    .get(&self.slots.key(&order.instrument, order.outcome))
                     .copied();
                 if !reference.is_some_and(|price| trigger.fires_at(price)) {
                     order.status = OrderStatus::Untriggered;
@@ -2728,7 +2848,7 @@ impl Engine {
         if !order.is_open() || order.status == OrderStatus::InFlight {
             return Ok(());
         }
-        let key = (order.instrument.clone(), order.outcome);
+        let key = self.slots.key(&order.instrument, order.outcome);
         let Some(book) = self.books.get(&key) else {
             // No book for this instrument yet. That is not a reason to
             // strand the order: it is simply no liquidity, so the order's
@@ -2809,7 +2929,7 @@ impl Engine {
         let Some(limit) = order.limit_price() else {
             return;
         };
-        let key = (order.instrument.clone(), order.outcome);
+        let key = self.slots.key(&order.instrument, order.outcome);
         let ahead = self
             .books
             .get(&key)
@@ -2825,13 +2945,15 @@ impl Engine {
             return;
         }
         self.join_queue(order);
-        self.resting_index.insert(order);
+        let slot = self.slots.key(&order.instrument, order.outcome);
+        self.resting_index.insert(order, slot);
         self.resting.push(order.id);
     }
 
     fn remove_resting(&mut self, id: OrderId) {
         if let Some(order) = self.orders.get(&id).cloned() {
-            self.resting_index.remove(&order);
+            let slot = self.slots.key(&order.instrument, order.outcome);
+            self.resting_index.remove(&order, slot);
         }
         self.resting.retain(|open| *open != id);
         self.queue_ahead.remove(&id);
@@ -2892,7 +3014,7 @@ impl Engine {
         // reach, rather than to every resting order in the engine.
         let mut eligible = std::mem::take(&mut self.queue_candidates);
         eligible.clear();
-        let key = (record.instrument.clone(), record.outcome);
+        let key = self.slots.key(&record.instrument, record.outcome);
         self.resting_index
             .reached_by_trade(&key, passive, price, &mut eligible);
 
@@ -3181,7 +3303,7 @@ impl Engine {
             .outcome_ids()
             .map(|outcome| {
                 self.marks
-                    .get(&(instrument.id.clone(), outcome))
+                    .get(&self.slots.key(&instrument.id, outcome))
                     .copied()
                     .filter(|price| price.is_positive())
             })
@@ -3335,7 +3457,11 @@ impl Engine {
             commissions: self.portfolio.commissions()?,
             simulated_through: self.simulated_through,
             records_processed: self.records,
-            marks: self.marks.clone(),
+            marks: self
+                .marks
+                .iter()
+                .map(|(slot, price)| (self.slots.name(*slot).clone(), *price))
+                .collect(),
             equity: self.equity.clone(),
             funding_paid: self.funding_paid,
             dividends_received: self.dividends_received,
@@ -3539,9 +3665,11 @@ impl EngineBuilder {
             })
             .collect();
         expiries.sort();
+        let slots = Slots::build(&self.instruments);
         Engine {
             clock: Clock::new(self.start),
             instruments: self.instruments,
+            slots,
             books: BTreeMap::new(),
             portfolio: Portfolio::new(),
             cash: self.starting_cash,
