@@ -239,7 +239,7 @@ Full methodology and results in [benchmarks](benchmarks).
 | engine | measured boundary | median | throughput |
 |---|---|---:|---:|
 | **h5i-db** | decoded records through the replay kernel | **65.7 ms** | **3.05 M events/s** |
-| **h5i-db** | full persisted run: scan, decode, fork, replay, write | 331 ms | 605 k events/s |
+| **h5i-db** | full persisted run: scan, decode, fork, replay, write | 280 ms⁶ | 713 k events/s⁶ |
 | NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
 | LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
 
@@ -248,6 +248,12 @@ saw all 200k events and submitted all 200 orders. The measured boundaries differ
 as the column says: the benchmark checks event and order counts rather than PnL
 equivalence, and Nautilus invokes a Python strategy callback per quote where the
 other two run native code.
+
+⁶ Re-measured two days after the other rows, once batched metadata commits cut
+  the durability cost a run pays. The kernel is untouched. The pre-change
+  revision measured 386 ms on the re-measurement day against 331 ms on the
+  original one, so the machine was slower, not faster; both arms and the method
+  are in [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
 
 ---
 

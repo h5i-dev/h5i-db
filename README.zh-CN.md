@@ -223,7 +223,7 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 | 引擎 | 测量边界 | 中位数 | 吞吐 |
 |---|---|---:|---:|
 | **h5i-db** | 已解码记录穿过重放内核 | **65.7 ms** | **305 万 事件/秒** |
-| **h5i-db** | 含持久化的完整运行：扫描、解码、fork、重放、写回 | 331 ms | 60.5 万 事件/秒 |
+| **h5i-db** | 含持久化的完整运行：扫描、解码、fork、重放、写回 | 280 ms⁶ | 71.3 万 事件/秒⁶ |
 | NautilusTrader 1.230.0 | 内存中的对象穿过 `BacktestEngine.run()` | 767 ms | 26.1 万 事件/秒 |
 | LEAN `11ba019f6` | 从首个 `Slice` 回调到 `OnEndOfAlgorithm`，数据来自磁盘 | 2033 ms | 9.84 万 事件/秒 |
 
@@ -231,6 +231,11 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 20 万个事件、发出了 200 笔订单。各家测量的边界并不相同，就是表中那一列写的意思：
 这份基准校验的是事件数和订单数，不是 PnL 的等价性；而且 Nautilus 每来一个报价就要调
 一次 Python 策略回调，另外两者跑的是原生代码。
+
+⁶ 在把元数据提交批量化、削掉一次运行所付的持久化开销之后，比其他几行晚两天重新测的。
+  内核没有改动。改动前的版本在重测那天是 386 ms，而在最初那天是 331 ms，所以是机器变慢了，
+  不是变快了。两侧的测量值和方法都在
+  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md)。
 
 ---
 

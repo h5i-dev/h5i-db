@@ -17,7 +17,9 @@ warm-up.
 
 h5i-db's persisted run, which scans and decodes its database, creates a fork
 and run tables, executes the kernel, and writes results, had a **331 ms**
-median (605 k input events/s). Its median decode alone was 84.2 ms.
+median (605 k input events/s) at `7659713d`. Its median decode alone was
+84.2 ms. That boundary has since moved; see [Persisted run,
+re-measured](#persisted-run-re-measured-2026-07-31) below.
 
 On this workload:
 
@@ -27,6 +29,52 @@ On this workload:
   engine throughput and **6.1×** LEAN's measured callback throughput; and
 - h5i-db storage orchestration, not event replay, is the larger optimization
   target: the persisted boundary takes about 5.0× the kernel time.
+
+## Persisted run, re-measured 2026-07-31
+
+The last bullet above was acted on at `d7f5bf0b`, which batches the metadata
+commits a run pays for. Only the persisted boundary changes: the kernel is
+untouched, and the three-engine table above stands as measured.
+
+Re-measuring means re-measuring *both* revisions, because this machine drifts
+between days by more than the change is worth. Both were built from the same
+tree state, run in alternating fresh processes on 2026-07-31, and reported as
+medians of five after one warm-up.
+
+| boundary | `a3d5c2a4` (before) | `d7f5bf0b` (after) | |
+|---|---:|---:|---:|
+| persisted run, end to end | 386 ms | **280 ms** | -27 % |
+| … as input throughput | 518 k events/s | **713 k events/s** | |
+| decode (Arrow → `Record`) | 82.2 ms | 67.0 ms | -19 % |
+| replay kernel | 69.9 ms | 65.7 ms | untouched |
+| create run tables | 71.2 ms | 39.7 ms | -44 % |
+| write run (one transaction) | 121.5 ms | 51.4 ms | -58 % |
+| four-trial study | 1,371 ms | 1,070 ms | -22 % |
+
+Two things to read off that table rather than assume:
+
+- The kernel row is the control. Nothing in `d7f5bf0b` touches it, and the
+  4.2 ms between the two arms is this machine's noise band on a phase that
+  did not change. The 65.7 ms it lands on is also the figure the 2026-07-29
+  table reports, which is why that table needs no revision.
+- The `a3d5c2a4` arm measured 386 ms where 2026-07-29 measured 331 ms for the
+  same code. The machine was slower on 2026-07-31, not faster. Comparing the
+  280 ms against numbers collected on the faster day therefore understates
+  the change rather than flattering it.
+
+Against the 2026-07-29 competitor figures the persisted boundary is now
+**2.7×** NautilusTrader's in-memory engine throughput and **7.3×** LEAN's, and
+it takes **4.3×** the kernel time rather than 5.0×. Storage orchestration is
+still the larger target: durability barriers, not scanning or replay, are what
+is left in that 4.3×.
+
+Reproduce either arm with:
+
+```sh
+cargo bench -p h5i-db-backtest --bench replay_path -- \
+    --book 200000 --trades 0 --instruments 1 --signals 200 \
+    --common-quotes --trials 4
+```
 
 ## Interpretation limits
 
@@ -48,7 +96,14 @@ workload, not a universal ranking of backtest systems.
 - The local Nautilus checkout is 1.231.0, but building it exceeded this
   machine's memory twice. The benchmark therefore uses the nearest published
   aarch64 wheel, 1.230.0, and records that version in the artifact.
+- The 2.7× and 7.3× above put a 2026-07-31 h5i measurement beside 2026-07-29
+  competitor measurements. Neither competitor's code changed, and the
+  re-measured `a3d5c2a4` arm shows which direction the machine drifted, but
+  they are not one session. A single-session three-engine table needs the
+  coordinator re-run, which needs the LEAN launcher rebuilt.
 
-Raw samples, workload parameters, machine metadata, and exact revisions are in
-[`results.json`](results.json). See [`README.md`](README.md) for reproduction
+Raw samples, workload parameters, machine metadata, and exact revisions for the
+2026-07-29 run are in [`results.json`](results.json); the 2026-07-31
+re-measurement is the `replay_path` command above rather than a coordinator
+artifact. See [`README.md`](README.md) for reproduction
 commands and the memory-safe serial LEAN build.

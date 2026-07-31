@@ -235,7 +235,7 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
 | エンジン | 計測した境界 | 中央値 | スループット |
 |---|---|---:|---:|
 | **h5i-db** | デコード済みレコードがリプレイカーネルを通る区間 | **65.7 ms** | **305万 events/s** |
-| **h5i-db** | 永続化を含む実行全体: スキャン、デコード、fork、リプレイ、書き込み | 331 ms | 60.5万 events/s |
+| **h5i-db** | 永続化を含む実行全体: スキャン、デコード、fork、リプレイ、書き込み | 280 ms⁶ | 71.3万 events/s⁶ |
 | NautilusTrader 1.230.0 | メモリ上のオブジェクトが `BacktestEngine.run()` を通る区間 | 767 ms | 26.1万 events/s |
 | LEAN `11ba019f6` | 最初の `Slice` コールバックから `OnEndOfAlgorithm` まで、ディスク供給 | 2,033 ms | 9.84万 events/s |
 
@@ -244,6 +244,13 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
 列に書いたとおり同じではない。このベンチマークが照合するのはイベント数と注文数で、
 PnLの一致ではないし、Nautilusは気配ごとにPythonの戦略コールバックを呼ぶが、残りの
 2つはネイティブコードを走らせている。
+
+⁶ メタデータのコミットをまとめて、ランが払う永続化のコストを削った後に、他の行の
+  2日後へ計測し直した値。カーネルには手を入れていない。変更前のリビジョンは計測し直した
+  日に386 msで、元の日は331 msだったので、機械は速くなったのではなく遅くなっている。
+  両方の計測値と手順は
+  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md)
+  にある。
 
 ---
 

@@ -255,7 +255,7 @@ Metodología y resultados completos en [benchmarks](benchmarks).
 | motor | frontera medida | mediana | rendimiento |
 |---|---|---:|---:|
 | **h5i-db** | registros decodificados por el núcleo de replay | **65,7 ms** | **3,05 M eventos/s** |
-| **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 331 ms | 605 k eventos/s |
+| **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 280 ms⁶ | 713 k eventos/s⁶ |
 | NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
 | LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
 
@@ -264,6 +264,13 @@ adaptador verifica que vio los 200 k eventos y envió las 200 órdenes. Las fron
 medidas difieren, como dice la columna: el benchmark comprueba recuentos de eventos
 y de órdenes, no equivalencia de PnL, y Nautilus invoca un callback de estrategia en
 Python por cada cotización mientras los otros dos ejecutan código nativo.
+
+⁶ Medido de nuevo dos días después que las demás filas, una vez que agrupar los
+  commits de metadatos redujo el coste de durabilidad que paga una ejecución. El
+  núcleo no cambia. La revisión previa al cambio midió 386 ms el día de la nueva
+  medición frente a 331 ms el día original: la máquina estaba más lenta, no más
+  rápida. Ambas mediciones y el método están en
+  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
 
 ---
 
