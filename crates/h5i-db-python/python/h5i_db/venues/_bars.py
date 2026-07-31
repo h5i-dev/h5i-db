@@ -555,11 +555,18 @@ def bars_from_trades(
         return report
 
     stamps = pc.cast(pc.cast(trades.column("ts_event"), pa.timestamp("ns")), pa.int64())
-    bucket = pc.multiply(
-        pc.cast(
-            pc.floor(pc.divide(pc.cast(stamps, pa.float64()), float(span))), pa.int64()
-        ),
-        pa.scalar(span, pa.int64()),
+    # Integer arithmetic throughout: a nanosecond timestamp exceeds the range
+    # float64 represents exactly, so dividing through a float would round trades
+    # into a neighbouring bucket. Arrow's integer division truncates toward
+    # zero, so the remainder is corrected to make it a true floor and keep
+    # pre-1970 timestamps in the bucket that contains them.
+    span_scalar = pa.scalar(span, pa.int64())
+    quotient = pc.divide(stamps, span_scalar)
+    remainder = pc.subtract(stamps, pc.multiply(quotient, span_scalar))
+    bucket = pc.if_else(
+        pc.less(remainder, pa.scalar(0, pa.int64())),
+        pc.multiply(pc.subtract(quotient, pa.scalar(1, pa.int64())), span_scalar),
+        pc.multiply(quotient, span_scalar),
     )
     working = pa.table(
         {

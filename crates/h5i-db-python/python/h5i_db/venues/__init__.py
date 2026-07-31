@@ -33,6 +33,8 @@ from ._archive import (
     KAGGLE_POLYMARKET_LAYOUT,
     KAGGLE_POLYMARKET_TRADES_LAYOUT,
     KALSHI_PMXT_LAYOUT,
+    LIMITLESS_PMXT_LAYOUT,
+    OPINION_PMXT_LAYOUT,
     PMXT_LAYOUT,
     TELONEX_LAYOUT,
     ArchiveLayout,
@@ -66,6 +68,13 @@ from ._canonical import (
     content_key,
     ensure_tables,
 )
+from ._feeds import (
+    ingest_manifold_bets,
+    ingest_references,
+    manifold_markets_from_json,
+    manifold_trades_from_json,
+    references_from_series,
+)
 from ._ledger import (
     LedgerRow,
     commands_from_ledger,
@@ -86,10 +95,18 @@ __all__ = [
     "KAGGLE_POLYMARKET_LAYOUT",
     "KAGGLE_POLYMARKET_TRADES_LAYOUT",
     "KALSHI_PMXT_LAYOUT",
+    "LIMITLESS_PMXT_LAYOUT",
+    "OPINION_PMXT_LAYOUT",
     "PMXT_LAYOUT",
     "TELONEX_LAYOUT",
     "discover",
     "ingest_archive",
+    # feeds that are not archives
+    "ingest_manifold_bets",
+    "ingest_references",
+    "manifold_markets_from_json",
+    "manifold_trades_from_json",
+    "references_from_series",
     # bars
     "BarLayout",
     "BINANCE_KLINES_LAYOUT",

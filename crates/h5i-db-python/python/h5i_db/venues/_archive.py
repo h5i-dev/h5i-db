@@ -325,6 +325,33 @@ KAGGLE_POLYMARKET_TRADES_LAYOUT = ArchiveLayout(
 )
 
 
+def _pmxt_clob_layout(name: str) -> ArchiveLayout:
+    """The pmxt CLOB dialect, which several venues ship byte for byte alike.
+
+    Same event vocabulary and the same per-outcome `asset_id` as the Polymarket
+    feed, with the two book sides stored as JSON text instead of list columns.
+    The files also carry a `receive_sequence`, but it counts the capture's own
+    messages across every market at once rather than one venue stream, so it
+    cannot stand in for a per-instrument sequence check and is not read.
+    """
+    return ArchiveLayout(
+        name=name,
+        timestamp_column="timestamp",
+        timestamp_unit="ms",
+        arrival_column="timestamp_received",
+        token_column="asset_id",
+        event_type_column="event_type",
+        snapshot_events=("book",),
+        delta_events=("price_change",),
+        trade_events=("last_trade_price", "trade"),
+        levels=LevelLayout(style="nested"),
+    )
+
+
+LIMITLESS_PMXT_LAYOUT = _pmxt_clob_layout("limitless-pmxt")
+OPINION_PMXT_LAYOUT = _pmxt_clob_layout("opinion-pmxt")
+
+
 # The hourly Kalshi orderbook archive. Three things make it its own shape
 # rather than a variation on the Polymarket feed, and each is measured from the
 # files rather than taken from the vendor's description:
@@ -418,8 +445,26 @@ def _arrivals_ns(table: pa.Table, layout: ArchiveLayout) -> Optional[pa.Array]:
     return _column_ns(table.column(layout.arrival_column), layout.scale_to_nanos)
 
 
+def _maybe_json(value: Any) -> Any:
+    """Decode a levels cell that arrived as a JSON string.
+
+    Whether a vendor stores a side as a list column or as the JSON text of that
+    list is a storage choice, not a difference in the data, so it is absorbed
+    here rather than spelt as another level style.
+    """
+    if not isinstance(value, (str, bytes)):
+        return value
+    import json
+
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _levels_from_nested(value: Any, layout: LevelLayout) -> list[tuple[float, float]]:
     """One side of a nested snapshot into (price, size) pairs."""
+    value = _maybe_json(value)
     if value is None:
         return []
     out: list[tuple[float, float]] = []
@@ -587,6 +632,7 @@ def _levels_exact(value: Any, layout: LevelLayout) -> list[tuple[Decimal, Decima
     adds thousands of them together, and binary floating point would drift a
     level away from the zero that means "gone".
     """
+    value = _maybe_json(value)
     if value is None:
         return []
     out: list[tuple[Decimal, Decimal]] = []

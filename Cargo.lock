@@ -1877,6 +1877,7 @@ dependencies = [
  "h5i-db-backtest",
  "h5i-db-core",
  "h5i-db-query",
+ "h5i-db-venues",
  "pyo3",
  "serde",
  "serde_json",
