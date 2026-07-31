@@ -239,17 +239,15 @@ Full methodology and results in [benchmarks](benchmarks).
 | engine | measured boundary | median | throughput |
 |---|---|---:|---:|
 | **h5i-db** | decoded records through the replay kernel | **65.7 ms** | **3.05 M events/s** |
-| **h5i-db** | same kernel, strategy as a Python callback per event | 278 ms⁷ | 719 k events/s⁷ |
-| **h5i-db** | full persisted run: scan, decode, fork, replay, write | 280 ms⁶ | 713 k events/s⁶ |
+| **h5i-db** | same kernel, strategy as a Python callback per event | 278 ms⁶ | 719 k events/s⁶ |
+| **h5i-db** | full persisted run: scan, decode, fork, replay, write | 280 ms | 713 k events/s |
 | NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
 | LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
 
 Medians of three fresh-process runs after one warm-up; each adapter verifies it
 saw all 200k events and submitted all 200 orders. The measured boundaries differ,
 as the column says, and the benchmark checks counts rather than PnL equivalence.
-⁶ Re-measured two days later, after batched metadata commits. The pre-change
-revision measured 386 ms that day against 331 ms originally, so the machine
-was slower, not faster. ⁷ The other rows never call Python; this one crosses into it per event, as
+⁶ The other rows never call Python; this one crosses into it per event, as
 Nautilus does. Callback against callback the gap is 3.1×, not 13×. Derived
 (native kernel plus measured boundary cost), not timed directly.
 

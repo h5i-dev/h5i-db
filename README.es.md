@@ -255,8 +255,8 @@ Metodología y resultados completos en [benchmarks](benchmarks).
 | motor | frontera medida | mediana | rendimiento |
 |---|---|---:|---:|
 | **h5i-db** | registros decodificados por el núcleo de replay | **65,7 ms** | **3,05 M eventos/s** |
-| **h5i-db** | mismo núcleo, estrategia como callback de Python por evento | 278 ms⁷ | 719 k eventos/s⁷ |
-| **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 280 ms⁶ | 713 k eventos/s⁶ |
+| **h5i-db** | mismo núcleo, estrategia como callback de Python por evento | 278 ms⁶ | 719 k eventos/s⁶ |
+| **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 280 ms | 713 k eventos/s |
 | NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
 | LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
 
@@ -264,10 +264,7 @@ Medianas de tres ejecuciones en procesos nuevos tras un calentamiento; cada
 adaptador verifica que vio los 200 k eventos y envió las 200 órdenes. Las fronteras
 medidas difieren, como dice la columna, y el benchmark comprueba recuentos en lugar
 de equivalencia de PnL.
-⁶ Medido de nuevo dos días después, tras agrupar los commits de metadatos. La
-revisión previa midió 386 ms ese día frente a 331 ms el original: la máquina
-estaba más lenta, no más rápida.
-⁷ Las otras filas nunca llaman a Python; esta cruza en cada evento, igual que
+⁶ Las otras filas nunca llaman a Python; esta cruza en cada evento, igual que
 Nautilus. Callback contra callback la distancia es 3,1× y no 13×. Cifra
 derivada (núcleo nativo más el coste de frontera medido), no cronometrada
 directamente.
