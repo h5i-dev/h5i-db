@@ -442,7 +442,7 @@ pub struct Liquidation {
 /// Scale a price by a fraction, for margin arithmetic.
 pub fn scaled(price: Price, fraction: Price) -> Result<Price> {
     let product = (price.raw() as i128 * fraction.raw() as i128) / SCALE as i128;
-    Ok(Price::from_raw(product as i64))
+    crate::types::narrow(product, "scaled").map(Price::from_raw)
 }
 
 #[cfg(test)]

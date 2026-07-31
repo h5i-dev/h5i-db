@@ -24,7 +24,7 @@ use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use crate::error::{BacktestError, Result};
-use crate::types::{Price, Qty, Side};
+use crate::types::{Price, Qty, Raw, Side};
 
 /// A venue-assigned order identifier from an MBO feed.
 pub type VenueOrderId = u64;
@@ -92,7 +92,7 @@ pub struct L3Book {
     /// `(side, price)` to the queue at that level, front first. Keyed on a
     /// numeric side so iteration order is fixed rather than dependent on a
     /// derived enum ordering nobody declared.
-    levels: BTreeMap<(u8, i64), VecDeque<VenueOrderId>>,
+    levels: BTreeMap<(u8, Raw), VecDeque<VenueOrderId>>,
 }
 
 const BUY: u8 = 0;
@@ -110,7 +110,7 @@ impl L3Book {
         Self::default()
     }
 
-    fn level_key(side: Side, price: Price) -> (u8, i64) {
+    fn level_key(side: Side, price: Price) -> (u8, Raw) {
         (side_key(side), price.raw())
     }
 
@@ -217,7 +217,7 @@ impl L3Book {
         let queue = self
             .levels
             .get(&Self::level_key(resting.side, resting.price))?;
-        let mut ahead = 0i64;
+        let mut ahead: Raw = 0;
         for id in queue {
             if *id == order_id {
                 return Some(Qty::from_raw(ahead));

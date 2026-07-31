@@ -6,23 +6,33 @@
 //! back as ordinary tables, so they are queryable with the same SQL as the
 //! market data.
 //!
-//! Storage holds `f64` and the kernel holds fixed point. The conversion is
-//! exact for everything the fixed-point type can represent, and
-//! [`tests::float_storage_round_trips_exactly`] is the test that says so.
+//! Storage holds `f64` by default and the kernel holds fixed point. That
+//! conversion is exact up to `2^53` raw units -- about nine million at nine
+//! decimal places -- and not above it;
+//! [`tests::float_storage_is_exact_up_to_the_mantissa_and_not_past_it`]
+//! is the test that says where the line is rather than implying there is
+//! none. Every price a venue quotes is well inside it.
+//!
+//! A table that will hold more than that is created with
+//! [`FixedEncoding::Decimal`], which stores the raw integer itself and has
+//! no such ceiling. The encoding belongs to the table, so every writer here
+//! reads it back with [`encoding_of`] instead of choosing, and every reader
+//! dispatches on the array it is handed. See [`crate::decimal`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, BooleanBuilder, Float64Array, Float64Builder, Int64Array,
-    Int64Builder, StringArray, StringBuilder, TimestampNanosecondArray, TimestampNanosecondBuilder,
-    UInt8Array, UInt8Builder, UInt16Array, UInt16Builder,
+    Array, ArrayRef, BooleanArray, BooleanBuilder, Int64Array, Int64Builder, StringArray,
+    StringBuilder, TimestampNanosecondArray, TimestampNanosecondBuilder, UInt8Array, UInt8Builder,
+    UInt16Array, UInt16Builder,
 };
 use arrow::record_batch::RecordBatch;
 use h5i_db_core::Database;
 use h5i_db_core::database::{ReadAt, ScanOptions, WriteOptions};
 
 use crate::book::{BookDelta, OrderBook};
+use crate::decimal::{FixedBuilder, FixedEncoding, read_fixed, read_fixed_value};
 use crate::engine::RunResult;
 use crate::error::{BacktestError, Result};
 use crate::event::{MarketEvent, Record};
@@ -32,7 +42,7 @@ use crate::instrument::{
 use crate::position::Portfolio;
 use crate::schema;
 use crate::settlement::{Payout, Resolution, SettlementReport};
-use crate::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
+use crate::types::{Money, Price, Qty, Raw, Side, Stamps, UnixNanos};
 use crate::window::TimeWindow;
 
 fn core_err(error: h5i_db_core::Error) -> BacktestError {
@@ -40,16 +50,52 @@ fn core_err(error: h5i_db_core::Error) -> BacktestError {
 }
 
 /// Create every market-data table that does not already exist.
-pub async fn create_market_data_tables(db: &Database) -> Result<()> {
-    let mut tables = schema::market_data_tables();
+///
+/// `encoding` decides how the fixed-point columns are stored, and this is
+/// the only place it is decided: a table's encoding is fixed when it is
+/// created, and every writer afterwards reads it back off the table rather
+/// than choosing again. `Float` is the default and what every existing table
+/// uses; `Decimal` is for values that will outgrow what an `f64` holds
+/// exactly, which starts at about nine million units.
+///
+/// Because creation is the only decision point, and it skips tables that
+/// already exist, calling this before an ingest is enough to make the whole
+/// pipeline write decimals -- `h5i_db_venues::write_plan` and every
+/// `write_*` here will follow the tables they find:
+///
+/// ```no_run
+/// # async fn example(db: &h5i_db_core::Database) -> h5i_db_backtest::Result<()> {
+/// use h5i_db_backtest::{FixedEncoding, store};
+/// store::create_market_data_tables_with(db, FixedEncoding::Decimal).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// A table created one way and a table created the other are both readable
+/// by the same build, so this is a per-database choice rather than a
+/// per-binary one.
+pub async fn create_market_data_tables_with(db: &Database, encoding: FixedEncoding) -> Result<()> {
+    let mut tables = schema::market_data_tables(encoding);
     // The ingest log travels with the market data it describes.
     tables.push(schema::ingest_log_table());
     create_tables(db, tables).await
 }
 
 /// Create every run-output table that does not already exist.
+///
+/// See [`create_market_data_tables_with`] for what `encoding` decides.
+pub async fn create_run_tables_with(db: &Database, encoding: FixedEncoding) -> Result<()> {
+    create_tables(db, schema::run_output_tables(encoding)).await
+}
+
+/// Create every market-data table, storing fixed point as `f64`.
+pub async fn create_market_data_tables(db: &Database) -> Result<()> {
+    create_market_data_tables_with(db, FixedEncoding::Float).await
+}
+
+/// Create every run-output table, storing fixed point as `f64`.
 pub async fn create_run_tables(db: &Database) -> Result<()> {
-    create_tables(db, schema::run_output_tables()).await
+    create_run_tables_with(db, FixedEncoding::Float).await
 }
 
 /// Create whichever of `tables` do not exist yet, in one batch.
@@ -106,11 +152,23 @@ fn column<'a, T: 'static>(batch: &'a RecordBatch, name: &str) -> Result<&'a T> {
         })
 }
 
-fn opt_str(array: &StringArray, row: usize) -> Option<&str> {
-    array.is_valid(row).then(|| array.value(row))
+/// A fixed-point column, still in whatever encoding it was stored in.
+///
+/// Not downcast here, because the point is that the caller does not need to
+/// know: [`read_fixed`] dispatches on the array. A reader written against
+/// this reads a table created either way.
+fn fixed<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a ArrayRef> {
+    let index = batch
+        .schema()
+        .index_of(name)
+        .map_err(|_| BacktestError::Schema {
+            table: "read",
+            detail: format!("missing column {name}"),
+        })?;
+    Ok(batch.column(index))
 }
 
-fn opt_f64(array: &Float64Array, row: usize) -> Option<f64> {
+fn opt_str(array: &StringArray, row: usize) -> Option<&str> {
     array.is_valid(row).then(|| array.value(row))
 }
 
@@ -271,14 +329,15 @@ pub async fn write_instruments(
     instruments: &[Instrument],
     known_at: UnixNanos,
 ) -> Result<()> {
+    let encoding = encoding_of(db, schema::INSTRUMENTS).await;
     let mut ts = TimestampNanosecondBuilder::new();
     let mut id = StringBuilder::new();
     let mut venue = StringBuilder::new();
     let mut kind = StringBuilder::new();
     let mut outcome = UInt16Builder::new();
     let mut label = StringBuilder::new();
-    let mut tick = Float64Builder::new();
-    let mut lot = Float64Builder::new();
+    let mut tick = FixedBuilder::new(encoding);
+    let mut lot = FixedBuilder::new(encoding);
     let mut expiration = Int64Builder::new();
     let mut observable = Int64Builder::new();
     let mut neg_risk = BooleanBuilder::new();
@@ -293,8 +352,8 @@ pub async fn write_instruments(
             kind.append_value(kind_name(&instrument.kind));
             outcome.append_value(index as u16);
             label.append_value(name);
-            tick.append_value(instrument.tick_size.to_f64());
-            lot.append_value(instrument.lot_size.to_f64());
+            tick.append(instrument.tick_size.raw());
+            lot.append(instrument.lot_size.raw());
             match instrument.expiration {
                 Some(at) => expiration.append_value(at.get()),
                 None => expiration.append_null(),
@@ -327,15 +386,21 @@ pub async fn write_instruments(
         Arc::new(kind.finish()),
         Arc::new(outcome.finish()),
         Arc::new(label.finish()),
-        Arc::new(tick.finish()),
-        Arc::new(lot.finish()),
+        tick.finish(),
+        lot.finish(),
         Arc::new(expiration.finish()),
         Arc::new(observable.finish()),
         Arc::new(neg_risk.finish()),
         Arc::new(significant_figures.finish()),
         Arc::new(max_decimals.finish()),
     ];
-    append(db, schema::INSTRUMENTS, schema::instruments(), columns).await
+    append(
+        db,
+        schema::INSTRUMENTS,
+        schema::instruments(encoding),
+        columns,
+    )
+    .await
 }
 
 fn kind_name(kind: &InstrumentKind) -> &'static str {
@@ -370,8 +435,8 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
         let kind = column::<StringArray>(batch, "kind")?;
         let outcome = column::<UInt16Array>(batch, "outcome")?;
         let label = column::<StringArray>(batch, "outcome_label")?;
-        let tick = column::<Float64Array>(batch, "tick_size")?;
-        let lot = column::<Float64Array>(batch, "lot_size")?;
+        let tick = fixed(batch, "tick_size")?;
+        let lot = fixed(batch, "lot_size")?;
         let expiration = column::<Int64Array>(batch, "expiration_ns")?;
         let observable = column::<Int64Array>(batch, "settlement_observable_ns")?;
         // Absent for rows written before the column existed; false is the
@@ -381,14 +446,18 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
         let max_decimals = column::<UInt8Array>(batch, "price_max_decimals").ok();
 
         for row in 0..batch.num_rows() {
+            // Read outside the closure: decoding a fixed-point column can
+            // fail, and `?` does not cross into an `or_insert_with`.
+            let tick_size = read_fixed_value(tick, row, "tick_size")?;
+            let lot_size = read_fixed_value(lot, row, "lot_size")?;
             let draft = collected
                 .entry(id.value(row).to_string())
                 .or_insert_with(|| InstrumentDraft {
                     venue: venue.value(row).to_string(),
                     kind: kind.value(row).to_string(),
                     outcomes: BTreeMap::new(),
-                    tick: tick.value(row),
-                    lot: lot.value(row),
+                    tick: tick_size,
+                    lot: lot_size,
                     expiration: opt_i64(expiration, row),
                     observable: opt_i64(observable, row),
                     neg_risk: neg_risk
@@ -440,8 +509,8 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
                 max_decimals,
             })?;
         }
-        instrument.tick_size = Price::from_f64(draft.tick)?;
-        instrument.lot_size = Qty::from_f64(draft.lot)?;
+        instrument.tick_size = Price::from_raw(draft.tick);
+        instrument.lot_size = Qty::from_raw(draft.lot);
         instrument.expiration = draft.expiration.map(UnixNanos::new);
         instrument.settlement_observable = draft.observable.map(UnixNanos::new);
         instrument.neg_risk = draft.neg_risk;
@@ -454,8 +523,8 @@ struct InstrumentDraft {
     venue: String,
     kind: String,
     outcomes: BTreeMap<u16, String>,
-    tick: f64,
-    lot: f64,
+    tick: Raw,
+    lot: Raw,
     expiration: Option<i64>,
     observable: Option<i64>,
     neg_risk: bool,
@@ -471,14 +540,15 @@ struct InstrumentDraft {
 /// crossed book, so the grouping is what lets the reader refuse a truncated
 /// one instead of reconstructing nonsense from it.
 pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> {
+    let encoding = encoding_of(db, schema::BOOK_DELTAS).await;
     let mut ts_init = TimestampNanosecondBuilder::new();
     let mut ts_event = TimestampNanosecondBuilder::new();
     let mut instrument = StringBuilder::new();
     let mut outcome = UInt16Builder::new();
     let mut action = StringBuilder::new();
     let mut side = StringBuilder::new();
-    let mut price = Float64Builder::new();
-    let mut size = Float64Builder::new();
+    let mut price = FixedBuilder::new(encoding);
+    let mut size = FixedBuilder::new(encoding);
     let mut event_index = Int64Builder::new();
     let mut is_last = BooleanBuilder::new();
     let mut vendor = StringBuilder::new();
@@ -499,11 +569,11 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
                 None => side.append_null(),
             }
             match price_value {
-                Some(value) => price.append_value(value.to_f64()),
+                Some(value) => price.append(value.raw()),
                 None => price.append_null(),
             }
             match size_value {
-                Some(value) => size.append_value(value.to_f64()),
+                Some(value) => size.append(value.raw()),
                 None => size.append_null(),
             }
             event_index.append_value(index as i64);
@@ -576,13 +646,19 @@ pub async fn write_book_events(db: &Database, records: &[Record]) -> Result<()> 
         Arc::new(outcome.finish()),
         Arc::new(action.finish()),
         Arc::new(side.finish()),
-        Arc::new(price.finish()),
-        Arc::new(size.finish()),
+        price.finish(),
+        size.finish(),
         Arc::new(event_index.finish()),
         Arc::new(is_last.finish()),
         Arc::new(vendor.finish()),
     ];
-    append(db, schema::BOOK_DELTAS, schema::book_deltas(), columns).await
+    append(
+        db,
+        schema::BOOK_DELTAS,
+        schema::book_deltas(encoding),
+        columns,
+    )
+    .await
 }
 
 /// Read book records back, regrouping snapshot levels by `event_index`.
@@ -611,8 +687,8 @@ pub async fn read_book_events(
         let outcome = column::<UInt16Array>(batch, "outcome")?;
         let action = column::<StringArray>(batch, "action")?;
         let side = column::<StringArray>(batch, "side")?;
-        let price = column::<Float64Array>(batch, "price")?;
-        let size = column::<Float64Array>(batch, "size")?;
+        let price = fixed(batch, "price")?;
+        let size = fixed(batch, "size")?;
         let event_index = column::<Int64Array>(batch, "event_index")?;
         let is_last = column::<BooleanArray>(batch, "is_last")?;
 
@@ -652,10 +728,12 @@ pub async fn read_book_events(
                             out_id.0
                         )));
                     }
-                    if let (Some(side_text), Some(p), Some(q)) =
-                        (opt_str(side, row), opt_f64(price, row), opt_f64(size, row))
-                    {
-                        let level = (Price::from_f64(p)?, Qty::from_f64(q)?);
+                    if let (Some(side_text), Some(p), Some(q)) = (
+                        opt_str(side, row),
+                        read_fixed(price, row, "price")?,
+                        read_fixed(size, row, "size")?,
+                    ) {
+                        let level = (Price::from_raw(p), Qty::from_raw(q));
                         match Side::parse(side_text)? {
                             Side::Buy => entry.4.push(level),
                             Side::Sell => entry.5.push(level),
@@ -682,16 +760,16 @@ pub async fn read_book_events(
                         match other {
                             "set" => BookDelta::set(
                                 parsed,
-                                Price::from_f64(opt_f64(price, row).ok_or_else(|| {
-                                    BacktestError::invalid("set row has no price")
-                                })?)?,
-                                Qty::from_f64(opt_f64(size, row).unwrap_or(0.0))?,
+                                Price::from_raw(read_fixed(price, row, "price")?.ok_or_else(
+                                    || BacktestError::invalid("set row has no price"),
+                                )?),
+                                Qty::from_raw(read_fixed(size, row, "size")?.unwrap_or_default()),
                             ),
                             "delete" => BookDelta::delete(
                                 parsed,
-                                Price::from_f64(opt_f64(price, row).ok_or_else(|| {
-                                    BacktestError::invalid("delete row has no price")
-                                })?)?,
+                                Price::from_raw(read_fixed(price, row, "price")?.ok_or_else(
+                                    || BacktestError::invalid("delete row has no price"),
+                                )?),
                             ),
                             "clear" => BookDelta::clear(parsed),
                             unknown => {
@@ -725,12 +803,13 @@ pub async fn read_book_events(
 // -- trades -----------------------------------------------------------------
 
 pub async fn write_trades(db: &Database, records: &[Record]) -> Result<()> {
+    let encoding = encoding_of(db, schema::TRADES).await;
     let mut ts_init = TimestampNanosecondBuilder::new();
     let mut ts_event = TimestampNanosecondBuilder::new();
     let mut instrument = StringBuilder::new();
     let mut outcome = UInt16Builder::new();
-    let mut price = Float64Builder::new();
-    let mut size = Float64Builder::new();
+    let mut price = FixedBuilder::new(encoding);
+    let mut size = FixedBuilder::new(encoding);
     let mut aggressor = StringBuilder::new();
     let mut trade_id = StringBuilder::new();
     let mut vendor = StringBuilder::new();
@@ -750,8 +829,8 @@ pub async fn write_trades(db: &Database, records: &[Record]) -> Result<()> {
         ts_event.append_value(record.stamps.ts_event.get());
         instrument.append_value(record.instrument.as_str());
         outcome.append_value(record.outcome.0);
-        price.append_value(p.to_f64());
-        size.append_value(q.to_f64());
+        price.append(p.raw());
+        size.append(q.raw());
         match side {
             Some(value) => aggressor.append_value(value.as_str()),
             None => aggressor.append_null(),
@@ -765,13 +844,13 @@ pub async fn write_trades(db: &Database, records: &[Record]) -> Result<()> {
         Arc::new(ts_event.finish()),
         Arc::new(instrument.finish()),
         Arc::new(outcome.finish()),
-        Arc::new(price.finish()),
-        Arc::new(size.finish()),
+        price.finish(),
+        size.finish(),
         Arc::new(aggressor.finish()),
         Arc::new(trade_id.finish()),
         Arc::new(vendor.finish()),
     ];
-    append(db, schema::TRADES, schema::trades(), columns).await
+    append(db, schema::TRADES, schema::trades(encoding), columns).await
 }
 
 pub async fn read_trades(
@@ -786,8 +865,8 @@ pub async fn read_trades(
         let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
         let mut instruments = Instruments::new(batch)?;
         let outcome = column::<UInt16Array>(batch, "outcome")?;
-        let price = column::<Float64Array>(batch, "price")?;
-        let size = column::<Float64Array>(batch, "size")?;
+        let price = fixed(batch, "price")?;
+        let size = fixed(batch, "size")?;
         let aggressor = column::<StringArray>(batch, "aggressor")?;
         for row in 0..batch.num_rows() {
             out.push(Record::new(
@@ -798,8 +877,8 @@ pub async fn read_trades(
                 instruments.get(row)?,
                 OutcomeId(outcome.value(row)),
                 MarketEvent::Trade {
-                    price: Price::from_f64(price.value(row))?,
-                    size: Qty::from_f64(size.value(row))?,
+                    price: Price::from_raw(read_fixed_value(price, row, "price")?),
+                    size: Qty::from_raw(read_fixed_value(size, row, "size")?),
                     aggressor: opt_str(aggressor, row).map(Side::parse).transpose()?,
                 },
             ));
@@ -812,10 +891,11 @@ pub async fn read_trades(
 // -- funding ----------------------------------------------------------------
 
 pub async fn write_funding(db: &Database, records: &[Record]) -> Result<()> {
+    let encoding = encoding_of(db, schema::FUNDING).await;
     let mut ts_init = TimestampNanosecondBuilder::new();
     let mut ts_event = TimestampNanosecondBuilder::new();
     let mut instrument = StringBuilder::new();
-    let mut rate = Float64Builder::new();
+    let mut rate = FixedBuilder::new(encoding);
     let mut vendor = StringBuilder::new();
 
     for record in records {
@@ -827,7 +907,7 @@ pub async fn write_funding(db: &Database, records: &[Record]) -> Result<()> {
         ts_init.append_value(record.stamps.ts_init.get());
         ts_event.append_value(record.stamps.ts_event.get());
         instrument.append_value(record.instrument.as_str());
-        rate.append_value(value.to_f64());
+        rate.append(value.raw());
         vendor.append_null();
     }
 
@@ -835,10 +915,10 @@ pub async fn write_funding(db: &Database, records: &[Record]) -> Result<()> {
         Arc::new(ts_init.finish()),
         Arc::new(ts_event.finish()),
         Arc::new(instrument.finish()),
-        Arc::new(rate.finish()),
+        rate.finish(),
         Arc::new(vendor.finish()),
     ];
-    append(db, schema::FUNDING, schema::funding(), columns).await
+    append(db, schema::FUNDING, schema::funding(encoding), columns).await
 }
 
 pub async fn read_funding(
@@ -852,7 +932,7 @@ pub async fn read_funding(
         let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
         let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
         let mut instruments = Instruments::new(batch)?;
-        let rate = column::<Float64Array>(batch, "rate")?;
+        let rate = fixed(batch, "rate")?;
         for row in 0..batch.num_rows() {
             out.push(Record::new(
                 Stamps::new(
@@ -862,7 +942,7 @@ pub async fn read_funding(
                 instruments.get(row)?,
                 OutcomeId::FIRST,
                 MarketEvent::Funding {
-                    rate: Price::from_f64(rate.value(row))?,
+                    rate: Price::from_raw(read_fixed_value(rate, row, "rate")?),
                 },
             ));
         }
@@ -874,11 +954,12 @@ pub async fn read_funding(
 // -- resolutions ------------------------------------------------------------
 
 pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Result<()> {
+    let encoding = encoding_of(db, schema::RESOLUTIONS).await;
     let mut ts = TimestampNanosecondBuilder::new();
     let mut instrument = StringBuilder::new();
     let mut kind = StringBuilder::new();
     let mut outcome = UInt16Builder::new();
-    let mut payout = Float64Builder::new();
+    let mut payout = FixedBuilder::new(encoding);
     let mut outcome_count = UInt16Builder::new();
 
     for resolution in resolutions {
@@ -894,7 +975,7 @@ pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Res
                 None => outcome.append_null(),
             }
             match payout_value {
-                Some(value) => payout.append_value(value.to_f64()),
+                Some(value) => payout.append(value.raw()),
                 None => payout.append_null(),
             }
             match count {
@@ -918,10 +999,16 @@ pub async fn write_resolutions(db: &Database, resolutions: &[Resolution]) -> Res
         Arc::new(instrument.finish()),
         Arc::new(kind.finish()),
         Arc::new(outcome.finish()),
-        Arc::new(payout.finish()),
+        payout.finish(),
         Arc::new(outcome_count.finish()),
     ];
-    append(db, schema::RESOLUTIONS, schema::resolutions(), columns).await
+    append(
+        db,
+        schema::RESOLUTIONS,
+        schema::resolutions(encoding),
+        columns,
+    )
+    .await
 }
 
 /// Read resolutions.
@@ -944,7 +1031,7 @@ pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolutio
         let instrument = column::<StringArray>(batch, "instrument_id")?;
         let kind = column::<StringArray>(batch, "kind")?;
         let outcome = column::<UInt16Array>(batch, "outcome")?;
-        let payout = column::<Float64Array>(batch, "payout")?;
+        let payout = fixed(batch, "payout")?;
         let outcome_count = column::<UInt16Array>(batch, "outcome_count")?;
         for row in 0..batch.num_rows() {
             let id = instrument.value(row);
@@ -976,7 +1063,7 @@ pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolutio
                     )?);
                 }
                 "split" => {
-                    if !outcome.is_valid(row) || !payout.is_valid(row) {
+                    if !outcome.is_valid(row) || payout.is_null(row) {
                         return Err(BacktestError::invalid(format!(
                             "split resolution row for {id} is missing its \
                              outcome or payout"
@@ -985,9 +1072,10 @@ pub async fn read_resolutions(db: &Database, at: ReadAt) -> Result<Vec<Resolutio
                     let entry = splits
                         .entry(id.to_string())
                         .or_insert((at.get(), BTreeMap::new()));
-                    entry
-                        .1
-                        .insert(outcome.value(row), Price::from_f64(payout.value(row))?);
+                    entry.1.insert(
+                        outcome.value(row),
+                        Price::from_raw(read_fixed_value(payout, row, "payout")?),
+                    );
                 }
                 other => {
                     return Err(BacktestError::Parse {
@@ -1040,9 +1128,9 @@ pub async fn read_signals(
         let instrument = column::<StringArray>(batch, "instrument_id")?;
         let outcome = column::<UInt16Array>(batch, "outcome")?;
         let side = column::<StringArray>(batch, "side")?;
-        let quantity = column::<Float64Array>(batch, "quantity")?;
+        let quantity = fixed(batch, "quantity")?;
         let kind = column::<StringArray>(batch, "kind")?;
-        let limit = column::<Float64Array>(batch, "limit_price")?;
+        let limit = fixed(batch, "limit_price")?;
         let tif = column::<StringArray>(batch, "time_in_force")?;
         let tag = column::<StringArray>(batch, "tag")?;
         let reduce_only = column::<BooleanArray>(batch, "reduce_only")?;
@@ -1055,21 +1143,21 @@ pub async fn read_signals(
             let id = InstrumentId::new(instrument.value(row))?;
             let out_id = OutcomeId(outcome.value(row));
             let parsed_side = Side::parse(side.value(row))?;
-            let size = Qty::from_f64(quantity.value(row))?;
+            let size = Qty::from_raw(read_fixed_value(quantity, row, "quantity")?);
             let mut request = match kind.value(row) {
                 "market" => OrderRequest::market(id, out_id, parsed_side, size),
                 "limit" => {
                     // A limit order without a price is a data error, not a
                     // market order: guessing which one the author meant is
                     // how a backtest quietly trades at the wrong price.
-                    let price = opt_f64(limit, row).ok_or_else(|| {
+                    let price = read_fixed(limit, row, "limit_price")?.ok_or_else(|| {
                         BacktestError::invalid(format!(
                             "limit signal for {} at {} has no limit_price",
                             instrument.value(row),
                             ts.value(row)
                         ))
                     })?;
-                    OrderRequest::limit(id, out_id, parsed_side, Price::from_f64(price)?, size)
+                    OrderRequest::limit(id, out_id, parsed_side, Price::from_raw(price), size)
                 }
                 other => {
                     return Err(BacktestError::Parse {
@@ -1131,9 +1219,9 @@ pub async fn read_commands(
         let instrument = column::<StringArray>(batch, "instrument_id")?;
         let outcome = column::<UInt16Array>(batch, "outcome")?;
         let side = column::<StringArray>(batch, "side")?;
-        let quantity = column::<Float64Array>(batch, "quantity")?;
+        let quantity = fixed(batch, "quantity")?;
         let kind = column::<StringArray>(batch, "kind")?;
-        let limit = column::<Float64Array>(batch, "limit_price")?;
+        let limit = fixed(batch, "limit_price")?;
         let tif = column::<StringArray>(batch, "time_in_force")?;
         let tag = column::<StringArray>(batch, "tag")?;
         let reduce_only = column::<BooleanArray>(batch, "reduce_only")?;
@@ -1147,8 +1235,8 @@ pub async fn read_commands(
             let command = match action.value(row) {
                 "cancel" => ReplayCommand::Cancel { client_order_id },
                 "amend" => {
-                    let quantity = opt_f64(quantity, row).map(Qty::from_f64).transpose()?;
-                    let limit = opt_f64(limit, row).map(Price::from_f64).transpose()?;
+                    let quantity = read_fixed(quantity, row, "quantity")?.map(Qty::from_raw);
+                    let limit = read_fixed(limit, row, "limit_price")?.map(Price::from_raw);
                     if quantity.is_none() && limit.is_none() {
                         return Err(BacktestError::invalid(format!(
                             "amend command for {:?} at {} changes neither quantity nor limit_price",
@@ -1175,28 +1263,29 @@ pub async fn read_commands(
                     required(instrument.is_valid(row), "instrument_id")?;
                     required(outcome.is_valid(row), "outcome")?;
                     required(side.is_valid(row), "side")?;
-                    required(quantity.is_valid(row), "quantity")?;
+                    required(!quantity.is_null(row), "quantity")?;
                     required(kind.is_valid(row), "kind")?;
 
                     let id = InstrumentId::new(instrument.value(row))?;
                     let outcome_id = OutcomeId(outcome.value(row));
                     let parsed_side = Side::parse(side.value(row))?;
-                    let size = Qty::from_f64(quantity.value(row))?;
+                    let size = Qty::from_raw(read_fixed_value(quantity, row, "quantity")?);
                     let mut request = match kind.value(row) {
                         "market" => OrderRequest::market(id, outcome_id, parsed_side, size),
                         "limit" => {
-                            let value = opt_f64(limit, row).ok_or_else(|| {
-                                BacktestError::invalid(format!(
-                                    "limit submit for {:?} at {} has no limit_price",
-                                    client_id.value(row),
-                                    ts.value(row)
-                                ))
-                            })?;
+                            let value =
+                                read_fixed(limit, row, "limit_price")?.ok_or_else(|| {
+                                    BacktestError::invalid(format!(
+                                        "limit submit for {:?} at {} has no limit_price",
+                                        client_id.value(row),
+                                        ts.value(row)
+                                    ))
+                                })?;
                             OrderRequest::limit(
                                 id,
                                 outcome_id,
                                 parsed_side,
-                                Price::from_f64(value)?,
+                                Price::from_raw(value),
                                 size,
                             )
                         }
@@ -1304,8 +1393,8 @@ fn decode_trades(batch: &RecordBatch, out: &mut std::collections::VecDeque<Recor
     let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
     let mut instruments = Instruments::new(batch)?;
     let outcome = column::<UInt16Array>(batch, "outcome")?;
-    let price = column::<Float64Array>(batch, "price")?;
-    let size = column::<Float64Array>(batch, "size")?;
+    let price = fixed(batch, "price")?;
+    let size = fixed(batch, "size")?;
     let aggressor = column::<StringArray>(batch, "aggressor")?;
     for row in 0..batch.num_rows() {
         out.push_back(Record::new(
@@ -1316,8 +1405,8 @@ fn decode_trades(batch: &RecordBatch, out: &mut std::collections::VecDeque<Recor
             instruments.get(row)?,
             OutcomeId(outcome.value(row)),
             MarketEvent::Trade {
-                price: Price::from_f64(price.value(row))?,
-                size: Qty::from_f64(size.value(row))?,
+                price: Price::from_raw(read_fixed_value(price, row, "price")?),
+                size: Qty::from_raw(read_fixed_value(size, row, "size")?),
                 aggressor: opt_str(aggressor, row).map(Side::parse).transpose()?,
             },
         ));
@@ -1371,8 +1460,8 @@ fn decode_reference(
     let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
     let mut instruments = Instruments::new(batch)?;
     let outcome = column::<UInt16Array>(batch, "outcome")?;
-    let mark = column::<Float64Array>(batch, "mark")?;
-    let oracle = column::<Float64Array>(batch, "oracle")?;
+    let mark = fixed(batch, "mark")?;
+    let oracle = fixed(batch, "oracle")?;
     for row in 0..batch.num_rows() {
         out.push_back(Record::new(
             Stamps::new(
@@ -1382,30 +1471,27 @@ fn decode_reference(
             instruments.get(row)?,
             OutcomeId(outcome.value(row)),
             MarketEvent::Reference {
-                mark: opt_price(mark, row)?,
-                oracle: opt_price(oracle, row)?,
+                mark: opt_price(mark, row, "mark")?,
+                oracle: opt_price(oracle, row, "oracle")?,
             },
         ));
     }
     Ok(())
 }
 
-fn opt_price(column: &Float64Array, row: usize) -> Result<Option<Price>> {
-    if column.is_valid(row) {
-        Ok(Some(Price::from_f64(column.value(row))?))
-    } else {
-        Ok(None)
-    }
+fn opt_price(column: &ArrayRef, row: usize, name: &str) -> Result<Option<Price>> {
+    Ok(read_fixed(column, row, name)?.map(Price::from_raw))
 }
 
 /// Write venue-published reference prices.
 pub async fn write_references(db: &Database, records: &[Record]) -> Result<()> {
+    let encoding = encoding_of(db, schema::REFERENCES).await;
     let mut ts_init = TimestampNanosecondBuilder::new();
     let mut ts_event = TimestampNanosecondBuilder::new();
     let mut instrument = StringBuilder::new();
     let mut outcome = UInt16Builder::new();
-    let mut mark = Float64Builder::new();
-    let mut oracle = Float64Builder::new();
+    let mut mark = FixedBuilder::new(encoding);
+    let mut oracle = FixedBuilder::new(encoding);
     let mut vendor = StringBuilder::new();
 
     for record in records {
@@ -1423,11 +1509,11 @@ pub async fn write_references(db: &Database, records: &[Record]) -> Result<()> {
         instrument.append_value(record.instrument.as_str());
         outcome.append_value(record.outcome.0);
         match mark_value {
-            Some(price) => mark.append_value(price.to_f64()),
+            Some(price) => mark.append(price.raw()),
             None => mark.append_null(),
         }
         match oracle_value {
-            Some(price) => oracle.append_value(price.to_f64()),
+            Some(price) => oracle.append(price.raw()),
             None => oracle.append_null(),
         }
         vendor.append_null();
@@ -1438,18 +1524,24 @@ pub async fn write_references(db: &Database, records: &[Record]) -> Result<()> {
         Arc::new(ts_event.finish()),
         Arc::new(instrument.finish()),
         Arc::new(outcome.finish()),
-        Arc::new(mark.finish()),
-        Arc::new(oracle.finish()),
+        mark.finish(),
+        oracle.finish(),
         Arc::new(vendor.finish()),
     ];
-    append(db, schema::REFERENCES, schema::references(), columns).await
+    append(
+        db,
+        schema::REFERENCES,
+        schema::references(encoding),
+        columns,
+    )
+    .await
 }
 
 fn decode_funding(batch: &RecordBatch, out: &mut std::collections::VecDeque<Record>) -> Result<()> {
     let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
     let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
     let mut instruments = Instruments::new(batch)?;
-    let rate = column::<Float64Array>(batch, "rate")?;
+    let rate = fixed(batch, "rate")?;
     for row in 0..batch.num_rows() {
         out.push_back(Record::new(
             Stamps::new(
@@ -1459,7 +1551,7 @@ fn decode_funding(batch: &RecordBatch, out: &mut std::collections::VecDeque<Reco
             instruments.get(row)?,
             OutcomeId::FIRST,
             MarketEvent::Funding {
-                rate: Price::from_f64(rate.value(row))?,
+                rate: Price::from_raw(read_fixed_value(rate, row, "rate")?),
             },
         ));
     }
@@ -1551,15 +1643,28 @@ pub async fn write_run(
     started_at: UnixNanos,
 ) -> Result<()> {
     create_run_tables(db).await?;
+    // Read after create, so a database whose run tables already exist in the
+    // decimal encoding is written in that encoding rather than reverted.
+    let encoding = encoding_of(db, schema::FILLS).await;
     let batches = vec![
         (
             schema::RUN,
-            run_manifest_batch(run_id, config_digest, result, settlement, started_at)?,
+            run_manifest_batch(
+                run_id,
+                config_digest,
+                result,
+                settlement,
+                started_at,
+                encoding,
+            )?,
         ),
-        (schema::ORDERS, orders_batch(result)?),
-        (schema::FILLS, fills_batch(result)?),
-        (schema::POSITIONS, positions_batch(result, settlement)?),
-        (schema::EQUITY, equity_batch(result)?),
+        (schema::ORDERS, orders_batch(result, encoding)?),
+        (schema::FILLS, fills_batch(result, encoding)?),
+        (
+            schema::POSITIONS,
+            positions_batch(result, settlement, encoding)?,
+        ),
+        (schema::EQUITY, equity_batch(result, encoding)?),
     ];
     commit_run_batches(db, batches).await
 }
@@ -1615,16 +1720,22 @@ fn run_manifest_batch(
     result: &RunResult,
     settlement: &SettlementReport,
     started_at: UnixNanos,
+    encoding: FixedEncoding,
 ) -> Result<Option<RecordBatch>> {
     let warnings = settlement.warnings();
+    let one = |value: Money| {
+        let mut builder = FixedBuilder::new(encoding);
+        builder.append(value.raw());
+        builder.finish()
+    };
     let columns: Vec<ArrayRef> = vec![
         Arc::new(TimestampNanosecondArray::from(vec![started_at.get()])),
         Arc::new(StringArray::from(vec![run_id])),
         Arc::new(StringArray::from(vec![config_digest])),
-        Arc::new(Float64Array::from(vec![result.starting_cash.to_f64()])),
-        Arc::new(Float64Array::from(vec![result.final_cash.to_f64()])),
-        Arc::new(Float64Array::from(vec![result.realized_pnl.to_f64()])),
-        Arc::new(Float64Array::from(vec![result.commissions.to_f64()])),
+        one(result.starting_cash),
+        one(result.final_cash),
+        one(result.realized_pnl),
+        one(result.commissions),
         Arc::new(Int64Array::from(vec![
             result.simulated_through.map(|t| t.get()),
         ])),
@@ -1636,19 +1747,19 @@ fn run_manifest_batch(
             Some(warnings.join("; "))
         }])),
     ];
-    build(schema::RUN, schema::run(), columns)
+    build(schema::RUN, schema::run(encoding), columns)
 }
 
-fn orders_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
+fn orders_batch(result: &RunResult, encoding: FixedEncoding) -> Result<Option<RecordBatch>> {
     let mut ts = TimestampNanosecondBuilder::new();
     let mut id = Int64Builder::new();
     let mut instrument = StringBuilder::new();
     let mut outcome = UInt16Builder::new();
     let mut side = StringBuilder::new();
     let mut kind = StringBuilder::new();
-    let mut limit = Float64Builder::new();
-    let mut quantity = Float64Builder::new();
-    let mut filled = Float64Builder::new();
+    let mut limit = FixedBuilder::new(encoding);
+    let mut quantity = FixedBuilder::new(encoding);
+    let mut filled = FixedBuilder::new(encoding);
     let mut tif = StringBuilder::new();
     let mut status = StringBuilder::new();
     let mut reject_reason = StringBuilder::new();
@@ -1664,15 +1775,15 @@ fn orders_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
         match order.limit_price() {
             Some(price) => {
                 kind.append_value("limit");
-                limit.append_value(price.to_f64());
+                limit.append(price.raw());
             }
             None => {
                 kind.append_value("market");
                 limit.append_null();
             }
         }
-        quantity.append_value(order.quantity.to_f64());
-        filled.append_value(order.filled.to_f64());
+        quantity.append(order.quantity.raw());
+        filled.append(order.filled.raw());
         tif.append_value(match order.time_in_force {
             crate::order::TimeInForce::GoodTilCancel => "gtc",
             crate::order::TimeInForce::ImmediateOrCancel => "ioc",
@@ -1697,27 +1808,27 @@ fn orders_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
         Arc::new(outcome.finish()),
         Arc::new(side.finish()),
         Arc::new(kind.finish()),
-        Arc::new(limit.finish()),
-        Arc::new(quantity.finish()),
-        Arc::new(filled.finish()),
+        limit.finish(),
+        quantity.finish(),
+        filled.finish(),
         Arc::new(tif.finish()),
         Arc::new(status.finish()),
         Arc::new(reject_reason.finish()),
         Arc::new(tag.finish()),
         Arc::new(reduce_only.finish()),
     ];
-    build(schema::ORDERS, schema::orders(), columns)
+    build(schema::ORDERS, schema::orders(encoding), columns)
 }
 
-fn fills_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
+fn fills_batch(result: &RunResult, encoding: FixedEncoding) -> Result<Option<RecordBatch>> {
     let mut ts = TimestampNanosecondBuilder::new();
     let mut order_id = Int64Builder::new();
     let mut instrument = StringBuilder::new();
     let mut outcome = UInt16Builder::new();
     let mut side = StringBuilder::new();
-    let mut price = Float64Builder::new();
-    let mut quantity = Float64Builder::new();
-    let mut commission = Float64Builder::new();
+    let mut price = FixedBuilder::new(encoding);
+    let mut quantity = FixedBuilder::new(encoding);
+    let mut commission = FixedBuilder::new(encoding);
     let mut is_taker = BooleanBuilder::new();
     let mut tag = StringBuilder::new();
 
@@ -1727,9 +1838,9 @@ fn fills_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
         instrument.append_value(fill.instrument.as_str());
         outcome.append_value(fill.outcome.0);
         side.append_value(fill.side.as_str());
-        price.append_value(fill.price.to_f64());
-        quantity.append_value(fill.quantity.to_f64());
-        commission.append_value(fill.commission.to_f64());
+        price.append(fill.price.raw());
+        quantity.append(fill.quantity.raw());
+        commission.append(fill.commission.raw());
         is_taker.append_value(fill.is_taker);
         match &fill.tag {
             Some(value) => tag.append_value(value),
@@ -1743,13 +1854,13 @@ fn fills_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
         Arc::new(instrument.finish()),
         Arc::new(outcome.finish()),
         Arc::new(side.finish()),
-        Arc::new(price.finish()),
-        Arc::new(quantity.finish()),
-        Arc::new(commission.finish()),
+        price.finish(),
+        quantity.finish(),
+        commission.finish(),
         Arc::new(is_taker.finish()),
         Arc::new(tag.finish()),
     ];
-    build(schema::FILLS, schema::fills(), columns)
+    build(schema::FILLS, schema::fills(encoding), columns)
 }
 
 /// Read `bt_fills` back as [`Fill`]s, so a stored run can be re-folded into
@@ -1763,9 +1874,9 @@ pub async fn read_fills(db: &Database, at: ReadAt) -> Result<Vec<crate::order::F
         let instrument = column::<StringArray>(batch, "instrument_id")?;
         let outcome = column::<UInt16Array>(batch, "outcome")?;
         let side = column::<StringArray>(batch, "side")?;
-        let price = column::<Float64Array>(batch, "price")?;
-        let quantity = column::<Float64Array>(batch, "quantity")?;
-        let commission = column::<Float64Array>(batch, "commission")?;
+        let price = fixed(batch, "price")?;
+        let quantity = fixed(batch, "quantity")?;
+        let commission = fixed(batch, "commission")?;
         let is_taker = column::<BooleanArray>(batch, "is_taker")?;
         let tag = column::<StringArray>(batch, "tag")?;
         for row in 0..batch.num_rows() {
@@ -1774,9 +1885,9 @@ pub async fn read_fills(db: &Database, at: ReadAt) -> Result<Vec<crate::order::F
                 instrument: InstrumentId::new(instrument.value(row))?,
                 outcome: OutcomeId(outcome.value(row)),
                 side: Side::parse(side.value(row))?,
-                price: Price::from_f64(price.value(row))?,
-                quantity: Qty::from_f64(quantity.value(row))?,
-                commission: Money::from_f64(commission.value(row))?,
+                price: Price::from_raw(read_fixed_value(price, row, "price")?),
+                quantity: Qty::from_raw(read_fixed_value(quantity, row, "quantity")?),
+                commission: Money::from_raw(read_fixed_value(commission, row, "commission")?),
                 is_taker: is_taker.value(row),
                 ts: UnixNanos::new(ts.value(row)),
                 tag: opt_str(tag, row).map(str::to_string),
@@ -1790,6 +1901,7 @@ pub async fn read_fills(db: &Database, at: ReadAt) -> Result<Vec<crate::order::F
 fn positions_batch(
     result: &RunResult,
     settlement: &SettlementReport,
+    encoding: FixedEncoding,
 ) -> Result<Option<RecordBatch>> {
     let portfolio = Portfolio::replay(&result.fills)?;
     let settled: BTreeMap<(String, u16), &crate::settlement::PositionSettlement> = settlement
@@ -1806,26 +1918,26 @@ fn positions_batch(
     let mut ts = TimestampNanosecondBuilder::new();
     let mut instrument = StringBuilder::new();
     let mut outcome = UInt16Builder::new();
-    let mut quantity = Float64Builder::new();
-    let mut average = Float64Builder::new();
-    let mut realized = Float64Builder::new();
-    let mut commissions = Float64Builder::new();
-    let mut settlement_pnl = Float64Builder::new();
-    let mut market_exit = Float64Builder::new();
+    let mut quantity = FixedBuilder::new(encoding);
+    let mut average = FixedBuilder::new(encoding);
+    let mut realized = FixedBuilder::new(encoding);
+    let mut commissions = FixedBuilder::new(encoding);
+    let mut settlement_pnl = FixedBuilder::new(encoding);
+    let mut market_exit = FixedBuilder::new(encoding);
 
     for position in portfolio.positions() {
         ts.append_value(ts_value);
         instrument.append_value(position.instrument.as_str());
         outcome.append_value(position.outcome.0);
-        quantity.append_value(position.quantity.to_f64());
-        average.append_value(position.average_price.to_f64());
-        realized.append_value(position.realized_pnl.to_f64());
-        commissions.append_value(position.commissions.to_f64());
+        quantity.append(position.quantity.raw());
+        average.append(position.average_price.raw());
+        realized.append(position.realized_pnl.raw());
+        commissions.append(position.commissions.raw());
         match settled.get(&(position.instrument.to_string(), position.outcome.0)) {
             Some(entry) => {
-                settlement_pnl.append_value(entry.settled_pnl.to_f64());
+                settlement_pnl.append(entry.settled_pnl.raw());
                 match entry.market_exit_pnl {
-                    Some(value) => market_exit.append_value(value.to_f64()),
+                    Some(value) => market_exit.append(value.raw()),
                     None => market_exit.append_null(),
                 }
             }
@@ -1840,42 +1952,42 @@ fn positions_batch(
         Arc::new(ts.finish()),
         Arc::new(instrument.finish()),
         Arc::new(outcome.finish()),
-        Arc::new(quantity.finish()),
-        Arc::new(average.finish()),
-        Arc::new(realized.finish()),
-        Arc::new(commissions.finish()),
-        Arc::new(settlement_pnl.finish()),
-        Arc::new(market_exit.finish()),
+        quantity.finish(),
+        average.finish(),
+        realized.finish(),
+        commissions.finish(),
+        settlement_pnl.finish(),
+        market_exit.finish(),
     ];
-    build(schema::POSITIONS, schema::positions(), columns)
+    build(schema::POSITIONS, schema::positions(encoding), columns)
 }
 
-fn equity_batch(result: &RunResult) -> Result<Option<RecordBatch>> {
+fn equity_batch(result: &RunResult, encoding: FixedEncoding) -> Result<Option<RecordBatch>> {
     let mut ts = TimestampNanosecondBuilder::new();
-    let mut cash = Float64Builder::new();
-    let mut position_value = Float64Builder::new();
-    let mut equity = Float64Builder::new();
-    let mut realized = Float64Builder::new();
-    let mut unrealized = Float64Builder::new();
+    let mut cash = FixedBuilder::new(encoding);
+    let mut position_value = FixedBuilder::new(encoding);
+    let mut equity = FixedBuilder::new(encoding);
+    let mut realized = FixedBuilder::new(encoding);
+    let mut unrealized = FixedBuilder::new(encoding);
 
     for point in &result.equity {
         ts.append_value(point.ts.get());
-        cash.append_value(point.cash.to_f64());
-        position_value.append_value(point.position_value.to_f64());
-        equity.append_value(point.equity.to_f64());
-        realized.append_value(point.realized_pnl.to_f64());
-        unrealized.append_value(point.unrealized_pnl.to_f64());
+        cash.append(point.cash.raw());
+        position_value.append(point.position_value.raw());
+        equity.append(point.equity.raw());
+        realized.append(point.realized_pnl.raw());
+        unrealized.append(point.unrealized_pnl.raw());
     }
 
     let columns: Vec<ArrayRef> = vec![
         Arc::new(ts.finish()),
-        Arc::new(cash.finish()),
-        Arc::new(position_value.finish()),
-        Arc::new(equity.finish()),
-        Arc::new(realized.finish()),
-        Arc::new(unrealized.finish()),
+        cash.finish(),
+        position_value.finish(),
+        equity.finish(),
+        realized.finish(),
+        unrealized.finish(),
     ];
-    build(schema::EQUITY, schema::equity(), columns)
+    build(schema::EQUITY, schema::equity(encoding), columns)
 }
 
 /// Assemble a batch, or `None` when there is nothing to write.
@@ -1897,6 +2009,28 @@ fn build(
             table,
             detail: error.to_string(),
         })
+}
+
+/// The encoding a table's fixed-point columns already use.
+///
+/// Read from the table rather than passed in, so a writer cannot disagree
+/// with what was created. A table that does not exist yet has no encoding to
+/// honour, so it takes the default and the caller's `create_*` decides.
+pub(crate) async fn encoding_of(db: &Database, table: &str) -> FixedEncoding {
+    let Ok(resolved) = db.resolve(table, ReadAt::Latest).await else {
+        return FixedEncoding::default();
+    };
+    resolved
+        .schema
+        .fields()
+        .iter()
+        .find_map(|field| match FixedEncoding::of(field.data_type()) {
+            // Only a fixed-point column answers the question; an Int64 or a
+            // timestamp says nothing about the encoding either way.
+            Some(FixedEncoding::Decimal) => Some(FixedEncoding::Decimal),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 async fn append(
@@ -2049,35 +2183,49 @@ mod tests {
     use super::*;
     use crate::types::SCALE;
 
+    /// Where the float encoding stops being exact, asserted from both sides.
+    ///
+    /// The older version of this test fed it float *literals*, which are by
+    /// definition values an `f64` already holds, so the trip back was
+    /// identity and it would have passed at any magnitude. It therefore said
+    /// nothing about the ceiling it was cited as proving. These cases start
+    /// from raw integers, which is what a fixed-point value actually is.
     #[test]
-    fn float_storage_round_trips_exactly() {
-        // The claim the schema doc makes: every value the fixed-point type
-        // can represent survives a trip through f64 storage unchanged.
-        let cases = [
-            0.0,
-            1.0,
-            0.5,
-            0.42,
-            0.0001,
-            0.999999999,
-            123.456789,
-            1e6,
-            -0.37,
-            0.123456789,
-            9_999_999.999999999,
-        ];
-        for value in cases {
-            let original = Price::from_f64(value).unwrap();
-            let stored = original.to_f64();
-            let restored = Price::from_f64(stored).unwrap();
-            assert_eq!(original, restored, "{value} did not survive the round trip");
+    fn float_storage_is_exact_up_to_the_mantissa_and_not_past_it() {
+        // 2^53 is the last integer after which an f64 stops holding
+        // consecutive values, so it is the ceiling on raw units -- about
+        // nine million at nine decimal places.
+        const MANTISSA: crate::types::Raw = 9_007_199_254_740_992;
+
+        let survives = |raw: crate::types::Raw| {
+            Price::from_f64(Price::from_raw(raw).to_f64()).unwrap() == Price::from_raw(raw)
+        };
+
+        // Below the ceiling, consecutive raws all survive. Odd values are
+        // the ones that fail first, so the sweep must include them.
+        for offset in 0..64 {
+            for base in [0, 1, SCALE, 123_456_789, MANTISSA / 2] {
+                let raw = base + offset;
+                assert!(survives(raw), "{raw} must survive below the mantissa");
+                assert!(survives(-raw), "{} must survive below the mantissa", -raw);
+            }
         }
+
+        // Above it, they do not, and the point of the assertion is that this
+        // is a known boundary rather than a surprise. If this ever starts
+        // failing, an f64 has grown a mantissa and the decimal encoding has
+        // lost its reason to exist.
+        let past = (0..64).filter(|offset| !survives(MANTISSA + 1 + 2 * offset));
+        assert!(
+            past.count() > 0,
+            "odd raw values above 2^53 must not round-trip through f64"
+        );
     }
 
     #[test]
     fn round_trip_holds_across_the_whole_tick_grid() {
         // Every 0.0001 tick a prediction market can quote.
-        for tick in 0..=10_000i64 {
+        for tick in 0..=10_000 as crate::types::Raw {
             let original = Price::from_raw(tick * (SCALE / 10_000));
             let restored = Price::from_f64(original.to_f64()).unwrap();
             assert_eq!(original, restored, "tick {tick} failed");

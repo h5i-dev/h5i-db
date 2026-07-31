@@ -26,7 +26,7 @@ use std::collections::BTreeMap;
 use crate::error::{BacktestError, Result};
 use crate::instrument::{Instrument, InstrumentId, OutcomeId, uniform_prices};
 use crate::position::Portfolio;
-use crate::types::{Money, Price, Qty, SCALE, UnixNanos, notional};
+use crate::types::{Money, Price, Qty, Raw, SCALE, UnixNanos, notional};
 
 /// What each outcome of a resolved market pays per contract.
 ///
@@ -127,7 +127,7 @@ impl Resolution {
                 "every payout for {instrument} must lie in [0, 1]"
             )));
         }
-        let total: i64 = payouts.iter().map(|price| price.raw()).sum();
+        let total: Raw = payouts.iter().map(|price| price.raw()).sum();
         if total != SCALE {
             return Err(BacktestError::invalid(format!(
                 "the payouts for {instrument} sum to {} rather than 1; a \
@@ -544,7 +544,7 @@ mod tests {
         let resolution = Resolution::new(instrument(), OutcomeId(1), ts(1));
         let report = settle(&portfolio, &[resolution], Some(ts(2)), &BTreeMap::new()).unwrap();
         assert_eq!(report.settled.len(), 3);
-        let total: i64 = report.settled.iter().map(|s| s.settled_pnl.raw()).sum();
+        let total: Raw = report.settled.iter().map(|s| s.settled_pnl.raw()).sum();
         // Paid 0.50 + 0.30 + 0.20 = 1.00 per set, received 1.00: flat.
         assert_eq!(Money::from_raw(total), Money::ZERO);
     }
@@ -581,7 +581,7 @@ mod tests {
         .unwrap();
         let resolution = Resolution::void(instrument(), 3, ts(1)).unwrap();
         let report = settle(&portfolio, &[resolution], Some(ts(2)), &BTreeMap::new()).unwrap();
-        let total: i64 = report.settled.iter().map(|s| s.settled_pnl.raw()).sum();
+        let total: Raw = report.settled.iter().map(|s| s.settled_pnl.raw()).sum();
         assert_eq!(
             Money::from_raw(total),
             Money::ZERO,

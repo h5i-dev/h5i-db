@@ -257,8 +257,11 @@ Méthodologie et résultats complets dans [benchmarks](benchmarks).
 | moteur | frontière mesurée | médiane | débit |
 |---|---|---:|---:|
 | **h5i-db** | enregistrements décodés à travers le noyau de rejeu | **65,7 ms** | **3,05 M évén./s** |
+| h5i-db `wide` | même noyau, virgule fixe 128 bits | 94 ms⁷ | 2,13 M évén./s⁷ |
 | **h5i-db** | même noyau, stratégie en callback Python par événement | 278 ms⁶ | 719 k évén./s⁶ |
+| h5i-db `wide` | idem, virgule fixe 128 bits | 306 ms⁶ ⁷ | 653 k évén./s⁶ ⁷ |
 | **h5i-db** | exécution persistée complète : balayage, décodage, fork, rejeu, écriture | 280 ms | 713 k évén./s |
+| h5i-db `wide` | idem, virgule fixe 128 bits | 280 ms | 713 k évén./s |
 | NautilusTrader 1.230.0 | objets en mémoire à travers `BacktestEngine.run()` | 767 ms | 261 k évén./s |
 | LEAN `11ba019f6` | du premier callback `Slice` à `OnEndOfAlgorithm`, alimenté par disque | 2033 ms | 98,4 k évén./s |
 
@@ -270,6 +273,10 @@ des comptages plutôt qu'une équivalence de PnL.
 événement, comme Nautilus. Callback contre callback, l'écart est de 3,1× et
 non de 13×. Chiffre dérivé (noyau natif plus coût de frontière mesuré), non
 chronométré directement.
+⁷ `--features wide`, désactivé par défaut ; voir
+[Précision et plage](https://db.h5i.dev/manual/backtest/). Chiffre dérivé, non
+chronométré directement ; méthode dans
+[RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
 
 ---
 

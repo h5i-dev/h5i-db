@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use crate::error::{BacktestError, Result};
-use crate::types::{Price, Qty, Side, UnixNanos};
+use crate::types::{Price, Qty, Raw, Side, UnixNanos};
 
 /// What an incremental update does to a price level.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -83,8 +83,8 @@ pub enum BookStatus {
 /// updates happened to arrive in.
 #[derive(Clone, Debug, Default)]
 pub struct OrderBook {
-    bids: BTreeMap<i64, Qty>,
-    asks: BTreeMap<i64, Qty>,
+    bids: BTreeMap<Raw, Qty>,
+    asks: BTreeMap<Raw, Qty>,
     status: Option<BookStatus>,
     last_update: Option<UnixNanos>,
 }
@@ -262,7 +262,7 @@ impl OrderBook {
         // Walk the maps directly. `levels()` materialises the entire side,
         // which is especially wasteful for the common case where an order
         // fills at the touch of a deep book.
-        let mut visit = |price_raw: &i64, size: &Qty| {
+        let mut visit = |price_raw: &Raw, size: &Qty| {
             if remaining <= 0 {
                 return false;
             }
@@ -339,7 +339,9 @@ impl BookWalk {
             .iter()
             .map(|(p, q)| p.raw() as i128 * q.raw() as i128)
             .sum();
-        Some(Price::from_raw((weighted / total as i128) as i64))
+        crate::types::narrow(weighted / total as i128, "OrderBook::weighted_mid")
+            .ok()
+            .map(Price::from_raw)
     }
 }
 

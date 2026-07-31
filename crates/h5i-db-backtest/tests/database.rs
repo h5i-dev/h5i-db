@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use h5i_db_backtest::book::BookDelta;
+use h5i_db_backtest::decimal::FixedEncoding;
 use h5i_db_backtest::engine::{OrderRequest, SignalReplay};
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, OutcomeId, PriceRule};
@@ -690,7 +691,7 @@ async fn a_truncated_snapshot_is_refused_rather_than_half_applied() {
     };
     use std::sync::Arc;
     let batch = arrow::record_batch::RecordBatch::try_new(
-        h5i_db_backtest::schema::book_deltas(),
+        h5i_db_backtest::schema::book_deltas(Default::default()),
         vec![
             Arc::new(TimestampNanosecondArray::from(vec![1i64, 2])),
             Arc::new(TimestampNanosecondArray::from(vec![1i64, 2])),
@@ -1007,7 +1008,7 @@ async fn a_snapshot_event_mixing_two_outcomes_is_refused() {
     }
 
     let batch = RecordBatch::try_new(
-        h5i_db_backtest::schema::book_deltas(),
+        h5i_db_backtest::schema::book_deltas(Default::default()),
         vec![
             Arc::new(ts_init.finish()),
             Arc::new(ts_event.finish()),
@@ -1035,4 +1036,163 @@ async fn a_snapshot_event_mixing_two_outcomes_is_refused() {
         message.contains("one event describes one outcome of one instrument"),
         "the error should name the rule that was broken, got: {message}"
     );
+}
+
+// -- decimal columns --------------------------------------------------------
+
+/// A market whose numbers are too large for an `f64` to carry exactly.
+///
+/// 2^53 raw units is where an `f64` mantissa stops holding consecutive
+/// integers, which at nine decimal places is a little over nine million. A
+/// venue quoting in units rather than dollars -- or a position accumulated
+/// over a long run -- reaches that, and this is the size at which the
+/// default encoding starts rounding.
+fn beyond_the_float_ceiling() -> Qty {
+    Qty::from_raw(9_007_199_254_740_993)
+}
+
+#[tokio::test]
+async fn decimal_tables_store_what_a_float_column_would_round() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("wide.db")).await.unwrap();
+    store::create_market_data_tables_with(&db, FixedEncoding::Decimal)
+        .await
+        .unwrap();
+
+    let size = beyond_the_float_ceiling();
+    store::write_trades(
+        &db,
+        &[Record::new(
+            Stamps::immediate(ts(SECOND)),
+            id(),
+            OutcomeId::FIRST,
+            MarketEvent::Trade {
+                price: price(0.42),
+                size,
+                aggressor: Some(Side::Buy),
+            },
+        )],
+    )
+    .await
+    .unwrap();
+
+    let back = store::read_trades(&db, ReadAt::Latest, None).await.unwrap();
+    let MarketEvent::Trade { size: stored, .. } = &back[0].event else {
+        panic!("expected a trade");
+    };
+    assert_eq!(
+        stored.raw(),
+        size.raw(),
+        "a decimal column must return the units it was given"
+    );
+}
+
+#[tokio::test]
+async fn a_float_table_rounds_the_same_value_and_says_nothing() {
+    // The control for the test above: the default encoding is what it has
+    // always been, so if this ever starts passing, the decimal encoding has
+    // no reason to exist and the test above proves nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("narrow.db"))
+        .await
+        .unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+
+    let size = beyond_the_float_ceiling();
+    store::write_trades(
+        &db,
+        &[Record::new(
+            Stamps::immediate(ts(SECOND)),
+            id(),
+            OutcomeId::FIRST,
+            MarketEvent::Trade {
+                price: price(0.42),
+                size,
+                aggressor: Some(Side::Buy),
+            },
+        )],
+    )
+    .await
+    .unwrap();
+
+    let back = store::read_trades(&db, ReadAt::Latest, None).await.unwrap();
+    let MarketEvent::Trade { size: stored, .. } = &back[0].event else {
+        panic!("expected a trade");
+    };
+    assert_ne!(stored.raw(), size.raw());
+}
+
+/// The encoding follows the table, not the writer.
+///
+/// This is the property that keeps both encodings readable by one build: a
+/// writer never decides how to encode, it reads what the table already
+/// declared. Creating with one encoding and then calling the ordinary
+/// `create_*` helper -- which asks for `Float` -- must not silently change
+/// the table or produce a batch its schema rejects.
+#[tokio::test]
+async fn a_later_writer_follows_the_encoding_the_table_was_created_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("mixed.db"))
+        .await
+        .unwrap();
+    store::create_market_data_tables_with(&db, FixedEncoding::Decimal)
+        .await
+        .unwrap();
+    // Asks for Float, but the tables exist, so it is a no-op.
+    store::create_market_data_tables(&db).await.unwrap();
+
+    store::write_instruments(&db, &[market()], ts(0))
+        .await
+        .unwrap();
+    let instruments = store::read_instruments(&db, ReadAt::Latest).await.unwrap();
+    assert_eq!(
+        instruments.get(&id()).unwrap().tick_size,
+        market().tick_size
+    );
+
+    let resolved = db.resolve("trades", ReadAt::Latest).await.unwrap();
+    let price_type = resolved
+        .schema
+        .field_with_name("price")
+        .unwrap()
+        .data_type()
+        .clone();
+    assert_eq!(
+        FixedEncoding::of(&price_type),
+        Some(FixedEncoding::Decimal),
+        "the table keeps the encoding it was created with"
+    );
+}
+
+/// A whole run, written and read back through decimal columns.
+#[tokio::test]
+async fn a_run_round_trips_through_decimal_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = seeded_db(&dir).await;
+    store::create_run_tables_with(&db, FixedEncoding::Decimal)
+        .await
+        .unwrap();
+
+    let mut strategy = SignalReplay::new(vec![(
+        ts(3 * SECOND),
+        OrderRequest::market(id(), OutcomeId::FIRST, Side::Buy, qty(100.0)),
+    )])
+    .unwrap();
+    let report = run_in_place(
+        &db,
+        RunSpec::new("decimal-run", money(10_000.0)),
+        &mut strategy,
+        |builder| builder,
+    )
+    .await
+    .unwrap();
+    assert!(!report.result.fills.is_empty(), "the run must have traded");
+
+    let fills = store::read_fills(&db, ReadAt::Latest).await.unwrap();
+    assert_eq!(fills.len(), report.result.fills.len());
+    for (stored, expected) in fills.iter().zip(&report.result.fills) {
+        assert_eq!(stored.price.raw(), expected.price.raw());
+        assert_eq!(stored.quantity.raw(), expected.quantity.raw());
+        assert_eq!(stored.commission.raw(), expected.commission.raw());
+    }
 }

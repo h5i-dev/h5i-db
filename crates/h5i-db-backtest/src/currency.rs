@@ -123,7 +123,14 @@ impl FxBook {
         {
             let inverse =
                 (crate::types::SCALE as i128 * crate::types::SCALE as i128) / rate.raw() as i128;
-            return Ok(Price::from_raw(inverse as i64));
+            // The rate table has its own error type, and an inverse that will
+            // not fit is a missing rate as far as a caller is concerned.
+            return crate::types::narrow(inverse, "Currency::inverse_rate")
+                .map(Price::from_raw)
+                .map_err(|_| FxError::NoRate {
+                    from: from.clone(),
+                    to: to.clone(),
+                });
         }
         Err(FxError::NoRate {
             from: from.clone(),

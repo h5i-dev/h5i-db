@@ -34,6 +34,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use h5i_db_backtest::FixedEncoding;
 use h5i_db_backtest::book::BookDelta;
 use h5i_db_backtest::engine::{Engine, OrderRequest, SignalReplay};
 use h5i_db_backtest::event::{MarketEvent, Record};
@@ -41,7 +42,7 @@ use h5i_db_backtest::instrument::{Instrument, InstrumentId, InstrumentSet, Outco
 use h5i_db_backtest::replay::{Replay, priority};
 use h5i_db_backtest::run::{RunSpec, run_in_fork};
 use h5i_db_backtest::store;
-use h5i_db_backtest::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
+use h5i_db_backtest::types::{Money, Price, Qty, Raw, Side, Stamps, UnixNanos};
 use h5i_db_backtest::window::TimeWindow;
 use h5i_db_core::Database;
 use h5i_db_core::database::{ReadAt, ScanOptions};
@@ -51,6 +52,37 @@ const TICK_NANOS: i64 = 1_000_000;
 /// Rows per write commit, so seeding never holds the whole dataset.
 const COMMIT_ROWS: usize = 50_000;
 
+/// Which storage encoding the run is measured in.
+///
+/// The *arithmetic* width is a compile-time feature and cannot be varied from
+/// here -- see [`raw_bits`] -- but the encoding a table stores its numbers in
+/// is a per-table runtime choice, so both can be measured in one process.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Encodings {
+    Float,
+    Decimal,
+    /// Float end to end, plus a second storage-bound pass in decimal.
+    Both,
+}
+
+impl Encodings {
+    /// The encoding the end-to-end run uses.
+    fn primary(self) -> FixedEncoding {
+        match self {
+            Self::Decimal => FixedEncoding::Decimal,
+            _ => FixedEncoding::Float,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Float => "float",
+            Self::Decimal => "decimal",
+            Self::Both => "both",
+        }
+    }
+}
+
 struct Args {
     book_events: usize,
     trades: usize,
@@ -58,7 +90,17 @@ struct Args {
     signals: usize,
     trials: usize,
     common_quotes: bool,
+    encodings: Encodings,
     dir: Option<PathBuf>,
+}
+
+/// How wide a raw fixed-point value is in this binary.
+///
+/// The i64 and i128 builds produce otherwise identical reports, and comparing
+/// the wrong pair is the easiest mistake to make with a compile-time switch,
+/// so every report says which one it came from.
+fn raw_bits() -> usize {
+    std::mem::size_of::<Raw>() * 8
 }
 
 impl Default for Args {
@@ -72,6 +114,8 @@ impl Default for Args {
             signals: 200,
             trials: 4,
             common_quotes: false,
+            // Float, so a report compares directly with every earlier one.
+            encodings: Encodings::Float,
             dir: None,
         }
     }
@@ -95,6 +139,14 @@ fn parse_args() -> Args {
             "--signals" => args.signals = value(&mut argv),
             "--trials" => args.trials = value(&mut argv),
             "--common-quotes" => args.common_quotes = true,
+            "--encoding" => {
+                args.encodings = match argv.next().as_deref() {
+                    Some("float") => Encodings::Float,
+                    Some("decimal") => Encodings::Decimal,
+                    Some("both") => Encodings::Both,
+                    other => panic!("--encoding takes float, decimal or both, got {other:?}"),
+                }
+            }
             "--dir" => args.dir = argv.next().map(PathBuf::from),
             "--bench" | "--nocapture" => {}
             other if other.starts_with("--") => {}
@@ -224,8 +276,10 @@ fn signals(args: &Args, ids: &[InstrumentId]) -> Vec<(UnixNanos, OrderRequest)> 
         .collect()
 }
 
-async fn seed(db: &Database, args: &Args, ids: &[InstrumentId]) {
-    store::create_market_data_tables(db).await.unwrap();
+async fn seed(db: &Database, args: &Args, ids: &[InstrumentId], encoding: FixedEncoding) {
+    store::create_market_data_tables_with(db, encoding)
+        .await
+        .unwrap();
     let instruments: Vec<Instrument> = (0..args.instruments)
         .map(|index| {
             Instrument::perpetual(instrument_id(index), "bench")
@@ -323,13 +377,18 @@ async fn main() {
         "replay path: {} book events, {} trades, {} instruments, {} signals, {} trials",
         args.book_events, args.trades, args.instruments, args.signals, args.trials
     );
+    eprintln!(
+        "             raw = i{} (compile-time), storage = {}",
+        raw_bits(),
+        args.encodings.name()
+    );
 
     let mut phases = Vec::new();
 
     let (phase, ()) = timed(
         "seed: write market data",
         Some((args.book_events + args.trades) as u64),
-        seed(&db, &args, &ids),
+        seed(&db, &args, &ids, args.encodings.primary()),
     )
     .await;
     phases.push(phase);
@@ -389,6 +448,80 @@ async fn main() {
         ..trade_phase
     });
     let decode_ms = book_decode_ms + phases.last().unwrap().millis;
+
+    // -- the other storage encoding, on the same data -----------------------
+    //
+    // Only the storage-bound phases are repeated. The kernel never sees a
+    // column, so an encoding cannot change what it costs; what it can change
+    // is how many bytes a scan moves and what a decode has to do per value,
+    // and those are exactly the phases below. A decimal value decodes to an
+    // integer move where a float decodes to a multiply and a round, so this
+    // is not a foregone conclusion in either direction.
+
+    let mut decimal_report = None;
+    if args.encodings == Encodings::Both {
+        eprintln!();
+        eprintln!("  the same data stored as Decimal128(38, 9):");
+        let other = Database::create(&root.with_file_name("replay-path-decimal.db"))
+            .await
+            .unwrap();
+
+        let (seed_phase, ()) = timed(
+            "decimal seed: write market data",
+            Some((args.book_events + args.trades) as u64),
+            seed(&other, &args, &ids, FixedEncoding::Decimal),
+        )
+        .await;
+
+        let (scan_phase, decimal_scan_rows) = timed("decimal scan: book_deltas", None, async {
+            let (batches, _) = other
+                .scan("book_deltas", ReadAt::Latest, ScanOptions::default())
+                .await
+                .unwrap();
+            batches.iter().map(|b| b.num_rows() as u64).sum::<u64>()
+        })
+        .await;
+
+        let (book_phase, decimal_book) = timed("decimal decode: book_deltas", None, async {
+            store::read_book_events(&other, ReadAt::Latest, None)
+                .await
+                .unwrap()
+        })
+        .await;
+        let decimal_book_rows = decimal_book.len() as u64;
+        assert_eq!(
+            decimal_book_rows, decoded_book,
+            "the two encodings must decode to the same number of records"
+        );
+        drop(decimal_book);
+
+        let (trade_phase, decimal_trades) = timed("decimal decode: trades", None, async {
+            let source = store::trade_source(&other, ReadAt::Latest, None)
+                .await
+                .unwrap();
+            source.collect::<Result<Vec<Record>, _>>().unwrap()
+        })
+        .await;
+        drop(decimal_trades);
+
+        let decimal_decode_ms = book_phase.millis + trade_phase.millis;
+        eprintln!(
+            "    decode: {:.1} ms decimal vs {:.1} ms float ({:+.0}%)",
+            decimal_decode_ms,
+            decode_ms,
+            (decimal_decode_ms / decode_ms - 1.0) * 100.0
+        );
+        decimal_report = Some(serde_json::json!({
+            "seed_ms": seed_phase.millis,
+            "scan_book_ms": scan_phase.millis,
+            "scan_book_rows": decimal_scan_rows,
+            "decode_ms": decimal_decode_ms,
+            "decode_ratio_vs_float": decimal_decode_ms / decode_ms,
+        }));
+        for phase in [seed_phase, scan_phase, book_phase, trade_phase] {
+            phases.push(phase);
+        }
+    }
 
     // -- kernel: records already in memory ----------------------------------
 
@@ -635,6 +768,12 @@ async fn main() {
     );
 
     let report = serde_json::json!({
+        "build": {
+            // The compile-time half of the switch, which no flag can change.
+            "raw_bits": raw_bits(),
+            "storage_encoding": args.encodings.name(),
+        },
+        "decimal": decimal_report,
         "config": {
             "book_events": args.book_events,
             "trades": args.trades,

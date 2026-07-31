@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::error::{BacktestError, Result};
-use crate::types::{Price, Qty, SCALE, UnixNanos};
+use crate::types::{Price, Qty, Raw, SCALE, UnixNanos};
 
 /// A venue-qualified instrument identifier.
 ///
@@ -275,7 +275,7 @@ impl Instrument {
                     max_decimals
                 )));
             }
-            self.tick_size = Price::from_raw(10_i64.pow(9 - max_decimals as u32));
+            self.tick_size = Price::from_raw((10 as Raw).pow(9 - max_decimals as u32));
         }
         self.price_rule = rule;
         Ok(self)
@@ -399,7 +399,7 @@ impl Instrument {
                 prices.len()
             )));
         }
-        let sum: i64 = prices.iter().map(|p| p.raw()).sum();
+        let sum: Raw = prices.iter().map(|p| p.raw()).sum();
         Ok(Price::from_raw(sum - SCALE))
     }
 }
@@ -435,13 +435,13 @@ fn count_significant_figures(price: Price) -> u8 {
 }
 
 /// Drop the digits past `figures` significant ones, towards zero.
-fn truncate_to_significant_figures(raw: i64, figures: u8) -> i64 {
+fn truncate_to_significant_figures(raw: Raw, figures: u8) -> Raw {
     if figures == 0 || raw == 0 {
         return raw;
     }
     let magnitude = raw.unsigned_abs();
     // A whole number keeps every digit: that is the venue's carve-out.
-    if magnitude.is_multiple_of(SCALE as u64) {
+    if magnitude.is_multiple_of(SCALE.unsigned_abs()) {
         return raw;
     }
     let mut digits = 0_u32;
@@ -453,7 +453,7 @@ fn truncate_to_significant_figures(raw: i64, figures: u8) -> i64 {
     if digits <= figures as u32 {
         return raw;
     }
-    let drop = 10_i64.pow(digits - figures as u32);
+    let drop = (10 as Raw).pow(digits - figures as u32);
     raw - raw % drop
 }
 
@@ -469,7 +469,7 @@ pub fn uniform_prices(outcomes: u16) -> Result<Vec<Price>> {
             "cannot split one unit across zero outcomes",
         ));
     }
-    let count = outcomes as i64;
+    let count = outcomes as Raw;
     let base = SCALE / count;
     let remainder = SCALE % count;
     let mut prices = vec![Price::from_raw(base); outcomes as usize];
@@ -500,9 +500,15 @@ pub fn normalise_to_one(prices: &[Price]) -> Result<Vec<Price>> {
     }
     let mut scaled: Vec<Price> = prices
         .iter()
-        .map(|price| Price::from_raw(((price.raw() as i128) * (SCALE as i128) / total) as i64))
-        .collect();
-    let residual = SCALE - scaled.iter().map(|price| price.raw()).sum::<i64>();
+        .map(|price| {
+            crate::types::narrow(
+                (price.raw() as i128) * (SCALE as i128) / total,
+                "normalise_to_one",
+            )
+            .map(Price::from_raw)
+        })
+        .collect::<Result<_>>()?;
+    let residual = SCALE - scaled.iter().map(|price| price.raw()).sum::<Raw>();
     if residual != 0 {
         let largest = scaled
             .iter()
@@ -804,7 +810,7 @@ mod tests {
             let prices = uniform_prices(outcomes).unwrap();
             assert_eq!(prices.len(), outcomes as usize);
             assert_eq!(
-                prices.iter().map(|price| price.raw()).sum::<i64>(),
+                prices.iter().map(|price| price.raw()).sum::<Raw>(),
                 SCALE,
                 "{outcomes} outcomes must still divide one exactly"
             );
@@ -825,7 +831,7 @@ mod tests {
         ];
         let normalised = normalise_to_one(&raw).unwrap();
         assert_eq!(
-            normalised.iter().map(|price| price.raw()).sum::<i64>(),
+            normalised.iter().map(|price| price.raw()).sum::<Raw>(),
             SCALE
         );
         // Order is preserved and the largest stays largest.

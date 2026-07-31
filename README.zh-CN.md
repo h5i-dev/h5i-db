@@ -223,8 +223,11 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 | 引擎 | 测量边界 | 中位数 | 吞吐 |
 |---|---|---:|---:|
 | **h5i-db** | 已解码记录穿过重放内核 | **65.7 ms** | **305 万 事件/秒** |
+| h5i-db `wide` | 同一内核，128 位定点 | 94 ms⁷ | 213 万 事件/秒⁷ |
 | **h5i-db** | 同一内核，策略是每事件一次的 Python 回调 | 278 ms⁶ | 71.9 万 事件/秒⁶ |
+| h5i-db `wide` | 同上，128 位定点 | 306 ms⁶ ⁷ | 65.3 万 事件/秒⁶ ⁷ |
 | **h5i-db** | 含持久化的完整运行：扫描、解码、fork、重放、写回 | 280 ms | 71.3 万 事件/秒 |
+| h5i-db `wide` | 同上，128 位定点 | 280 ms | 71.3 万 事件/秒 |
 | NautilusTrader 1.230.0 | 内存中的对象穿过 `BacktestEngine.run()` | 767 ms | 26.1 万 事件/秒 |
 | LEAN `11ba019f6` | 从首个 `Slice` 回调到 `OnEndOfAlgorithm`，数据来自磁盘 | 2033 ms | 9.84 万 事件/秒 |
 
@@ -234,6 +237,9 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 ⁶ 其他行重放期间不调 Python；这一行每个事件都跨进去，和 Nautilus 一样。回调对
 回调来比，差距是 3.1 倍而不是 13 倍。此数字为推导值（原生内核加实测边界开销），
 并非直接计时。
+⁷ `--features wide`，默认关闭，详见
+[精度与范围](https://db.h5i.dev/manual/backtest/)。为推导值，非直接计时；方法见
+[RESULTS.md](benchmarks/backtest_compare/RESULTS.md)。
 
 ---
 

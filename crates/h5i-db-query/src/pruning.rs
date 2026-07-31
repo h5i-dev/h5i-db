@@ -14,7 +14,19 @@ use datafusion::scalar::ScalarValue;
 use h5i_db_core::SegmentMeta;
 
 /// Build a typed Arrow scalar from a manifest JSON stat for `data_type`.
-fn json_stat_to_scalar(v: &serde_json::Value, data_type: &DataType) -> Option<ScalarValue> {
+///
+/// `None` means "no usable bound", which every caller treats as unknown and
+/// therefore keeps the segment. That is the fail-open path, and it is what a
+/// stat of an unexpected shape lands in -- a manifest written by a newer
+/// version, or a type this does not record stats for.
+///
+/// Shared with [`crate::provider`] rather than duplicated. The two copies
+/// were byte-identical, which is exactly the arrangement where adding a type
+/// to one and not the other produces a pruner and a scanner that disagree.
+pub(crate) fn json_stat_to_scalar(
+    v: &serde_json::Value,
+    data_type: &DataType,
+) -> Option<ScalarValue> {
     use arrow::datatypes::TimeUnit;
     match data_type {
         DataType::Int8 => v.as_i64().map(|x| ScalarValue::Int8(Some(x as i8))),
@@ -46,6 +58,15 @@ fn json_stat_to_scalar(v: &serde_json::Value, data_type: &DataType) -> Option<Sc
         // Dictionary-encoded strings: stats were computed over values.
         DataType::Dictionary(_, value) if **value == DataType::Utf8 => {
             v.as_str().map(|s| ScalarValue::Utf8(Some(s.to_string())))
+        }
+        // Written as a decimal string, because an `i128` does not fit a JSON
+        // number. The precision and scale come from `data_type` -- the
+        // schema is the single authority on them, and a column's cannot
+        // change under evolution -- so the stat carries only the unscaled
+        // integer and there is no scale to mismatch.
+        DataType::Decimal128(precision, scale) => {
+            let raw: i128 = v.as_str()?.parse().ok()?;
+            Some(ScalarValue::Decimal128(Some(raw), *precision, *scale))
         }
         _ => None,
     }

@@ -32,7 +32,7 @@ use crate::instrument::{InstrumentId, InstrumentSet, OutcomeId};
 use crate::models::{BookFills, FeeContext, FeeModel, FillModel, LatencyModel, NoFees, NoLatency};
 use crate::order::{Fill, Order, OrderId, OrderKind, OrderStatus, TimeInForce};
 use crate::position::Portfolio;
-use crate::types::{Money, Price, Qty, Side, UnixNanos, notional};
+use crate::types::{Money, Price, Qty, Raw, Side, UnixNanos, notional};
 
 /// A key identifying one tradable book.
 ///
@@ -148,8 +148,8 @@ impl Slots {
 
 #[derive(Default)]
 struct QueueLevels {
-    buys: BTreeMap<i64, Vec<OrderId>>,
-    sells: BTreeMap<i64, Vec<OrderId>>,
+    buys: BTreeMap<Raw, Vec<OrderId>>,
+    sells: BTreeMap<Raw, Vec<OrderId>>,
 }
 
 #[derive(Default)]
@@ -1121,7 +1121,7 @@ pub struct Engine {
     equity: Vec<EquityPoint>,
     funding_paid: Money,
     /// Displayed size still ahead of each resting order at its price.
-    queue_ahead: BTreeMap<OrderId, i64>,
+    queue_ahead: BTreeMap<OrderId, Raw>,
     /// Reused scratch space for price-prioritising orders reached by a trade.
     queue_candidates: Vec<(Price, OrderId)>,
     margin: Option<Box<dyn MarginModel>>,
@@ -1440,7 +1440,7 @@ impl Engine {
             let slice = if remaining_slices <= 1 {
                 twap.remaining()
             } else {
-                Qty::from_raw(twap.request.quantity.raw() / twap.total_slices)
+                Qty::from_raw(twap.request.quantity.raw() / twap.total_slices as Raw)
             };
             if !slice.is_positive() {
                 twap.sent = twap.total_slices;
@@ -1938,7 +1938,7 @@ impl Engine {
         }
         // The fraction of this position whose requirement covers the gap.
         let fraction = (need as i128 * held as i128) / full.raw() as i128;
-        let mut closing = fraction.min(held as i128) as i64;
+        let mut closing = crate::types::narrow(fraction.min(held as i128), "closing size")?;
         // Round up to a whole lot: a venue closes lots, not slivers.
         let lot = found.lot_size.raw().max(1);
         closing = closing.saturating_add(lot - 1) / lot * lot;
@@ -2587,7 +2587,7 @@ impl Engine {
             .position(&order.instrument, order.outcome)
             .map(|position| position.quantity.raw())
             .unwrap_or(0);
-        let pending: i64 = self
+        let pending: Raw = self
             .live_orders
             .iter()
             .filter_map(|id| self.orders.get(id))
@@ -2657,8 +2657,8 @@ impl Engine {
                 .position(&order.instrument, order.outcome)
                 .map(|position| position.quantity.raw())
                 .unwrap_or(0);
-            let mut pending_buys = 0_i64;
-            let mut pending_sells = 0_i64;
+            let mut pending_buys: Raw = 0;
+            let mut pending_sells: Raw = 0;
             for candidate in self
                 .live_orders
                 .iter()
@@ -2681,13 +2681,13 @@ impl Engine {
             }
             // Opposing live orders are not assumed to offset: either side may
             // fill independently. Check both possible exposure extremes.
-            let projected_long = current.saturating_add(pending_buys).unsigned_abs();
-            let projected_short = current.saturating_sub(pending_sells).unsigned_abs();
+            let projected_long = current.saturating_add(pending_buys).unsigned_abs() as u128;
+            let projected_short = current.saturating_sub(pending_sells).unsigned_abs() as u128;
             let projected = projected_long.max(projected_short);
-            if projected > maximum.raw() as u64 {
+            if projected > maximum.raw() as u128 {
                 return Some(format!(
                     "worst-case absolute position {} across live orders exceeds max_abs_position {}",
-                    Qty::from_raw(projected.min(i64::MAX as u64) as i64),
+                    Qty::from_raw(projected.min(Raw::MAX as u128) as Raw),
                     maximum
                 ));
             }
@@ -3163,7 +3163,7 @@ impl Engine {
                         outcomes.saturating_sub(1)
                     )));
                 }
-                let multiplier = (sorted.len() - 1) as i64;
+                let multiplier = (sorted.len() - 1) as Raw;
                 let sets = request
                     .quantity
                     .raw()

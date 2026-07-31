@@ -94,8 +94,11 @@ impl CorporateAction {
         let new_quantity = (quantity.raw() as i128 * ratio.raw() as i128) / SCALE as i128;
         let new_price = (price.raw() as i128 * SCALE as i128) / ratio.raw() as i128;
         Ok((
-            Qty::from_raw(new_quantity as i64),
-            Price::from_raw(new_price as i64),
+            Qty::from_raw(crate::types::narrow(
+                new_quantity,
+                "split_position quantity",
+            )?),
+            Price::from_raw(crate::types::narrow(new_price, "split_position price")?),
         ))
     }
 }
