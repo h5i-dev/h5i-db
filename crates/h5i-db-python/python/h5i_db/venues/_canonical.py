@@ -20,6 +20,9 @@ __all__ = [
     "TRADES_SCHEMA",
     "INSTRUMENTS_SCHEMA",
     "RESOLUTIONS_SCHEMA",
+    "BARS_SCHEMA",
+    "FUNDING_SCHEMA",
+    "REFERENCES_SCHEMA",
     "CANONICAL_SCHEMAS",
     "IngestReport",
     "SourceFile",
@@ -98,11 +101,57 @@ RESOLUTIONS_SCHEMA = pa.schema(
     ]
 )
 
+# Aggregates. `outcome` is not nullable because a bar is always a bar of
+# something tradeable, and a binary market's two sides do not share one.
+BARS_SCHEMA = pa.schema(
+    [
+        pa.field("ts_init", pa.timestamp("ns"), nullable=False),
+        pa.field("ts_event", pa.timestamp("ns"), nullable=False),
+        pa.field("instrument_id", pa.string(), nullable=False),
+        pa.field("outcome", pa.uint16(), nullable=False),
+        pa.field("open", pa.float64(), nullable=False),
+        pa.field("high", pa.float64(), nullable=False),
+        pa.field("low", pa.float64(), nullable=False),
+        pa.field("close", pa.float64(), nullable=False),
+        pa.field("volume", pa.float64(), nullable=False),
+        pa.field("source_vendor", pa.string()),
+    ]
+)
+
+# Perpetual funding as it became due. No `outcome`: funding is charged on a
+# position in the instrument, and a perpetual has exactly one.
+FUNDING_SCHEMA = pa.schema(
+    [
+        pa.field("ts_init", pa.timestamp("ns"), nullable=False),
+        pa.field("ts_event", pa.timestamp("ns"), nullable=False),
+        pa.field("instrument_id", pa.string(), nullable=False),
+        pa.field("rate", pa.float64(), nullable=False),
+        pa.field("source_vendor", pa.string()),
+    ]
+)
+
+# Venue-published mark and oracle prices. Both are nullable because a venue
+# can publish one and not the other, and a null must not read as a zero price.
+REFERENCES_SCHEMA = pa.schema(
+    [
+        pa.field("ts_init", pa.timestamp("ns"), nullable=False),
+        pa.field("ts_event", pa.timestamp("ns"), nullable=False),
+        pa.field("instrument_id", pa.string(), nullable=False),
+        pa.field("outcome", pa.uint16(), nullable=False),
+        pa.field("mark", pa.float64()),
+        pa.field("oracle", pa.float64()),
+        pa.field("source_vendor", pa.string()),
+    ]
+)
+
 CANONICAL_SCHEMAS: Mapping[str, pa.Schema] = {
     "book_deltas": BOOK_DELTAS_SCHEMA,
     "trades": TRADES_SCHEMA,
     "instruments": INSTRUMENTS_SCHEMA,
     "resolutions": RESOLUTIONS_SCHEMA,
+    "bars": BARS_SCHEMA,
+    "funding": FUNDING_SCHEMA,
+    "references": REFERENCES_SCHEMA,
 }
 
 # Sorting a table before appending: h5i-db requires appended rows to carry
@@ -128,6 +177,18 @@ _SORT_KEYS: Mapping[str, tuple[tuple[str, str], ...]] = {
     # index order; the reader places them by index anyway, but a stable order
     # keeps a stored table readable.
     "resolutions": (
+        ("ts_init", "ascending"),
+        ("instrument_id", "ascending"),
+        ("outcome", "ascending"),
+    ),
+    "bars": (
+        ("ts_init", "ascending"),
+        ("instrument_id", "ascending"),
+        ("outcome", "ascending"),
+    ),
+    # Funding carries no outcome, so the instrument is the only tiebreak.
+    "funding": (("ts_init", "ascending"), ("instrument_id", "ascending")),
+    "references": (
         ("ts_init", "ascending"),
         ("instrument_id", "ascending"),
         ("outcome", "ascending"),
