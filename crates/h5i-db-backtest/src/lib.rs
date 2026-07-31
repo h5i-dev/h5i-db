@@ -37,6 +37,7 @@ pub mod book;
 pub mod clock;
 pub mod corporate;
 pub mod currency;
+pub mod decimal;
 pub mod engine;
 pub mod error;
 pub mod event;
