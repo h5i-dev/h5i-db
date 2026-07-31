@@ -239,6 +239,7 @@ Full methodology and results in [benchmarks](benchmarks).
 | engine | measured boundary | median | throughput |
 |---|---|---:|---:|
 | **h5i-db** | decoded records through the replay kernel | **65.7 ms** | **3.05 M events/s** |
+| **h5i-db** | same kernel, strategy as a Python callback per event | 568 ms⁷ | 352 k events/s⁷ |
 | **h5i-db** | full persisted run: scan, decode, fork, replay, write | 280 ms⁶ | 713 k events/s⁶ |
 | NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
 | LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
@@ -248,6 +249,16 @@ saw all 200k events and submitted all 200 orders. The measured boundaries differ
 as the column says: the benchmark checks event and order counts rather than PnL
 equivalence, and Nautilus invokes a Python strategy callback per quote where the
 other two run native code.
+
+⁷ The declarative rows above never call Python during replay, because the
+  strategy is a `signals` table. This row is the same kernel driven by
+  `backtest.EventStrategy`, which crosses into Python for every event as
+  Nautilus does. One callback costs 2.5 µs against 0.33 µs for a whole native
+  kernel step, so most of the gap between the first row and Nautilus is the
+  boundary rather than the engine: measured callback-to-callback, the same day,
+  it is 1.5× rather than 13×. Derived, not timed directly (native kernel plus
+  the measured boundary cost); the arms are in
+  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
 
 ⁶ Re-measured two days after the other rows, once batched metadata commits cut
   the durability cost a run pays. The kernel is untouched. The pre-change

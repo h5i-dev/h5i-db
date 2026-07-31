@@ -258,6 +258,7 @@ Méthodologie et résultats complets dans [benchmarks](benchmarks).
 | moteur | frontière mesurée | médiane | débit |
 |---|---|---:|---:|
 | **h5i-db** | enregistrements décodés à travers le noyau de rejeu | **65,7 ms** | **3,05 M évén./s** |
+| **h5i-db** | même noyau, stratégie en callback Python par événement | 568 ms⁷ | 352 k évén./s⁷ |
 | **h5i-db** | exécution persistée complète : balayage, décodage, fork, rejeu, écriture | 280 ms⁶ | 713 k évén./s⁶ |
 | NautilusTrader 1.230.0 | objets en mémoire à travers `BacktestEngine.run()` | 767 ms | 261 k évén./s |
 | LEAN `11ba019f6` | du premier callback `Slice` à `OnEndOfAlgorithm`, alimenté par disque | 2033 ms | 98,4 k évén./s |
@@ -268,6 +269,17 @@ frontières mesurées diffèrent, comme l'indique la colonne : le benchmark vér
 comptages d'événements et d'ordres, pas une équivalence de PnL, et Nautilus appelle
 un callback de stratégie Python à chaque cotation là où les deux autres exécutent du
 code natif.
+
+⁷ Les lignes déclaratives ci-dessus n'appellent jamais Python pendant le rejeu,
+  la stratégie étant une table `signals`. Cette ligne est le même noyau piloté par
+  `backtest.EventStrategy`, qui franchit la frontière Python à chaque événement
+  comme le fait Nautilus. Un callback coûte 2,5 µs contre 0,33 µs pour une étape
+  complète du noyau natif : l'essentiel de l'écart entre la première ligne et
+  Nautilus tient donc à la frontière et non au moteur. Mesuré callback contre
+  callback, le même jour, le rapport est de 1,5× et non de 13×. Chiffre dérivé et
+  non chronométré directement (noyau natif plus le coût de frontière mesuré) ; les
+  bras sont dans
+  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
 
 ⁶ Mesuré à nouveau deux jours après les autres lignes, une fois que le regroupement
   des commits de métadonnées a réduit le coût de durabilité payé par une exécution.

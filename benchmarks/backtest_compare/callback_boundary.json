@@ -1,0 +1,48 @@
+{
+ "events": 200000,
+ "signals": 200,
+ "rounds": 5,
+ "records_processed": {
+  "signals": 200000,
+  "noop": 200000,
+  "trading": 200000
+ },
+ "samples_ms": {
+  "signals": [
+   375.5306240000209,
+   406.4108060001672,
+   453.48249200014834,
+   394.6351089998643,
+   387.83355000032316
+  ],
+  "noop": [
+   791.1179660004564,
+   702.8021109999827,
+   745.8313039996938,
+   775.7886769995821,
+   808.2655150001301
+  ],
+  "trading": [
+   890.3063419993487,
+   916.2542730000496,
+   794.1091650000089,
+   897.4089570001524,
+   938.6667979997583
+  ]
+ },
+ "median_ms": {
+  "signals": 394.6351089998643,
+  "noop": 775.7886769995821,
+  "trading": 897.4089570001524
+ },
+ "boundary_us_per_event": 1.905767839998589,
+ "nautilus_rerun_2026_07_31_ms": [
+  883.575298,
+  864.34387,
+  783.719368
+ ],
+ "nautilus_median_ms": 864.34387,
+ "nautilus_version": "1.230.0",
+ "h5i_native_kernel_ms": 65.7,
+ "note": "arms alternate in one process over one seeded database; differences isolate the Python strategy boundary"
+}

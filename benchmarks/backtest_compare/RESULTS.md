@@ -76,6 +76,69 @@ cargo bench -p h5i-db-backtest --bench replay_path -- \
     --common-quotes --trials 4
 ```
 
+## What the strategy boundary costs, 2026-07-31
+
+The table at the top measures h5i through its declarative path: the strategy
+is a `signals` table, so the replay never calls Python. Nautilus is measured
+through a Python callback per quote. That is a real difference in what the two
+were asked to do, and the ratio alone invites the reading that the kernel is
+an order of magnitude faster at the same job. It is not.
+
+h5i has the other path too. `backtest.EventStrategy` is public, and its
+adapter reacquires the GIL for every callback deliberately. Three arms over
+one seeded database, alternating within one process, medians of five after one
+warm-up:
+
+| arm | strategy | median | fills |
+|---|---|---:|---:|
+| `signals` | declarative; no Python during replay | 394.6 ms | 200 |
+| `noop` | `EventStrategy.on_event` returns `None` | 775.8 ms | 0 |
+| `trading` | `EventStrategy` submits the same 200 orders | 897.4 ms | 200 |
+
+Everything outside the strategy boundary is identical across the three, so the
+differences are the boundary and nothing else:
+
+| | µs/event |
+|---|---:|
+| crossing into Python and back (`noop` − `signals`) | 1.906 |
+| the strategy body, in Python (`trading` − `noop`) | 0.608 |
+| both (`trading` − `signals`) | 2.514 |
+| the whole native kernel step, for comparison | 0.329 |
+
+One Python callback costs **7.7× a complete native kernel step** — book
+application, matching, mark bookkeeping, liquidation checks and all.
+
+Nautilus was re-run the same day for a like-for-like comparison: 884 / 864 /
+784 ms, median **864.3 ms** against the 766.6 ms recorded on 2026-07-29, which
+is the same direction of drift the h5i arms show. Its benchmark strategy
+(`nautilus_runner.py:40`) increments a counter and compares twice per quote,
+which is the work the `trading` arm does.
+
+| comparison | h5i | Nautilus | |
+|---|---:|---:|---:|
+| declarative path against callback path | 65.7 ms | 864.3 ms | 13.2× |
+| callback against callback | 568.5 ms¹ | 864.3 ms | **1.52×** |
+
+¹ Derived, not measured: the native kernel (65.7 ms) plus the measured
+  `trading` boundary cost (502.8 ms). The Python API exposes only the
+  persisted-run boundary, so the kernel-with-callback figure cannot be
+  timed directly. The boundary term is measured; the kernel term is from
+  the same day's `replay_path` run.
+
+So the order-of-magnitude figure is mostly a difference in boundary, not in
+engine. What survives as an architectural difference is narrower and worth
+stating precisely: because the strategy can be a table, h5i can *choose* not
+to have a boundary, and a system whose strategy is always an object receiving
+callbacks has no equivalent choice. That choice is only available where the
+decision is path-independent. React to your own fills and the run is on
+`EventStrategy`, paying 2.5 µs an event like everyone else.
+
+```sh
+python3 benchmarks/backtest_compare/h5i_callback_boundary.py \
+    --events 200000 --signals 200 --rounds 5 \
+    --output benchmarks/backtest_compare/callback_boundary.json
+```
+
 ## Interpretation limits
 
 This establishes a reproducible advantage for this narrow event-driven
