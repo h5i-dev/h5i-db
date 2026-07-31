@@ -50,6 +50,8 @@ pub const COMMANDS: &str = "commands";
 pub const FUNDING: &str = "funding";
 /// Venue-published mark and oracle prices, which are not the book.
 pub const REFERENCES: &str = "references";
+/// Splits, dividends and delistings, as events at the instant they take effect.
+pub const CORPORATE_ACTIONS: &str = "corporate_actions";
 /// What has already been ingested, so a reload is a no-op.
 pub const INGEST_LOG: &str = "ingest_log";
 
@@ -228,6 +230,40 @@ pub fn references(encoding: FixedEncoding) -> SchemaRef {
         // and a null must not be read as a zero price.
         opt_float("mark", encoding),
         opt_float("oracle", encoding),
+        opt_text("source_vendor"),
+    ]))
+}
+
+/// `corporate_actions`: what a company did to its own shares.
+///
+/// `ts_init` is the instant the action *takes effect*, because that is when
+/// the engine has to apply it to positions and resting orders. Nothing here
+/// rewrites history: see [`crate::corporate`] for why an adjusted price series
+/// is the wrong input to a backtest.
+///
+/// `announced_ns` is what keeps that honest. Adjustment data is point-in-time,
+/// and a run that loads every action ever recorded has read the future: it
+/// knows about a split that, on the simulated date, nobody had announced yet.
+/// Carrying the announcement instant makes "only what was known by then" a
+/// filter on this table rather than a discipline the caller has to remember.
+/// It is nullable because a vendor that ships only effective dates is still
+/// worth loading, and a null reads as "unknown", never as "always known".
+///
+/// One value column per kind rather than one shared column, matching
+/// [`resolutions`]: a ratio and a per-share amount are different quantities,
+/// and naming them apart means no reader can take one for the other.
+pub fn corporate_actions(encoding: FixedEncoding) -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        ts("ts_init"),
+        ts("ts_event"),
+        text("instrument_id"),
+        // "split" | "dividend" | "delist"
+        text("kind"),
+        // New shares per old share: a 2-for-1 is 2.0, a 1-for-10 reverse is 0.1.
+        opt_float("ratio", encoding),
+        opt_float("per_share", encoding),
+        opt_float("final_price", encoding),
+        opt_int("announced_ns"),
         opt_text("source_vendor"),
     ]))
 }
@@ -451,6 +487,11 @@ pub fn market_data_tables(encoding: FixedEncoding) -> Vec<(&'static str, SchemaR
         (RESOLUTIONS, resolutions(encoding), market_data_options()),
         (FUNDING, funding(encoding), market_data_options()),
         (REFERENCES, references(encoding), market_data_options()),
+        (
+            CORPORATE_ACTIONS,
+            corporate_actions(encoding),
+            market_data_options(),
+        ),
     ]
 }
 

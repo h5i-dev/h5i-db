@@ -57,6 +57,7 @@ from ._canonical import (
     BARS_SCHEMA,
     BOOK_DELTAS_SCHEMA,
     CANONICAL_SCHEMAS,
+    CORPORATE_ACTIONS_SCHEMA,
     FUNDING_SCHEMA,
     INSTRUMENTS_SCHEMA,
     REFERENCES_SCHEMA,
@@ -69,11 +70,21 @@ from ._canonical import (
     ensure_tables,
 )
 from ._feeds import (
+    corporate_actions_from_rows,
+    ingest_corporate_actions,
     ingest_manifold_bets,
     ingest_references,
     manifold_markets_from_json,
     manifold_trades_from_json,
     references_from_series,
+)
+from ._trades import (
+    BINANCE_AGG_TRADES_LAYOUT,
+    BINANCE_TRADES_LAYOUT,
+    TradeLayout,
+    ingest_trades,
+    read_trades_csv,
+    trades_from_table,
 )
 from ._ledger import (
     LedgerRow,
@@ -101,7 +112,16 @@ __all__ = [
     "TELONEX_LAYOUT",
     "discover",
     "ingest_archive",
+    # trade dumps
+    "TradeLayout",
+    "BINANCE_AGG_TRADES_LAYOUT",
+    "BINANCE_TRADES_LAYOUT",
+    "ingest_trades",
+    "read_trades_csv",
+    "trades_from_table",
     # feeds that are not archives
+    "corporate_actions_from_rows",
+    "ingest_corporate_actions",
     "ingest_manifold_bets",
     "ingest_references",
     "manifold_markets_from_json",
@@ -131,6 +151,7 @@ __all__ = [
     "BARS_SCHEMA",
     "BOOK_DELTAS_SCHEMA",
     "CANONICAL_SCHEMAS",
+    "CORPORATE_ACTIONS_SCHEMA",
     "FUNDING_SCHEMA",
     "INSTRUMENTS_SCHEMA",
     "REFERENCES_SCHEMA",

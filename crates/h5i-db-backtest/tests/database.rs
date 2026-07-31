@@ -1196,3 +1196,130 @@ async fn a_run_round_trips_through_decimal_columns() {
         assert_eq!(stored.commission.raw(), expected.commission.raw());
     }
 }
+
+// -- corporate actions ------------------------------------------------------
+
+fn corporate_at(at: i64, action: h5i_db_backtest::corporate::CorporateAction) -> Record {
+    Record::new(
+        Stamps::immediate(ts(at)),
+        perp_id(),
+        OutcomeId::FIRST,
+        MarketEvent::Corporate(action),
+    )
+}
+
+#[tokio::test]
+async fn corporate_actions_round_trip_through_the_store() {
+    use h5i_db_backtest::corporate::CorporateAction;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("corp.db")).await.unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+
+    let written = vec![
+        corporate_at(
+            SECOND,
+            CorporateAction::Split {
+                ratio: Price::from_f64(2.0).unwrap(),
+            },
+        ),
+        corporate_at(
+            2 * SECOND,
+            CorporateAction::Dividend {
+                per_share: Money::from_f64(0.75).unwrap(),
+            },
+        ),
+        corporate_at(
+            3 * SECOND,
+            CorporateAction::Delist {
+                final_price: Price::from_f64(3.25).unwrap(),
+            },
+        ),
+    ];
+    store::write_corporate_actions(&db, &written).await.unwrap();
+
+    let read = store::read_corporate_actions(&db, ReadAt::Latest, None)
+        .await
+        .unwrap();
+    // Each kind survives with its own value. A shared value column would let a
+    // dividend come back as a split ratio, which is the failure this shape
+    // exists to prevent.
+    assert_eq!(read, written);
+}
+
+#[tokio::test]
+async fn a_corporate_source_streams_in_replay_order() {
+    use h5i_db_backtest::corporate::CorporateAction;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("corp.db")).await.unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+    store::write_corporate_actions(
+        &db,
+        &[
+            corporate_at(
+                2 * SECOND,
+                CorporateAction::Split {
+                    ratio: Price::from_f64(2.0).unwrap(),
+                },
+            ),
+            corporate_at(
+                SECOND,
+                CorporateAction::Dividend {
+                    per_share: Money::from_f64(0.5).unwrap(),
+                },
+            ),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let mut source = store::corporate_source(&db, ReadAt::Latest, None)
+        .await
+        .unwrap();
+    let mut stamps = Vec::new();
+    while let Some(record) = source.next().transpose().unwrap() {
+        stamps.push(record.ts().get());
+    }
+    assert_eq!(stamps, vec![SECOND, 2 * SECOND]);
+}
+
+#[tokio::test]
+async fn a_corporate_row_missing_its_value_is_refused_rather_than_zeroed() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Database::create(&dir.path().join("corp.db")).await.unwrap();
+    store::create_market_data_tables(&db).await.unwrap();
+
+    // A split row with no ratio. Reading it as zero would empty a position,
+    // and reading it as one would silently skip the split.
+    use arrow::array::{
+        Float64Array, Int64Array, StringArray, TimestampNanosecondArray,
+    };
+    use arrow::record_batch::RecordBatch;
+
+    let schema = h5i_db_backtest::schema::corporate_actions(FixedEncoding::Float);
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            std::sync::Arc::new(TimestampNanosecondArray::from(vec![SECOND])),
+            std::sync::Arc::new(TimestampNanosecondArray::from(vec![SECOND])),
+            std::sync::Arc::new(StringArray::from(vec!["PERP"])),
+            std::sync::Arc::new(StringArray::from(vec!["split"])),
+            std::sync::Arc::new(Float64Array::from(vec![None::<f64>])),
+            std::sync::Arc::new(Float64Array::from(vec![None::<f64>])),
+            std::sync::Arc::new(Float64Array::from(vec![None::<f64>])),
+            std::sync::Arc::new(Int64Array::from(vec![None::<i64>])),
+            std::sync::Arc::new(StringArray::from(vec![None::<&str>])),
+        ],
+    )
+    .unwrap();
+    db.append("corporate_actions", vec![batch], Default::default())
+        .await
+        .unwrap();
+
+    let failure = store::read_corporate_actions(&db, ReadAt::Latest, None).await;
+    assert!(
+        failure.is_err(),
+        "a split with no ratio must not read back as an applicable action"
+    );
+}

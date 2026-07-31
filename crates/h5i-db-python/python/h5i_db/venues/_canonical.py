@@ -23,6 +23,7 @@ __all__ = [
     "BARS_SCHEMA",
     "FUNDING_SCHEMA",
     "REFERENCES_SCHEMA",
+    "CORPORATE_ACTIONS_SCHEMA",
     "CANONICAL_SCHEMAS",
     "IngestReport",
     "SourceFile",
@@ -144,6 +145,33 @@ REFERENCES_SCHEMA = pa.schema(
     ]
 )
 
+# What a company did to its own shares. `ts_init` is the instant the action
+# takes effect, because that is when a replay has to apply it to positions and
+# resting orders; nothing here rewrites past prices, since nobody ever traded a
+# split-adjusted price.
+#
+# `announced_ns` is what keeps a run honest. Adjustment data is point-in-time,
+# and loading every action ever recorded means knowing about a split that, on
+# the simulated date, had not been announced yet. Carrying the announcement
+# instant makes "only what was known by then" a filter on this table rather
+# than a discipline the caller has to remember. Null means unknown, never
+# "always known".
+CORPORATE_ACTIONS_SCHEMA = pa.schema(
+    [
+        pa.field("ts_init", pa.timestamp("ns"), nullable=False),
+        pa.field("ts_event", pa.timestamp("ns"), nullable=False),
+        pa.field("instrument_id", pa.string(), nullable=False),
+        # "split" | "dividend" | "delist"
+        pa.field("kind", pa.string(), nullable=False),
+        # New shares per old share: a 2-for-1 is 2.0, a 1-for-10 reverse is 0.1.
+        pa.field("ratio", pa.float64()),
+        pa.field("per_share", pa.float64()),
+        pa.field("final_price", pa.float64()),
+        pa.field("announced_ns", pa.int64()),
+        pa.field("source_vendor", pa.string()),
+    ]
+)
+
 CANONICAL_SCHEMAS: Mapping[str, pa.Schema] = {
     "book_deltas": BOOK_DELTAS_SCHEMA,
     "trades": TRADES_SCHEMA,
@@ -152,6 +180,7 @@ CANONICAL_SCHEMAS: Mapping[str, pa.Schema] = {
     "bars": BARS_SCHEMA,
     "funding": FUNDING_SCHEMA,
     "references": REFERENCES_SCHEMA,
+    "corporate_actions": CORPORATE_ACTIONS_SCHEMA,
 }
 
 # Sorting a table before appending: h5i-db requires appended rows to carry
@@ -192,6 +221,15 @@ _SORT_KEYS: Mapping[str, tuple[tuple[str, str], ...]] = {
         ("ts_init", "ascending"),
         ("instrument_id", "ascending"),
         ("outcome", "ascending"),
+    ),
+    # Two actions can take effect on one instrument at one instant (a dividend
+    # and a split on the same open), so `kind` is the third key: without it the
+    # order between them would depend on Arrow's sort stability, and applying a
+    # split before or after a dividend gives different cash.
+    "corporate_actions": (
+        ("ts_init", "ascending"),
+        ("instrument_id", "ascending"),
+        ("kind", "ascending"),
     ),
 }
 

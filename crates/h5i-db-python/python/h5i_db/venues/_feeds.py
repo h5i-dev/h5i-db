@@ -21,6 +21,7 @@ import pyarrow.compute as pc
 
 from ._bars import parse_interval
 from ._canonical import (
+    CORPORATE_ACTIONS_SCHEMA,
     REFERENCES_SCHEMA,
     TRADES_SCHEMA,
     IngestReport,
@@ -31,6 +32,8 @@ from ._canonical import (
 from ._markets import MarketSpec
 
 __all__ = [
+    "corporate_actions_from_rows",
+    "ingest_corporate_actions",
     "manifold_markets_from_json",
     "manifold_trades_from_json",
     "ingest_manifold_bets",
@@ -222,6 +225,183 @@ def ingest_manifold_bets(
         report.loaded_window = (pc.min(stamps).as_py(), pc.max(stamps).as_py())
     else:
         report.skipped.append({"reason": "no_rows_matched"})
+    return report
+
+
+#: Which value column each kind carries, and what makes it valid. The engine
+#: checks the same things at replay; checking here too means a bad row fails
+#: the load rather than a run that is already hours in.
+_CORPORATE_KINDS: Mapping[str, tuple[str, str]] = {
+    "split": ("ratio", "positive"),
+    "dividend": ("per_share", "non-negative"),
+    "delist": ("final_price", "non-negative"),
+}
+
+
+def corporate_actions_from_rows(
+    rows: Iterable[Mapping[str, Any]],
+    *,
+    source_vendor: str = "corporate",
+    time_unit: str = "auto",
+) -> pa.Table:
+    """Canonical `corporate_actions` rows from vendor records.
+
+    Each row needs `instrument_id`, `kind`, an `effective` instant, and the one
+    value its kind carries: `ratio` for a split (new shares per old, so a
+    2-for-1 is `2.0`), `per_share` for a dividend, `final_price` for a delist.
+    An optional `announced` instant records when it was disclosed.
+
+    `effective` is the replay clock, because that is when the action has to be
+    applied to positions and resting orders. Prices are never rewritten: a
+    strategy that bought at 50 the day before a 2-for-1 bought at 50, and an
+    adjusted series would claim it bought at 25.
+
+    Supplying a value that belongs to a different kind is an error rather than
+    an ignored field. A dividend row carrying `ratio` is far more likely to be
+    a mis-mapped column than a harmless extra, and silently dropping it would
+    load the dividend at whatever `per_share` happened to be there.
+    """
+    from ._bars import _to_nanos
+
+    effective_raw: list[Any] = []
+    announced_raw: list[Any] = []
+    has_announced = False
+    instruments: list[str] = []
+    kinds: list[str] = []
+    values: dict[str, list[Optional[float]]] = {
+        name: [] for name, _ in _CORPORATE_KINDS.values()
+    }
+
+    for index, row in enumerate(rows):
+        kind = str(row.get("kind") or "").strip().lower()
+        if kind not in _CORPORATE_KINDS:
+            raise ValueError(
+                f"row {index}: {kind!r} is not a corporate action; expected one "
+                f"of {sorted(_CORPORATE_KINDS)}"
+            )
+        column, rule = _CORPORATE_KINDS[kind]
+        if column not in row or row[column] is None:
+            raise ValueError(f"row {index}: a {kind} needs {column}")
+        try:
+            value = float(row[column])
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"row {index}: {column} is not a number") from error
+        if rule == "positive" and value <= 0:
+            raise ValueError(
+                f"row {index}: a split ratio must be positive, got {value}"
+            )
+        if rule == "non-negative" and value < 0:
+            # A negative dividend is a capital call, which is a different
+            # instrument's problem, and a sign error here drains an account.
+            raise ValueError(f"row {index}: {column} must not be negative, got {value}")
+        for other, _ in _CORPORATE_KINDS.values():
+            if other != column and row.get(other) is not None:
+                raise ValueError(
+                    f"row {index}: a {kind} carries {column}, but this row also "
+                    f"has {other}; one of the two columns is mapped wrong"
+                )
+
+        effective = row.get("effective")
+        if effective is None:
+            raise ValueError(f"row {index}: an action needs an effective instant")
+        announced = row.get("announced")
+        if announced is not None:
+            has_announced = True
+        effective_raw.append(effective)
+        announced_raw.append(announced)
+        instruments.append(str(row["instrument_id"]))
+        kinds.append(kind)
+        for name in values:
+            values[name].append(value if name == column else None)
+
+    if not instruments:
+        return CORPORATE_ACTIONS_SCHEMA.empty_table()
+
+    effective_ns = _to_nanos(pa.array(effective_raw), time_unit)
+    if has_announced:
+        # Announced and effective are read on one axis, so they are converted
+        # together: a mixed pair (a date string and an epoch int) would
+        # otherwise land centuries apart and the comparison below would pass.
+        announced_ns = _to_nanos(
+            pa.array([a if a is not None else None for a in announced_raw]), time_unit
+        )
+        late = pc.and_(
+            pc.is_valid(announced_ns), pc.greater(announced_ns, effective_ns)
+        )
+        if pc.any(late).as_py():
+            raise ValueError(
+                "an action is announced after it takes effect, which usually "
+                "means the announced and effective columns are swapped"
+            )
+    else:
+        announced_ns = pa.nulls(len(instruments), pa.int64())
+
+    count = len(instruments)
+    return pa.table(
+        {
+            "ts_init": pc.cast(effective_ns, pa.timestamp("ns")),
+            "ts_event": pc.cast(effective_ns, pa.timestamp("ns")),
+            "instrument_id": pa.array(instruments, pa.string()),
+            "kind": pa.array(kinds, pa.string()),
+            "ratio": pa.array(values["ratio"], pa.float64()),
+            "per_share": pa.array(values["per_share"], pa.float64()),
+            "final_price": pa.array(values["final_price"], pa.float64()),
+            "announced_ns": pc.cast(announced_ns, pa.int64()),
+            "source_vendor": pa.array([source_vendor] * count, pa.string()),
+        },
+        schema=CORPORATE_ACTIONS_SCHEMA,
+    )
+
+
+def ingest_corporate_actions(
+    db: Any,
+    *,
+    actions: Iterable[Mapping[str, Any]],
+    source_vendor: str = "corporate",
+    time_unit: str = "auto",
+    known_by: Optional[int] = None,
+    chunk_rows: int = 250_000,
+    note: Optional[str] = None,
+) -> IngestReport:
+    """Normalise corporate actions into the `corporate_actions` table.
+
+    `known_by` is an epoch-nanosecond cutoff: rows announced after it are left
+    out, which is how a run reproduces what was knowable on a past date instead
+    of what is recorded now. Rows with no announcement instant cannot be placed
+    on that axis, so they are dropped and counted rather than assumed early
+    enough, because assuming is what produces a backtest that traded a split
+    nobody had heard of.
+    """
+    table = corporate_actions_from_rows(
+        actions, source_vendor=source_vendor, time_unit=time_unit
+    )
+    report = IngestReport(vendor=source_vendor)
+    if known_by is not None and table.num_rows:
+        announced = table.column("announced_ns")
+        unknown = pc.sum(pc.cast(pc.is_null(announced), pa.int64())).as_py() or 0
+        keep = pc.and_(
+            pc.is_valid(announced),
+            pc.less_equal(announced, pa.scalar(int(known_by), pa.int64())),
+        )
+        dropped = table.num_rows - (pc.sum(pc.cast(keep, pa.int64())).as_py() or 0)
+        table = table.filter(pc.fill_null(keep, False))
+        if dropped:
+            report.skipped.append(
+                {
+                    "reason": "announced_after_cutoff",
+                    "rows": int(dropped),
+                    "without_announcement": int(unknown),
+                }
+            )
+    if not table.num_rows:
+        report.skipped.append({"reason": "no_rows_matched"})
+        return report
+    ensure_tables(db, ["corporate_actions"])
+    report.tables["corporate_actions"] = commit(
+        db, "corporate_actions", table, note=note, chunk_rows=chunk_rows
+    )
+    stamps = pc.cast(table.column("ts_init"), pa.int64())
+    report.loaded_window = (pc.min(stamps).as_py(), pc.max(stamps).as_py())
     return report
 
 
