@@ -207,6 +207,39 @@ comme vu que lorsque son détail est ouvert.
 
 ---
 
+## Places de marché
+
+Les payloads se décodent en un seul jeu de tables canoniques — `instruments`,
+`book_deltas`, `trades`, `bars`, `funding`, `references`, `resolutions` — si
+bien que le noyau n'apprend jamais la forme d'une place. Tout ce qui sait
+écrire ces tables est un chargeur, dans n'importe quel langage. Ces trois-là
+sont livrées avec des parseurs testés sur des payloads enregistrés.
+
+| | Kalshi | Polymarket | Hyperliquid |
+|---|---|---|---|
+| Instruments | métadonnées de marché REST | un marché, N issues | univers perp et spot |
+| Carnet L2 | instantanés REST + WS, deltas à séquence vérifiée | instantanés `book`, deltas `price_change` | REST + WS |
+| Transactions | ✓ direct et historique, un seul parseur | ✓ | ✓ |
+| Barres | ✓ candlesticks | ✗ | ✓ candles |
+| Funding | s.o. | s.o. | ✓ |
+| Prix mark et oracle | s.o. | s.o. | ✓ contextes d'actif |
+| Marge et levier | s.o. | s.o. | ✓ plafond par coin, indicateur isolated-only |
+| Règlement | ✓ dès qu'observable | ✓ depuis la résolution du marché | s.o. |
+| Mint et redeem d'un lot complet | ✗ | ✓ marchés neg-risk | s.o. |
+| Modèle de frais | quadratique, arrondi de la place | proportionnel + rabais maker | paliers de volume glissants sur 14 jours |
+| Archive historique | ✗¹ | dispositions pmxt, telonex, Kaggle | flux horaire + contextes d'actif |
+
+¹ Kalshi ne publie aucun delta historique de carnet : un backtest fidèle à la
+position en file d'attente suppose donc d'avoir capté à l'avance le flux
+WebSocket authentifié. Un numéro de séquence manquant lève un trou plutôt que
+d'interpoler par-dessus.
+
+« s.o. » signifie que la place n'a pas cette notion : un perpétuel ne se
+règle jamais, et un marché de prédiction entièrement collatéralisé n'a ni
+levier ni funding.
+
+---
+
 ## Quand *ne pas* utiliser h5i-db
 
 - **Entrepôts distribués de plusieurs téraoctets :** mononœud et embarquée par

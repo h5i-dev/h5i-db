@@ -192,6 +192,37 @@ reviewed; a trial counts as seen only when its detail is opened.
 
 ---
 
+## Venues
+
+Payloads decode into one canonical set of tables — `instruments`,
+`book_deltas`, `trades`, `bars`, `funding`, `references`, `resolutions` — so
+the kernel never learns a venue's shape. Anything that writes those tables is
+a loader, in any language. These three ship with parsers tested against
+recorded payloads.
+
+| | Kalshi | Polymarket | Hyperliquid |
+|---|---|---|---|
+| Instruments | REST market metadata | one market, N outcomes | perp and spot universes |
+| L2 book | REST + WS snapshots, sequence-checked deltas | `book` snapshots, `price_change` deltas | REST + WS |
+| Trades | ✓ live and historical, one parser | ✓ | ✓ |
+| Bars | ✓ candlesticks | ✗ | ✓ candles |
+| Funding | n/a | n/a | ✓ |
+| Mark and oracle price | n/a | n/a | ✓ per-asset contexts |
+| Margin and leverage | n/a | n/a | ✓ per-coin cap, isolated-only flag |
+| Settlement | ✓ once observable | ✓ from market resolution | n/a |
+| Complete-set mint and redeem | ✗ | ✓ neg-risk markets | n/a |
+| Fee model | quadratic, exchange rounding | proportional + maker rebate | 14-day rolling volume tiers |
+| Historical archive | ✗¹ | pmxt, telonex, Kaggle layouts | hourly feed + asset contexts |
+
+¹ Kalshi publishes no historical order-book deltas, so a queue-accurate
+backtest needs prospective capture of the authenticated WebSocket stream. A
+missing sequence number raises a gap rather than interpolating across it.
+
+`n/a` means the venue has no such concept: a perpetual never resolves, and a
+fully collateralized prediction market has no leverage or funding.
+
+---
+
 ## When *not* to use h5i-db
 
 - **Distributed, multi-terabyte warehouses:** single-node and embedded by
