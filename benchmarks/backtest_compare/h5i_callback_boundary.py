@@ -200,6 +200,23 @@ class NoopStrategy(backtest.EventStrategy):
         return None
 
 
+class NoopLeanStrategy(backtest.EventStrategy):
+    """`noop`, minus the `context` parameter.
+
+    Same crossing, same body, one fewer argument. Run beside `noop` in the
+    same process, the difference is what building `context` costs and nothing
+    else -- which is the only way to price it that this machine's drift
+    between sessions cannot corrupt.
+    """
+
+    def __init__(self) -> None:
+        self.seen = 0
+
+    def on_event(self, event):
+        self.seen += 1
+        return None
+
+
 class FillsOnlyStrategy(backtest.EventStrategy):
     """Wants fills and nothing else, so `on_event` is left as the base no-op.
 
@@ -265,6 +282,7 @@ def run_arm(db, arm: str, run_id: str, events: int, signals: int):
     else:
         strategy = {
             "noop": NoopStrategy,
+            "noop_lean": NoopLeanStrategy,
             "fills_only": FillsOnlyStrategy,
         }.get(arm, lambda: TradingStrategy(spacing, signals))()
         report = backtest.run_strategy(
@@ -287,7 +305,7 @@ def main() -> None:
     parser.add_argument("--output", type=str, default=None)
     args = parser.parse_args()
 
-    arms = ("signals", "fills_only", "noop", "trading")
+    arms = ("signals", "fills_only", "noop_lean", "noop", "trading")
     with tempfile.TemporaryDirectory() as tmp:
         print(f"seeding {args.events} events ...", flush=True)
         db = seed(f"{tmp}/boundary.db", args.events, args.signals)
@@ -323,6 +341,9 @@ def main() -> None:
         )
     print()
     print(f"boundary cost: {boundary_us:.3f} us/event over {args.events} events")
+    if "noop_lean" in medians:
+        context_us = (medians["noop"] - medians["noop_lean"]) / args.events * 1000
+        print(f"of which context: {context_us:.3f} us/event")
     print(f"noop vs signals: {medians['noop'] / medians['signals']:.2f}x")
 
     if args.output:

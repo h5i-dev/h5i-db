@@ -335,11 +335,22 @@ def create_command_table(db: Any, name: str = "commands") -> None:
 class EventStrategy:
     """Optional base class for path-dependent Python strategies.
 
-    Callbacks receive plain dictionaries and return one command mapping, an
-    iterable of command mappings, or ``None``. Supported actions are
-    ``submit``, ``amend``, ``cancel``, and ``timer``. Declarative signals or
-    command tables remain preferable when callbacks are unnecessary because
-    they avoid crossing the Python boundary for every event.
+    Callbacks receive mappings and return one command mapping, an iterable of
+    command mappings, or ``None``. Supported actions are ``submit``,
+    ``amend``, ``cancel``, and ``timer``. Declarative signals or command
+    tables remain preferable when callbacks are unnecessary because they
+    avoid crossing the Python boundary for every event.
+
+    ``context`` is optional. Declare a callback without it and it is not
+    built, which for ``on_event`` saves an object and a snapshot of every
+    open position on every event::
+
+        def on_event(self, event): ...           # context is not built
+        def on_event(self, context, event): ...  # context is built
+
+    Both forms are supported everywhere; the shorter one is simply not
+    charged for what it does not ask for. Callbacks left at this class's
+    do-nothing versions are not called at all.
     """
 
     def on_start(self, context: dict) -> Any:

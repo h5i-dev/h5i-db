@@ -38,12 +38,23 @@ pub(crate) struct PythonStrategy {
     /// strategy has no such method, or it left `EventStrategy`'s do-nothing
     /// version in place, and crossing the boundary to be handed `None` back
     /// is the most expensive way to learn nothing.
-    on_start: Option<Py<PyAny>>,
-    on_event: Option<Py<PyAny>>,
-    on_timer: Option<Py<PyAny>>,
-    on_fill: Option<Py<PyAny>>,
-    on_stop: Option<Py<PyAny>>,
+    on_start: Option<Callable>,
+    on_event: Option<Callable>,
+    on_timer: Option<Callable>,
+    on_fill: Option<Callable>,
+    on_stop: Option<Callable>,
     order_ids: BTreeMap<String, OrderId>,
+}
+
+/// A resolved callback and whether it asked for the context.
+///
+/// Most strategies never read `context`, and building one is a pyclass and a
+/// snapshot of every open position. Whether to build it is decided from the
+/// signature, once, rather than every event: a callback declared
+/// `on_event(self, event)` is not handed one.
+struct Callable {
+    function: Py<PyAny>,
+    wants_context: bool,
 }
 
 impl PythonStrategy {
@@ -59,11 +70,11 @@ impl PythonStrategy {
                 .and_then(|module| module.getattr("EventStrategy"))
                 .ok();
             Self {
-                on_start: resolve(bound, base.as_ref(), "on_start"),
-                on_event: resolve(bound, base.as_ref(), "on_event"),
-                on_timer: resolve(bound, base.as_ref(), "on_timer"),
-                on_fill: resolve(bound, base.as_ref(), "on_fill"),
-                on_stop: resolve(bound, base.as_ref(), "on_stop"),
+                on_start: resolve(bound, base.as_ref(), "on_start", false),
+                on_event: resolve(bound, base.as_ref(), "on_event", true),
+                on_timer: resolve(bound, base.as_ref(), "on_timer", true),
+                on_fill: resolve(bound, base.as_ref(), "on_fill", true),
+                on_stop: resolve(bound, base.as_ref(), "on_stop", false),
                 order_ids: BTreeMap::new(),
             }
         })
@@ -81,28 +92,36 @@ impl PythonStrategy {
             return Ok(());
         }
         Python::attach(|py| {
-            let callable = match self.callback(method) {
-                Some(callable) => callable.bind(py).clone(),
+            let (callable, wants_context) = match self.callback(method) {
+                Some(callable) => (callable.function.bind(py).clone(), callable.wants_context),
                 None => return Ok(()),
             };
-            let context = context_view(ctx);
+            // Only built if it was asked for: it is a pyclass plus a snapshot
+            // of every open position, and most callbacks never read it.
+            let context = wants_context
+                .then(|| Py::new(py, context_view(ctx)))
+                .transpose()
+                .map_err(py_error)?;
             let returned = match event {
                 Some(event) => {
-                    let payload = event.to_view(ctx);
-                    let context = Py::new(py, context).map_err(py_error)?;
-                    let payload = Py::new(py, payload).map_err(py_error)?;
-                    callable.call1((context, payload)).map_err(py_error)?
+                    let payload = Py::new(py, event.to_view(ctx)).map_err(py_error)?;
+                    match context {
+                        Some(context) => callable.call1((context, payload)),
+                        None => callable.call1((payload,)),
+                    }
+                    .map_err(py_error)?
                 }
-                None => {
-                    let context = Py::new(py, context).map_err(py_error)?;
-                    callable.call1((context,)).map_err(py_error)?
+                None => match context {
+                    Some(context) => callable.call1((context,)),
+                    None => callable.call0(),
                 }
+                .map_err(py_error)?,
             };
             self.apply_actions(ctx, &returned)
         })
     }
 
-    fn callback(&self, method: Callback) -> Option<&Py<PyAny>> {
+    fn callback(&self, method: Callback) -> Option<&Callable> {
         match method {
             Callback::Start => self.on_start.as_ref(),
             Callback::Event => self.on_event.as_ref(),
@@ -321,7 +340,8 @@ fn resolve(
     object: &Bound<'_, PyAny>,
     base: Option<&Bound<'_, PyAny>>,
     name: &str,
-) -> Option<Py<PyAny>> {
+    carries_event: bool,
+) -> Option<Callable> {
     let bound = object.getattr(name).ok()?;
     if let Some(base) = base
         && let Ok(inherited) = base.getattr(name)
@@ -336,7 +356,32 @@ fn resolve(
     {
         return None;
     }
-    Some(bound.unbind())
+    Some(Callable {
+        wants_context: wants_context(&bound, carries_event),
+        function: bound.unbind(),
+    })
+}
+
+/// Whether this callback declared a `context` parameter.
+///
+/// Read off `__code__.co_argcount`, which counts `self`: an event-carrying
+/// callback wants one at three parameters and not at two, and one without an
+/// event at two and not at one.
+///
+/// Anything that cannot be read this way -- a C function, a `*args` wrapper,
+/// a decorator that dropped `__code__` -- is given the context. The cost of
+/// guessing wrong that way is a wasted argument; guessing wrong the other way
+/// is a `TypeError` in the middle of someone's run.
+fn wants_context(bound: &Bound<'_, PyAny>, carries_event: bool) -> bool {
+    let expected = if carries_event { 3 } else { 2 };
+    bound
+        .getattr("__func__")
+        .unwrap_or_else(|_| bound.clone())
+        .getattr("__code__")
+        .and_then(|code| code.getattr("co_argcount"))
+        .and_then(|count| count.extract::<usize>())
+        .map(|count| count >= expected)
+        .unwrap_or(true)
 }
 
 impl Strategy for PythonStrategy {

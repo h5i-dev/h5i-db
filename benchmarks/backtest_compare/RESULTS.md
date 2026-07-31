@@ -146,8 +146,58 @@ callbacks has no equivalent choice. That choice is only available where the
 decision is path-independent. React to your own fills and the run is on
 `EventStrategy`, paying about a microsecond an event.
 
+### What `context` costs, and what that implies
+
+Callbacks may be declared without the `context` parameter, in which case it
+is not built. Whether to build it is read once from the signature rather than
+decided per event. A fifth arm prices it: `noop_lean` is `noop` with one
+fewer parameter, same crossing and same body.
+
+Pricing it needed the storage taken out of the way. On disk, eleven rounds
+put `noop_lean` at 543.9 ms against `noop` at 518.6 -- the arm doing strictly
+less work, slower. The medians were not separated, because each arm is a
+whole persisted run of which the boundary is about a fifth, and the rest is
+dominated by the fsyncs the persisted-run section above measures. Adding
+rounds does not fix a signal buried under the wrong noise source; moving the
+database to tmpfs does.
+
+| arm | median (tmpfs) |
+|---|---:|
+| `signals` | 250.4 ms |
+| `fills_only` | 278.0 ms |
+| `noop_lean` | 376.3 ms |
+| `noop` | 395.3 ms |
+| `trading` | 405.1 ms |
+
+The ladder is monotone, which is the check that it is working at all.
+
+| per event | µs |
+|---|---:|
+| the whole crossing (`noop` − `signals`) | 0.724 |
+| of which building `context` (`noop` − `noop_lean`) | **0.095** |
+| what is left | 0.630 |
+
+So `context` is 13% of the boundary. The estimate that motivated the change
+was 0.25 µs, which was 2.6× too high: it came from counting objects rather
+than what is in them, and `context` with no open positions is nearly empty.
+
+The crossing itself measures 0.724 µs here against 0.697 µs on disk, which is
+the cross-check worth having -- the boundary does not depend on where the
+database lives, so the two environments agreeing is evidence neither number
+is an artifact.
+
+What the 0.630 µs remainder implies is worth stating as an inference rather
+than a result. `context` is a pyclass, a `Vec`, and a position snapshot, and
+it costs 0.095 µs. The event view is a pyclass and a `Vec` of thirteen, so it
+should be the same order. That puts all object construction at roughly 0.2 µs
+and leaves about 0.5 for the GIL acquisition and the call. If that holds,
+eliding further objects is the wrong direction and the remaining cost is in
+holding the GIL across a run -- which trades away other Python threads, so it
+wants measuring before it is built, not after.
+
 ```sh
-python3 benchmarks/backtest_compare/h5i_callback_boundary.py \
+# tmpfs, for the reason above
+TMPDIR=/dev/shm python3 benchmarks/backtest_compare/h5i_callback_boundary.py \
     --events 200000 --signals 200 --rounds 11 \
     --output benchmarks/backtest_compare/callback_boundary.json
 ```
