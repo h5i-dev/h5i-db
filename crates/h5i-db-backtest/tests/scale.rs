@@ -15,10 +15,11 @@
 use std::time::Instant;
 
 use h5i_db_backtest::Result;
-use h5i_db_backtest::engine::{Engine, OrderRequest, SignalReplay};
+use h5i_db_backtest::engine::{Context, Engine, OrderRequest, SignalReplay, Strategy};
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, InstrumentSet, OutcomeId};
 use h5i_db_backtest::models::QueuePositionFills;
+use h5i_db_backtest::order::TimeInForce;
 use h5i_db_backtest::replay::{Replay, priority};
 use h5i_db_backtest::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
 
@@ -391,5 +392,87 @@ fn queue_matching_scales_across_many_prints_and_orders() {
     assert!(
         elapsed.as_secs_f64() < 30.0,
         "10k prints over 500 queued orders took {elapsed:?}"
+    );
+}
+
+/// The pre-trade checks and the trigger sweep must not scan every order the
+/// run has ever created.
+///
+/// `orders` only grows -- nothing is ever removed from it -- so a per-record
+/// or per-submit walk over it is quadratic in the length of the run. All
+/// three of these were exactly that when they were written, and the cost is
+/// paid whether or not a run uses a single stop.
+#[test]
+fn pre_trade_checks_do_not_scan_the_whole_order_history() {
+    /// Submits orders that never fill, so the order map grows and the
+    /// live set stays small.
+    struct Churn;
+    impl Strategy for Churn {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            for _ in 0..5 {
+                ctx.submit(
+                    OrderRequest::limit(
+                        InstrumentId::new(MARKET).unwrap(),
+                        OutcomeId::FIRST,
+                        Side::Sell,
+                        Price::from_f64(0.9).unwrap(),
+                        Qty::from_f64(1.0).unwrap(),
+                    )
+                    .with_time_in_force(TimeInForce::ImmediateOrCancel),
+                );
+            }
+            Ok(())
+        }
+    }
+
+    let elapsed_for = |records: i64| -> std::time::Duration {
+        let mut set = InstrumentSet::new();
+        set.insert(Instrument::binary(MARKET, "v").unwrap())
+            .unwrap();
+        let books: Vec<Record> = (0..records)
+            .map(|step| {
+                Record::new(
+                    Stamps::immediate(UnixNanos::new(step * 1_000_000)),
+                    InstrumentId::new(MARKET).unwrap(),
+                    OutcomeId::FIRST,
+                    MarketEvent::BookSnapshot {
+                        bids: vec![(
+                            Price::from_f64(0.4).unwrap(),
+                            Qty::from_f64(1_000.0).unwrap(),
+                        )],
+                        asks: vec![(
+                            Price::from_f64(0.5).unwrap(),
+                            Qty::from_f64(1_000.0).unwrap(),
+                        )],
+                    },
+                )
+            })
+            .collect();
+        let mut replay = Replay::builder()
+            .stream("book", priority::SNAPSHOT, books)
+            .build()
+            .unwrap();
+        let mut engine = Engine::builder(set)
+            .starting_cash(Money::from_f64(1e9).unwrap())
+            .record_mark_curve(false)
+            .build();
+        let started = std::time::Instant::now();
+        engine.run(&mut replay, &mut Churn).unwrap();
+        started.elapsed()
+    };
+
+    // Warm the allocator and the branch predictors before timing.
+    elapsed_for(500);
+    let small = elapsed_for(1_000).as_secs_f64();
+    let large = elapsed_for(4_000).as_secs_f64();
+
+    // Linear would be 4x. Quadratic was ~16x and measured far worse than
+    // that in practice. The bound is loose because this is a wall-clock
+    // test on a shared machine; it is set to catch a return to quadratic,
+    // not to police constant factors.
+    assert!(
+        large < small * 9.0,
+        "four times the records took {large:.4}s against {small:.4}s for one \
+         times -- the pre-trade checks are scanning the order history again"
     );
 }

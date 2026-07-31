@@ -254,7 +254,18 @@ pub struct FeeTier {
 pub struct TieredFees {
     tiers: Vec<FeeTier>,
     window_nanos: i64,
-    traded: std::sync::Mutex<std::collections::VecDeque<(i64, i64)>>,
+    /// The window, plus its running total.
+    ///
+    /// The total is carried rather than summed per fill: re-adding the
+    /// whole window on every fill is quadratic over a run, and a fourteen-
+    /// day window on a busy market is exactly where that bites.
+    traded: std::sync::Mutex<VolumeWindow>,
+}
+
+#[derive(Debug, Default)]
+struct VolumeWindow {
+    entries: std::collections::VecDeque<(i64, i64)>,
+    total: i128,
 }
 
 impl TieredFees {
@@ -290,7 +301,7 @@ impl TieredFees {
         Ok(Self {
             tiers,
             window_nanos,
-            traded: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            traded: std::sync::Mutex::new(VolumeWindow::default()),
         })
     }
 
@@ -313,15 +324,16 @@ impl FeeModel for TieredFees {
             .lock()
             .map_err(|_| crate::error::BacktestError::invalid("fee volume state was poisoned"))?;
         let cutoff = ctx.ts.get().saturating_sub(self.window_nanos);
-        while traded.front().is_some_and(|(at, _)| *at < cutoff) {
-            traded.pop_front();
+        while traded.entries.front().is_some_and(|(at, _)| *at < cutoff) {
+            let (_, amount) = traded.entries.pop_front().expect("peeked");
+            traded.total -= amount as i128;
         }
-        let rolling: i128 = traded.iter().map(|(_, amount)| *amount as i128).sum();
-        let rolling = Money::from_raw(rolling.clamp(0, i64::MAX as i128) as i64);
+        let rolling = Money::from_raw(traded.total.clamp(0, i64::MAX as i128) as i64);
         let tier = self.tier_for(rolling);
         // Priced at the tier reached *before* this fill, then the fill
         // counts towards the next one.
-        traded.push_back((ctx.ts.get(), gross.raw()));
+        traded.entries.push_back((ctx.ts.get(), gross.raw()));
+        traded.total += gross.raw() as i128;
 
         let rate = if ctx.is_taker { tier.taker } else { tier.maker };
         notional(rate, Qty::from_raw(gross.raw()))

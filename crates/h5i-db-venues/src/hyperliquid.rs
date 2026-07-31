@@ -789,7 +789,34 @@ pub fn parse_ws_message(body: &str) -> Result<Vec<Record>> {
     records_from_envelope(&parse_json(body)?)
 }
 
+/// Instrument ids reused across a read.
+///
+/// `InstrumentId` is an `Arc<str>` precisely so a record can carry one
+/// cheaply. Building a fresh one per line defeats that: a million-line
+/// hour would hold a million separate allocations of the same handful of
+/// strings, and every map comparison would walk the bytes instead of
+/// hitting the pointer.
+#[derive(Default)]
+pub struct InstrumentCache {
+    by_coin: std::collections::HashMap<String, InstrumentId>,
+}
+
+impl InstrumentCache {
+    pub fn get(&mut self, coin: &str) -> Result<InstrumentId> {
+        if let Some(id) = self.by_coin.get(coin) {
+            return Ok(id.clone());
+        }
+        let id = instrument_id_for(coin)?;
+        self.by_coin.insert(coin.to_string(), id.clone());
+        Ok(id)
+    }
+}
+
 fn records_from_envelope(json: &Value) -> Result<Vec<Record>> {
+    records_from_envelope_cached(json, &mut InstrumentCache::default())
+}
+
+fn records_from_envelope_cached(json: &Value, cache: &mut InstrumentCache) -> Result<Vec<Record>> {
     // Archive lines wrap the live envelope and add the instant the archiver
     // received it. That is `ts_init` -- when this system could first have
     // known the message -- and the venue's own stamp inside is `ts_event`.
@@ -815,7 +842,7 @@ fn records_from_envelope(json: &Value) -> Result<Vec<Record>> {
         return Ok(Vec::new());
     };
     // A capture can span both universes; the venue's naming says which.
-    let id = instrument_id_for(coin)?;
+    let id = cache.get(coin)?;
     let mut records = match channel {
         "l2Book" => vec![book_from_value(data, &id)?],
         "trades" => trades_from_value(data, &id)?,
@@ -865,7 +892,15 @@ fn parse_archive_time(text: &str) -> Option<i64> {
         return None;
     }
     // Right-pad to nanoseconds so ".238" and ".238437296" both scale.
-    let nanos: i64 = format!("{fraction:0<9}").parse().ok()?;
+    // Done arithmetically: this runs once per archive line, and a format!
+    // per line is an allocation per line for no reason.
+    let mut nanos: i64 = 0;
+    for byte in fraction.bytes() {
+        nanos = nanos * 10 + (byte - b'0') as i64;
+    }
+    for _ in fraction.len()..9 {
+        nanos *= 10;
+    }
 
     let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
     let time = chrono::NaiveTime::from_hms_opt(hour, minute, second)?;
@@ -1091,6 +1126,7 @@ pub fn format_archive_time(at: UnixNanos) -> String {
 /// can refuse a file that is mostly junk.
 pub fn read_archive<R: std::io::BufRead>(reader: R) -> Result<ArchiveRead> {
     let mut out = ArchiveRead::default();
+    let mut cache = InstrumentCache::default();
     for line in reader.lines() {
         let line = line.map_err(|error| BacktestError::Parse {
             what: "hyperliquid archive",
@@ -1101,7 +1137,7 @@ pub fn read_archive<R: std::io::BufRead>(reader: R) -> Result<ArchiveRead> {
         }
         out.lines += 1;
         match serde_json::from_str::<Value>(&line) {
-            Ok(json) => match records_from_envelope(&json) {
+            Ok(json) => match records_from_envelope_cached(&json, &mut cache) {
                 Ok(records) if records.is_empty() => out.skipped += 1,
                 Ok(records) => out.records.extend(records),
                 Err(_) => out.malformed += 1,

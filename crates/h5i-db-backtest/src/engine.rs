@@ -1042,6 +1042,21 @@ pub struct Engine {
     isolated_collateral: BTreeMap<InstrumentId, Money>,
     /// TWAPs the venue is still working.
     twaps: Vec<TwapProgress>,
+    /// Orders that may still be open.
+    ///
+    /// Pruned lazily rather than maintained exactly, so no terminal
+    /// transition has to remember to remove itself. What it buys is that
+    /// the pre-trade checks scan the orders that are *live* rather than
+    /// every order the run has ever created -- the latter is quadratic in
+    /// the length of the run, and a long run submits a great many orders.
+    live_orders: Vec<OrderId>,
+    /// Orders parked on a trigger.
+    ///
+    /// Indexed rather than found by scanning `orders`, which only ever
+    /// grows: a per-record sweep over every order a run has ever created
+    /// is quadratic in the length of the run, and it costs that whether or
+    /// not the run uses a single stop.
+    untriggered: Vec<OrderId>,
 }
 
 /// Which price a run values positions at.
@@ -1350,19 +1365,33 @@ impl Engine {
     /// stop can and does fill worse than its trigger -- the gap it exists
     /// to protect against is the gap it suffers.
     fn arm_triggers(&mut self, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
-        let ready: Vec<OrderId> = self
-            .orders
-            .values()
-            .filter(|order| {
-                order.status == OrderStatus::Untriggered
-                    && order.trigger.is_some_and(|trigger| {
-                        self.marks
-                            .get(&(order.instrument.clone(), order.outcome))
-                            .is_some_and(|price| trigger.fires_at(*price))
-                    })
-            })
-            .map(|order| order.id)
-            .collect();
+        if self.untriggered.is_empty() {
+            return Ok(());
+        }
+        // Walk the index, dropping anything that is no longer parked --
+        // cancelled, or already fired -- and collecting what is now due.
+        let mut ready: Vec<OrderId> = Vec::new();
+        let mut parked = std::mem::take(&mut self.untriggered);
+        parked.retain(|id| {
+            let Some(order) = self.orders.get(id) else {
+                return false;
+            };
+            if order.status != OrderStatus::Untriggered {
+                return false;
+            }
+            let Some(trigger) = order.trigger else {
+                return false;
+            };
+            let fires = self
+                .marks
+                .get(&(order.instrument.clone(), order.outcome))
+                .is_some_and(|price| trigger.fires_at(*price));
+            if fires {
+                ready.push(*id);
+            }
+            !fires
+        });
+        self.untriggered = parked;
         for id in ready {
             if let Some(order) = self.orders.get_mut(&id) {
                 order.trigger = None;
@@ -2302,6 +2331,15 @@ impl Engine {
         }
 
         self.metrics.orders_submitted += 1;
+        // Drop anything that has since terminated, so the checks below scan
+        // live orders rather than the whole history.
+        let mut live = std::mem::take(&mut self.live_orders);
+        live.retain(|id| {
+            self.orders
+                .get(id)
+                .is_some_and(|candidate| candidate.is_open())
+        });
+        self.live_orders = live;
         if let Some(at) = self.has_expired(&order.instrument, now) {
             order.status = OrderStatus::Rejected;
             order.reject_reason = Some(format!("{} stopped trading at {at}", order.instrument));
@@ -2332,6 +2370,7 @@ impl Engine {
             sequence: self.sequence,
             action: InFlightAction::Order(Box::new(order.clone())),
         });
+        self.live_orders.push(id);
         self.orders.insert(id, order);
         Ok(())
     }
@@ -2386,8 +2425,9 @@ impl Engine {
             .map(|position| position.quantity.raw())
             .unwrap_or(0);
         let pending: i64 = self
-            .orders
-            .values()
+            .live_orders
+            .iter()
+            .filter_map(|id| self.orders.get(id))
             .filter(|candidate| {
                 candidate.is_open()
                     && !candidate.reduce_only
@@ -2437,8 +2477,9 @@ impl Engine {
         }
         if let Some(maximum) = self.risk_limits.max_open_orders {
             let open = self
-                .orders
-                .values()
+                .live_orders
+                .iter()
+                .filter_map(|id| self.orders.get(id))
                 .filter(|candidate| candidate.is_open())
                 .count();
             if open >= maximum {
@@ -2455,11 +2496,16 @@ impl Engine {
                 .unwrap_or(0);
             let mut pending_buys = 0_i64;
             let mut pending_sells = 0_i64;
-            for candidate in self.orders.values().filter(|candidate| {
-                candidate.is_open()
-                    && candidate.instrument == order.instrument
-                    && candidate.outcome == order.outcome
-            }) {
+            for candidate in self
+                .live_orders
+                .iter()
+                .filter_map(|id| self.orders.get(id))
+                .filter(|candidate| {
+                    candidate.is_open()
+                        && candidate.instrument == order.instrument
+                        && candidate.outcome == order.outcome
+                })
+            {
                 let target = match candidate.side {
                     Side::Buy => &mut pending_buys,
                     Side::Sell => &mut pending_sells,
@@ -2548,6 +2594,7 @@ impl Engine {
                 if !reference.is_some_and(|price| trigger.fires_at(price)) {
                     order.status = OrderStatus::Untriggered;
                     order.accepted_at = Some(ts);
+                    self.untriggered.push(order.id);
                     self.orders.insert(order.id, order);
                     continue;
                 }
@@ -3503,6 +3550,8 @@ impl EngineBuilder {
             isolated: self.isolated,
             isolated_collateral: BTreeMap::new(),
             twaps: Vec::new(),
+            untriggered: Vec::new(),
+            live_orders: Vec::new(),
         }
     }
 }
