@@ -273,19 +273,15 @@ des comptages plutôt qu'une équivalence de PnL.
 événement, comme Nautilus. Callback contre callback, l'écart est de 3,1× et
 non de 13×. Chiffre dérivé (noyau natif plus coût de frontière mesuré), non
 chronométré directement.
-⁷ `--features wide`, qui fait du type à virgule fixe un `i128`. Désactivé par
-défaut ; voir [Précision et plage](https://db.h5i.dev/manual/backtest/). Le
-chiffre du noyau est la ligne au-dessus multipliée par **1,43×**, la médiane de
-12 paires alternées sur la même machine pour cette charge : plus lent sur les
-12, médianes de 68,2 à 97,5 ms, les plages des deux bras ne se recouvrant pas.
-Mis à l'échelle plutôt que cité tel quel parce que cette machine exécute le
-noyau i64 en 68,2 ms et non 65,7, et cet écart appartient à la machine. Le
-terme de frontière de la ligne callback est repris tel quel : passer en Python
-ne dépend pas de la largeur de l'entier.
-⁸ Inchangé, ce qui n'est pas la même chose que non mesuré. Sur ces mêmes 12
-paires, l'exécution persistée a été plus lente avec `wide` 6 fois et plus
-rapide 6 fois, les médianes tenant dans 2%. Elle est dominée par les fsync que
-paie chaque commit, et la largeur de l'arithmétique n'y touche pas.
+⁷ `--features wide`, désactivé par défaut ; voir
+[Précision et plage](https://db.h5i.dev/manual/backtest/). Le chiffre du noyau
+est la ligne au-dessus multipliée par **1,43×** : 12 paires alternées sur la
+même machine, `wide` plus lent sur les 12, médianes de 68,2 à 97,5 ms, plages
+sans recouvrement. Mis à l'échelle parce que cette machine exécute le noyau i64
+en 68,2 ms, pas 65,7. Le coût de frontière Python ne change pas.
+⁸ Mesuré, et inchangé : sur ces 12 paires, `wide` a été plus lent 6 fois et plus
+rapide 6 fois, médianes à moins de 2%. La ligne est dominée par les fsync de
+chaque commit, que la largeur de l'arithmétique ne touche pas.
 
 ---
 
