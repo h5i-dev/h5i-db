@@ -5,13 +5,21 @@
 //! `book_deltas`, and the kernel never learns which vendor a row came from
 //! beyond the provenance columns.
 //!
-//! **Numbers on disk are `Float64`; numbers in the kernel are fixed point.**
-//! Storage matches the rest of this repository, so ordinary SQL and the
-//! quant layer work on these tables without decoding anything. The
-//! conversion at the boundary is exact for every value the fixed-point type
-//! can represent -- nine decimal places and magnitudes below about 9e9 --
-//! and [`crate::store`] has a round-trip test that says so rather than
-//! leaving it as an assumption.
+//! **Numbers in the kernel are fixed point; on disk they are `Float64` by
+//! default.** Storage matches the rest of this repository, so ordinary SQL
+//! and the quant layer work on these tables without decoding anything. The
+//! conversion at the boundary keeps all nine decimal places, and is exact up
+//! to a magnitude of about 9e6 -- where an `f64` mantissa stops holding
+//! consecutive scaled integers -- which covers every price a venue quotes.
+//! [`crate::store`] has a round-trip test that says so rather than leaving
+//! it as an assumption.
+//!
+//! A table that will hold values above that ceiling is created with
+//! [`FixedEncoding::Decimal`] instead, and stores the same numbers as
+//! `Decimal128(38, 9)` with no float in the path. The encoding is per table
+//! and recorded in its schema, so both builds read both encodings; see
+//! [`crate::decimal`]. Every schema function here takes it, and passing
+//! [`FixedEncoding::Float`] reproduces the schema byte for byte.
 //!
 //! Every market-data table carries both timestamps and is *time-indexed on
 //! `ts_init`*, because that is the order replay reads them in, so a time
@@ -21,6 +29,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use h5i_db_core::spec::TableOptions;
+
+use crate::decimal::FixedEncoding;
 
 /// Market data: incremental book updates and full snapshots.
 pub const BOOK_DELTAS: &str = "book_deltas";
@@ -66,12 +76,17 @@ fn opt_text(name: &str) -> Field {
     Field::new(name, DataType::Utf8, true)
 }
 
-fn float(name: &str) -> Field {
-    Field::new(name, DataType::Float64, false)
+/// A fixed-point column, in whichever encoding the table was created with.
+///
+/// Was `Float64` unconditionally. It still is by default, so an existing
+/// table's schema is byte-identical; `FixedEncoding::Decimal` is what a
+/// caller asks for when the values will outgrow what an `f64` holds exactly.
+fn float(name: &str, encoding: FixedEncoding) -> Field {
+    crate::decimal::fixed_field(name, encoding, false)
 }
 
-fn opt_float(name: &str) -> Field {
-    Field::new(name, DataType::Float64, true)
+fn opt_float(name: &str, encoding: FixedEncoding) -> Field {
+    crate::decimal::fixed_field(name, encoding, true)
 }
 
 fn int(name: &str) -> Field {
@@ -93,7 +108,7 @@ fn outcome() -> Field {
 /// last of them carries `is_last`. Applying half an event would leave a
 /// crossed or hollow book, so the grouping is part of the schema rather
 /// than a convention each loader reinvents.
-pub fn book_deltas() -> SchemaRef {
+pub fn book_deltas(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts_init"),
         ts("ts_event"),
@@ -103,8 +118,8 @@ pub fn book_deltas() -> SchemaRef {
         text("action"),
         // Null for clear, gap, and snapshot boundary rows.
         opt_text("side"),
-        opt_float("price"),
-        opt_float("size"),
+        opt_float("price", encoding),
+        opt_float("size", encoding),
         int("event_index"),
         Field::new("is_last", DataType::Boolean, false),
         opt_text("source_vendor"),
@@ -112,14 +127,14 @@ pub fn book_deltas() -> SchemaRef {
 }
 
 /// `trades`: prints.
-pub fn trades() -> SchemaRef {
+pub fn trades(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts_init"),
         ts("ts_event"),
         text("instrument_id"),
         outcome(),
-        float("price"),
-        float("size"),
+        float("price", encoding),
+        float("size", encoding),
         // Null where the vendor does not say, which is common and must not
         // be guessed: an assumed aggressor silently biases every fill model
         // that reads it.
@@ -130,23 +145,23 @@ pub fn trades() -> SchemaRef {
 }
 
 /// `bars`: aggregates.
-pub fn bars() -> SchemaRef {
+pub fn bars(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts_init"),
         ts("ts_event"),
         text("instrument_id"),
         outcome(),
-        float("open"),
-        float("high"),
-        float("low"),
-        float("close"),
-        float("volume"),
+        float("open", encoding),
+        float("high", encoding),
+        float("low", encoding),
+        float("close", encoding),
+        float("volume", encoding),
         opt_text("source_vendor"),
     ]))
 }
 
 /// `instruments`: one row per outcome, so a categorical market is N rows.
-pub fn instruments() -> SchemaRef {
+pub fn instruments(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts_init"),
         text("instrument_id"),
@@ -155,8 +170,8 @@ pub fn instruments() -> SchemaRef {
         text("kind"),
         outcome(),
         text("outcome_label"),
-        float("tick_size"),
-        float("lot_size"),
+        float("tick_size", encoding),
+        float("lot_size", encoding),
         opt_int("expiration_ns"),
         opt_int("settlement_observable_ns"),
         // Whether the venue exchanges a complete set of these outcomes for
@@ -179,7 +194,7 @@ pub fn instruments() -> SchemaRef {
 /// is one row per outcome carrying its payout; a void is one row naming the
 /// arity it refunds across. `kind` says which, so no row has to be read in
 /// the light of another's absence.
-pub fn resolutions() -> SchemaRef {
+pub fn resolutions(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         // The instant the result became observable, which is what gates
         // settlement -- not the instant the underlying event occurred.
@@ -191,7 +206,7 @@ pub fn resolutions() -> SchemaRef {
         // belongs to on a `split` row, and absent on a `void`.
         Field::new("outcome", DataType::UInt16, true),
         // What one contract on `outcome` pays. Only a `split` carries it.
-        Field::new("payout", DataType::Float64, true),
+        opt_float("payout", encoding),
         // How many outcomes a `void` refunds across.
         Field::new("outcome_count", DataType::UInt16, true),
     ]))
@@ -203,7 +218,7 @@ pub fn resolutions() -> SchemaRef {
 /// venue margins against its own mark and charges funding on its own
 /// oracle; storing only the book leaves a replay to substitute the mid for
 /// both, which liquidates positions the venue would not have.
-pub fn references() -> SchemaRef {
+pub fn references(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts_init"),
         ts("ts_event"),
@@ -211,20 +226,20 @@ pub fn references() -> SchemaRef {
         outcome(),
         // Either may be absent: a venue can publish one and not the other,
         // and a null must not be read as a zero price.
-        Field::new("mark", DataType::Float64, true),
-        Field::new("oracle", DataType::Float64, true),
+        opt_float("mark", encoding),
+        opt_float("oracle", encoding),
         opt_text("source_vendor"),
     ]))
 }
 
 /// `funding`: perpetual funding rates as they became due.
-pub fn funding() -> SchemaRef {
+pub fn funding(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts_init"),
         ts("ts_event"),
         text("instrument_id"),
         // Per-interval rate, not annualised: positive means longs pay.
-        float("rate"),
+        float("rate", encoding),
         opt_text("source_vendor"),
     ]))
 }
@@ -237,6 +252,8 @@ pub fn funding() -> SchemaRef {
 /// second time. Without it the natural response to a partial failure --
 /// run it again -- silently doubles the data, and a doubled book is not
 /// obviously wrong until a fill happens at an impossible size.
+/// Takes no encoding because it holds no fixed-point column: counts and a
+/// digest, all of them integers or text.
 pub fn ingest_log() -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts"),
@@ -256,7 +273,7 @@ pub fn ingest_log() -> SchemaRef {
 /// through the full matching, fee and latency path. It is also what a
 /// factor pipeline naturally emits, so research output feeds simulation
 /// without an adapter in between.
-pub fn signals() -> SchemaRef {
+pub fn signals(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         // When the strategy wants to act. Replay submits the intent the
         // first time the clock reaches it.
@@ -265,11 +282,11 @@ pub fn signals() -> SchemaRef {
         outcome(),
         // "buy" | "sell"
         text("side"),
-        float("quantity"),
+        float("quantity", encoding),
         // "market" | "limit"
         text("kind"),
         // Required for limit orders, ignored for market ones.
-        opt_float("limit_price"),
+        opt_float("limit_price", encoding),
         // "gtc" | "ioc" | "fok"; defaults per order kind when null.
         opt_text("time_in_force"),
         opt_text("tag"),
@@ -295,7 +312,7 @@ pub fn signals_options() -> TableOptions {
 /// `client_order_id`; amend rows require at least one of `quantity` or
 /// `limit_price`. Client IDs are strategy-local strings and are mapped to
 /// engine order IDs without exposing implementation-dependent counters.
-pub fn commands() -> SchemaRef {
+pub fn commands(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts"),
         // "submit" | "cancel" | "amend"
@@ -304,9 +321,9 @@ pub fn commands() -> SchemaRef {
         opt_text("instrument_id"),
         Field::new("outcome", DataType::UInt16, true),
         opt_text("side"),
-        opt_float("quantity"),
+        opt_float("quantity", encoding),
         opt_text("kind"),
-        opt_float("limit_price"),
+        opt_float("limit_price", encoding),
         opt_text("time_in_force"),
         opt_text("tag"),
         Field::new("reduce_only", DataType::Boolean, true),
@@ -325,15 +342,15 @@ pub fn commands_options() -> TableOptions {
 }
 
 /// `bt_run`: the run manifest.
-pub fn run() -> SchemaRef {
+pub fn run(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts"),
         text("run_id"),
         text("config_digest"),
-        float("starting_cash"),
-        float("final_cash"),
-        float("realized_pnl"),
-        float("commissions"),
+        float("starting_cash", encoding),
+        float("final_cash", encoding),
+        float("realized_pnl", encoding),
+        float("commissions", encoding),
         opt_int("simulated_through_ns"),
         int("records_processed"),
         Field::new("settlement_applied", DataType::Boolean, false),
@@ -342,7 +359,7 @@ pub fn run() -> SchemaRef {
 }
 
 /// `bt_orders`: every order the run produced.
-pub fn orders() -> SchemaRef {
+pub fn orders(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts"),
         int("order_id"),
@@ -350,9 +367,9 @@ pub fn orders() -> SchemaRef {
         outcome(),
         text("side"),
         text("kind"),
-        opt_float("limit_price"),
-        float("quantity"),
-        float("filled"),
+        opt_float("limit_price", encoding),
+        float("quantity", encoding),
+        float("filled", encoding),
         text("time_in_force"),
         text("status"),
         opt_text("reject_reason"),
@@ -363,46 +380,46 @@ pub fn orders() -> SchemaRef {
 
 /// `bt_fills`: every execution. The authoritative record -- positions are a
 /// fold over this table and nothing else.
-pub fn fills() -> SchemaRef {
+pub fn fills(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts"),
         int("order_id"),
         text("instrument_id"),
         outcome(),
         text("side"),
-        float("price"),
-        float("quantity"),
-        float("commission"),
+        float("price", encoding),
+        float("quantity", encoding),
+        float("commission", encoding),
         Field::new("is_taker", DataType::Boolean, false),
         opt_text("tag"),
     ]))
 }
 
 /// `bt_positions`: where the run finished.
-pub fn positions() -> SchemaRef {
+pub fn positions(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts"),
         text("instrument_id"),
         outcome(),
-        float("quantity"),
-        float("average_price"),
-        float("realized_pnl"),
-        float("commissions"),
-        opt_float("settlement_pnl"),
-        opt_float("market_exit_pnl"),
+        float("quantity", encoding),
+        float("average_price", encoding),
+        float("realized_pnl", encoding),
+        float("commissions", encoding),
+        opt_float("settlement_pnl", encoding),
+        opt_float("market_exit_pnl", encoding),
     ]))
 }
 
 /// `bt_equity`: the equity curve, sampled on a fixed interval of simulated
 /// time. This is the table `h5i_db.quant.returns()` reads.
-pub fn equity() -> SchemaRef {
+pub fn equity(encoding: FixedEncoding) -> SchemaRef {
     Arc::new(Schema::new(vec![
         ts("ts"),
-        float("cash"),
-        float("position_value"),
-        float("equity"),
-        float("realized_pnl"),
-        float("unrealized_pnl"),
+        float("cash", encoding),
+        float("position_value", encoding),
+        float("equity", encoding),
+        float("realized_pnl", encoding),
+        float("unrealized_pnl", encoding),
     ]))
 }
 
@@ -425,15 +442,15 @@ pub fn run_output_options() -> TableOptions {
 }
 
 /// Every market-data table, with the options it wants.
-pub fn market_data_tables() -> Vec<(&'static str, SchemaRef, TableOptions)> {
+pub fn market_data_tables(encoding: FixedEncoding) -> Vec<(&'static str, SchemaRef, TableOptions)> {
     vec![
-        (BOOK_DELTAS, book_deltas(), market_data_options()),
-        (TRADES, trades(), market_data_options()),
-        (BARS, bars(), market_data_options()),
-        (INSTRUMENTS, instruments(), market_data_options()),
-        (RESOLUTIONS, resolutions(), market_data_options()),
-        (FUNDING, funding(), market_data_options()),
-        (REFERENCES, references(), market_data_options()),
+        (BOOK_DELTAS, book_deltas(encoding), market_data_options()),
+        (TRADES, trades(encoding), market_data_options()),
+        (BARS, bars(encoding), market_data_options()),
+        (INSTRUMENTS, instruments(encoding), market_data_options()),
+        (RESOLUTIONS, resolutions(encoding), market_data_options()),
+        (FUNDING, funding(encoding), market_data_options()),
+        (REFERENCES, references(encoding), market_data_options()),
     ]
 }
 
@@ -445,23 +462,23 @@ pub fn ingest_log_table() -> (&'static str, SchemaRef, TableOptions) {
 
 /// The signals table, which a caller creates only when driving a Tier 1
 /// replay from stored intent.
-pub fn signals_table() -> (&'static str, SchemaRef, TableOptions) {
-    (SIGNALS, signals(), signals_options())
+pub fn signals_table(encoding: FixedEncoding) -> (&'static str, SchemaRef, TableOptions) {
+    (SIGNALS, signals(encoding), signals_options())
 }
 
 /// The optional lifecycle-aware strategy command table.
-pub fn commands_table() -> (&'static str, SchemaRef, TableOptions) {
-    (COMMANDS, commands(), commands_options())
+pub fn commands_table(encoding: FixedEncoding) -> (&'static str, SchemaRef, TableOptions) {
+    (COMMANDS, commands(encoding), commands_options())
 }
 
 /// Every run-output table.
-pub fn run_output_tables() -> Vec<(&'static str, SchemaRef, TableOptions)> {
+pub fn run_output_tables(encoding: FixedEncoding) -> Vec<(&'static str, SchemaRef, TableOptions)> {
     vec![
-        (RUN, run(), run_output_options()),
-        (ORDERS, orders(), run_output_options()),
-        (FILLS, fills(), run_output_options()),
-        (POSITIONS, positions(), run_output_options()),
-        (EQUITY, equity(), run_output_options()),
+        (RUN, run(encoding), run_output_options()),
+        (ORDERS, orders(encoding), run_output_options()),
+        (FILLS, fills(encoding), run_output_options()),
+        (POSITIONS, positions(encoding), run_output_options()),
+        (EQUITY, equity(encoding), run_output_options()),
     ]
 }
 
@@ -473,7 +490,7 @@ mod tests {
     fn market_data_is_time_indexed_on_the_column_replay_sorts_by() {
         // Pruning must happen on ts_init, because that is the order the
         // merge reads records in.
-        for (name, schema, options) in market_data_tables() {
+        for (name, schema, options) in market_data_tables(FixedEncoding::default()) {
             assert_eq!(
                 options.time_column.as_deref(),
                 Some("ts_init"),
@@ -488,7 +505,7 @@ mod tests {
 
     #[test]
     fn every_market_data_row_carries_both_timestamps() {
-        for (name, schema, _) in market_data_tables() {
+        for (name, schema, _) in market_data_tables(FixedEncoding::default()) {
             if name == INSTRUMENTS || name == RESOLUTIONS {
                 continue; // reference data: known-at only
             }
@@ -503,12 +520,12 @@ mod tests {
     fn optional_columns_are_the_ones_a_vendor_may_not_supply() {
         // An aggressor that is absent must stay absent rather than being
         // defaulted to a side.
-        let trades = trades();
+        let trades = trades(FixedEncoding::default());
         assert!(trades.field_with_name("aggressor").unwrap().is_nullable());
         assert!(!trades.field_with_name("price").unwrap().is_nullable());
 
         // A clear or gap row has no side, price, or size.
-        let deltas = book_deltas();
+        let deltas = book_deltas(FixedEncoding::default());
         for column in ["side", "price", "size"] {
             assert!(
                 deltas.field_with_name(column).unwrap().is_nullable(),
@@ -520,7 +537,7 @@ mod tests {
 
     #[test]
     fn run_outputs_are_time_indexed_and_named_consistently() {
-        for (name, schema, options) in run_output_tables() {
+        for (name, schema, options) in run_output_tables(FixedEncoding::default()) {
             assert!(name.starts_with("bt_"), "{name} must be a bt_ table");
             assert_eq!(options.time_column.as_deref(), Some("ts"));
             assert!(schema.field_with_name("ts").is_ok());
@@ -530,7 +547,7 @@ mod tests {
     #[test]
     fn fills_carry_everything_needed_to_rebuild_a_position() {
         // The audit claim: bt_fills alone must reconstruct bt_positions.
-        let fills = fills();
+        let fills = fills(FixedEncoding::default());
         for column in [
             "instrument_id",
             "outcome",
@@ -548,11 +565,15 @@ mod tests {
 
     #[test]
     fn table_names_do_not_collide() {
-        let mut names: Vec<&str> = market_data_tables()
+        let mut names: Vec<&str> = market_data_tables(FixedEncoding::default())
             .into_iter()
             .map(|(n, _, _)| n)
-            .chain(run_output_tables().into_iter().map(|(n, _, _)| n))
-            .chain(std::iter::once(signals_table().0))
+            .chain(
+                run_output_tables(FixedEncoding::default())
+                    .into_iter()
+                    .map(|(n, _, _)| n),
+            )
+            .chain(std::iter::once(signals_table(FixedEncoding::default()).0))
             .chain(std::iter::once(ingest_log_table().0))
             .collect();
         let count = names.len();

@@ -63,6 +63,7 @@ pub use book::{BookAction, BookDelta, BookStatus, BookWalk, OrderBook};
 pub use clock::{Clock, TimeEvent};
 pub use corporate::{CorporateAction, SymbolRegistry, Universe};
 pub use currency::{Currency, FxBook, Haircuts};
+pub use decimal::FixedEncoding;
 pub use engine::{
     CommandReplay, Context, Engine, EngineBuilder, Forecast, LiquidationPolicy, MarkPoint,
     MarkSource, OrderRequest, ReplayCommand, RiskLimits, RunResult, SetOperation,

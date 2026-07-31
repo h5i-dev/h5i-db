@@ -114,6 +114,18 @@ pub fn read_fixed(array: &ArrayRef, row: usize, name: &str) -> Result<Option<Raw
     }
 }
 
+/// Read row `row` of a fixed-point column the schema declares non-null.
+///
+/// A null there is a row that disagrees with its own schema, so it is refused
+/// rather than read as a zero -- a zero price or a zero size is a value a
+/// matching engine will happily act on.
+pub fn read_fixed_value(array: &ArrayRef, row: usize, name: &str) -> Result<Raw> {
+    read_fixed(array, row, name)?.ok_or_else(|| BacktestError::Schema {
+        table: "read",
+        detail: format!("column {name} is null in a row where it must not be"),
+    })
+}
+
 fn downcast<'a, T: 'static>(array: &'a ArrayRef, name: &str) -> Result<&'a T> {
     array
         .as_any()
