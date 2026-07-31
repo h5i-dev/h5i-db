@@ -207,3 +207,38 @@ breaks when Yahoo changes internals. Fetch with it if you like, then hand the
 frame to `bars_from_dataframe`: that keeps the breakage in your script instead
 of in a parser here. Stooq downloads now sit behind a browser check, so fetch
 those by hand and point `read_bars_csv` at the file.
+
+## Trades and corporate actions
+
+A venue that publishes bulk trade files gives you real microstructure for free.
+
+```python
+venues.ingest_trades(db, files=[...], layout=venues.BINANCE_TRADES_LAYOUT,
+                     instrument_id="BINANCE:BTCUSDT")
+```
+
+The one field worth reading twice is the aggressor. Binance ships
+`isBuyerMaker`, which is true when the **buyer** was resting, so the taker was
+the seller. Read straight through it inverts every trade sign, and the result
+still balances and still sums to the right volume. `TradeLayout` therefore
+takes either `buyer_is_maker_column` or `aggressor_column`, never both.
+
+Corporate actions are what make an equity backtest correct rather than
+plausible. Without them a 2-for-1 split reads as a 50% overnight crash.
+
+```python
+venues.ingest_corporate_actions(
+    db,
+    actions=[{"instrument_id": "AAPL", "kind": "split", "ratio": 2.0,
+              "effective": "2026-03-02", "announced": "2026-02-01"}],
+    known_by=simulated_now_ns,   # drop what had not been announced yet
+)
+```
+
+`effective` is the replay clock, because that is when positions and resting
+orders change. Past prices are never rewritten: nobody traded the adjusted
+price, and a strategy that bought at 50 the day before a 2-for-1 bought at 50.
+`announced` is kept separately so `known_by` can reproduce what was knowable on
+a past date; rows with no announcement are dropped under a cutoff rather than
+assumed early enough, since assuming is how a run ends up trading a split
+nobody had heard of.
