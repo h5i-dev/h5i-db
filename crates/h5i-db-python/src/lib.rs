@@ -1366,6 +1366,17 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     m.add_class::<NativeDatabase>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
+    // Which fixed-point width this wheel's backtest kernel was built with:
+    // 64 by default, 128 under the `wide` feature. A compile-time choice is
+    // otherwise invisible from Python, and while it cannot corrupt anything
+    // here -- this boundary passes `f64`, never a raw integer -- a caller
+    // that asked for the wide range deserves a way to confirm it got it.
+    // Taken from the type itself rather than `cfg!`, so it cannot disagree
+    // with the build it is reporting on.
+    m.add(
+        "FIXED_POINT_BITS",
+        std::mem::size_of::<h5i_db_backtest::types::Raw>() * 8,
+    )?;
     m.add("H5iError", py.get_type::<H5iError>())?;
     m.add("NotFoundError", py.get_type::<NotFoundError>())?;
     m.add("ConflictError", py.get_type::<ConflictError>())?;

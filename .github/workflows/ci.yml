@@ -50,6 +50,31 @@ jobs:
             cargo test -p $pkg -- --test-threads=2
           done
 
+  # The backtest kernel compiles two ways: its fixed-point raw type is `i64`
+  # by default and `i128` under `wide` (`types::Raw`). Both are supported, so
+  # both are tested -- a mode nobody compiles is a mode that breaks without
+  # anyone noticing, and the wide build is exactly the kind that rots, since
+  # nothing in the workspace enables it.
+  #
+  # Its own job rather than a row in `test` above: the second run recompiles
+  # the crate under a different cfg, so it does not share that job's cache.
+  # Clippy is repeated here for `wide` only -- the `lint` job's
+  # `--workspace --all-targets` already covers the default mode, and the wide
+  # build has casts that are no-ops there and lints the narrow build cannot
+  # reach.
+  backtest-fixed-point:
+    name: backtest (i64 + i128)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p h5i-db-backtest --all-targets --features wide -- -D warnings
+      - run: cargo test -p h5i-db-backtest -- --test-threads=2
+      - run: cargo test -p h5i-db-backtest --features wide -- --test-threads=2
+
   # Windows exercises the pieces that genuinely differ there: rename-based
   # HEAD CAS, path handling, file locking. Core only, to bound CI cost.
   test-windows:

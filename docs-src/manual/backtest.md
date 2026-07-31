@@ -40,10 +40,11 @@ came from.
 Every market-data table is time-indexed on `ts_init`, the column replay
 sorts by, so a range scan prunes on exactly the right column.
 
-Numbers are `Float64` on disk and fixed point in the kernel. The conversion
-is exact for every value the fixed-point type can represent (nine decimal
-places, magnitudes below about 9e9); a test walks the entire 0.0001 tick
-grid to confirm it rather than assuming.
+Numbers are fixed point in the kernel and `Float64` on disk by default. The
+conversion keeps all nine decimal places and is exact up to a magnitude of
+about nine million, which covers every price a venue quotes; a test walks the
+entire 0.0001 tick grid to confirm it rather than assuming. For a book that
+will hold larger numbers than that, see [Precision and range](#precision-and-range).
 
 ### Snapshots are grouped
 
@@ -62,6 +63,62 @@ without complaint.
 The index values themselves only have to *change* between events. They are not
 required to increase with `ts_init`, since grouping follows row order and ends
 at `is_last`, so a recorder that writes instrument-major is fine.
+
+## Precision and range
+
+Two independent choices decide how large a number can get. Both default to
+the cheaper option, and most books never need to change either.
+
+**On disk**, a fixed-point column is `Float64` by default. That is exact to
+about nine million units; past that an `f64` mantissa stops holding
+consecutive values and writes begin to round. A table that will hold more is
+created with the decimal encoding instead, which stores the number itself and
+rounds nothing:
+
+```rust
+use h5i_db_backtest::{FixedEncoding, store};
+
+store::create_market_data_tables_with(&db, FixedEncoding::Decimal).await?;
+```
+
+The encoding belongs to the table rather than to your binary: it is recorded
+in the table's schema, and every reader follows what it finds. Two tables in
+one database can differ, and any build reads both. The call above skips
+tables that already exist, so running it before an ingest is enough -- the
+loaders write whichever encoding the table already declares, and existing
+tables keep the one they were created with.
+
+**In the kernel**, arithmetic is `i64` scaled by 1e-9, which tops out at
+±9,223,372,036. The `wide` feature makes it `i128`:
+
+```toml
+h5i-db-backtest = { version = "0.1", features = ["wide"] }
+```
+
+The scale does not move when the integer widens, so nothing already written
+changes meaning and there is nothing to migrate.
+
+| | exact to | kernel cost |
+|---|---:|---:|
+| default | 9.0e6 units | -- |
+| decimal columns | 9.2e9 units | none |
+| decimal columns + `wide` | 1.7e29 units | ~50% slower |
+
+The middle row is the one worth knowing about. On an ordinary build, decimal
+storage is exact across the entire range the default arithmetic can produce,
+and costs nothing at run time because the kernel never sees a column. What it
+does cost is on disk: sixteen bytes a value instead of eight, and a decimal
+column carries no min/max statistics yet, so a query filtering on one scans
+segments a `Float64` column would have skipped. Filtering on time is
+unaffected, which is the path a replay takes.
+
+Reach for `wide` only when you need to *compute* past 9.2e9 units -- a
+yen-denominated book, or token quantities in the trillions. It buys range and
+pays for it in arithmetic, because an `i128` add spans two registers.
+
+Nothing is silently truncated in either direction. A default build reading a
+decimal value too large for its `i64` refuses it, the same way arithmetic
+overflow is refused rather than allowed to wrap.
 
 ## A run
 

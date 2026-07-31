@@ -2369,6 +2369,9 @@ wide build, green), `59416110` (the decimal encoding layer), `bbea27bd`
 | `FixedEncoding::{Float, Decimal}` | per table, chosen at creation |
 | tests | 338 pass on `i64`, 338 pass on `i128` |
 | lint | `clippy --all-targets` clean in both modes |
+| CI | `backtest-fixed-point` runs both suites plus wide clippy |
+| Python | `maturin build --features wide`; wheel reports `FIXED_POINT_BITS` |
+| docs | `docs-src/manual/backtest.md`, "Precision and range" |
 
 ### Two deliberate departures from the survey above
 
@@ -2421,13 +2424,26 @@ from raw integers rather than float literals, which is the flaw the survey
 identified. The `store.rs` and `schema.rs` module docs now say nine million
 and name the decimal encoding as the way past it.
 
-### The mode symbol is not needed here
+### The mode symbol, for a weaker reason than theirs
 
 Nautilus exports `HIGH_PRECISION_MODE` with `no_mangle` because Python reads
 their raw integers across FFI, where a build mismatch is a silent
 corruption. Our Python boundary (`crates/h5i-db-python`) passes `f64` in and
-out and never sees a raw, so a wide build is invisible from Python and cannot
-corrupt anything by being unnoticed. The symbol would be ceremony.
+out and never sees a raw, so a wide build cannot corrupt anything here by
+going unnoticed.
+
+It still earns a weaker version. `h5i_db.FIXED_POINT_BITS` reports 64 or 128,
+because `maturin build --features wide` is otherwise indistinguishable from a
+default build once the wheel is installed, and someone who asked for the
+range deserves to confirm they got it. Taken from `size_of::<Raw>()` rather
+than `cfg!`, so it cannot disagree with the build it describes. Safety is
+theirs; ours is only confirmation, and the distinction is why theirs is a
+linker symbol and ours is a module constant.
+
+The Python default is deliberately the *opposite* of theirs. `HIGH_PRECISION`
+defaults on in their `build.py` and off in their Rust crate, so the same
+project ships two answers. Here `wide` is off in both, and a wheel behaves
+like the library it wraps until someone asks otherwise.
 
 ### What the wide build costs, measured
 

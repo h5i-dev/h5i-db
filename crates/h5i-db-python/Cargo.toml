@@ -12,6 +12,20 @@ publish = false
 name = "_native"
 crate-type = ["cdylib"]
 
+[features]
+default = []
+# Build the backtest kernel with 128-bit fixed point. Off by default, as it
+# is in the Rust crate, so a wheel behaves like the library it wraps unless
+# someone asks otherwise:
+#
+#     maturin build --release --features wide
+#
+# Safe to flip on an existing database. The wide build only changes what the
+# kernel can compute; how a table stores its numbers is recorded in that
+# table and read back, so a wheel built either way reads data written by the
+# other. The built wheel reports which it got as `_native.FIXED_POINT_BITS`.
+wide = ["h5i-db-backtest/wide"]
+
 [dependencies]
 h5i-db-core = { workspace = true }
 h5i-db-query = { workspace = true }

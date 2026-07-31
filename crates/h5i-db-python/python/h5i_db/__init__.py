@@ -36,6 +36,7 @@ import pyarrow as pa
 import pyarrow.ipc
 
 from h5i_db._native import (  # noqa: F401
+    FIXED_POINT_BITS,
     ConflictError,
     CorruptionError,
     H5iError,
@@ -660,6 +661,7 @@ from . import venues as venues  # noqa: E402  (vendor archives -> canonical tabl
 
 __all__ = [
     "Database",
+    "FIXED_POINT_BITS",
     "QueryResult",
     "MutationPlan",
     "LazyFrame",
