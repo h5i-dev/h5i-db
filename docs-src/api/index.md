@@ -67,7 +67,7 @@ db.close()                                    # or use `with h5i_db.Database(...
   <a class="card" href="../cookbook/">
     <span class="card-no">TUTORIALS</span>
     <span class="card-title">Cookbook</span>
-    <span class="card-desc">37 executed notebooks that put the API to work: fundamentals, market data, alpha research, and risk.</span>
+    <span class="card-desc">Executed notebooks that put the API to work, from fundamentals through event-driven backtesting and prediction markets.</span>
   </a>
 </div>
 

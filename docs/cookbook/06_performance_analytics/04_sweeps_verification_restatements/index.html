@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sweeps, verification, and what a restatement did to your alpha</title>
+  <meta name="description" content="Three questions arrive in order at the end of a piece of research. What did the parameter grid say? Can somebody else reproduce the number?">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/06_performance_analytics/04_sweeps_verification_restatements/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Sweeps, verification, and what a restatement did to your alpha">
+  <meta property="og:description" content="Three questions arrive in order at the end of a piece of research. What did the parameter grid say? Can somebody else reproduce the number?">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/06_performance_analytics/04_sweeps_verification_restatements/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Sweeps, verification, and what a restatement did to your alpha">
+  <meta name="twitter:description" content="Three questions arrive in order at the end of a piece of research. What did the parameter grid say? Can somebody else reproduce the number?">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/06_performance_analytics/04_sweeps_verification_restatements/#article","headline":"Sweeps, verification, and what a restatement did to your alpha","name":"Sweeps, verification, and what a restatement did to your alpha","description":"Three questions arrive in order at the end of a piece of research. What did the parameter grid say? Can somebody else reproduce the number?","url":"https://db.h5i.dev/cookbook/06_performance_analytics/04_sweeps_verification_restatements/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/06_performance_analytics/04_sweeps_verification_restatements/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Performance analytics"},{"@type":"ListItem","position":4,"name":"Sweeps, verification, and what a restatement did to your alpha","item":"https://db.h5i.dev/cookbook/06_performance_analytics/04_sweeps_verification_restatements/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Performance analytics</div><ul><li><a href="/cookbook/06_performance_analytics/01_tearsheets_and_performance_stats/">Tearsheets and performance statistics</a></li><li><a href="/cookbook/06_performance_analytics/02_factor_panels_and_reports/">Factor panels: IC, quantiles, turnover</a></li><li><a href="/cookbook/06_performance_analytics/03_cross_validation_without_leakage/">Cross-validation that a time series survives</a></li><li><a href="/cookbook/06_performance_analytics/04_sweeps_verification_restatements/" class="active">Sweeps, verification, and what a restatement did to your alpha</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Performance analytics</span>
+<span class="sep">/</span>
+<span>Sweeps, verification, and what a restatement did to your alpha</span></div>
+<h1>Sweeps, verification, and what a restatement did to your alpha</h1>
+<p>Three questions arrive in order at the end of a piece of research. What did
+the parameter grid say? Can somebody else reproduce the number? And when the
+vendor revises the data next month, does the number change?</p>
+<p>The first is ordinary work. The second and third are where a versioned store
+stops being a storage detail: <code>quant.verify</code> refuses to bless a computation
+that was not pinned, and <code>quant.restatement_impact</code> answers "did the revision
+move my answer" by running the same computation at two read points, which is a
+question a directory of Parquet files cannot be asked.</p>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>sweep</td>
+<td>running one computation over a grid of parameters</td>
+</tr>
+<tr>
+<td>fork</td>
+<td>a copy-on-write branch of the database a trial writes into</td>
+</tr>
+<tr>
+<td>provenance</td>
+<td>the pin, parameters and SQL that produced a number</td>
+</tr>
+<tr>
+<td>digest</td>
+<td>a hash of that provenance, so two results can be compared exactly</td>
+</tr>
+<tr>
+<td>restatement</td>
+<td>a vendor correcting data you have already used</td>
+</tr>
+<tr>
+<td>as-of read</td>
+<td>reading the database as it stood at an earlier moment</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">json</span>
+
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">col</span><span class="p">,</span> <span class="n">quant</span><span class="p">,</span> <span class="n">sql_expr</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+</pre></div>
+</div>
+<h2 id="1-the-data-and-a-version-of-it">1. The data, and a version of it<a class="headerlink" href="#1-the-data-and-a-version-of-it" title="Permanent link">#</a></h2>
+<p>Daily prices for thirty names. The important part is the version history:
+every commit is readable afterwards, which is what makes the last section of
+this recipe possible.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">daily</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">fetch_daily</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">SP500_EXAMPLES</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="s2">&quot;2018-01-01&quot;</span><span class="p">,</span> <span class="n">end</span><span class="o">=</span><span class="s2">&quot;2026-07-01&quot;</span><span class="p">)</span>
+<span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;06_sweeps_verification_restatements&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">prices</span> <span class="o">=</span> <span class="n">daily</span><span class="o">.</span><span class="n">sort_by</span><span class="p">([(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;ascending&quot;</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;ascending&quot;</span><span class="p">)])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">prices</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="n">sort_key</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">prices</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;vendor load, first delivery&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;prices-v1&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;prices&quot;</span><span class="p">],</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;What the research below read&quot;</span><span class="p">)</span>
+<span class="n">first_version</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;sequence&quot;</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;prices is at version </span><span class="si">{</span><span class="n">first_version</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">prices</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows&quot;</span><span class="p">)</span>
+<span class="n">daily</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">3</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">prices is at version 1
+64,020 rows</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>symbol</th>
+      <th>open</th>
+      <th>high</th>
+      <th>low</th>
+      <th>close</th>
+      <th>adj_close</th>
+      <th>volume</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2018-01-02 20:00:00+00:00</td>
+      <td>AAPL</td>
+      <td>42.540001</td>
+      <td>43.075001</td>
+      <td>42.314999</td>
+      <td>43.064999</td>
+      <td>40.267075</td>
+      <td>102223600</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2018-01-02 20:00:00+00:00</td>
+      <td>NVDA</td>
+      <td>4.894500</td>
+      <td>4.987500</td>
+      <td>4.862500</td>
+      <td>4.983750</td>
+      <td>4.922529</td>
+      <td>355616000</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2018-01-02 20:00:00+00:00</td>
+      <td>GE</td>
+      <td>84.251045</td>
+      <td>86.215950</td>
+      <td>84.011429</td>
+      <td>86.168022</td>
+      <td>80.953125</td>
+      <td>16185981</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="2-a-sweep-is-one-fork-per-trial">2. A sweep is one fork per trial<a class="headerlink" href="#2-a-sweep-is-one-fork-per-trial" title="Permanent link">#</a></h2>
+<p><code>quant.sweep</code> calls a function once per parameter combination, with a database
+opened on that trial's own fork. Anything the function writes lands in the
+fork and nowhere else, so trials cannot contaminate each other or the base
+data, and a failed trial leaves no mess to clean up.</p>
+<p>The function returns metrics; the sweep writes them into the fork alongside
+the parameters that produced them.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">score</span><span class="p">(</span><span class="n">fork</span><span class="p">,</span> <span class="n">params</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Build a factor panel inside this trial&#39;s fork and score it.&quot;&quot;&quot;</span>
+    <span class="n">pinned</span> <span class="o">=</span> <span class="n">fork</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;prices-v1&quot;</span><span class="p">)</span>
+    <span class="n">factor</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">pinned</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+            <span class="n">past</span><span class="o">=</span><span class="n">sql_expr</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;lag(adj_close, </span><span class="si">{</span><span class="n">params</span><span class="p">[</span><span class="s1">&#39;lookback&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span>
+                <span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">value</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;adj_close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;past&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">ts</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span> <span class="n">asset</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span> <span class="n">factor</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">))</span>
+    <span class="p">)</span>
+    <span class="n">price_frame</span> <span class="o">=</span> <span class="n">pinned</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">ts</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span> <span class="n">asset</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span> <span class="n">price</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;adj_close&quot;</span><span class="p">))</span>
+    <span class="n">panel</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">build_panel</span><span class="p">(</span>
+        <span class="n">fork</span><span class="p">,</span>
+        <span class="n">factor</span><span class="p">,</span>
+        <span class="n">price_frame</span><span class="p">,</span>
+        <span class="n">periods</span><span class="o">=</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;horizon&quot;</span><span class="p">],),</span>
+        <span class="n">quantiles</span><span class="o">=</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;quantiles&quot;</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="n">decay</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">ic_decay</span><span class="p">()</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">spread</span> <span class="o">=</span> <span class="n">panel</span><span class="o">.</span><span class="n">spread</span><span class="p">()</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()[</span><span class="sa">f</span><span class="s2">&quot;spread_</span><span class="si">{</span><span class="n">params</span><span class="p">[</span><span class="s1">&#39;horizon&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">]</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;mean_ic&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">decay</span><span class="p">[</span><span class="s2">&quot;mean_ic&quot;</span><span class="p">]),</span>
+        <span class="s2">&quot;ic_t_stat&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">decay</span><span class="p">[</span><span class="s2">&quot;t_stat&quot;</span><span class="p">]),</span>
+        <span class="s2">&quot;spread_sharpe&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">spread</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span> <span class="o">/</span> <span class="n">spread</span><span class="o">.</span><span class="n">std</span><span class="p">()</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sqrt</span><span class="p">(</span><span class="mi">252</span><span class="p">)),</span>
+        <span class="s2">&quot;observations&quot;</span><span class="p">:</span> <span class="nb">int</span><span class="p">(</span><span class="n">decay</span><span class="p">[</span><span class="s2">&quot;n&quot;</span><span class="p">]),</span>
+    <span class="p">}</span>
+
+
+<span class="n">swept</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">sweep</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="p">{</span><span class="s2">&quot;lookback&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">63</span><span class="p">,</span> <span class="mi">126</span><span class="p">,</span> <span class="mi">252</span><span class="p">],</span> <span class="s2">&quot;quantiles&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">5</span><span class="p">],</span> <span class="s2">&quot;horizon&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">21</span><span class="p">]},</span>
+    <span class="n">score</span><span class="p">,</span>
+    <span class="n">prefix</span><span class="o">=</span><span class="s2">&quot;momentum&quot;</span><span class="p">,</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;momentum lookback and bucket count&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">swept</span><span class="p">)</span>
+<span class="n">compared</span> <span class="o">=</span> <span class="n">swept</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">board</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">pd</span><span class="o">.</span><span class="n">json_normalize</span><span class="p">(</span><span class="n">compared</span><span class="p">[</span><span class="s2">&quot;_params&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">)),</span>
+        <span class="n">compared</span><span class="p">[[</span><span class="s2">&quot;mean_ic&quot;</span><span class="p">,</span> <span class="s2">&quot;ic_t_stat&quot;</span><span class="p">,</span> <span class="s2">&quot;spread_sharpe&quot;</span><span class="p">,</span> <span class="s2">&quot;observations&quot;</span><span class="p">]],</span>
+    <span class="p">],</span>
+    <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>
+<span class="p">)</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;spread_sharpe&quot;</span><span class="p">,</span> <span class="n">ascending</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">board</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">SweepResult(trials=6, failed=0, table=&#x27;quant_sweep&#x27;)</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>lookback</th>
+      <th>quantiles</th>
+      <th>horizon</th>
+      <th>mean_ic</th>
+      <th>ic_t_stat</th>
+      <th>spread_sharpe</th>
+      <th>observations</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>5</th>
+      <td>126</td>
+      <td>5</td>
+      <td>21</td>
+      <td>0.0182</td>
+      <td>2.7654</td>
+      <td>0.9904</td>
+      <td>1987.0</td>
+    </tr>
+    <tr>
+      <th>0</th>
+      <td>252</td>
+      <td>5</td>
+      <td>21</td>
+      <td>0.0257</td>
+      <td>3.5922</td>
+      <td>0.8141</td>
+      <td>1861.0</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>252</td>
+      <td>3</td>
+      <td>21</td>
+      <td>0.0257</td>
+      <td>3.5922</td>
+      <td>0.7143</td>
+      <td>1861.0</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>63</td>
+      <td>5</td>
+      <td>21</td>
+      <td>0.0102</td>
+      <td>1.6028</td>
+      <td>0.6419</td>
+      <td>2050.0</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>126</td>
+      <td>3</td>
+      <td>21</td>
+      <td>0.0182</td>
+      <td>2.7654</td>
+      <td>0.3516</td>
+      <td>1987.0</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>63</td>
+      <td>3</td>
+      <td>21</td>
+      <td>0.0102</td>
+      <td>1.6028</td>
+      <td>0.2027</td>
+      <td>2050.0</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p><code>compare()</code> is one query across every fork at once. The forks share their
+base's segments, so comparing a hundred trials costs about what reading one
+does, plus what each trial actually wrote. Parameters travel as a JSON string
+in <code>_params</code>, so a trial's identity survives whatever columns its metrics
+happened to have.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">best</span> <span class="o">=</span> <span class="n">swept</span><span class="o">.</span><span class="n">best</span><span class="p">(</span><span class="s2">&quot;spread_sharpe&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;forks created  </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">swept</span><span class="o">.</span><span class="n">forks</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;best trial     lookback=</span><span class="si">{</span><span class="n">best</span><span class="p">[</span><span class="s1">&#39;lookback&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2"> quantiles=</span><span class="si">{</span><span class="n">best</span><span class="p">[</span><span class="s1">&#39;quantiles&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.0f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;               spread Sharpe </span><span class="si">{</span><span class="n">best</span><span class="p">[</span><span class="s1">&#39;spread_sharpe&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2">, IC t-stat </span><span class="si">{</span><span class="n">best</span><span class="p">[</span><span class="s1">&#39;ic_t_stat&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;comparison table columns: </span><span class="si">{</span><span class="n">swept</span><span class="o">.</span><span class="n">compare</span><span class="p">()</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()</span><span class="o">.</span><span class="n">column_names</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">forks created  6
+best trial     lookback=126 quantiles=5
+               spread Sharpe 0.990, IC t-stat 2.77
+comparison table columns: [&#x27;_trial&#x27;, &#x27;_fork&#x27;, &#x27;_params&#x27;, &#x27;mean_ic&#x27;, &#x27;ic_t_stat&#x27;, &#x27;spread_sharpe&#x27;, &#x27;observations&#x27;, &#x27;__fork&#x27;]</pre></div></div>
+<p>A sweep that stops at the first failure wastes the trials that already ran.
+<code>keep_going</code> records the failure and continues, which is the behaviour you
+want overnight and the behaviour you must not have when the failure means the
+data is wrong.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">brittle</span><span class="p">(</span><span class="n">fork</span><span class="p">,</span> <span class="n">params</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;lookback&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1_000</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;no history that long&quot;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;lookback&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">params</span><span class="p">[</span><span class="s2">&quot;lookback&quot;</span><span class="p">])}</span>
+
+
+<span class="n">partial</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">sweep</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;lookback&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">63</span><span class="p">,</span> <span class="mi">5_000</span><span class="p">]},</span> <span class="n">brittle</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">&quot;brittle&quot;</span><span class="p">,</span> <span class="n">keep_going</span><span class="o">=</span><span class="kc">True</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">partial</span><span class="p">)</span><span class="si">}</span><span class="s2"> trials succeeded, </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">partial</span><span class="o">.</span><span class="n">failures</span><span class="p">)</span><span class="si">}</span><span class="s2"> failed&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">partial</span><span class="o">.</span><span class="n">failures</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">1 trials succeeded, 1 failed
+[{&#x27;trial&#x27;: 1, &#x27;fork&#x27;: &#x27;brittle-0001&#x27;, &#x27;error&#x27;: &quot;ValueError(&#x27;no history that long&#x27;)&quot;}]</pre></div></div>
+<h2 id="3-verification-is-a-refusal-not-a-checkmark">3. Verification is a refusal, not a checkmark<a class="headerlink" href="#3-verification-is-a-refusal-not-a-checkmark" title="Permanent link">#</a></h2>
+<p><code>quant.verify</code> re-executes the computation and checks two things: the
+provenance digest is unchanged, and the recomputed numbers agree. An unpinned
+computation is reported as unverifiable rather than passed, because two runs
+against "latest" agreeing proves only that nothing changed in between.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">build_panel</span><span class="p">(</span><span class="n">pin</span><span class="p">:</span> <span class="nb">dict</span><span class="p">):</span>
+    <span class="n">pinned</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">table</span><span class="p">(</span><span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="o">**</span><span class="n">pin</span><span class="p">)</span>
+    <span class="n">factor</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">pinned</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span>
+            <span class="n">past</span><span class="o">=</span><span class="n">sql_expr</span><span class="p">(</span><span class="s2">&quot;lag(adj_close, 126)&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="n">partition_by</span><span class="o">=</span><span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="n">order_by</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">value</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;adj_close&quot;</span><span class="p">)</span> <span class="o">/</span> <span class="n">col</span><span class="p">(</span><span class="s2">&quot;past&quot;</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">ts</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span> <span class="n">asset</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span> <span class="n">factor</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">))</span>
+    <span class="p">)</span>
+    <span class="n">price_frame</span> <span class="o">=</span> <span class="n">pinned</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">ts</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span> <span class="n">asset</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span> <span class="n">price</span><span class="o">=</span><span class="n">col</span><span class="p">(</span><span class="s2">&quot;adj_close&quot;</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">quant</span><span class="o">.</span><span class="n">build_panel</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">factor</span><span class="p">,</span> <span class="n">price_frame</span><span class="p">,</span> <span class="n">periods</span><span class="o">=</span><span class="p">(</span><span class="mi">21</span><span class="p">,),</span> <span class="n">quantiles</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="o">**</span><span class="n">pin</span><span class="p">)</span>
+
+
+<span class="n">panel</span> <span class="o">=</span> <span class="n">build_panel</span><span class="p">({</span><span class="s2">&quot;snapshot&quot;</span><span class="p">:</span> <span class="s2">&quot;prices-v1&quot;</span><span class="p">})</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="n">panel</span><span class="p">,</span> <span class="n">rerun</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="n">build_panel</span><span class="p">({</span><span class="s2">&quot;snapshot&quot;</span><span class="p">:</span> <span class="s2">&quot;prices-v1&quot;</span><span class="p">}))</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;verified </span><span class="si">{</span><span class="n">report</span><span class="p">[</span><span class="s1">&#39;verified&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">  pinned </span><span class="si">{</span><span class="n">report</span><span class="p">[</span><span class="s1">&#39;pinned&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">  digest </span><span class="si">{</span><span class="n">report</span><span class="p">[</span><span class="s1">&#39;digest&#39;</span><span class="p">][:</span><span class="mi">16</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="n">unpinned</span> <span class="o">=</span> <span class="n">build_panel</span><span class="p">({})</span>
+<span class="n">relaxed</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">verify</span><span class="p">(</span><span class="n">unpinned</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;unpinned: verified=</span><span class="si">{</span><span class="n">relaxed</span><span class="p">[</span><span class="s1">&#39;verified&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2"> reason=</span><span class="si">{</span><span class="n">relaxed</span><span class="p">[</span><span class="s1">&#39;reason&#39;</span><span class="p">]</span><span class="si">!r}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">verified True  pinned True  digest 53fe8be088649650
+unpinned: verified=False reason=&#x27;unpinned computation&#x27;</pre></div></div>
+<h2 id="4-the-vendor-restates">4. The vendor restates<a class="headerlink" href="#4-the-vendor-restates" title="Permanent link">#</a></h2>
+<p>A correction arrives: one session of one symbol was wrong. The fix is an
+ordinary previewable mutation, so the old version stays readable and the new
+one is what "latest" now means.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">target_symbol</span><span class="p">,</span> <span class="n">target_day</span> <span class="o">=</span> <span class="s2">&quot;GE&quot;</span><span class="p">,</span> <span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="s2">&quot;2024-03-14&quot;</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">date</span><span class="p">()</span>
+<span class="n">frame</span> <span class="o">=</span> <span class="n">daily</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="c1"># The session stamp carries a time, so a whole day is a half-open range rather</span>
+<span class="c1"># than an equality test.</span>
+<span class="n">window</span> <span class="o">=</span> <span class="n">frame</span><span class="p">[</span><span class="n">frame</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">date</span> <span class="o">==</span> <span class="n">target_day</span><span class="p">]</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;as delivered:&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">window</span><span class="p">[</span><span class="n">window</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">target_symbol</span><span class="p">][[</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;symbol&quot;</span><span class="p">,</span> <span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="s2">&quot;adj_close&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">to_string</span><span class="p">(</span><span class="n">index</span><span class="o">=</span><span class="kc">False</span><span class="p">))</span>
+
+<span class="n">corrected</span> <span class="o">=</span> <span class="n">window</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+<span class="n">mask</span> <span class="o">=</span> <span class="n">corrected</span><span class="p">[</span><span class="s2">&quot;symbol&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">target_symbol</span>
+<span class="n">corrected</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="s2">&quot;adj_close&quot;</span><span class="p">]]</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">corrected</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">mask</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;close&quot;</span><span class="p">,</span> <span class="s2">&quot;adj_close&quot;</span><span class="p">]]</span> <span class="o">*</span> <span class="mf">0.82</span>
+<span class="p">)</span><span class="o">.</span><span class="n">values</span>
+<span class="n">day_start</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">pd</span><span class="o">.</span><span class="n">Timestamp</span><span class="p">(</span><span class="n">target_day</span><span class="p">,</span> <span class="n">tz</span><span class="o">=</span><span class="s2">&quot;UTC&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">value</span> <span class="o">//</span> <span class="mi">1_000</span><span class="p">)</span>
+<span class="n">day_end</span> <span class="o">=</span> <span class="n">day_start</span> <span class="o">+</span> <span class="mi">24</span> <span class="o">*</span> <span class="mi">60</span> <span class="o">*</span> <span class="mi">60</span> <span class="o">*</span> <span class="mi">1_000_000</span>
+<span class="n">plan</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">plan_replace_range</span><span class="p">(</span>
+    <span class="s2">&quot;prices&quot;</span><span class="p">,</span>
+    <span class="n">day_start</span><span class="p">,</span>
+    <span class="n">day_end</span><span class="p">,</span>
+    <span class="n">data</span><span class="o">=</span><span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span>
+        <span class="n">corrected</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;symbol&quot;</span><span class="p">),</span> <span class="n">schema</span><span class="o">=</span><span class="n">prices</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span>
+    <span class="p">),</span>
+    <span class="n">note</span><span class="o">=</span><span class="s2">&quot;vendor restatement: GE close was 18% too high&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">rows affected </span><span class="si">{</span><span class="n">plan</span><span class="o">.</span><span class="n">summary</span><span class="p">[</span><span class="s1">&#39;rows_affected&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">, &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;rows after </span><span class="si">{</span><span class="n">plan</span><span class="o">.</span><span class="n">summary</span><span class="p">[</span><span class="s1">&#39;rows_after&#39;</span><span class="p">]</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">plan</span><span class="o">.</span><span class="n">apply</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;prices is now at version </span><span class="si">{</span><span class="n">db</span><span class="o">.</span><span class="n">versions</span><span class="p">(</span><span class="s1">&#39;prices&#39;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s1">&#39;sequence&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">as delivered:
+                       ts symbol      close  adj_close
+2024-03-14 20:00:00+00:00     GE 133.080612 131.104553</pre><pre class="">
+rows affected 30, rows after 64,020
+prices is now at version 2</pre></div></div>
+<h2 id="5-did-the-restatement-change-the-answer">5. Did the restatement change the answer?<a class="headerlink" href="#5-did-the-restatement-change-the-answer" title="Permanent link">#</a></h2>
+<p><code>restatement_impact</code> runs one computation at two read points and reports the
+differences per metric. This is the question a versioned store exists to
+answer: not "what is my alpha" but "did the revision move it, and by how
+much".</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">def</span> <span class="nf">headline</span><span class="p">(</span><span class="n">built</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+    <span class="n">decay</span> <span class="o">=</span> <span class="n">built</span><span class="o">.</span><span class="n">ic_decay</span><span class="p">()</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;mean_ic&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">decay</span><span class="p">[</span><span class="s2">&quot;mean_ic&quot;</span><span class="p">]),</span>
+        <span class="s2">&quot;ic_t_stat&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">decay</span><span class="p">[</span><span class="s2">&quot;t_stat&quot;</span><span class="p">]),</span>
+        <span class="s2">&quot;observations&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">decay</span><span class="p">[</span><span class="s2">&quot;n&quot;</span><span class="p">]),</span>
+    <span class="p">}</span>
+
+
+<span class="n">impact</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">restatement_impact</span><span class="p">(</span>
+    <span class="n">build_panel</span><span class="p">,</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">before</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;version&quot;</span><span class="p">:</span> <span class="n">first_version</span><span class="p">},</span>
+    <span class="n">after</span><span class="o">=</span><span class="p">{},</span>
+    <span class="n">metric</span><span class="o">=</span><span class="n">headline</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;changed: </span><span class="si">{</span><span class="n">impact</span><span class="p">[</span><span class="s1">&#39;changed&#39;</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">impact</span><span class="p">[</span><span class="s2">&quot;metrics&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">6</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">changed: True</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>before</th>
+      <th>after</th>
+      <th>delta</th>
+      <th>changed</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>ic_t_stat</th>
+      <td>2.765367</td>
+      <td>2.753026</td>
+      <td>-0.012341</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <th>mean_ic</th>
+      <td>0.018205</td>
+      <td>0.018121</td>
+      <td>-0.000084</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <th>observations</th>
+      <td>1987.0</td>
+      <td>1987.0</td>
+      <td>0.0</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>One corrected close, in one name out of thirty, on one session out of two
+thousand, moved the mean information coefficient in the fifth decimal place
+and its t-statistic by about a hundredth. Small, and not zero, which is the
+point: the size was measured rather than assumed. A restatement that touched a
+whole sector, or a survivorship correction that removed a name, will not read
+like this.</p>
+<p>The reason to run it every time is that the cost is one query, and the
+alternative is discovering the sensitivity from a production difference.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sensitive</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">restatement_impact</span><span class="p">(</span>
+    <span class="n">build_panel</span><span class="p">,</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">before</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;version&quot;</span><span class="p">:</span> <span class="n">first_version</span><span class="p">},</span>
+    <span class="n">after</span><span class="o">=</span><span class="p">{},</span>
+    <span class="n">metric</span><span class="o">=</span><span class="k">lambda</span> <span class="n">built</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;top_bucket_21d&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span>
+            <span class="n">built</span><span class="o">.</span><span class="n">quantile_returns</span><span class="p">()</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="s2">&quot;mean_21&quot;</span><span class="p">]</span>
+        <span class="p">)</span>
+    <span class="p">},</span>
+<span class="p">)</span>
+<span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">sensitive</span><span class="p">[</span><span class="s2">&quot;metrics&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">T</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">8</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>before</th>
+      <th>after</th>
+      <th>delta</th>
+      <th>changed</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>top_bucket_21d</th>
+      <td>0.005916</td>
+      <td>0.005901</td>
+      <td>-0.000016</td>
+      <td>True</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="6-cleaning-up">6. Cleaning up<a class="headerlink" href="#6-cleaning-up" title="Permanent link">#</a></h2>
+<p>A sweep's forks are cheap but not free, and research databases accumulate
+them. <code>drop()</code> removes a sweep's forks and the comparison table with them.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;forks before </span><span class="si">{</span><span class="nb">len</span><span class="p">([</span><span class="n">name</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">db</span><span class="o">.</span><span class="n">fork_names</span><span class="p">()])</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">dropped</span> <span class="o">=</span> <span class="n">partial</span><span class="o">.</span><span class="n">drop</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;dropped </span><span class="si">{</span><span class="n">dropped</span><span class="si">}</span><span class="s2"> brittle-sweep forks&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;forks after  </span><span class="si">{</span><span class="nb">len</span><span class="p">([</span><span class="n">name</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">name</span><span class="w"> </span><span class="ow">in</span><span class="w"> </span><span class="n">db</span><span class="o">.</span><span class="n">fork_names</span><span class="p">()])</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">forks before 8
+dropped 1 brittle-sweep forks
+forks after  7</pre></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li><code>quant.sweep</code> gives every trial its own fork, so trials cannot contaminate
+  each other and <code>compare()</code> reads them all back in one query.</li>
+<li><code>keep_going</code> is right for an overnight grid and wrong when a failure means
+  the data is broken.</li>
+<li><code>quant.verify</code> checks the provenance digest <em>and</em> the recomputed values, and
+  refuses to verify anything unpinned.</li>
+<li>A restatement is an ordinary versioned commit, so the old answer stays
+  readable rather than being overwritten.</li>
+<li><code>restatement_impact</code> turns "the vendor revised the data" into a number per
+  metric, which is the only form in which that fact is actionable.</li>
+<li>Drop sweep forks when the research is done; the comparison table goes with
+  them.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/06_performance_analytics/03_cross_validation_without_leakage/"><span class="dir">← Previous</span><span class="pn-title">Cross-validation that a time series survives</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-the-data-and-a-version-of-it">1. The data, and a version of it</a></li><li><a href="#2-a-sweep-is-one-fork-per-trial">2. A sweep is one fork per trial</a></li><li><a href="#3-verification-is-a-refusal-not-a-checkmark">3. Verification is a refusal, not a checkmark</a></li><li><a href="#4-the-vendor-restates">4. The vendor restates</a></li><li><a href="#5-did-the-restatement-change-the-answer">5. Did the restatement change the answer?</a></li><li><a href="#6-cleaning-up">6. Cleaning up</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

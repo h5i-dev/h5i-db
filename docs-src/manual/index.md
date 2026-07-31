@@ -80,7 +80,7 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
   <a class="card" href="../cookbook/">
     <span class="card-no">TUTORIALS</span>
     <span class="card-title">Cookbook</span>
-    <span class="card-desc">37 executed notebooks: fundamentals, market data engineering, alpha research, risk &amp; production.</span>
+    <span class="card-desc">Executed notebooks: fundamentals, market data engineering, alpha research, risk &amp; production, event-driven backtesting, prediction markets, performance analytics.</span>
   </a>
 </div>
 

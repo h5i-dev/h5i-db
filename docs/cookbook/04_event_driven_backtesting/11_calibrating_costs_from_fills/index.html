@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Calibrating costs from your own fills · h5i-db docs</title>
+  <meta name="description" content="Recipe 04/02 varies fees, slippage and latency to see whether a conclusion survives them.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="Calibrating costs from your own fills · h5i-db docs">
+  <meta property="og:description" content="Recipe 04/02 varies fees, slippage and latency to see whether a conclusion survives them.">
+  <meta property="og:url" content="https://db.h5i.dev/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Calibrating costs from your own fills · h5i-db docs">
+  <meta name="twitter:description" content="Recipe 04/02 varies fees, slippage and latency to see whether a conclusion survives them.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/#article","headline":"Calibrating costs from your own fills","name":"Calibrating costs from your own fills","description":"Recipe 04/02 varies fees, slippage and latency to see whether a conclusion survives them.","url":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Cookbook","item":"https://db.h5i.dev/cookbook/"},{"@type":"ListItem","position":3,"name":"Event-driven backtesting"},{"@type":"ListItem","position":4,"name":"Calibrating costs from your own fills","item":"https://db.h5i.dev/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" >Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" class="active">Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Event-driven backtesting</div><ul><li><a href="/cookbook/04_event_driven_backtesting/01_first_event_driven_run/">Your first event-driven backtest</a></li><li><a href="/cookbook/04_event_driven_backtesting/02_execution_realism/">Stress-test execution assumptions</a></li><li><a href="/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/">Operate reproducible backtests</a></li><li><a href="/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/">A production data contract for Kaggle Polymarket L2</a></li><li><a href="/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/">Causal signal replay on real Polymarket books</a></li><li><a href="/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/">Order lifecycle and account risk</a></li><li><a href="/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/">Path-dependent Python strategies</a></li><li><a href="/cookbook/04_event_driven_backtesting/08_equity_bars_to_event_driven/">From a vectorized equity backtest to an event-driven one</a></li><li><a href="/cookbook/04_event_driven_backtesting/09_market_making_inventory/">Market making: inventory, latency, and being run over</a></li><li><a href="/cookbook/04_event_driven_backtesting/10_execution_algorithms/">Execution algorithms and the cost of not finishing</a></li><li><a href="/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/" class="active">Calibrating costs from your own fills</a></li><li><a href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/">Searching a strategy space without fooling yourself</a></li><li><a href="/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/">Replaying an account&#x27;s ledger</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/cookbook/">Cookbook</a>
+<span class="sep">/</span>
+<span>Event-driven backtesting</span>
+<span class="sep">/</span>
+<span>Calibrating costs from your own fills</span></div>
+<h1>Calibrating costs from your own fills</h1>
+<p>Recipe 04/02 varies fees, slippage and latency to see whether a conclusion
+survives them. That is the right first move, and it leaves an obvious
+question open: which setting is <em>true</em>? A strategy whose edge is smaller than
+the error in your slippage guess is not a strategy you have tested.</p>
+<p>The number is measurable. A replay against a book with depth produces fills
+that walked that book, and the distance each fill travelled from the mid, as a
+function of how much of the displayed size it took, is a cost model. This
+recipe fits one with <code>quant.costs</code>, then validates it the only way a cost
+model can be validated: by charging it in a cheaper backtest and checking that
+the cheaper backtest reproduces what the full book actually did.</p>
+<h2 id="terms-used-here">Terms used here<a class="headerlink" href="#terms-used-here" title="Permanent link">#</a></h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>term</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>slippage</td>
+<td>the gap between the price you referenced and the price you got</td>
+</tr>
+<tr>
+<td>participation</td>
+<td>order size as a fraction of the size displayed at the touch</td>
+</tr>
+<tr>
+<td>effective spread</td>
+<td>twice the average cost of crossing, one side measured</td>
+</tr>
+<tr>
+<td>market impact</td>
+<td>how much worse the price gets as the order gets bigger</td>
+</tr>
+<tr>
+<td>square-root law</td>
+<td>the usual empirical shape: cost grows with the square root of size</td>
+</tr>
+<tr>
+<td>top of book</td>
+<td>a backtest that sees only the best bid and offer, with no depth behind them</td>
+</tr>
+<tr>
+<td>tick</td>
+<td>the smallest price increment a venue quotes</td>
+</tr>
+</tbody>
+</table></div>
+<p>New to any of these? <a href="../../GLOSSARY.md">GLOSSARY.md</a> defines them at more
+length, along with every other term the cookbook uses.</p>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">datetime</span> <span class="k">as</span> <span class="nn">dt</span>
+
+<span class="kn">import</span> <span class="nn">matplotlib.pyplot</span> <span class="k">as</span> <span class="nn">plt</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">import</span> <span class="nn">pandas</span> <span class="k">as</span> <span class="nn">pd</span>
+<span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+
+<span class="kn">import</span> <span class="nn">h5i_db</span>
+<span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span>
+<span class="kn">from</span> <span class="nn">h5i_db.quant</span> <span class="kn">import</span> <span class="n">costs</span>
+<span class="kn">import</span> <span class="nn">cookbook_utils</span> <span class="k">as</span> <span class="nn">cu</span>
+
+<span class="n">SYMBOL</span> <span class="o">=</span> <span class="s2">&quot;ACME&quot;</span>
+<span class="n">TICK</span> <span class="o">=</span> <span class="mf">0.01</span>
+<span class="n">PROBE_SIZES</span> <span class="o">=</span> <span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">250</span><span class="p">,</span> <span class="mi">500</span><span class="p">,</span> <span class="mi">1_000</span><span class="p">,</span> <span class="mi">2_000</span><span class="p">,</span> <span class="mi">4_000</span><span class="p">,</span> <span class="mi">8_000</span><span class="p">)</span>
+</pre></div>
+</div>
+<h2 id="1-a-book-with-something-behind-the-touch">1. A book with something behind the touch<a class="headerlink" href="#1-a-book-with-something-behind-the-touch" title="Permanent link">#</a></h2>
+<p>Every earlier recipe in this section quoted one level a side, which is enough
+to fill a small order and useless for measuring what a large one costs. This
+tape carries eight levels, one tick apart, each holding more size than the one
+in front of it.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>column</th>
+<th>type</th>
+<th>meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ts_init</code></td>
+<td><code>timestamp[ns]</code></td>
+<td>the instant the book event arrived</td>
+</tr>
+<tr>
+<td><code>side</code></td>
+<td><code>string</code></td>
+<td><code>buy</code> for bids, <code>sell</code> for offers</td>
+</tr>
+<tr>
+<td><code>price</code></td>
+<td><code>float64</code></td>
+<td>the level's price</td>
+</tr>
+<tr>
+<td><code>size</code></td>
+<td><code>float64</code></td>
+<td>shares displayed at that price</td>
+</tr>
+<tr>
+<td><code>event_index</code></td>
+<td><code>int64</code></td>
+<td>rows sharing one value are one atomic book</td>
+</tr>
+</tbody>
+</table></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">quotes</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_quotes</span><span class="p">(</span><span class="n">symbols</span><span class="o">=</span><span class="p">[</span><span class="n">SYMBOL</span><span class="p">],</span> <span class="n">days</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">quotes_per_day</span><span class="o">=</span><span class="mi">2_000</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">23</span><span class="p">)</span>
+<span class="n">tape</span> <span class="o">=</span> <span class="n">cu</span><span class="o">.</span><span class="n">make_equity_tape</span><span class="p">(</span>
+    <span class="n">quotes</span><span class="p">,</span> <span class="n">levels</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">level_growth</span><span class="o">=</span><span class="mf">1.6</span><span class="p">,</span> <span class="n">print_every</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">tick_size</span><span class="o">=</span><span class="n">TICK</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">tape</span><span class="p">[</span><span class="s1">&#39;book_deltas&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> book rows, &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">tape</span><span class="p">[</span><span class="s1">&#39;book_deltas&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">num_rows</span><span class="w"> </span><span class="o">//</span><span class="w"> </span><span class="p">(</span><span class="mi">2</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">8</span><span class="p">)</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> events&quot;</span><span class="p">)</span>
+<span class="n">tape</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">9</span><span class="p">)[[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;size&quot;</span><span class="p">,</span> <span class="s2">&quot;is_last&quot;</span><span class="p">]]</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">24,864 book rows, 1,554 events</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_init</th>
+      <th>side</th>
+      <th>price</th>
+      <th>size</th>
+      <th>is_last</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>buy</td>
+      <td>289.79</td>
+      <td>1000.0000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>buy</td>
+      <td>289.78</td>
+      <td>1600.0000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>buy</td>
+      <td>289.77</td>
+      <td>2560.0000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>buy</td>
+      <td>289.76</td>
+      <td>4096.0000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>buy</td>
+      <td>289.75</td>
+      <td>6553.6000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>5</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>buy</td>
+      <td>289.74</td>
+      <td>10485.7600</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>6</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>buy</td>
+      <td>289.73</td>
+      <td>16777.2160</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>7</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>buy</td>
+      <td>289.72</td>
+      <td>26843.5456</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>8</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>sell</td>
+      <td>289.85</td>
+      <td>300.0000</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">db</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;04_calibrating_costs_from_fills&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">table</span> <span class="ow">in</span> <span class="n">tape</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+    <span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;eight-level ladder&quot;</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;l2-v1&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">tape</span><span class="p">),</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;The full book the cost model is fitted on&quot;</span><span class="p">)</span>
+
+<span class="n">book</span> <span class="o">=</span> <span class="n">tape</span><span class="p">[</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">bids</span><span class="p">,</span> <span class="n">asks</span> <span class="o">=</span> <span class="n">book</span><span class="p">[</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;buy&quot;</span><span class="p">],</span> <span class="n">book</span><span class="p">[</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;sell&quot;</span><span class="p">]</span>
+<span class="n">top_bid</span> <span class="o">=</span> <span class="n">bids</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">bids</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">idxmax</span><span class="p">()]</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+<span class="n">top_ask</span> <span class="o">=</span> <span class="n">asks</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">asks</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">idxmin</span><span class="p">()]</span><span class="o">.</span><span class="n">set_index</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+<span class="n">quote</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span>
+    <span class="p">{</span>
+        <span class="s2">&quot;bid&quot;</span><span class="p">:</span> <span class="n">top_bid</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;bid_size&quot;</span><span class="p">:</span> <span class="n">top_bid</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;bid_depth&quot;</span><span class="p">:</span> <span class="n">bids</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)[</span><span class="s2">&quot;size&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span>
+        <span class="s2">&quot;ask&quot;</span><span class="p">:</span> <span class="n">top_ask</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;ask_size&quot;</span><span class="p">:</span> <span class="n">top_ask</span><span class="p">[</span><span class="s2">&quot;size&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;ask_depth&quot;</span><span class="p">:</span> <span class="n">asks</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)[</span><span class="s2">&quot;size&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">(),</span>
+    <span class="p">}</span>
+<span class="p">)</span><span class="o">.</span><span class="n">sort_index</span><span class="p">()</span>
+<span class="n">quote</span><span class="p">[</span><span class="s2">&quot;mid&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span><span class="n">quote</span><span class="p">[</span><span class="s2">&quot;bid&quot;</span><span class="p">]</span> <span class="o">+</span> <span class="n">quote</span><span class="p">[</span><span class="s2">&quot;ask&quot;</span><span class="p">])</span> <span class="o">/</span> <span class="mi">2</span>
+<span class="n">quote</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>bid</th>
+      <th>bid_size</th>
+      <th>bid_depth</th>
+      <th>ask</th>
+      <th>ask_size</th>
+      <th>ask_depth</th>
+      <th>mid</th>
+    </tr>
+    <tr>
+      <th>ts_init</th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>2026-06-01 13:30:00.067981</th>
+      <td>289.79</td>
+      <td>1000.0</td>
+      <td>69916.12160</td>
+      <td>289.85</td>
+      <td>300.0</td>
+      <td>20974.83648</td>
+      <td>289.820</td>
+    </tr>
+    <tr>
+      <th>2026-06-01 13:30:01.150309</th>
+      <td>289.75</td>
+      <td>400.0</td>
+      <td>27966.44864</td>
+      <td>289.80</td>
+      <td>200.0</td>
+      <td>13983.22432</td>
+      <td>289.775</td>
+    </tr>
+    <tr>
+      <th>2026-06-01 13:30:01.964625</th>
+      <td>289.76</td>
+      <td>2000.0</td>
+      <td>139832.24320</td>
+      <td>289.79</td>
+      <td>100.0</td>
+      <td>6991.61216</td>
+      <td>289.775</td>
+    </tr>
+    <tr>
+      <th>2026-06-01 13:30:07.271106</th>
+      <td>289.81</td>
+      <td>100.0</td>
+      <td>6991.61216</td>
+      <td>289.84</td>
+      <td>1200.0</td>
+      <td>83899.34592</td>
+      <td>289.825</td>
+    </tr>
+    <tr>
+      <th>2026-06-01 13:30:09.176965</th>
+      <td>289.76</td>
+      <td>200.0</td>
+      <td>13983.22432</td>
+      <td>289.80</td>
+      <td>800.0</td>
+      <td>55932.89728</td>
+      <td>289.780</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="2-probe-orders">2. Probe orders<a class="headerlink" href="#2-probe-orders" title="Permanent link">#</a></h2>
+<p>A cost model needs fills across a range of sizes. Here they come from probe
+orders: the same size ladder, alternating side, spread through the session so
+each one meets a different book.</p>
+<p>On a desk you would use your own historical fills instead, and the arithmetic
+below is unchanged. Probes are used here because a fixture has no trading
+history, and because a deliberately spaced ladder makes the fit legible.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">instants</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DatetimeIndex</span><span class="p">(</span><span class="n">book</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">unique</span><span class="p">())</span><span class="o">.</span><span class="n">sort_values</span><span class="p">()</span>
+<span class="n">probes</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">size</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">PROBE_SIZES</span> <span class="o">*</span> <span class="mi">8</span><span class="p">):</span>
+    <span class="n">at</span> <span class="o">=</span> <span class="n">instants</span><span class="p">[</span><span class="mi">150</span> <span class="o">+</span> <span class="n">index</span> <span class="o">*</span> <span class="mi">20</span><span class="p">]</span>
+    <span class="n">probes</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="n">at</span><span class="o">.</span><span class="n">floor</span><span class="p">(</span><span class="s2">&quot;us&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pydatetime</span><span class="p">()</span> <span class="o">+</span> <span class="n">dt</span><span class="o">.</span><span class="n">timedelta</span><span class="p">(</span><span class="n">microseconds</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span>
+            <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">SYMBOL</span><span class="p">,</span>
+            <span class="s2">&quot;side&quot;</span><span class="p">:</span> <span class="s2">&quot;buy&quot;</span> <span class="k">if</span> <span class="n">index</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">&quot;sell&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;quantity&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">size</span><span class="p">),</span>
+            <span class="s2">&quot;kind&quot;</span><span class="p">:</span> <span class="s2">&quot;market&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;tag&quot;</span><span class="p">:</span> <span class="sa">f</span><span class="s2">&quot;probe-</span><span class="si">{</span><span class="n">size</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+<span class="n">signals</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">signal_table</span><span class="p">(</span><span class="nb">sorted</span><span class="p">(</span><span class="n">probes</span><span class="p">,</span> <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">row</span><span class="p">:</span> <span class="n">row</span><span class="p">[</span><span class="s2">&quot;ts&quot;</span><span class="p">]))</span>
+<span class="n">backtest</span><span class="o">.</span><span class="n">create_signal_table</span><span class="p">(</span><span class="n">db</span><span class="p">)</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="n">signals</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;size ladder, both sides&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">signals</span><span class="o">.</span><span class="n">num_rows</span><span class="si">}</span><span class="s2"> probe orders, </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">PROBE_SIZES</span><span class="p">)</span><span class="si">}</span><span class="s2"> sizes x 8 repeats&quot;</span><span class="p">)</span>
+<span class="n">signals</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">56 probe orders, 7 sizes x 8 repeats</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>kind</th>
+      <th>limit_price</th>
+      <th>time_in_force</th>
+      <th>tag</th>
+      <th>reduce_only</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:41:46.496481024</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>100.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>probe-100</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:43:53.775106816</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>sell</td>
+      <td>250.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>probe-250</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:46:13.138299904</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>500.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>probe-500</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:47:49.601224960</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>sell</td>
+      <td>1000.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>probe-1000</td>
+      <td>False</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:49:17.292925952</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>2000.0</td>
+      <td>market</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>probe-2000</td>
+      <td>False</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Fees are set to zero for the probe run. The question is what the <em>book</em> costs;
+a commission schedule is known exactly and does not need fitting.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">probe_run</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="s2">&quot;cost-probe&quot;</span><span class="p">,</span>
+    <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000_000.0</span><span class="p">,</span>
+    <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span>
+    <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;l2-v1&quot;</span><span class="p">,</span>
+    <span class="n">fee_kind</span><span class="o">=</span><span class="s2">&quot;proportional&quot;</span><span class="p">,</span>
+    <span class="n">fee_rate</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">600_000_000_000</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">probe_fork</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="n">probe_run</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">])</span>
+<span class="n">fills</span> <span class="o">=</span> <span class="n">probe_fork</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;bt_fills&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">orders</span> <span class="o">=</span> <span class="n">probe_fork</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;bt_orders&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">orders</span><span class="p">)</span><span class="si">}</span><span class="s2"> orders produced </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">fills</span><span class="p">)</span><span class="si">}</span><span class="s2"> fills&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;fills per order: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">fills</span><span class="p">)</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="nb">len</span><span class="p">(</span><span class="n">orders</span><span class="p">)</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> on average, &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">fills</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s1">&#39;order_id&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">size</span><span class="p">()</span><span class="o">.</span><span class="n">max</span><span class="p">()</span><span class="si">}</span><span class="s2"> at most&quot;</span><span class="p">)</span>
+<span class="n">fills</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">56 orders produced 194 fills
+fills per order: 3.5 on average, 8 at most</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts</th>
+      <th>order_id</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>side</th>
+      <th>price</th>
+      <th>quantity</th>
+      <th>commission</th>
+      <th>is_taker</th>
+      <th>tag</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:41:49.041193</td>
+      <td>1</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>290.85</td>
+      <td>100.0</td>
+      <td>0.0</td>
+      <td>True</td>
+      <td>probe-100</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:44:11.371913</td>
+      <td>2</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>sell</td>
+      <td>290.24</td>
+      <td>200.0</td>
+      <td>0.0</td>
+      <td>True</td>
+      <td>probe-250</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:44:11.371913</td>
+      <td>2</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>sell</td>
+      <td>290.23</td>
+      <td>50.0</td>
+      <td>0.0</td>
+      <td>True</td>
+      <td>probe-250</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:46:16.885152</td>
+      <td>3</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>290.79</td>
+      <td>300.0</td>
+      <td>0.0</td>
+      <td>True</td>
+      <td>probe-500</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>2026-06-01 13:46:16.885152</td>
+      <td>3</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>buy</td>
+      <td>290.80</td>
+      <td>200.0</td>
+      <td>0.0</td>
+      <td>True</td>
+      <td>probe-500</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<h2 id="3-one-sample-per-order">3. One sample per order<a class="headerlink" href="#3-one-sample-per-order" title="Permanent link">#</a></h2>
+<p>A <code>SlippageSample</code> is one execution measured against the price that stood when
+it was decided. Several fills belong to one decision, so the fills of an order
+are collapsed into their size-weighted average price first. Measuring each
+partial fill separately would count the same decision many times and weight
+the deepest levels least.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">executed</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">fills</span><span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">notional</span><span class="o">=</span><span class="k">lambda</span> <span class="n">frame</span><span class="p">:</span> <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span> <span class="o">*</span> <span class="n">frame</span><span class="p">[</span><span class="s2">&quot;quantity&quot;</span><span class="p">])</span>
+    <span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;order_id&quot;</span><span class="p">)</span>
+    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">ts</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span> <span class="s2">&quot;first&quot;</span><span class="p">),</span>
+        <span class="n">side</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="s2">&quot;first&quot;</span><span class="p">),</span>
+        <span class="n">quantity</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;quantity&quot;</span><span class="p">,</span> <span class="s2">&quot;sum&quot;</span><span class="p">),</span>
+        <span class="n">notional</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;notional&quot;</span><span class="p">,</span> <span class="s2">&quot;sum&quot;</span><span class="p">),</span>
+        <span class="n">levels</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;nunique&quot;</span><span class="p">),</span>
+    <span class="p">)</span>
+<span class="p">)</span>
+<span class="n">executed</span><span class="p">[</span><span class="s2">&quot;avg_price&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">executed</span><span class="p">[</span><span class="s2">&quot;notional&quot;</span><span class="p">]</span> <span class="o">/</span> <span class="n">executed</span><span class="p">[</span><span class="s2">&quot;quantity&quot;</span><span class="p">]</span>
+<span class="n">decision</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">merge_asof</span><span class="p">(</span>
+    <span class="n">executed</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">reset_index</span><span class="p">(),</span>
+    <span class="n">quote</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()[[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="s2">&quot;mid&quot;</span><span class="p">,</span> <span class="s2">&quot;bid_size&quot;</span><span class="p">,</span> <span class="s2">&quot;ask_size&quot;</span><span class="p">]],</span>
+    <span class="n">left_on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span>
+    <span class="n">right_on</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">decision</span><span class="p">[</span><span class="s2">&quot;displayed&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span>
+    <span class="n">decision</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;buy&quot;</span><span class="p">,</span> <span class="n">decision</span><span class="p">[</span><span class="s2">&quot;ask_size&quot;</span><span class="p">],</span> <span class="n">decision</span><span class="p">[</span><span class="s2">&quot;bid_size&quot;</span><span class="p">]</span>
+<span class="p">)</span>
+<span class="n">samples</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">costs</span><span class="o">.</span><span class="n">SlippageSample</span><span class="p">(</span>
+        <span class="n">direction</span><span class="o">=</span><span class="mi">1</span> <span class="k">if</span> <span class="n">row</span><span class="o">.</span><span class="n">side</span> <span class="o">==</span> <span class="s2">&quot;buy&quot;</span> <span class="k">else</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span>
+        <span class="n">fill_price</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">avg_price</span><span class="p">),</span>
+        <span class="n">reference_price</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">mid</span><span class="p">),</span>
+        <span class="n">quantity</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">quantity</span><span class="p">),</span>
+        <span class="n">reference_size</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="n">row</span><span class="o">.</span><span class="n">displayed</span><span class="p">),</span>
+    <span class="p">)</span>
+    <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">decision</span><span class="o">.</span><span class="n">itertuples</span><span class="p">()</span>
+<span class="p">]</span>
+<span class="n">decision</span><span class="p">[</span><span class="s2">&quot;slippage&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">sample</span><span class="o">.</span><span class="n">slippage</span> <span class="k">for</span> <span class="n">sample</span> <span class="ow">in</span> <span class="n">samples</span><span class="p">]</span>
+<span class="n">decision</span><span class="p">[</span><span class="s2">&quot;participation&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="n">sample</span><span class="o">.</span><span class="n">participation</span> <span class="k">for</span> <span class="n">sample</span> <span class="ow">in</span> <span class="n">samples</span><span class="p">]</span>
+<span class="n">decision</span><span class="p">[[</span><span class="s2">&quot;side&quot;</span><span class="p">,</span> <span class="s2">&quot;quantity&quot;</span><span class="p">,</span> <span class="s2">&quot;levels&quot;</span><span class="p">,</span> <span class="s2">&quot;avg_price&quot;</span><span class="p">,</span> <span class="s2">&quot;mid&quot;</span><span class="p">,</span> <span class="s2">&quot;slippage&quot;</span><span class="p">,</span> <span class="s2">&quot;participation&quot;</span><span class="p">]]</span><span class="o">.</span><span class="n">head</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>side</th>
+      <th>quantity</th>
+      <th>levels</th>
+      <th>avg_price</th>
+      <th>mid</th>
+      <th>slippage</th>
+      <th>participation</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>buy</td>
+      <td>100.0</td>
+      <td>1</td>
+      <td>290.8500</td>
+      <td>290.835</td>
+      <td>0.0150</td>
+      <td>0.333333</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>sell</td>
+      <td>250.0</td>
+      <td>2</td>
+      <td>290.2380</td>
+      <td>290.250</td>
+      <td>0.0120</td>
+      <td>1.250000</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>buy</td>
+      <td>500.0</td>
+      <td>2</td>
+      <td>290.7940</td>
+      <td>290.755</td>
+      <td>0.0390</td>
+      <td>1.666667</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>sell</td>
+      <td>1000.0</td>
+      <td>2</td>
+      <td>290.8750</td>
+      <td>290.905</td>
+      <td>0.0300</td>
+      <td>2.000000</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>buy</td>
+      <td>2000.0</td>
+      <td>3</td>
+      <td>290.7228</td>
+      <td>290.700</td>
+      <td>0.0228</td>
+      <td>5.000000</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>Two headline numbers before any fitting. The effective spread is what crossing
+costs on a round trip; the implementation shortfall is what this particular
+set of orders paid per share, weighted by size so that the large orders count
+for what they were.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;effective spread          </span><span class="si">{</span><span class="n">costs</span><span class="o">.</span><span class="n">effective_spread</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;implementation shortfall  </span><span class="si">{</span><span class="n">costs</span><span class="o">.</span><span class="n">implementation_shortfall</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> per share&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;quoted spread (median)    </span><span class="si">{</span><span class="p">(</span><span class="n">quote</span><span class="p">[</span><span class="s1">&#39;ask&#39;</span><span class="p">]</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">quote</span><span class="p">[</span><span class="s1">&#39;bid&#39;</span><span class="p">])</span><span class="o">.</span><span class="n">median</span><span class="p">()</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">effective spread          0.0770
+implementation shortfall  0.0534 per share
+quoted spread (median)    0.0500</pre></div></div>
+<h2 id="4-fitting-the-shape">4. Fitting the shape<a class="headerlink" href="#4-fitting-the-shape" title="Permanent link">#</a></h2>
+<p><code>fit_impact</code> regresses slippage on size, either against the square root of
+participation or against participation itself. The square root is the default
+because it is the shape impact studies keep recovering, and because fitting a
+straight line to a concave process extrapolates badly exactly where it
+matters: in the large orders that decide whether a strategy has capacity.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sqrt_fit</span> <span class="o">=</span> <span class="n">costs</span><span class="o">.</span><span class="n">fit_impact</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="s2">&quot;sqrt&quot;</span><span class="p">)</span>
+<span class="n">linear_fit</span> <span class="o">=</span> <span class="n">costs</span><span class="o">.</span><span class="n">fit_impact</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="s2">&quot;linear&quot;</span><span class="p">)</span>
+<span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">([</span><span class="n">sqrt_fit</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(),</span> <span class="n">linear_fit</span><span class="o">.</span><span class="n">to_dict</span><span class="p">()])</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>intercept</th>
+      <th>coefficient</th>
+      <th>shape</th>
+      <th>r_squared</th>
+      <th>residual_std</th>
+      <th>observations</th>
+      <th>usable</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>0.01865</td>
+      <td>0.00772</td>
+      <td>sqrt</td>
+      <td>0.64098</td>
+      <td>0.01126</td>
+      <td>56</td>
+      <td>True</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>0.02881</td>
+      <td>0.00095</td>
+      <td>linear</td>
+      <td>0.53372</td>
+      <td>0.01283</td>
+      <td>56</td>
+      <td>True</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p><code>usable</code> is not a statistical test. It is a reminder that a cost model fitted
+to eleven fills is not a cost model, and thirty is the conventional floor for
+pretending otherwise.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="k">assert</span> <span class="n">sqrt_fit</span><span class="o">.</span><span class="n">is_usable</span><span class="p">,</span> <span class="s2">&quot;not enough fills to claim a cost model&quot;</span>
+<span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">fit</span> <span class="ow">in</span> <span class="p">((</span><span class="s2">&quot;sqrt&quot;</span><span class="p">,</span> <span class="n">sqrt_fit</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;linear&quot;</span><span class="p">,</span> <span class="n">linear_fit</span><span class="p">)):</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">label</span><span class="si">:</span><span class="s2">&lt;7</span><span class="si">}</span><span class="s2"> R^2 </span><span class="si">{</span><span class="n">fit</span><span class="o">.</span><span class="n">r_squared</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2">  residual </span><span class="si">{</span><span class="n">fit</span><span class="o">.</span><span class="n">residual_std</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">  &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;cost at 1x displayed </span><span class="si">{</span><span class="n">fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="mf">1.0</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">sqrt    R^2 0.641  residual 0.0113  cost at 1x displayed 0.0264
+linear  R^2 0.534  residual 0.0128  cost at 1x displayed 0.0298</pre></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">9</span><span class="p">,</span> <span class="mf">4.5</span><span class="p">))</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">decision</span><span class="p">[</span><span class="s2">&quot;participation&quot;</span><span class="p">],</span> <span class="n">decision</span><span class="p">[</span><span class="s2">&quot;slippage&quot;</span><span class="p">],</span> <span class="n">s</span><span class="o">=</span><span class="mi">18</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.6</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;orders&quot;</span><span class="p">)</span>
+<span class="n">grid</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mf">0.01</span><span class="p">,</span> <span class="n">decision</span><span class="p">[</span><span class="s2">&quot;participation&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(),</span> <span class="mi">100</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="p">[</span><span class="n">sqrt_fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">grid</span><span class="p">],</span> <span class="n">linewidth</span><span class="o">=</span><span class="mf">1.8</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;square-root fit&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">grid</span><span class="p">,</span> <span class="p">[</span><span class="n">linear_fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">x</span><span class="p">)</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">grid</span><span class="p">],</span> <span class="n">linewidth</span><span class="o">=</span><span class="mf">1.4</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">&quot;--&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;linear fit&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;What each order paid, against how much of the book it took&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;Participation (order size / displayed size)&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;Slippage vs mid ($ per share)&quot;</span><span class="p">)</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
+<span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA3oAAAG4CAYAAAAT7JXuAAAAOnRFWHRTb2Z0d2FyZQBNYXRwbG90bGliIHZlcnNpb24zLjExLjEsIGh0dHBzOi8vbWF0cGxvdGxpYi5vcmcvctoD+AAAAAlwSFlzAAAPYQAAD2EBqD+naQAAuFtJREFUeJzs3Xd8VFX6+PHPlCSTNuk9oUMCSehIlV4FRBAVFevXuuquXawr6uqqu/pz1V1dFV1R1wLqIop0lCogPQk1ISSkkUL6JJmZ+/vjJhOGFJIhySTheb9evMyce+695w4hzpNzzvNoFEVREEIIIYQQQgjRaWidPQAhhBBCCCGEEC1LAj0hhBBCCCGE6GQk0BNCCCGEEEKITkYCPSGEEEIIIYToZCTQE0IIIYQQQohORgI9IYQQQgghhOhkJNATQgghhBBCiE5GAj0hhBBCCCGE6GQk0BNCCCGEEEKITkYCPSE6sOeffx6NRoPJZHL2UNpUe37uW2+9ldDQUGcPw2GTJ09mxIgRTerbUZ+1Oc/YVoYOHcrkyZOdPYwOpS3fsyVLlhAdHY2LiwsGg8Gha7TVeJ35vXQx926P/y4bI/9mRUcggZ4QTvD555+j0Wj48ssv6xybOXMmGo2Gd955p86xW265Ba1WS25ubquN7a9//SsajYazZ8+22j2E6OzGjBnDmDFjnD0M0QIOHDjAHXfcwf333095eXmjv2CSv/eW1dz3U95/IexJoCeEE0ycOBGAjRs32rWbzWY2b96Mp6cnGzZsqHPexo0b6d+/P4GBgW0yTnHpWbduHTt27HD2MFrVpfCMouVs3rwZRVFYsGABer3e2cPptOTfpRAtTwI9IZwgLCyMmJiYOsHcrl27KC4u5v7772fTpk1YrVbbsePHj5OWlsakSZPaerhCCHHJqllB4e7u7uSRCCFE80igJ4STTJo0iePHj5Oenm5r27BhA1FRUfzf//0fBQUF7Nu3z3asZvavZjbwXJWVlTz44IMEBgbi5eXFvHnzyM7Otuvz5ZdfotFobH+8vLwYMWIEX331la3PPffcw5NPPgmAn5+fre+FfsuakpLCzTffTGhoKK6urvTs2ZMXX3wRi8XSrPufe73bbruNiIgIDAYD8fHxvP3225jN5mY/d0N27tzJFVdcga+vL+7u7gwaNIiPP/7Yrk/NXsCCggIeeOABgoOD8fPzA0BRFF5//XW6d++Ou7s7I0aMaPR9WrNmDZMmTcJoNOLu7s7w4cP54Ycf7PrU7Pk4evQo06dPx8vLi4ULFzZ4zZr+SUlJTJw4EQ8PDyIiInj66afrvFcLFy60vfdarZbAwEDmzJnDoUOH7PrVt0+muc/aFE0dj6Io/PWvf6Vbt252965vf+DFPGPNe5mSksL06dPx9PQkLCyMp59+2u4XLgBbt25l6tSpBAUFYTQaueyyy/jPf/5j6xcZGcnWrVvZunWrbTxNnYVvyv1B3TM2aNAg3N3d8fX1ZcaMGezatct2/IUXXsDV1ZWSkhJb21tvvYVGo+GGG26wu1Z8fDwzZ85sdFw178+RI0eYNGkSnp6eREdH276HExMTmTx5Mp6ennTp0oWPPvqozjVCQ0O59dZb67QvXLiQyMjIOu1r165l6tSp+Pn5YTQamTBhQr0rHZr6ntXnQu+jl5cXzz//PADe3t5oNBoefPDBeq/V1L/3po63KT8zGtOUnwtNeQ+a2+98y5Ytw8PDg5tvvpnKysoG+53/77K5/46a0r+9PKsQbUYRQjjF8uXLFUD5z3/+Y2ubOHGictNNNymKoigRERHK66+/bju2YMECRa/XK0VFRba2P//5zwqg3HXXXcpXX32lFBYWKlu3blVCQkKUOXPmNHhvq9WqnD59Wnn++ecVjUajrF692nbslVdeUQCloKCgSc9x5MgRxd/fXxk/fryyd+9epbi4WFm1apUSEhKi3HLLLc2+f1JSkuLn56eMGDFC2b59u1JcXKwkJCQof/zjH5UtW7Zc1HPX2LZtm+Lm5qbMnj1bOXbsmJKTk6O88sorilarVRYvXmzrV3Ofm2++Wfniiy+U/Px85YMPPlAURVGeeuopRa/XK2+//baSn5+vJCQkKDNmzFAmTZqkhISE2N3v448/VjQajfLoo48qp06dUvLy8pS//e1vik6nU77++mtbvyFDhijDhg1Tpk+fruzcuVPJyclR/vvf/zb4HOf23717t3L27Fll6dKliru7u3L77bc3eF5lZaVy6NAhZebMmUpYWJiSl5dnOzZp0iRl+PDhdv2b86yOaGw8TzzxhOLi4qK8++67Sn5+vpKYmKjMnj1bmThxYqP3bu4zDhkyRLnsssuUuXPnKrt27VIKCwuVf/3rXwpg+ztXFEVJT09XPD09lTvvvFNJT09XSktLld9//1257bbblAMHDtj6jR49Whk9enST34Om3l9RFGXx4sWKVqtVXn75ZSUnJ0c5duyYcuWVVypubm7Ktm3bFEVRv8cBZcWKFbbzZs2apbi7uytBQUGK1WpVFEVRMjMzFUB58803Lzi+YcOGKVdddZWyf/9+JT8/X3nooYcUV1dXZcuWLcr06dOVvXv3KgUFBcqjjz6qAMq+ffvsrtHQz4Qbb7xRiYiIsGv74IMPFI1Go/zhD39Qjh49qhQVFSm//PKL3b/v5rxn9WnK+6gotT8HiouLL3jNxv7emzPepv7MaOg+Tf250NT3oKn9hgwZokyaNMn2+uWXX67zc7Uh9f27bO6/o8b6t6dnFaKtSKAnhJPk5+crWq1WufXWWxVFURSTyaQYDAZlyZIliqIoyg033KDMmDHD1j80NFQZOXKk3TVqPoD84x//sGv/y1/+ogBKVlbWBccxYsQIZf78+bbXzQ30Zs+erQQHBytnz561a//ss88UQDl48GCz7j99+nTF39+/0ftf7HOPHTtWCQkJUcrKyuzab7zxRsXV1VXJzs62u8+rr75q1y8nJ0dxdXVV7r77brv2zMxMxWAw2AUgRUVFitFoVK6++uo641iwYIHSrVs32+shQ4YogHLo0KFGx39uf41GoyQmJtq1P//88wpQp/18ubm5CqB88skntrbzP2w151kv1vnjycnJUVxcXJR7773Xrt+ZM2cUDw+PJt27Kc+oKOp7qdPplKNHj9q1jxw5Uhk2bJjt9ffff68Ayv79+xu9ryOBXlPuf+bMGcXNzU254YYb7PqVl5croaGhtnuazWbFx8dHuf/++xVFUQNfLy8v5cknn1QAZc+ePYqiKMrSpUub9D1XM77jx4/b2srKyhRPT0/FaDQqR44csRuLt7e38sADD9hdo6mB3tmzZxUvLy/lyiuvbNKYLvSe1aep76OitGyg15TxNudnRkP3acrPhaa+B815r2qCn4qKCuXWW29VDAZDo7+sOldrBnrt7VmFaCuydFMIJ/Hz82PgwIG2pUjbtm3DZDIxYcIEAMaPH8/mzZsxm80kJiaSlZVV77JNoM6yq7i4OEBdIlSjqqqKl19+mf79++Ph4WG3LPP48eMOPUNlZSWrV69m6tSp+Pj42B2rSTv9yy+/NPn+lZWVrF+/3rak8kKa8tznq6ioYOvWrcyYMaPOnpv58+dTWVnJ5s2b7dqvvPJKu9dbtmyhsrKyTntoaGidJYG//vorRUVFXHPNNXXGMnnyZE6ePElqaqqtrWfPnsTGxjY4/vP16tWLvn372rVdddVVAHbL3E6fPs0dd9xBly5dcHV1tVvW1Njff3OetTmaMp4tW7ZQVVXF7Nmz7c4NDAys996OPmONPn360Lt3b7u2uLg4kpOTba/79euHXq/nD3/4AytXrrRbGnmxmnL/LVu2UFFRwbx58+z6GQwGZs6cyfbt2ykrK0On0zFhwgTWrFkDwI4dOygpKeH+++8nKirK1r527VrCwsKa9D3Xp08fevbsaXvt7u5O165dCQkJoU+fPnZj6d69u924m+PXX3+lpKSkzhLThsZ0ofesPk19H1taU8bb3J8Z9WnKz4WmvgfNfa/Onj3L1KlT+fHHH9mwYQMLFixodKxt4VJ6ViHOJYGeEE40ceJETp06RXJyMhs3bqRbt25069YNUAO9kpISdu3a1ej+PFCTu5zLaDQC2JVIeOCBB3jxxRd54oknSE1NxWw2oygKkydPpqqqyqHxFxQUUFlZyeeff45er0en06HT6dBqtbb9U3l5eU2+f0FBAVVVVURERDTp/k157vOdPXsWi8VSb/23mrbzy1ecP56aZwoJCalzjfPbsrKyALjxxhtt75FWq0Wr1XLHHXfYXa++e11IY2OoeY6KigrGjRvHjh07+OKLL8jLy8NqtdrSxDf299+cZ22qpo6n5t7BwcF1rnF+28U8Y43zv59A/Z469/upd+/erFixAqvVypw5c/D19WXkyJEsWbIERVGa9gZcxP1r3pOGvn+tVisFBQUATJkyhaNHj5KamsratWuJjY0lPDycKVOmsHbtWkDNdDhlyhSHx+ft7d1ge1NLtJz/vuXk5ABN+7fQlPesPs15H1tSU8bb3J8Z9WnKz4WmvgfNfa9SUlLYvHkzEyZM4LLLLmt0nG3lUnpWIc4lgZ4QTlQTuG3YsIENGzbYZvNA/UAZERFhO2YwGBg1alS919FoNBe819KlS7npppu48cYbCQoKQqfTAY3Pfl2Ij48Per2eu+++G7PZjMViwWKxYLVaUdSl4Tz33HNNvr+vry8uLi6cPn26SfdvynPXN2adTldv0paatvM38Lu4uNi9DggIsOtf3zVq1Fzrf//7n+09slqtdu/R4MGDG7zXhTQ2hppxbt26lRMnTvDyyy8zZswYW1KJpvzdN+dZm6qp46m5d80H/3Od33Yxz1ijqd9PM2bMYNu2bRQUFLBy5UoiIyP5v//7P95///0m38vR+/v7+wMN/31otVpbwqCaAG7NmjW2xCYAU6dOZcuWLezatYuMjIwmB3oNja+p75uPjw/FxcV12s//9x4UFFRv+8Xc+3zNeR9bUlPG29yfGfVpys+Fpr4HzX2vBg0axJdffsn333/Pdddd1y6SklxKzyrEuSTQE8KJxo4di4uLCytXrmTnzp12gR7AuHHjWL9+Pb/88gujRo3CYDA4dB9FUdBoNLi5udm1b9++nRMnTti1eXp6AuoMyYUYDAamTJnCTz/91OgStqbe383NjcmTJ/PTTz+1WsH2moB51apVdZ5x+fLluLq6cvnllzd6jTFjxuDi4lInA15OTk6dbJTjxo3D29u73uyiLeH48eMcPnzYru1///sfUHcG+Pz3/9NPP73g9ZvzrM11ofHU3PvHH3+0a8/Ly2vw3o48o6OMRiPTp0/n66+/xtvbm19//dV2zNPTs0n/hpprzJgxuLq68t1339m1V1RU8OOPPzJy5Eg8PDwA9ZdFXbt25ZtvvmHXrl22gK5mFv3ZZ5+1vW4LPXv2rJMBNTs7u042w3HjxuHl5cUXX3zRamNpzvvYHC3x994SPzOa8nOhqe+BI+/VNddcw4oVK1i1ahWzZs2itLTUoedo7vvZUP+O8KxCtAYJ9IRwIk9PTy677DJWrFhBVVUV48ePtzs+fvx4Nm3aRF5eXoPLNptCo9Ewa9Ysli5dysaNGyktLWXDhg089NBDdWYJa/a5rVy5sknL3d58803KysqYNWsW27dvp6SkhMzMTH7++WeuvPJKjh492qz7//3vf0dRFGbMmMGOHTsoLS0lMTGRBx98kK1btzr8HpzrlVdeIT8/nwULFnDixAlyc3N5/fXX+fzzz1m0aFG9SwXPFRQUxCOPPMJHH33EP//5TwoKCkhKSuL2229n9OjRdn19fX35xz/+weeff85DDz3EsWPHKC8v5/jx4yxZssS2b8ZRQ4cO5eGHH2bPnj0UFRXxxRdf8Nprr3HLLbfQr18/AIYNG0ZoaCiLFy/mxIkT5Ofn8+67715wn09znxVqy2i89957DV6zqeMJCgri4Ycf5oMPPuC9997j7NmzHD58mDvuuIORI0c6dM2L9fHHH3Pffffx22+/UVhYSGFhIf/+978pLi62+0VNXFwchw8f5siRIxe9pPNcQUFBLFq0yPb3nJubS3JyMtdffz15eXm8+uqrdv1rlmnqdDrGjRsHqDM6gwYNYvXq1cTHx9e7TK013HnnnRw9epRXX32VoqIiDh06xD333FPnZ4CPjw9vvPEGP/zwA/fddx/Hjx+nuLiYX3/99aL/vdRo7vvYVC3x994SPzOa8nOhqe+Bo+/VtGnTWLt2re2XDI4shW3u+9lQ/47wrEK0ijZP/yKEsPPcc88pgNKzZ886x44dO6YACmCX1rlGTTa48vJyu/aNGzcqgLJq1SpbW35+vnLbbbcpwcHBipeXlzJ16lTlyJEjysyZM5XY2Fi78x999FElNDRU0Wq1CqBs37690WdIS0tT7rrrLqVLly6Ki4uLEhERocycOVNZuXKlLY17c+5//PhxZeHChUpISIji5uamxMfHK//4xz+UqqqqZj93Q7Zv365MmzZNMRqNipubmzJgwIA6Kc4buo+iqCUiXnnlFaVLly6Km5ubMmzYMGXr1q3KLbfcUm82yF9++UWZOXOm4u/vr7i5uSl9+vRR7rrrLrvMeOen676Qmv4JCQnK2LFjFYPBoISFhSmLFi1SKisr7fru2bNHGT9+vOLl5aUEBwcr9913n1JWVqYAyhNPPGHrV1/mu+Y86wcffKAAyv/+979Gx97U8VitVuXll1+23Xv48OHK9u3blQULFihdunRpsWds6L1/5JFHFJ1OZ3tdWlqq/Otf/1JGjhypGI1GWymQc8ukKIqaMfSKK65QvL29FUAJCAho9P1o6v1r/Pvf/1YGDBiguLm5Kd7e3srUqVOVHTt21On31VdfKYAyYcIEu/ZFixYpgPLQQw81Oq4LjW/48OHKuHHj6rQ3lP3wr3/9qxIREaG4ubkpY8aMUQ4cOFBveQVFUZRVq1YpEyZMULy9vRUfHx9lwoQJyoYNGy44pobes/o05X1sTtbNxv7emzvepvzMqE9zfi409T1oar/6nnH//v1KaGioEh8fr2RmZjY47vr+XTb339GF+reXZxWirWgUpQV/1SiEEKLNDB06FF9fX9atW+fsodjcdNNNHDx4kL179zq8f6opLr/8ciorK/ntt99a7R5CCCFERyZLN4UQQrSYDRs28Je//KVVg7z09HR27txpW4oohBBCiLr0zh6AEEKIzqOpGVObauPGjWzcuJEbb7yRyMhIDh48yAMPPICXlxd/+tOfWvReQgghRGciM3pCCCHardGjR+Pm5sb8+fMJDAxk1qxZdO3alW3btjW75qAQQghxKZE9ekIIIYQQQgjRyciMnhBCCCGEEEJ0MhLoCSGEEEIIIUQnI8lYGmC1WsnIyMDb27tVs8cJIYQQQgghRFMoikJxcTHh4eFotY3P2Umg14CMjAyioqKcPQwhhBBCCCGEsJOWlkZkZGSjfSTQa4C3tzegvolGo9HJoxFCCCGEEEJc6oqKioiKirLFKo2RQK8BNcs1jUajBHpCCCGEEEKIdqMpW8skGYsQQgghhBBCdDIS6AkhhBBCCCFEJyOBnhBCCCGEEEJ0MrJH7yJYrVYqKyudPQzRCbi4uKDT6Zw9DCGEEEII0UlIoOegyspKUlJSsFqtzh6K6CR8fX0JDQ2Vuo1CCCGEEOKiSaDnAEVRyMzMRKfTERUVdcFihUI0RlEUysrKyMnJASAsLMzJIxJCCCGEEB2dBHoOMJvNlJWVER4ejoeHh7OHIzoBd3d3AHJycggODpZlnEIIIYQQ4qLIVJQDLBYLAK6urk4eiehMan5pUFVV5eSRCCGEEEKIjk4CvYsge6lES5LvJyGEEEII0VIk0BMOO3LkCIWFhc4ehhBCCCGEEOI8EugJh02aNIkffvjB2cMQQgghhBBCnEcCPSGEEEIIIYToZCTQuwTl5uZy7Nixeou9nzx5kuzsbABOnTrFyZMnbcfMZjMnTpygvLy80eufOXOG1NTUemsMJiQkUFJSQlVVFcePH7eVFAAoKSkhJSXFluxGCCGEEEIIpzBXwNE1oCjOHonDJNBzsiqLlfzSSqosrV94PS8vjxkzZhAZGcn48eMJCgrivffes+tzxx13cNdddxEfH8/YsWNZvHgxANu2baNbt25cdtllREZGctttt9XJDnny5EnGjh1L7969GTduHEFBQXzyySd2fQYMGMBjjz1GVFQUM2fOZNmyZVgsFm6//XaCg4OZMmUKgYGBvPbaa636XgghhBBCCGHHaoHkX+B/98PfesMX10D6bmePymFSR89JrFaFdUnZrE7IoqCsCj8PF6bFhjK5bwhabetkX3zwwQfJzs4mIyMDf39/li1bxrXXXsuwYcMYMmSIrd/PP//M+vXrGTNmDACVlZXccMMNXHXVVbz99ttYrVZuvvlmu9k4s9nMFVdcwezZs9mwYQN6vZ6tW7cydepU4uLiGDp0qK3v+vXr+f3334mIiADgu+++Y8WKFSQnJxMaGkp5eTlvvPFGq7wHQgghhBBC2CnKhG3/gEPfQklWbXvX0WA1O29cF0lm9JxkXVI2S7amkF1UgcFFR3ZRBUu2prAuKbtV7ldcXMznn3/O888/j7+/PwDz589n7NixvP/++3Z9Z8+ebQvyANasWUNmZiYvv/wyGo0GnU7H66+/bnfO6tWrSU5OZuHChRw7doykpCT8/PwYNGgQK1assOv7xz/+0Rbkgbpk083NzVZHzt3dnaeffrpFn18IIYQQQgibktoJCzRa+O09NcgL7Q9TXoSHEuC2n6DrSOeN8SLJjJ4TVFmsrE7IQq/VEuWvBjc+7i6k5ZexOiGLCTHBuOhaNgZPTk5GURTi4uLs2uPj40lISLBr6969u93rEydOEBkZidFotLWFh4fj5+dne52UlISiKFx//fV17q2ct7b5/OtfffXVfPzxx3Tt2pWpU6cyefJkrr32Wnx8fJr3kEIIIYQQQjTkbBocWg4Hl0HBSXjsGLi4g3cIXPkORA6DoD7OHmWLkUDPCYpNZgrKqjC6u9i1Gw16CsqqKDaZ8fd0bdF7enp6AtRJpFJWVmY7VkOn09m99vDwqDcBy7ltrq6uGAwGDh48eMHC3/Vdf8OGDRw9epQNGzbwn//8h8WLF7Nv3z4CAwMv/HBCCCGEEELUpzQXEr+Hg8vh1Lbadu8wyDsBodWTIINudMrwWpMs3XQCb4MePw8Xisrtk5kUmcz4ebjgbWj5+Ltbt274+fmxfv16W5vFYmHTpk0MGjSo0XMHDRpEVlYWhw8ftrVt27YNk8lkez1mzBiKiopYvXp1nfPry+5Z3/E+ffpwzz33sHHjRrKzs9m2bVuj5wkhhBBCCNEgqwX+OQJ+fEQN8gy+MPgWuGWlujQzNO6Cl+jIZEbPCVx0WqbFhrJkawpp+WUYDXqKTGbMVivTYkNbfNkmgF6vZ/HixTzzzDN4eXnRp08f/vnPf1JUVMSDDz7Y6LlDhw5l+vTpXHfddbz22muYzWYeeughu5m5wYMHc9ttt3HTTTfx0ksvMWjQIE6ePMknn3zCH/7wB2bNmtXg9d955x327dvH/PnzCQ8PZ+XKlbi6ujJw4MAWenohhBBCCNGpmSvg2Fo4+A1MfQl8o0Crg/hroCRb/W/PSaBv2VVz7ZkEek4yuW8IgC3rZojRzZZ1s7U88MADeHt789lnn1FQUED//v3Zvn27LTkLqPvnQkND65z73//+l+eee46nn36aqKgo3nrrLf7+97/j6+tr6/PRRx+xZMkSli1bxgcffEDv3r3505/+xLRp02x94uLi8Pb2trv2Qw89xBdffMFHH31EVlYWvXv35pdffqFLly4t/yYIIYQQQojOwWqBk5vV4C7xB6goVNsjBsPoP6lfT3/FeeNzMo1yfqYMAUBRURE+Pj4UFhbaJSEBMJlMpKSk0L17dwwGw0Xdp8pipdhkxtugb5WZPNFxtOT3lRBCCCFEp7b9Xdj6ljpbB4BGLYcQfzX0uwo8/Bs7u8NqLEY5n8zoOZmLTtviiVeEEEIIIYToVHIOq8su/Xuory2VapAXNkBdlhk7D3wiGr/GJUYCPSGEEEIIIUT7c/ZUbTmE7EMw9HaY9aZ6bNBNEDMbAns5d4ztmAR6QgghhBBCiPahNA8SvlWDu7Qdte3eYeAdXvvaM1D9IxokgZ4QQgghhBDCeRQFauowp/wCPz2qfu3uB/3mqEszu4wCreSzaA4J9IQQQgghhBBtq8oEx9bAoWVgMcP1X6jtfabDgBvUAK/nxEuqHEJLk0BPCCGEEEII0fosZjj5KxxcDkkroKJIbde7g6kIDEZw9YC5/3LuODsJCfSEEEIIIYQQrasoA94fB6U51Q0a6HY5xM+HvleqQZ5oURLoCSGEEEIIIVpWThIcXa0WLtdo1GQqbt5qCYS4+RA3D4zhF76OcJgEekIIIYQQQoiLd/aUmi3z4DLISVDbuo+FiMFqsHfXJpm5a0MS6AnRAjZv3szTTz/NyZMnueWWW+jXrx//+Mc/2L59u7OHJoQQQgjRunZ9BAe+grTfatu8wyH+avAIqG2TIK9NSY5SIRrx008/ERsbe8F+CxYsYMqUKWzZsoVHHnmE0tJSMjMzm30dIYQQQoh2z1QE5ora14dXqkGeux8MuQ1u/QkeSoCpL4FfV+eN8xInM3pCNKKsrIzTp0832ic/P5+MjAzmzJlDly5dALjhhhuYNWtWs64jhBBCCNFu1ZRDOPiNuvdu3vsQO1c9dvmjMPwe6DFByiG0IzKjdwnZvXs3c+bMITo6mgkTJvDFF1/YjlmtVhYvXky/fv0YPnw4L7zwAn/4wx94/PHHbX2mTZvG+++/b3fN++67z67Pk08+SWRkJJGRkQwYMIC7776bnJwcu3Ouv/56nnvuOR599FH69evHtddeC4DJZOK5555j4MCB9OvXj4ULF3Ly5MlGn6msrIzIyEi+/vpr5syZQ8+ePfnoo48A2LlzJzNnzqRnz56MGDGCf//733XOb6zP9u3bufvuuykqKrI90yuvvGJ3/vr164mLiwNg6tSptn59+vRh7ty5Tb6OEEIIIUS7YzHDiQ3w/R/gb73h65vUsgiKFfJTavt1Gw19pkmQ194ool6FhYUKoBQWFtY5Vl5eriQmJirl5eVOGJljysvLFT8/P+Wpp55Sjhw5omzevFm56aablD179iiKoiiLFy9WQkJClBUrVij79u1TrrvuOkWr1Sr/93//Z7vGgAEDlNdff93uutddd51dn4KCAiUtLU1JS0tTdu/ercyZM0cZPny4YrVabX0mTZqkaLVa5ZlnnlGSkpKUnJwcxWq1KlOnTlWmTZumbNu2TUlMTFQefvhhJSwsTDl79myDz1VcXKwASmBgoPLll18qKSkpSnFxsZKcnKy4u7srjzzyiHLo0CFl6dKlipeXl/Kvf/3Ldu6F+phMJuX9999XjEaj7ZnO/34oLy9X9uzZowDKunXrbP1ee+01pWvXrk2+Ts21Otr3lRBCCCE6sZ+fUpQ/G6v/+CjKJ7MUZfcnilKa5+yRXbIai1HOJ0s3W8jiHxJIzChq8/v2Czfy59kX3vuVnp5OQUEBDzzwAKGhofTp04cxY8ZgtVqprKzkb3/7G2+99RazZ88G4JNPPmHDhg3NHo+vry++vr4AREZGsnTpUnx9fTl8+DB9+/a19Rs9ejQvvvii7fX69evZunUrOTk5eHh4APD3v/+dVatW8dVXX3HXXXc1et8nn3yS6667zvb60UcfJT4+nr/97W8AxMbGkpqayuLFi7nnnnsAePXVVxvt4+bmhr+/PxqNhsjIyHrvazAYCAsLAyAkJMTWz8/Pz9anKdcRQgghhHCq7ER1WaZfNxhyi9oWMxNSt0H8NeoyTWOYU4comkcCvRaSmFHEbyn5zh5Gg7p3787QoUOZOnUqt912GxMmTGDgwIFotVpSUlIoLi5mzJgxtv4Gg4GhQ4c2+z7p6em8/PLL7Nixg9zcXKxWK4qicPLkSbtAb/DgwXbnbdu2jcrKSvr164eiKAAoisKZM2c4fvz4Be97/vX279/PuHHj7NrGjx/PM888Q05ODsHBwU3qI4QQQgjRaRWchEPLq8shJKptIXG1gV7XUXDXRqcNT1wcCfRaSL9w56SLbep9dTodW7ZsYdmyZaxdu5bXXnuNoKAgVq5cSUWFmjXJ1dV+XfX5r5ti+vTpREdH8/bbbxMeHo5er6dnz562e9QwGAx2r00mE126dGHTpk11runt7Q3Aww8/zNdff21rT0xMRKvV1nu9iooK3Nzc7NpqXteMpSl9hBBCCCE6nYx98NNjkL6zts0YqRYxj5/vtGGJliWBXgtpyvJJZ3Nzc+PGG2/kxhtvpLKykqFDh/Luu+/y7LPPotPpOHjwIF27qilwFUXh4MGDTJgwwXa+0WikuLjY7pqpqam2sgEZGRkkJCTw3Xff0bt3bwAOHz5MVVXVBccWGxvLyZMn0Wq1hIeH19vn2Wef5eGHH7a99vb2prS0tN6+0dHR7N+/365t7969eHh4EBER0eQ+Op3ONsN4MVrqOkIIIYQQzWYqhDNHIOoy9bVHgBrkuftD7FXq0syoEaCVPI2difxtXiL27t3Liy++SF5eHgAFBQUUFxcTFBSEl5cXCxcu5NlnnyU7Oxur1cprr71GcnKy3TWGDh3K8uXLKSgoAODTTz9lx44dtuP+/v64u7vz008/AZCXl8e9997bpPHNmzeP7t27c9NNN5GRkQGoZQteffVVfvtNLb7p5+dny1oZGRmJRqNp8HoPPPAAP/30E99++y0AJ06c4OWXX+b++++3zQI2pU9ERATFxcW2MTmqpa4jhBBCCNEkVeWQ+D/4aiG83hu+uBbMleox3yi4fTU8ehRmvaku0ZQgr9ORv9FLRHR0NFVVVcTExBAYGEiPHj2YOHEiDzzwAABvvPEGwcHBhIeHExAQwKZNm5gyZYrdNZ566imCgoIIDQ0lICCA7777jkmTJtmOGwwGPvroI55//nn8/Pzo2rUrgwcPtiVXaYzBYGD9+vV4enrSrVs3/Pz8iI6OprCw0KFC46NGjeKf//wn99xzD0ajkdjYWCZMmMDzzz/frD7Dhg1j7ty59OjR46LKIrTUdYQQQgghGmS1wPH18N29anD39c2Q9AOgQJdRUH5OPokuI0Dn4rShitanUWQ9Wb2Kiorw8fGhsLAQo9F+H5zJZCIlJYXu3bvX2RvWEeTn5+Pr62ubtTrX2bNn8fDwwNXVlYULF2IwGPjwww/t+pSUlODm5oaLiwv5+floNBq7LJOKopCbm4uvry8uLi5kZGTg7+9ve69yc3NxdXWt877WqKiooKSkhICAgAs+i6IonD59muDg4Hr3FFqtVnJzc/Hx8amzH685fUwmE3l5eXh7e9cZt9VqJSMjg9DQUPR6dTV0WVkZRUVFhIaGNvk6Hf37SgghhBBOoChQs8qpqlwN8CqLAQ10H6vuues7G9z9Gr2M6Bgai1HOJ3v0LkH+/v4NHqspjdAYLy+vRq+l0WgICgqyvT5/z11gYGCj13dzc2sw4KrvXo2VLNBqtRfMntmUPgaDwbZvr77zzx+Dh4dHvTOZjV1HCCGEEKLJshPUbJkJ36nLML1DwMUdRv8JXD2lHIKQQE8IIYQQQogOoeCkGtwdXAZnkmrbj6+FQQvVr8c95pShifZHAj3RoLffftvZQxBCCCGEEADL74SDtWWm8ImqLodwjVr7TojzSKAnGnTuvjshhBBCCNFGTIVqEpWIoRAco7YF9FTLIvS7qrocwnDJlCkaJYGeEEIIIYQQzlZVDkdXw8Fv4NhasFTAiD/A9OpM3SPvh8sfkUyZoskk0BNCCCGEEMJZTv8OOz+ApJXV2TIBnSvEzIIeE2r7uXnVf74QDZBATwghhBBCiLZitUJFYW25gzNHYf9/QaOF7uPUZZl9Z4O7r1OHKTo+CfSEEEIIIYRoTYoC2YfUbJmHvoXQOLj+v+qxmJkw/a9qOQTv0MavI0QzSKAnhBBCCCFEa8hPgUM15RAO17a7+4DFDDo9GIww4l7njVF0WhLoXULeffdd/Pz8uOGGG+p93V5t27aN7777joKCAp599lm+/PJL+vbty5VXXunsoQkhhBBC1C9zP7w/tva1TxTEXQ3x89VyCBqN88YmLgmSk/USsnbtWrZt29bg6/YoISGBCRMm4OXlxYgRI/D09OSHH35gz549tj5vv/02X331lRNHKYQQQohLWvlZ2LMUVvyxti0kHsIHwbA74Laf4U8HYMpiCI2XIE+0CZnRu4Tdf//9eHp6OnsYjdq0aRPR0dH8+c9/trUtWrSI8PBw2+vVq1fTq1cvrrvuOmcMUQghhBCXoqpyOPqzuizz2BqwVKrtw++GkFi1xt2dGyWoE04jgd4l7MiRI/j5+TFy5EgA3njjDbp164a/vz/r1q3DYrFwzTXXMHjwYLvz0tPT+eyzz0hPT6dHjx7cdNNNBAUF2Y5/9tlnbNq0CYCAgABGjBjB3Llz7a5Rcy9vb29WrVpFeHg4jz76qF2f9957j//85z9kZmZyxx132B278sorGTx4MB9//DEHDhzg5MmTtj4vvfQSoaGymVkIIYQQrcBqgf/dD0kroLJEbasphxA/H/x71PaVIE84kQR6l7C1a9cSGRlp26P3008/cfjwYXr16sWcOXNISkpixIgR7Nixwxbsbd++ndmzZzNv3jzi4uLYtWsXr7zyCr/99hs9eqg/2Lp3747JZAIgOzubhx56iNWrV/Pee+/Z7v3TTz+RlJRE165dufbaa+ndu3ed8fXu3ZuoqChycnIYMWKErf3VV18lMjKSK6+8kp49e+Ln50dwcLCtj7u7e+u8YUIIIYS49FitkLYDIoaC3hW0OjibClVlap27+Gug7yww+Dh7pELYkUBP2PH392f9+vXodDoAjh8/zn/+8x9boHf77bfz9NNP89BDD9nOuemmm/jzn//M0qVLARg9ejSjR4+2Hb/uuuvo06cPzzzzDJGRkbZ2d3d3fvnlF1xcXOody6RJk9i1axepqal2M3qffPKJ7euxY8cSFRVFr1696sz6CSGEEEI4RFEg62B1xszlUJQO138J0TPU41e8Dh6B4B3i3HGKVpNXUsGR7GKOZhUztk8QPYI6XsF6CfRa0otBDR+7Yx2EDVC//vJGdS13fcY+BuMeV7/esxR+fLj+fqHxcOcGx8fagAkTJtiCPIDo6GjS09MBOHHiBIcPH2b79u0cOXIERVFQFIUTJ05QXFxsO8dqtbJy5Up27NhBbm4uVqsVrVbLkSNH7AK9yZMnNxjkCSGEEEK0ufxkNbA7+A3kHqltD+oLirX2dUhs249NtIoiUxXHsos5klXC0exijmQVcyynmNySSlufF6+Kk0BPdHznL3vU6XRYLBYAcnNzARg8eDCBgYG2Ppdddhne3t621wsXLmT79u0sXLiQQYMG4eLiwqeffmoXDAL4+vq20lMIIYQQQjjg17/Bvs/Vr326QPzV6tJMCew6PFOVheM5JRzJKlYDuurZuoxC0wXPTTlT2gYjbHkS6LWkZ880rd+Cz5vWb/BN6p92IiIiAoC4uDhmzZpVb5+CggL++9//snv3boYMGQJAXl4ed955Z6uNSyMbnYUQQgjRHOUFkPSDOnMXM0vNlAkw8EZw9YS4+RB1mSRT6YDMFisn80o5klXCkexijmQVcTS7hNS8UqxK4+caXLT0CfGmd7A30aFe9AnxJjrUm1CjoW0G38Ik0BNNFhkZybhx43jhhRcYO3YsRqMRUAO5/fv3M3HiRFvfc2fvXnnllVYdl7+/P/n5+a16DyGEEEJ0cJVlcHSVujTz2BqwVqntilIb6HUbrf4R7Z6iKGQUmjiaVczh6lm6w1nFnMgpodJibfRcvVZDzyAv+oR60yfYi+hQNaCL9PNAp+08wb0EeqJZPvvsM+bMmUN0dDSXX345BQUFJCcn8/e//x0APz8/7rnnHubOncv06dNJTk7GZDLh5ubWamOaM2cOCxcupLKyEi8vLymvIIQQQgh7ST/At3dDVfUSPJ0b9J2tLsvsPdW5YxMXVFBaWT07V2z779GsYoorzI2ep9FAF38Pegd7ExPqTZ9Qb6JDvOke6ImrXttGo3ceCfQuIecXSD//9SOPPGK39w7gxhtvpLS0dl1yZGQku3fvZseOHRw/fpzw8HCGDx+Ol1ftBtV//etf3HzzzRw/fpywsDDGjx/P559/zqBBgxq9V32uuOIK+vbta9d2fsH0efPmsXv3bvbv309paamUVxBCCCEuZTXlEIqzIG6e2hbcD8wmKYfQzpmqLBzLLuFwVpFthu5IVjE5xRUXPDfI242Y6kCuJqDrHeKFh+ulG+5oFEW5wGrVS1NRURE+Pj4UFhbalijWMJlMpKSk0L17dwyGjrlmV7Q/8n0lhBBCOEhRIOsAHFwGh75VyyF4BsPDSaCr/qBflg8e/s4dpwDAYlU4lV/GkawiWzB3JKuYk03YR+ftplcDuepgrua/fp6ubTN4J2ssRjnfpRviCiGEEEKIjq38LPz2vlrvLvdobXtwP4ifD5bK2kBPgjynyC2p4HBmMYezijhSvZ/uWE4xpqrG99G56NR9dDGh3kSHGokO9SI61Ei4j0ES8TVRuwj0cnJyyMnJoUePHnh4eLTYORkZGRQUFBAZGYmPj0zPCyGEEEJ0eOVnwd1X/Vqrgy1vgrkcfLuo2TLj50s5BCcor7RwLKd2uWVNYHduPbqGRPq5E3NOMBcTqu6jc9F1/n10rcmpgV5lZSW33XYby5cvJywsjDNnzvDmm282moq/KeckJiZyww03cOrUKcLCwkhOTmbevHksWbKkVZOCCCGEEEKIVlCWD0kr1KWZaTvhkcPqDJ2bN8z8GwT2gchhUg6hDVitCmkFZRzOKuZwZjFHsos4nNm0ZZe+Hi5Eh3ifM0unLr30cmsXc0+djlPf1ZdeeomNGzdy7NgxoqKi+Oqrr7j++usZPHiwrQabI+fcc889BAUF8dtvv+Hm5saJEycYNGgQ7777Lg8//HBbPqIQQgjR6VRZrBSbzHgb9PIbd9F6KkvhyCo1uDu+rrYcgpsRshOg++Xq60ELnTfGTq6wrIrD1fvoDp+zn66s0tLoea46Lb2C1WWXMWHetlm6YG83WXbZhpwa6H344YfccccdREVFAXDdddfxwgsv8NFHHzUY6DXlnMzMTK6//nrb7F3Pnj3p2rUrmZmZbfBUQgghROdktSqsS8pmdUIWBWVV+Hm4MC02lMl9Q9B2otpTop34cDLkJKpf69yg3xx1aWbvqeAiSctaUpXFSkpuKUmZ1UFd9X8zC00XPFddduldvfTS27bsUi+/BHI6pwV6mZmZZGZmMmzYMLv24cOHs2fPnos659lnn+Wpp54iOjqarl27smbNGgoLC7n33ntb9BkkYaloSVZr45uShRDC2dYlZbNkawp6rRajuwvZRRUs2ZoCwNRYqV8qHGS1wqlt6szdZXdBSD+1PWYmeIep5RBiZoKh8QyDomnOFFeos3OZxSRV//d4E4qMexv01Usu1aCub5g3fUK88Ta4tNHIRXM5LdDLy8sDICAgwK49MDDQdszRc2bOnMkPP/zA/fffT1hYGGlpaTz//PN07969wfFUVFRQUVFbo6OoqKjBvi4uLmg0Gs6cOUNQUJBMQYuLoigKlZWVnDlzBq1Wi6vrpZEeWAjRsVRZrKxOyEKv1RLlryZB83F3IS2/jNUJWUyICZZlnKLpFAUy98PBbyDhOyg6rba7+0LI8+rXE56WPXcXocJs4UROzSydOkOXlFl0weQoOq2G7oGexIR60zfMWL38UrJddkTNDvQqKipYv349v/76K+np6QBERUUxduxYJk2a1OQPqS4uLrbrnau8vNx2zNFzrrjiCoKDg8nIyMDd3Z3k5GRGjBhBVVUVixYtqvfar7zyCosXL27S2HU6HZGRkaSnp3Py5MkmnSPEhXh4eNClSxe0WvmgJIRof4pNZgrKqjC62/8/2mjQU1BWRbHJjP8lUsdKXKT9X8Gvr0Pesdq2kDiIu1rNmFlDgoomURSFM8UVJFUHcoczi0jKLObEmRLMF8iOEuDpahfMxYR60yvYC4OLro1GL1pTkwO90tJSXn/9df75z39SXFxM//79CQkJAWDDhg28+eabGI1G7rvvPh577LELlkmIjIxEo9GQkZFh156RkUGXLl0cPuf06dPs3LmTH3/8EXd3dwB69OjBVVddxbfffttgoPfkk0/aJWopKiqy7QOsj5eXF71796aqqqrR5xSiKXQ6HXq9Xn5TJoRot7wNevw81OWaPucEe0UmMyFGN7wNkjVPNKAoA6rKIaCn+tpcrgZ5vl3VZZnx8yG4r3PH2EFUmq0czykhKbPItp8uKbOIvNLGZ+lqatL1CzMSE6YuvYwJ8ybYW/Y6dmZN/qnct29fhgwZwieffMLkyZPrzNxVVlaydu1aPvzwQ2JiYjh16lSj1/P09GTEiBH8+OOP3HjjjYA6M7d+/XqefvppW7/U1FRKSkqIjY1t0jl+fn5otVqysrLs7peZmVlnyee53Nzcml16QafTodPJbzyEEEJ0fi46LdNiQ1myNYW0/DKMBj1FJjNmq5VpsaGybFPYO7ccwsktEHsVXPOJeqzfVRAcC5FDZdauEbklFbaALilTDeiO51x4li7I242YUG/6hRnV2bowb3oEeuGql3+jl5omB3rff/89gwcPbvC4q6srM2fOZObMmQ0mUznfiy++yPTp04mOjmbkyJG89dZb+Pr6cvfdd9v12bFjB4cOHWrSOR4eHtxyyy089dRTaLVaevTowZo1a/jxxx/5/vvvm/q4QgghhDjP5L7qSp6arJshRjdb1k0hGi6H4AMegbX93H0hali9l7gUmS1WkqszXiaeE9SdKa5o9DwXnYZewd70DfOmb2htUBfoJTWjhUqjODl15IYNG3jnnXfIzs4mPj6eZ555hsjISNvxl156iUOHDvHll182+Zyqqio+/PBDVq9eTV5eHl27duXOO+9k3LhxTR5XUVERPj4+FBYWYjRKlichhBCihtTRE/VK3gSfzlG/1hugzzR1aWavKVIOoVpheRWHbQGdGtQdyS6m0tx4xstAL3UvnfpHXXrZM0hm6S5FzYlRHA70FEXh6NGjJCcnM2PGDIcG2p5JoCeEEEIIUQ+rFVK3qhkzC9Phpm+r2y3w7Z1qYHeJl0NQFIW0/HISzwnqEjOKOH22vNHzdFoNPYM8zwnq1MBO9tKJGs2JURzaOZ2Tk8PVV1/Nli1bgNp6ctOmTePxxx9n0qRJjlxWCCGEEEK0R4oCmfvUZZmHlkNxZu2xwnTwiQStDuYvcdoQncVUZeFYdgmJmYUkZtQuvSyuMDd6ntGgtwVz/cKN9AszSsZL0aIcCvQefvhhwsPDycvLs0tw8tRTT7F48WIJ9IQQQgghOouKEvj3OMg7XtsWEg/xV6slEXwiGz63k8kvrbTNziVW//f4mRIsF0iQ0i3AQw3oambpwqUunWh9DgV6a9as4cCBA/j7+9u1Dxo0iO3bt7fIwIQQQgghhBMUnlYzZg67E3R6cPMCgy/4dVP33MXNh+AYZ4+yVVmtCmkFZXYBXWJmEZmFpkbPM7hoiQ5VAzp1ls6b6FAjXm5SfkS0PYe+60pKSmw16s79TUReXl6zSxQIIYQQQggnK8uHxO/h4HJ1/x0KBPaBXtWrtG74Gjz8O2U5hApz9dLL6mAuIaOQpMxiSi6w9DLQy43YcDWgq5mt6x7oiU7b+d4j0TE5FOiNGjWKzz77jPvuu88W6JnNZp577jnGjh3bogMUQgghhBCtJPF/sPdzOLEerNWBjZsP9JsN3qG1/TwbrkXckRSWV5GUWURChjpLl5BReMHadBoNdA9UE6TEhtfO1kmCFNHeORTovfbaa0ycOJG1a9eiKAr33nsv69evJzs7m61bt7b0GIUQQgghREswV4JiARd1ZRaJK+DYatC7Q9/Z1eUQJoO+Y6/QUhSF7KIKEjIKqwO6IhIyC0nLbzzrpZteS0z17FzNbF1MqDcerrL0UnQ8DpdXSE5O5q233mL37t1YrVYGDx7Mww8/TM+ePVt6jE4h5RWEEEII0SlYLdXlEJapM3iTnoNh/6ceS9sF+ckQcwW4eTt3nA6yWhVO5pWqwVz1LF1iRhF5pZWNnufn4UJsuI8toKtZeqmX2pCiHWv18govvfQSzzzzDG+99ZZDAxRCCCGEEK1IUSBjrxrcJXxrXw4h92jt11HD1D8dRKXZytHsYtuyy4QMtUZdaaWl0fOi/N2JDfOhX3jtTF2oUbJeis7NoRk9Nzc3SktL0es77zS2zOgJIYQQosPa8v9g3Z9rX4fGq8syY+eBb5TThtUcZZVm2366Q6fVoO5odjFVloY/uuq0GnoFedmCudhwNbjzcXdpw5EL0XpafUZv0KBBbN26lXHjxjk0QCGEEEII0UIK09Ui5i4ecNmdalufafD7JxA/v0OUQygsqyIho5BDGYUcOq3O1iXnltLYdITBRUtMqDpDV7MEMzrUWwqOC1HNoUBv3rx5LFiwgEceeYR+/frh6upqd3zy5MktMjghhBBCCFGP0rzqcgjL4NQ2tc0YCUP/D7RaCO4Lf9zbLsshnCmu4FBGIQmn1aDuUEYh6QWNJ0nxNuiJqw7mYiOMxIX7yH46IS7AoaWbF1rP7GB+l3ZFlm4KIYQQot3JT4ZVT8CJDbXlEAw+0G+OOnPX7XI10GsHFEUhq8jEwfRCDmUUqYFdRiHZRRWNnhfo5UZcdTAXG24kLsKHSD932U8nBG2wdLMzBHJCCCGEEO2euQKyDkHkEPW1ux+c2AhaF+h7ZXU5hElOL4egKArpBeUcOl3IwdO1gd2FMl9G+LrXBnXV/w02Sn06IVpC582mIoQQQgjREVktcHILHPwGklZAlQkeOw4Goxro3fQdhA8CNy/nDM+qkJpfxqHTheqf6n11heVVjZ7XPdDTNkMXG64GdX6ero2eI4Rw3EUHeiaTCbPZbNfm5eWcHzxCCCGEEB2SosDpPXBoGRz6Fkqyao91HQ0lOWqgB9D98jYbltWqkJJXqs7UpRdW760rorjC3OA5Wg30DPIiLsJH/VOdAdPbIJkvhWhLDgV6xcXFLFq0iG+++YYzZ87UOS5LO4UQQgghmkGxwpc31AZ4of3VZZlx88Ansk2GYLUqJOeW2pZfHkwvJCGjsNEadTqtht7BalAXH+FDXISRvmFGPFxl0ZgQzubQv8JFixaxd+9ePv30U2bMmMHGjRvZuXMnr7zyCo899lhLj1EIIYQQovM4m6aWQzi0DOZ/DIG9QauDkfdBZYmaVCWoT6sOoSaoO3j6LAfTa+rUNR7U6bUaokO9iQv3IS5SnanrG2aUcgZCtFMOZd2MjIxk3bp1xMTEoNFosFgsaLVaVq5cyQsvvMDOnTtbY6xtSrJuCiGEEKLFlOZB4ndwcHltOQSASX+Gyx9u1Vufu/zyQLo6W5dwuvGgzkWnISbUaDdTFx3qjZtegjohnKk5MYpDgZ5Wq8VsNqPVajEajaSkpBAQEEBpaSkBAQGYTCaHB99eSKAnhBBCiBax9jnY/u455RB81XII8ddA11HqbF4LURSF1LwyDlQnSjmQfpZDp4soaWRP3flBXf9IH/qEeOOqbx9lGoQQtdqkvIK2ukZLdHQ0K1as4LbbbmPjxo0EBAQ4ckkhhBBCiI7PXAHH1qr76sIHqm3GyNpyCP2vhZ6TQH/x2SZrShrUzNKpyzALKTI1PaiLj/AhOlSCOiE6I4cCvZ49e9q+XrRoEddffz2LFy8mPT2dv/71ry02OCGEEEKIdu/8cgimQui/AOa9rx4feIP65yLLIWQVmjiQfpYD6YUcOF3IwfSzFJQ1XNKgZk9dfIQP8ZE+9I/wpU+olyy/FOIS4VCgd/z4cdvXV199NXv37mXXrl3ExMQwYsSIFhucEEIIIUS7lXscdn90XjkEDXQdAz0n1PZzIMDLK6ngwOlCDqSpM3UH0gvJKa5osH9N9sv+kT7ER/rSv3qmThKlCHHpapHct7GxscTGxrbEpYQQQggh2q+KktrALf8E7Pin+nXYQIifD7HzwCeiWZcsMlVxKL2Q/elqULc/rZDTZ8sb7K+prlPXv2amLtKHfmE+uLtKUCeEqOVwoHfixAl+++038vPz6xy7//77L2pQQgghhBDtxtlTajmEg8vB1RP+b7Xa3nMiTHgGYq9SSyQ0ganKQkJGkW0J5v70sySfKW30nG4BHsRF+DAg0pf4SLUIuZeb1KkTQjTOoZ8SS5Ys4a677iIgIAA/P786xyXQE0IIIUSHVpoLCd+pAd6p7bXtxgioKAY3b9C5wLiG6webLVaOZpewP/0sB9LVmbqj2cWYrQ0nPA/3MVTP0vmqgV2EDz4eLi35ZEKIS4RDgd4LL7zAe++9xx133NHS4xFCCCGEcK7CdPh//UGprjPn7ldbDqHLKNDWzVCpKAon88o4kH6WfWnqbF1CRiGmKmuDt/H3dKW/LahT/xvk7dZaTyWEuMQ4FOjl5+dzww03tPRYhBBCCCHaVk05hONrYeabahDnEwmRQ8G3C8TNV5donlcOIafYxP60QrvArrC84QyYXm564iKMDIj0pX+kL/0jfYj0c0ej0bT2EwohLlEOBXqDBw9m3759jBo1qqXHI4QQQgjRuqwWSPkVDi6DpB+golBtj78Guo1Rv759tZr1BCipMHMwNY/96WfZn6b+ySg0NXh5V52WvmHeDIjytc3W9QjyQqeVoE4I0XaaHOitW7fO9vXMmTNZsGABTz75JL169arz26jJkye33AiFEEIIIVrK2udg/5dQkl3doIFul6sZM0NiqbJYOZJVfE5QV8jRnGKUBrbV1WTAHBDpy8AodfllTJi31KoTQjidRlEa+tF1XsdmLC1o4iXbtaKiInx8fCgsLMRoNDp7OEIIIUS7UVZpJrPQRJiPAQ/Xdp79MeewWu7AzVt9/eWNcHglhA1EiZ9PZuQV/F7gzv40dQnmoQvsqws1GhgY5cuAKF8GRPkQH+GDt0GSpQgh2kZzYpQm/3TuDMGbEEIIIRxnNlt5Y91RVh7IoLTCgqebjln9w3l4ch/0+roJSpzGVg5hGWQfgjn/hEE3UlhexfGefyDR8zY25fmwf8NZcksON3gZbze9LaAbEKkGdyFGQxs+iBBCOK5Ffg1nMpnYtGkT3bp1IyYmpiUuKYQQQoh25o11R1m6IxWdRoPBVUdRuZmlO1IBeHy6k///X3IGEr+Hg99A2m+25lK3YFbuPMm/N2zihF29uhy70110GvqGGRlYva9uYJQvPQI90cq+OiFEB+VQoLdq1Sq++OILli5diqIoTJkyhW3btqHRaPj666+ZN29eS49TCCGEEE5UVmlm5YEMdBoNAV5qCQBPVz15JRWsPJDB/RN7OW0Zp6IolG54Ha897wNQrPHmJ8tlLK8axS5TNEqhFrAvSt41wKN6X50vA7v40i/MiMFF9tUJIToPh34iP/vss3z00UcA7NixgxMnTnDmzBl+/vln/vKXv0igJ4QQQnQymYUmSissGFztgyGDi5bSCguZhSZ6Bnm1/kCqTFQkraJk95cc1/VkiXYe+9LOEljclTv1o1hhGcVma3+qzvmI4+PuwoAoNagbVL2/zt/TtZGbCCFEx+dQoJeYmEh0dDQA69evZ+7cufj7+zN37lzuuuuuFh2gEEIIIZwvzMeAp5u6XNPznJk7U5UVo7ueMJ/W2btmtSqknCnk9N41eB75jpiCTXhShhuQZ41gdeVoALLpxoNV96PXaugboS7BHBjly6AuvnQP9JR6dUKIS45DgV5wcDB79uxh5MiRfPvttzzzzDMAZGZmEhIS0qIDFEIIIYTzebjqmdU/nKU7UskrqcDgosVUZcWiKMzqH95iyzYLy6vYl3aWvacK2HvqLJpT23ld+Rs9NUUAWBUN26z9WGEdxSrLZYT7GBjUxc8W1MVF+MgSTCGEwMFA7+6772b69OmEhYVRUVHB9OnTAVi+fDnz589v0QEKIURLqrJYKTaZ8TbocdG1oyyBQnQAD0/uA2DLuml019uybjrCYlU4nlPCnlMF7D1VwJ5TZ9GeSaK35jQ/WkcAEEAQfm4l7Lf24CdGczJ0Gt2692J8lB8PdZEsmEII0ZAm19E73+rVq0lNTeXKK68kNDQUgH/84x/cdNNN+Pn5teggnUHq6AnRuVitCuuSslmdkEVBWRV+Hi5Miw1lct8QyaonRDM5WkevsKyKPWkF7E1Vg7r9aWcprjATqcnhSu12rtRtI0abRqnixpCK9wgL9GdQF19GBVcR07sP0aHe8gsaIcQlrTkxisOBXmcngZ4QncuahCyWbE1Br9VidHehqLwKs9XK7aO7MzU21NnDE6LTsVoVjlXP1u1JLWDPqQK78gZuVHKdbiNzdNsYoj1may92Daagx2yMkx/HN1D+bQohxLlapWC6EEJ0VFUWK6sTstBrtUT5ewBqFr60/DJWJ2QxISZYZgmEuEg1e+tqgrp9p9TZunMZqMCEWpqhW5CRJ8q+x9NSiMXghyZ2Ltr4+Xh3GYm3Vv49CiHExZJAT4gW5OhyJtG6ik1mCsqqMLq72LUbDXoKyqooNpkl1boQzaAoCim5pfxeHdT9nlrAsZwS6lsj5EYlV7gd4HqPnQyu2MXumT/Tt288Ph4usPcV8AxE13Mi6FzqniyEEMJh8klUiBZgNlt5Y91RW4ICTzedLUGBXi+/mXY2b4MePw8Xsosq8Dkn2CsymQkxuuFtkB+FQjSmvNLC/vSz/J6qJk35PbWAgrKqBvv3DjRwbUAyk8y/0vXMRnSVxVAOaF0YYUgFj8Fqx0E3ts0DCCHEJcihTzcvvfSSraSCEALeWHeUpTtS0Wk0GFzVOlNLd6QC8Pj0GCePTrjotEyLDWXJ1hTS8sswGvQUmcyYrVamxYbKsk0hzpNVaGJ3aj6/p6pBXWJGEWZr/Vv6PVx1DIzyZUhXPwZ38WNQF198l10LyRure2ig+1iImw/9rgT3jp+wTQghOgKHkrG4ublRWlqKXt95fwsuyVhEU5VVmpn+/36lqNxMgJebrT2vpAKju56fHxwryzjbAcm6KUT9zBYrh7OKbUHd76kFnD5b3mD/KH93hnTxUwO7rn5Ecwp94nKInglRw9ROW/8BCd9B/DUQOxeMYW30NEII0bm1ejKWQYMGsXXrVsaNG+fQAIXoTDILTZRWWDC42hfoNbhoKa2wkFloomeQl5NGJ2potRqmxoYyISZY6uiJS1qxSU2asvtkgW0pZmmlpd6+LjoNcRE+DOnix9Bu6oxdsNEABSfh4DL4bhmcSVI7l+XXBnoj74fRf2ybBxJCCFEvhwK9efPmsWDBAh555BH69euHq6t9EoPJkye3yOCE6AjCfAx4uqnLNT3PmbkzVVkxuusJ85Fivu2Ji04riVfEJSXjbDm7TqrLMHedLOBIVhENrMLE39OVwdVB3ZCufsRH+GBwOeeXWMfWwtevQvqu2jZjJMTNg/7X1bZJ1kwhhHA6hwK9J554AoDHHnus3uNSmk9cSjxc9czqH87SHanklVRgcNFiqrJiURRm9Q+XZZtCiDZjsSocySpmd2o+u08WsPtkPhmFpgb79wzyZGhXf4Z082NoVz+6B3qi0ZyzlNlUCEW5ENBTfV1VpgZ57v7qksz4ayBquAR2QgjRDjn0CVQCOSHsPTy5D4At66bRXW/LuimEEK2lvNLCvrSz/J6az66TamHy82vX1XDVaxkQ6cOQrv4M7arO2PnVN7tdVQ5HV8PBb9QZvC4j4JYV6rHe0+CGb6DnBCmHIITo9Kos1g693UOmGoRoAXq9lsenx3D/xF5SR08I0WrySyvZfTKf3akF7EzJ59DpwgazYfp5uDC0mz/DuvkxpKs/cRFG3PS6evtiMUPyJji0DJJWQmWx2q5zBYMPWC2g1YGLAfpMbZ2HE0KIdqKzJHBz+JNoamoqX375JcnJybz//vsArFq1ikmTJtXZsyfEpcLDVS+JV4QQLUJRFNILytmZks/u1Hx2puRz4kxpg/27B3oypKsfw7r5MbSbPz3OX4bZmJwE+Pxq9WuNFrqPU5dl9p0N7r4X/zBCCNGBrEvKZsnWFPRaLUZ3tQ7vkq0pAEyNDXXy6JrOoUBv27ZtTJs2jUGDBrF582ZboLdu3TqOHz/OAw880KKDFEIIITo7q1XhSHYxu06qQd3ukwVkFdW/v06n1RAXbrSbsQvydqu3rx1FgewEdVnm6d/hlh9Ao4HQ/hA7D6IuU/feeXecDzJCCNGSqixWVidkoddqifL3AMDH3YW0/DJWJ2QxISa4wyzjdCjQe+yxx3j99de555577H5bePvtt3P11VdLoCeEEEJcQKXZysHThew6mc+ulHx2ncynyFT//jp3Fx2Du/oyrJs/w7r5M6iLb/OWh+enqMsyDy6vLYcAkLkfwgeqwd41H1/cAwkhRCdQbDJTUFaF0d1+H7LRoKegrIpik7nDZO92KNDbv38/q1evBrAL9Lp160ZycnLLjEwI0aF09A3LQrS2skoze0+dZWeKOmO3N60AU5W13r7+nq4M6+ZnC+z6hRsd+3dltcAnM+HU9to2nyiIuxri50NInINPI4QQnZO3QY+fh7pc0+ecYK/IZCbE6Ia3oePkYHBopO7u7uTl5eHlZb8Xaf/+/QQHB7fIwIQQHUNn2bAsREsrLK/i99R8fqsO7A6mN5w4JcLXneHd/RnWXQ3segY1Y3/ducrPQtIPal07V081gYqrF3gEqEsy4+ZLOQQhhGiEi07LtNhQlmxNIS2/DKNBT5HJjNlqZVpsaIf6ZbZDgd7cuXN54okn+Pjjj23/I9q/fz933nkn8+fPb9EBCiHat86yYVmIi5VXUsGuk/nsSFYDu6SsIhqqRtQ72IvLuvtzWXVgF+7r7viNq8rh6M9wcBkcWwOWSnBxV2fsAOa8Cx7+Ug5BCCGaaHLfEADbL7FDjG62X2J3JA4Feq+99hqzZ88mICAAq9VKWFgYWVlZjBkzhpdeeqmlxyiEaKc64oZlWWIqWkp2kYnfUvL5LTmP31LyOZ5TUm8/rQZiw33sArsW2d+Rshn2fgaHV0Jl9b11rhAzC4wRtf28O9YHEyGEcDatVsPU2FAmxAR36M8MDgV6vr6+/Prrr2zatIndu3djtVoZPHgwkydPdmypiRCiQ+pIG5Zliam4WKfPlqtBXXI+v6XkcTKvrN5+LjoNAyJ9bYHdkK5+eBtaYDbNaq2erTOorxP/Bwe+VMsh9JigzuDFzJJyCEII0UJcdNp28znGEQ7vJtRoNEyYMIEJEya05HiEEB1IR9qwLEtMRXPU1LDbfk5gl15QXm9fN72WwV38GN5DDewGd/HD4NJAYfLmDwSyDqoZMw99C0NuhbGPqscG3wwBvarLIcisnRBCCHsOfwrbs2cPb731FklJaprmfv368eCDDzJw4MCWGpsQop3rKBuWO+ISU9G2FEUhLb+cHcl5tj8ZhfXXsPN01TGkmz/Du6t/+kf64qpv4e+fvBNwaLm67y73SG175r7ar8P6q3+EEEKIejgU6H3xxRfcdNNNTJkyhWnTpgGwa9cuhg4dymeffcaCBQtadJBCiParI2xY7khLTEXbaE5g5+2mZ2g3P4b3CGBEjwDiwo3oW/MXA/u/hO/urn3t0wXir1YzZobEtt59hRBCdCoOBXpPP/007777Lvfcc49d+7/+9S+eeuopCfTEJaus0kxmoYkwH0Pzihl3YB1hw3JHWmIqWk9afhnbawK7E40EdgY9w7v7M6JHAMO7B9Av3IiutfZxlheo5RAqSmDkH9S27mPBKwT6Xgnx10DUZWpBcyGEEKIZNIrSUPLnhnl7e3P69GmMRqNde2FhIZGRkRQXF7fYAJ2lqKgIHx8fCgsL6zynEOczm628se4oKw9kUFphwdNNx6z+4Tw8uQ/6ll7SJRyyJiGrdo/eOUtMbx/dXfbodVIZZ8vZfiLPFtw1tMfu3MBuRI8A+oa1YmAHUFlWWw7h+Fo1wYrBBx49Bno3tY/VKrXuhBBC1NGcGMWhX2P379+frVu3MmPGDLv2bdu2MWDAAEcuKUSH9sa6oyzdkYpOo8HgqqOo3MzSHakAPD49xsmjE9AxlpiKi5NTZGJ7cp4tuEttICumt5uey7r7M7JnG8zYnaskB9Y8A4d/PKccghv0na0uy9ScE9hJkCeEEOIiORTozZ49mwULFnDfffcxbNgwFEVh9+7dvPvuuzz11FOsW7fO1nfy5MktNlgh2qOySjMrD2Sg02gI8FJ/G+/pqievpIKVBzK4f2KvS2YZZ3vWEZaYiubJL61kR3Ie207ksv1EHifOlNbbz8tNz7Bufozsqc7YxYb7tE1gZ7VCTgKExquv3Yxw5GeoKqsuh3AN9J2lzuYJIYQQLcyhpZvNqZXnwOXbBVm6KZrqxJkSrn1vOy56LZ7nBHSlFVVUWRS+vmckPYO8nDhCITqHYlMVO1Py2XYij20n8kjKLKq3n7uLjqHVgd2onoGtnzzlXIoCWQfUZZmHlkNRBjycBMYw9fiJjWpCFa/gthmPEEKITqXVl2521OBNiNYQ5mPA001drnluoGeqsmJ01xPmY3Di6ITouExVFn5PLWDbiVy2ncjjQHohFmvd//+46rUM6aIGdiN7BjCgNcodXEjeiergbhnkHq1tD+6nBns1gV5PqT0rhBCibbSL9WR79+4lOzub2NhYoqKiWuyc0tJSdu3ahYeHB0OGDEGna6ECtkKcw8NVz6z+4SzdkUpeSQUGFy2mKisWRWFW/3BZtilEE5ktVg6cLmTb8Vy2Hs/j91MFVJqtdfrptRoGRPkyqjqwa9EC5Y768gY4c1j92reLuucu/hoI6efccQkhhLhkOfUTaHFxMbNmzSIpKYno6Gh+//13Hn/8cZ5//vmLPufDDz/kkUceISYmBg8PD8rLy/nuu+8ICwtr3YcSl6SHJ/cBsGXdNLrrbVk3hRD1UxSFo9klbD2ey9bjufyWkk9JhblOP40G+oUZGd0rkJE9AxjWzR8vNyf976u8ABJXwMFvYNKfIWqY2j7sDsg9pgZ3kUOlHIIQQginc2qg98wzz3D69GmOHDmCn58fGzZsYNKkSYwfP57x48c7fM6qVau46667+O6775gzZw4A+/bto7i4WAI90Sr0ei2PT4/h/om9Lrk6ekI0R8bZcrYcz1Vn7U7kcaa4ot5+PYI8Gd0zkFHVCVT8nFnQvrIUjqxS99wdWwvWKrU94bvaQO+yO503Pie4FGuGCiFER+NQMpaWoCgKgYGBPProozz55JO29qFDhzJgwAA++ugjh88ZPXo0gYGB/O9//3N4fJKMRQghLl5heRXbT+TZZu2Sc+vPjBlqNDCqV4Aa3PUKIMzHvY1H2oBt78DGl6Gqetw6N+gzTZ256z0VXC6tPbhSM1QIIZyr1ZOxtIT09HTy8/Pr1N0bOHAg+/fvd/gck8nEb7/9xjvvvENGRgYHDx4kPDycuLi4RrOFVlRUUFFR+5vloqL6s7kJIYRoWIXZwp7Us2w9nsvm47kcTD9LPflT8DboGdUzgNG9AhndK5AegZ7NyujcKqxWOLVdLVoeOVRt8woBswl6ToL4+RAz85IuhyA1Q4UQouNokUDv999/Z8uWLQwfPpwRI0Y06ZzCwkIA/Pz87NoDAgI4e/asw+fk5eVhsVj45ZdfePnll4mJieHgwYNERESwYsUKwsPD6732K6+8wuLFi5s0diGEECpFUTiSXcyWY7lsPpbLzpR8yqssdfq56rUM7erH6F6BjOkVSFxEG9WyuxBFgcz9arbMQ99C0WnoPQ1u/Fo93ncW9Dgs5RCQmqFCCNHRNPsn8rZt2/jXv/7F0qVLAfjll1+YMmUKvXv35vHHH+fzzz9n/vz5F7yOq6u636KsrMyuvaSkBDc3N4fPqemzb98+EhMT8fLyoqysjJEjR/LII4/w3//+t95rP/nkkzz88MO210VFRU3OACqEEJeSnCITW46rgd2W47kN7rOLDTcyprca2A3t6o+7azvKfFyUAXs+VUsi5B2rbQ+OhW5jal+7uKt/BJmFJkorLBjO+3s0uGgprbCQWWiSmqFCCNGONDvQe/LJJ3n22Wdtr//f//t/PPfcczzzzDN88cUXvPbaa00K9Lp06YJOpyMtLc2uPS0tje7duzt8TmBgIEajkVmzZuHlpf4Px8PDg9mzZ/PFF180OB43N7cGA0whhLiUmaos/JaSz+ajZ9h8LJcj2cX19ovwdWdMr0DG9FaTqNTM+rQbVabaPXWF6bDpFfVr367qssy4+VIOoRFSM1QIITqWJgd6f/3rXwHYvn07W7ZsYffu3QBs2rSJqKgo/vrXv2IymTh48KCt76JFixq8nsFgYMKECSxfvpxbb70VgIKCAtavX8/rr79u67dv3z7y8/OZOHFik87RaDRcccUVHDt2zO5+x48fJyIioqmPK4QQlyxFUTicVczmY2pg91tKfr317Lzd9IzoGcDlvQO5vHcQ3QI8nL/P7nxl+ZC0Qp25K8uDe7eppQ8ih8HYx9RlmlIOoUmkZqgQQnQsTf6pXFO6wN3dncsuuwx/f39SUlLQ6/XccMMNgFrjztXVtcHSCOd75ZVXuPzyy7nzzjsZOXIk77//Pj179uT222+39XnnnXfYsWMHhw4davI5L774IsOHD+e+++5j9OjR/Pbbb3z77bf89NNPTX1cIYS4pOSVVLD5WC6/Vgd39S3H1Gk1DIj04fLeQVzeO5ABUb646NphpsWacggHl8HxdbXlENyMUJwJxnA1sJv4jHPH2QFJzVAhhOg4ml1eYdasWYSEhPCHP/yBV199FYPBwKeffgrA1q1beeaZZ9i4cWOTr5eQkMD7779PdnY28fHx/PGPf7RLFfruu+9y9OhR3nrrrSafA5Camso///lPUlNT6dKlC7feeiv9+jV9SY6UVxBCdGZVFit7Ugv49dgZfj2ay8HThfX2i/J3Z2zvIC7vHcTIngH4uLu08UibqaIY/t4XKquXl+oNteUQek255MohtBapoyeEEM7RnBil2YHe4cOHmTNnDkePHiU6Opqff/6Zbt26AXD11Vdz880324qUd2QS6AkhOpu0/DJ+OXqGX46eYfuJPEoqzHX6eLrqGNkzkHF91OWYXdvjcswaViuc2gaJ/4MpL9YGcUvngkarBnfRV4BBfoYLIYToHFo10Ktx9uxZfH197dpOnz7dafbBSaAnhOjoTFUWdiTn2YK75DP1Fyvv4u+Bu4sWDzc93QI8mBEXxuS+IWjbQ/mD8ykKZO5Tl2Ue+haKM9T26z6DvrPVr60W0LajDJ9CCCFEC2mVgumKotj9Vvf8IA+wBXnn9xVCCNH6FEUhObeUTUfUwO635Dwq6kmiEujlxtjegYztE4TZYmXZnnT0Wi1GdxfOFFeyZGsKAFNjQ9v6ERq37R34/WPIO17bFhIHcVdDxJDaNgnyhBBCiKYHekOHDuWFF15gxowZaLX1b763WCz89NNP/PnPf2bPnj0tNkghhBD1K6s0s/1EHpuOnGHT0RzS8svr9NFrNQzu6se4PkGM6xNEvzAjWq2GKouVRcsPoNdqifL3AMDH3YW0/DJWJ2QxISbYuclWCk+rNew8/NXXuUfUIM+vm7osM24+BMc4b3xCCCFEO9bkQO+5557jj3/8I2azmZkzZzJkyBBCQkJQFIWsrCx27drFjz/+iMFg4O9//3trjlkI0QRVFivFJjPeBn37zIwoHKIoCim5pWw8coZNR3IaLH0Q7mNgXHQw4/oEMapXAEZD3SQqxSYzBWVVGM9LsGI06Ckoq6LYZMbf07XVnqVeZfmQ+D0cXA6pW2HqizDqAfXYyAdg8K0QMVjKIQghhBAX0ORAb86cOcycOZNvv/2WL7/8kqeeeoqcnBwAgoODGTNmDG+99RZXXXUVer1k4BLCWaxWhXVJ2axOyKKgrAo/DxemxYa23z1X4oJq9tptOnKGjUdySM0rq9PHRafhsu7+jO8TzPjoIHoFe11wCb23QY+fhwvZRRV22TSLTGZCjG54G9roZ3lFiVoO4VBNOYTqJDFuPmCprO0XJCn8hRBCiKZyOBkLQGVlJRqNBheXdp5u2wGSjEV0VGsSsliyNcW256qovAqz1crto7u3vz1XokFp+WVsOpLDxiNn2HYiF1NV3Vm7CF93xkUHMb5PEKN6BeLl1vzAzO77xaCnyGRu+++XzX+H9S+oX+sNED1DXZbZewro3dpmDEIIIUQH0CrJWOrj6trGS3qEEI2qslhZnZDVfvdciQZVWaz8nlrAxsM5bDicw7Gckjp99FoNw7r5MyEmiPHRwfRuwqzdhUzuGwJgmwEOMbrZZoBbnNWqLsc8+A14BsKk59T2uKshdZu67y5mJrh5t/y9hRBCiEuMrLEUohNpl3uuRIPySyvZdEQN7H49eoYiU926dsHebkyIDmZCTBCjewXiXc9eu4uh1WqYGhvKhJjg1tnT2VA5BM8gmPC0miHTrxssXN5y9xRCCCGEBHpCdCbtZs+VqJeiKBzJLmZ9Ug7rk7LZm3aW8xfPazQwMMqXidHBTIgJJjbc2Cblalx02pb/JUB2Iny1EPJP1LaFxEP8fHUWT8ogCCGEEK1GPvUJ0Ym46LRMiw1lydYU0vLL7PZcTYsNlWWbTlCTSGXD4RzWJ+Vw+mzd8gfeBj1j+wQxKUbNkhng1UH3pRWehvRdEHuV+tqvKxRngl/36uBOyiEIIYQQbUUCPSE6mTbdcyXqlVtSUR3YZbP5WC5llZY6fXoGeTKpbwgTooMZ2s2v4wbhtnIIy9T9dxoddBuj7sFz9YQ/bAffrlIOQQghhGhjTQ70vvzyyyZfdMGCBQ4NRghx8Vp9z5WoQ1EUjuWUsC4pm3WJ9S/J1Gs1DO/hz8SYECbFBNMt0NM5g20JVou63+7gN3BifW05BIMP9L0SzKbavn7dnDJEIYQQ4lLX5PIKoaH2abazs7MBcHd3B6C8XF2OFBISQlZWVkuO0SmkvIIQojFmi5WdJ/NZl5jDuqRsTuXXrW3n5+HChOhgJvUN4fI+gfUWLe8wzJWgc1Fn5hQF/jEQCk6C3l0thxB/DfSaJOUQhBBCiFbUKuUVzg3e3nzzTZYvX857771HXFwcAIcOHeKee+5h/vz5Dg5bCCHat5IKM78cOcO6pGw2HM6hsLyqTp8eQZ5M6RvCpL4hDO7ii74jz6ZaLbXlEBJXwC0rIGyAGuxNeFrtE30FuHk5d5xCCCGEqMOhgum9e/dmzZo1dO/e3a49JSWFadOmcfTo0RYboLPIjJ4QAiC7yMTaxGzWJmaz/UQelRb7wuVaDQzt5l8d3AXTI6iDBz2KAhl74OByOLQcSs5ZoTHjdRh+l/PGJoQQQlziWr1gelpaGm5udZfnuLm5kZaW5sglhRCi3TieU8KaxCzWJGSzL+1sneMerjrG9QliSj81mYpfZ6pN+P29sP+/ta9D+6vLMuPmgU+k88YlhBBCiGZxKNAbOXIk9957Lx988AHBwcGAumfv3nvvZdSoUS06QCGEaElVFmudJDVWq8K+9LOsSchmTWIWyWdK65wX7O3GpL4hTO0XwsieARhcOkENuMJ0ddYubCD0GKe2dR0Nab9VB3fzIaiPU4cohBBCCMc4FOh98MEHzJs3j4iICLp06YKiKKSlpdGvXz++++67lh6jEEJcNKtVYV1Stq3shI+7nq7+npwpqWBtYjY5xRV1zukV7MXUfiFM6RfCgEhftNpOUCKgNK+2HMKpbWpb3ytrA70B18OghVIOQQghhOjgHAr0evXqxb59+1i/fj2JiYkA9OvXj8mTJ6ORDwdCiHZoXVI2H2xOpsRkpshkJrvIhNlad4vyoC6+TO0XytTYEHp29P1250rbBb++Bic22JdD6DcH+l9X208n5VWFEEKIzsDh/6NrtVqmTJnClClTWnI8QgjRoopMVaxJyOKNtUfJKjRxfmynAUb3CmR6XChT+4UQbDQ4ZZwtzlwBRRngX500y2yCY2vUcgh9r5RyCEIIIUQn1+RA7/vvvwfgqquusn3dkKuuuuoihiSEEBenoLSStYnZrDqUydbjdTNl6rQawnwMBHi6YnR34a0Fg/DvDAlVrBY4uVldlpm0Any7wj2b1WNdR8P8JdB7mpRDEEIIIS4BTQ70Fi5cCEBJSYnt64aUlJRc3KiEEKKZzhRXsDohi58PZbE9OQ/LeVN3LjoNvh6uRId4E+ZjQK/TkpZfRrC3G96GDrxcUVHg9B611l3Ct1CSXXvMzRsqS8HVE7RaiLvaeeMUQgghRJtq8qebc4M3CeSEEO1BTpGJVYey+OlgJjtP5nN+VVB/T1em9gthelwoZRVmPt2RCkBphbpPz2y1Mi021JZ9s0MqTIcPJ9a+DhugZsuUcghCCCHEJa0D/xpbCHEpyio0sepQJj8dzGR3akGd4C7E6Mb02FCmx4UxrJsf+nNKKOh1WlvWzRCjG9NiQ5ncN8QJT+Ggs2lqOYTj6+Cm70DnAr5REH+tuhdPyiEIIYQQoppGUc7/mNQ0FouF9PR0CgoK6hwbOHDgxY7L6ZpTdV4I0bqyCk38dDCTHw9m8ntq3Z854T4GZsSHcUV8KIOi/Botg1BfHb12rTT3nHII22vbFy6HXpOdNiwhhBBCtL3mxCgOzeht2bKFG2+8kVOnTtV73MHYUQghbHKKaoO7XSfrBncRvu7M7B/GjLhQBkb5Nrm0i4tO23ESr3xzKySuAMWivjb4quUQ4q+BrqOcOTIhhBBCtHMOBXp33303c+bM4Y9//CO+vr4tPCQhxKXqTHEFPx/KZOWB+vfcRfm7c0V8GDPjw4iP8OlcdTvNFXBsLXQZCZ4BapvOVS1/EH0FxM+HnpNA30GCVCGEEEI4lUNLNw0GA7m5uXh5dd4U3bJ0U4i2cbasktUJWfywP5NtJ3Lr1LmL8HVnVv8wZvbvhMGd1QIpv8KhZZD4A1QUwhV/g8vuVI8XZaqZM6UcghBCCCFog6WbcXFxHDlyhCFDhjg0QCHEpa2kwszaRDW423zsDFUW++guzMfAzHg1uGvOsswOI/MA7PscEr47pxyCBrqOsc+UaQxzyvCEEEII0fE5FOi98cYb3H777Tz00EP07NmzzoewMWPGtMjghBCdh6nKwsbDOazYn8GGwzlUmO2LmAd6uTGrfxiz+ocxuEvjCVU6JEuVmiUTIOkH+O099euwgeqyzNh54BPhtOEJIYQQonNxKNBLS0vj8OHD3HbbbfUel2QsQggAs8XK9uQ8/rcvg9WHsiiuMNsd9/VwYUZcGLMHhDG8ewC6zhbcnT2lZss8tBx6jIdpf1HbBywArU4thxDYy6lDFEIIIUTn5FCg9+STT/Lwww/zpz/9SZKxCCHsKIrC3rSzrNiXwcoDGeSWVNod93TVMS02lNkDwxnTK7BjlDhojpIz1eUQvoG032rb9W61Xwf0hPGL2nxoQgghhLh0OBTo5efn88wzz+Dp6dnS4xFCdFDJZ0r4fl8G3+89zan8MrtjrjotE2KCmDMwgokxwRhcdE4aZSs7vg4+v7a2HIK7X205hC5SDkEIIYQQbcfhZCwHDx5kxIgRLT0eIUQHcqa4gpUH1OBuf3qh3TGtBkb2DGDOgAimxYXi4+7ipFG2kioTHFsDBSdh9B/VtshhYDCqhczjr4EeE6QcghBCCCGcwqFAb+rUqVx77bU8+eST9OrVq04ylsmTJ7fI4IQQ7U95pYU1iVl8t/c0m4/lYjmvHkJ8hA9zBoZz5YBwgo0GJ42ylVjMcPJXdd9d0g9QUaTWuht8M7j7gsEHHj1Wm3RFCCGEEMJJHKqjd6FU550hGYvU0ROiltWqsCMlj2/3nGbVwUxKKy12xyP93Jk7KII5AyPoFdwJa75VlMD6F9RyCKU51Y0a6DZGnbmLnw+uspRdCCGEEK2r1evodYZATghxYSfOlPDtnnS+35vB6bPldsd8PVyY1T+MqwZGMKSrX+erdZd7vDYjposHHF6pBnnhg9TgLnYuGMOdO0YhhBBCiAY4FOgJITqvs2WV/LA/g2V7TrM/7azdMRedhokxwcwbHMmE6GBc9Z0sY2ZBKhxaBgeXQ04C/OE3CI4BrRbmvAO+XdWMmUIIIYQQ7ZwEekIIzBYrm4/lsuz3dNYmZlNpsS9mPqiLL/MGRzIrPgw/z06WXKTkjLok89Ay+3IIxggoSlcDPYCeE50zPiGEEEIIB0igJ8Ql7Fh2Mct+T+fbvac5U1xhdyzC1515gyOYOyiCHkGdcN9djW9ugdSt6tfufuqSzLj50GWkOpMnhBBCCNEBSaAnRAuqslgpNpnxNujbbSHwIlMVP+zP4Ovd6XWWZhpctFwRF8b8IZGM6BGAVtuJ9t3VlEM4+A0MuUUtgQAw8AZ19i5+vpRDEEIIIUSn0SKBnslkYtOmTXTr1o2YmJiWuKQQHYrVqrAuKZvVCVkUlFXh5+HCtNhQJvcNaRfBkqIo/JaSz9e70vjpUCamKvulmZd182f+kEhmxIfibehEpQEsZkj5BQ4try2HAKA31AZ6gxaqf4QQQgghOhGHAr1Vq1bxxRdfsHTpUhRFYcqUKWzbtg2NRsPXX3/NvHnzWnqcQrRr65KyWbI1Bb1Wi9HdheyiCpZsTQFgamyo08aVVWhi+Z50vt6dRmpemd2xMB8D84dEcvXgSLoFdsLSAPu/gjVPQ+mZ6gYNdB+rLsvsd6VThyaEEEII0docCvSeffZZPvroIwB27NjBiRMnOHPmDD///DN/+ctfJNATl5Qqi5XVCVnotVqi/D0A8HF3IS2/jNUJWUyICW7TZZxmi5WNR87w352n2HQkh3PrmbvoNEztF8o1QyO5vHcQunYw29hishOgshSiLlNfewSoQV744HPKIYQ5d4xCCCGEEG3EoUAvMTGR6OhoANavX8/cuXPx9/dn7ty53HXXXS06QCHau2KTmYKyKozu9ksejQY9BWVVFJvM+LdBpsq0/DK+2pXGN7+nkV1kn1glJtSba4dGcdWgiDYZS5spOAkHl6lLM3MSIfIyuGOteqzHeHhgj5RDEEIIIcQlyaFALzg4mD179jBy5Ei+/fZbnnnmGQAyMzMJCQlp0QEK0d55G/T4eajLNX3OCfaKTGZCjG54G1ov51Gl2cq6pGz+u/MUW47nopwze+fpquPKgREsGBZF/0ifzlPQvLwADnytJlVJ31XbboyEriPBagGtDnR6CfKEEEIIccly6BPo3XffzfTp0wkLC6OiooLp06cDsHz5cubPn9+iAxSivXPRaZkWG8qSrSmk5ZdhNOgpMpkxW61Miw1tlWWbafll/HfnKb7enUZuSaXdsYFRvlx/WRSz+ofj6dZJEutazGrgBlCaC6seV79291eXZMbPh6gRUg5BCCGEEKKaQ58Cn3zySQYPHkxqaipXXnklHh7qviQ3NzcWLVrUogMUoiOY3Fedya7JuhlidLNl3WwpNXvvPv8tlV+OnrGbvTMa9MwdFMGCy7rQN8zYYvd0qqpyOLpaLWSeeQD+uFedqQvsDZc/Cl1GqMszdZ0oS6gQQgghRAvRKMq5Hxeb5u2332bBggUEBQW1xpjahaKiInx8fCgsLMRo7CQfnEWra406elmFJr7alcaXu06RWWiyOzakqx83XNaFmf3DMLjoWuR+TmUxQ8omdd9d0kqoLFbbda5w50YIjXPq8IQQQgghnKk5MYpDgV54eDhnzpxh6tSpLFy4kDlz5thm9ToLCfSEMymKwvbkPJZuT2VNYjaWc1Jnermps3c3DO9Es3egBnn/GAiFadUN1eUQ4udD39ng7ufM0QkhhBBCOF1zYhSHlm6mpaWxYcMGPv/8c+6++27uuusu5s2bx8KFC5k0aRJa2ScjhENKKsx8tyedT7enciynxO5YbLiRhSO6cuWATrD3TlHUcgiHlsHoP6lBnE4PEUPAK7i2HIK382oQCiGEEEJ0ZA7N6J2rvLycH374gc8//5yff/6ZgIAAMjIyWmp8TiMzeqItHc8p5tPtqXy75zQlFWZbu6tey+z+4dw0sisDOkPmzPwUtRTCwWVwJkltu/JtGHyz+rW5EvSdqPyDEEIIIUQLavUZvXO5u7szduxYMjIyOHbsGElJSRd7SdGKWmMPmXCMxaqw4XAOn2xLYevxPLtjkX7uLBzRlWuHRnWOunf7v4SdH8Dp3bVtPlEQdzV0GVnbJkGeEEIIIUSLcDjQKy4u5ttvv+Xzzz9nw4YNREVFcf3117N8+fKWHJ9oIVarwrqkbFtWSD8PF1tWSK22g88SdTBFpiq+3pXGp9tTOZVfZndsbJ8gbh7RlQkxweg68t9L+Vm1np1ngPo6J1EN8jwC1CWZcfMhariUQxBCCCGEaCUOBXrXXXcdP/zwA+7u7lxzzTU8++yzjBkzpuMvK+vE1iVls2RrCnqtFqO7Wtx7ydYUAKbGyj6otnDiTAn/2XaSZb+nU1ZpsbV7u+mZPzSSm0d2o3ugpxNHeJGqyuHoz+qyzGNrYNQDMOk59diQW6HbWOgxTsohCCGEEEK0AYcCPUVR+O9//8uMGTNwdZWlVu1dlcXK6oQs9FotUf5qdlQfdxfS8stYnZDFhJhgWcbZShRFYevxPD7cksymI2fsjnUP9OTWUd24ekgkXh01uYqlCpI3qcHd4ZVQWZ1ARucKFeckk/Hvof5pB2T5shBCCCEuBQ59uvz6669behyiFRWbzBSUVWF0t59JMRr0FJRVUWwyd459YO1IhdnCin0ZfLQlhcNZxXbHxvYJ4rbR3RjXO6jjL5vd9zn88Cf1a41WLWAefw3EzAJ3X2eOrA5ZviyEEEKIS0kHnUYQzeFt0OPnoS7X9Dkn2CsymQkxuuFtkG+DllJQWsnnv6Xyn+2pnCmusLUbXLTMHxLJraO60yvYy4kjdJCiQPYhOPiNuvdu2l/U9pjZsO+/6r672LngHeLccTZCli8LIYQQ4lIin/AvAS46LdNiQ1myNYW0/DKMBj1FJjNmq5VpsaGyfK0FpOSW8uHmZJbvScdUZbW1B3u7ccuobtw4vAu+Hh1w1jQ/GQ4uVwO83CNqm4sHTHgKXD3VZCv/t9q5Y2wCWb58YbKkVQghhOhcJNC7REzuq8601CxbCzG62ZatCcftSzvL+7+c4OeELM6tSNk3zMgdY7oze0A4rvoO+KG58DR8fROc/r22zacLxF+tZsx08XDe2Bwgy5cbJktahRBCiM5JAr1LhFarYWpsKBNiguW39hdJURQ2HT3D+7+cYEdyvt2xcX2CuP6yLkyMCcJVr3PSCB1QXgAnt0Df2eprrxA4ewo8AtUlmfHXQNRl0EEz68ry5YbJklYhhBCic3L4001qaipffvklycnJvP/++wCsWrWKSZMmSSbOdsxFp71kZy4uVpXFysoDGbz/S7JdghUXnYYrB4QTH+HDwdOFfL07jbWJWe1/VqSyTC2HcGi5Wg7BUgl/3Ktmx9Tp4dafar/u4GT5cv1kSasQQgjReTn0CW7btm1MmzaNQYMGsXnzZlugt27dOo4fP84DDzzQooMUwplMVRa+3p3G+78kc/psua3d01XHDcO7cPuY7hxML+w4syLH1qp77g7/eE45BDd1Ns9cWdsvqI9zxtdKZPlyXbKkVQghhOi8HAr0HnvsMV5//XXuueceuyLpt99+O1dffbUEepewzpTQoaTCzOc7Uvlgcwq5JbUZNAO93LhtdDcWjuiKj7tL+58VsVYnh9FWj2Hjy5Cx55xyCNdC31lg8HHaENuCLF+uS5a0CiGEEJ2XQ/8X379/P6tXq5n2zg30unXrRnJycsuMTHQonSmhQ2FZFZ9sO8mSrSkUllfZ2qP83blnXE+uHhyJwaV2/127nBVRFMg6oBYyP/QtzHkHek5Qj43+I5TkQL+r2nU5hNYiy5dryZJWIYQQovNyKNBzd3cnLy8PLy/7emD79+8nODi4RQYmOpbOkNAht6SCDzen8NmOVEoqzLb2XsFe3DehJ7P7h6Ov54Nvu5oVyTtRHdwtg9yjte0nN9cGerFz2248ot2TJa1CCCFE5+TQJ9C5c+fyxBNP8PHHH9tm9Pbv38+dd97J/Pnzm3WtiooK1qxZQ3Z2NvHx8QwfPrxFzzlx4gSrVq1i4MCBjBkzplljE03T7pcuXkBeSQX//jWZT7enUl5lsbXHhhu5f0IvpsWGNjor2W5mRdY9D1verH3t2wXirlYzZobEts0YRIcjS1qFEEKIzsmhQO+1115j9uzZBAQEYLVaCQsLIysrizFjxvDSSy81+To5OTmMHz8egAEDBvD4448zb948PvzwwxY5p6Kigquvvppjx45x5513dspArz3siWuXSxebIK+kgn9vTubTbfYB3tCuftw3sRfj+wTZLU1uTJvPipQXQOIK8A6DPlPVtshh4BlUWw4hcliHLYcg2p4saRVCCCE6F4cCPV9fX3799Vc2bdrE7t27sVqtDB48mMmTJzf5gzHAokWLcHFxYceOHbi7u7Nv3z6GDBnCnDlzmD179kWf8/DDDzNq1ChHHrHda0974trV0sUmyC+trJ7BO0lZZW2AN6ybHw9N7sPIngHN+j6GNpoVqSyDo6vgYHU5BGsVdLu8NtDrPQ0ePtwpyiEIIYQQQoiL4/AnQo1Gw4QJE5gwYYJD51utVpYtW8bixYtxd3cHYODAgYwaNYqvvvqq3kCvOed89913bNiwgd9//71TBnvtaU9cu1m6eAGFZVW8/+sJPtlmH+AN7erHQ1P6MMqBAO98rTIrcuYIbP47JK2EqlK1TecGfa+E/tfW9pMATwghhBBCVHPok+GXX37Z4DE3Nzd69OjBgAEDGr1GWloaxcXF9O3b1669b9++7N69+6LOSUtL49577+Wnn37Cw8PjQo8DqMs8KypqU+gXFRU16TxnaI974tpzQofSCjOfbDvJe7+coNhUm2SlJQO8FmW1QtFp8I1SX1uq4MBXoNFBz0kQPx9iZnb6cghCCCGEEMJxDgV6Dz74INnZ2YCagVOj0VBWVgaA0WikqKiIwYMHs2rVqgazcBYXFwPqMtBz+fn5NRhkNeUci8XCDTfcwEMPPcTgwYOb/EyvvPIKixcvbnJ/Z7qYPXGttaevPSZ0qDBb+OK3U7y78Ti5JbWFwAd38eXhKdGM7tWOAjxbOYRv1HIIGh08eEDdYxcSC1e9B70mg1eQs0cqhBBCCCE6AIc+iT/xxBOMGzeOxMREysrKKC0tJSEhgcsvv5zFixeTmpqKj48PjzzySIPXqFl6WRO81SgqKmpwFq4p53z++eccPHgQd3d33nnnHd555x1yc3PZv38/77zzDoqi1HvtJ598ksLCQtuftLS0pr0ZTlCzJ67onBpvoO6J8/NwqXdPnNWqsCYhi0XLD/DoN/tZtPwAaxKysFrrfz8cVbN00ZlBntli5evdaUz82y8s/iHRFuTFhHrz0S1DWX7vKMb0DmwfQV7eCdj0Krx7Gbw/Fra9rc7muXlDifrLFDQaGHi9BHlCCCGEEKLJHJrR++c//8m6devo2rWrra1fv358+umnTJ06lQcffJB//vOfTJo0qcFrdOnSBVdXV1JSUuzak5OT6d27t8PndOvWjYULF3L0aG0NsYqKCgoKCjh8+DCKotT7Ad/NzQ03N7cLP3w74MieuPa0p6+1KIrCmsRsXvv5MCfOlNrauwV48PDUaGbFh7Wv4u2mInh3uJpUBdRyCPHXQNx8COnn3LEJIYQQQogOzaFALy0tDVfXuksD3dzcbDNh4eHhlJeXN3gNFxcXZsyYwRdffMGdd96JRqMhPT2dTZs28e9//9vWb+PGjWRlZXH99dc36ZyxY8cyduxYu3tt2bKF8ePH8//+3/9z5HHbpebsiWuPe/pa2t5TBbz8UxK7ThbY2kKNBv40uTfzh0Q6//nK8iFphVoS4dr/qDN2BiMMWAAuHuq+OymHIIQQQgghWohDgd7w4cO57777eO+992x78HJycrjnnntsxct/+eUXxo0b1+h1Xn31VUaNGsWsWbMYPnw4n332GaNGjeLGG2+09fn888/ZsWMH119/fZPPuRQ0Z09cR61z1xSn8sp4dfVhfjyQaWvzcXfhgYm9WDiiKwYXnfMGV1kKR1bBwWVwfF3tzN2RVbXZMue847zxCSGEEEKITsuhQO+DDz5g7ty5RERE0KVLFxRFIS0tjT59+vDdd98BkJKSwptvvtnodaKjozl06BBLly4lOzubp556ihtvvBG9vnZYEydOpEePHs0653wLFixocDloR9eUdP7ttc7dxSSGKSit5O0Nx1m64yRVFnWfoatOy62ju3Hf+F74eLhc4AqtbNUi2PNpbTkEvQFirlCXZvaa4tyxCSGEEEKITk+jNJSd5AKsVitr164lKSkJjUZDTEwMU6ZMQavt2EsAaxQVFeHj40NhYSFGo9HZw7loaxKyavfonbOn7/bR3dt8j97FFHuvNFv5z7aT/GPDMbtSCXMGhvPo1Gjb0tQ2ZbXCqW3g3wOM4Wrbqidg5wfQY7wa3MXMVJdqCiGEEEII4aDmxCgOB3qdXWcL9C4muGppdkGnu5o9tClB58YjOby4MpHkcxKtDO/uz9Mz+9I/0rcNRn4ORYHM/bXlEIozYMLTMO5x9XhRJmj1kilTCCGEEEK0mObEKBe9Zs9kMmE2m+3avLy8LvayooW1lzp3jiSGSckt5aWViaw/nGNr6xHoyVNX9GVS3+C2LZOQn6IWLz+4DPKO1baHxNXO5gEYw9puTEIIIYQQQpzHoUCvuLiYRYsW8c0333DmzJk6x2WSsP1qyp6+1tScxDAlFWbe3nCMJVtSbPvwvNz0/GlSb24Z1Q1XfRsFqlYr1CxJPvozbHpF/dq3q7osM34+BPdtm7EIIYQQQgjRBA4FeosWLWLv3r18+umnzJgxg40bN7Jz505eeeUVHnvssZYeo+hEmpIYRlEUvtt7mldWHeZMcQWgVh24Zkgkj02LIci7DeodluVD4v/UmTv/7rXZMWPnqrN68ddA5FAphyCEEEIIIdolh/boRUZGsm7dOmJiYtBoNFgsFrRaLStXruSFF15g586drTHWNtXZ9ui1J40lhukR5MlT3x1iZ0q+rf/gLr48f2Vs6+/Ds5VD+Ka6HEL1kmSfKPjTgdpZPSGEEEIIIZyg1ZOxaLVazGYzWq0Wo9FISkoKAQEBlJaWEhAQgMlkcnjw7cWlHOiVVZrJLDQR5mPAw7XlSy/UlxhmQnQwSZlF/Htzsm2ZZrC3G4tmxHDVwIjWTxiTsRc+vgKqytTXegP0ma4uy+w1BVwMrXt/IYQQQgghLqDVk7EoimIroxAdHc2KFSu47bbb2LhxIwEBAY5cUrQDZrOVN9YdZeWBDEorLHi66ZjVP5yHJ/dB34L74c5PDLMvrYDnVyRyKl8NsrQauHlkNx6Z2gdvQyvUw7NaIHUbZOyB0X9S24JjwcUDuo5Sl2VGXyHlEIQQQgghRIflUKDXs2dP29eLFi3i+uuvZ/HixaSnp/PXv/61xQYn2tYb646ydEcqOo0Gg6uOonIzS3ekAvD49JgWv19BaSUvrExk5YFMW1t8hA8vz40nPtKnZW+mKJC5T91zd2g5FGcCGoibDz4RoHeFhw6Bi3vL3lcIIYQQQggncCjQO378uO3rq6++mr1797Jr1y5iYmIYMWJEiw1OtJ2ySjMrD2Sg02gI8FKTnXi66skrqWDlgQzun9irxZZxKorCf3em8cpPSRRXqPvgvNz0PDK1DzeP7IauJZdpWszw6+vqvrv8E7XtIfEQf7V9YCdBnhBCCCGE6CRa5JN7bGwssbGxLXEp0QRVFiv5pZWAmsXSVGW96Lp4mYUmSissGFx1du0GFy2lFRYyC030DLr4+ojpBWUsWn6QLcdzbW1XxIfy3KxYQn1aaB9cUQZ4harJU3R6SPpBDfL8uqnLMuPmQ3DLz1AKIYQQQgjRXjgc6O3Zs4e33nqLpKQkAPr168eDDz7IwIEDW2ps4jxWq8KaxCz+s+0kyWdKqDAr6HUawnwM9A72ZnpcKJP7hjiUuCTMx4Cnm7pc0/OcmTtTlRWju56wiwzCFEXhi52nePnHJEorLbZ7/mVuHBNjQi7q2kB1OYTv1aWZqdvgtlXQdaR6bNpfwM0bIoZIOQQhhBBCCHFJcCjQ++KLL7jpppuYMmUK06ZNA2DXrl0MHTqUzz77jAULFrToIIVqXVI2b6w9SlahCQUor7SgoGCqsmC2KmQUlgMwNTa02df2cNUzq384S3ekkldSgcFFi6nKikVRmNU//KKWbdY3i7dgWBRPzeyL8WKSrVSUwJGf1ODuxPracghuPnD2VG2g13OC4/cQQgghhBCiA3Lo0/vTTz/Nu+++yz333GPX/q9//YunnnpKAr1WUGWxsupQJmdLqzC46CirtOCi0wBazFaF8koL/h6urE7IYkJMsEPLOB+e3AfAlnXT6K63Zd10REOzeH+9uj/j+gQ5dE07398LSSvUr/UG6DtbXZbZewro26CouhBCCCGEEO2UQ4Febm4uN9xwQ532G264gccff/yiByXqKjaZOVNciaIBF60Wq2JGW70M0aKoSyzdXXUUlFVRbDLj7+na7Hvo9Voenx7D/RN7XXQdvewiE49+s5/Nx1pgFs9qgdSt6sxdz4kQe5XaHj8fqsrVfXcxV6jLM4UQQgghhBCOBXr9+/dn69atzJgxw65927ZtDBgwoEUGJux5G/QEebtyNAvMVitajQaL1QqowZ7BRUt5pYVQHwPehovLsePhqr+oxCvrk7J59Jv9FJRVAQ7O4imKWsS8phxCSZbaXnS6NtDrN0f9I4QQQgghhLDjUEQwe/ZsFixYwH333cewYcNQFIXdu3fz7rvv8tRTT7Fu3Tpb38mTJ7fYYC9lLjotM+LCSMgoIqvQhAaosigoWHF30eHuqsOiKEyLDb2o7JsXw1Rl4a+rDvPJtpO2tqsHR/LnK/s1bxbv2DpY9RjkJ9e2hcarM3ex81puwEIIIYQQQnRSGkVRlGaf1IzMhQ5cvl0oKirCx8eHwsJCjEajs4cD1J9100WnIdTHnd7BXheVdfNiHc8p5v4v9nI4qxgAbzc9L82NY87AiAufXJgOhaehy3D1dfrv8OFE8O+h7rmLnw9B0a04eiGEEEIIIdq/5sQoDgV6l4L2GOjVaI06eo5SFIUvd6Wx+IcETFVWAAZ18eUfCwYR5e/R8ImlebXlEE5tg4BecP9utfyBokDmfggbIOUQhBBCCCGEqNacGKVFCqaLtuWi0xJirK1r59H8vCstorC8iie/PcBPB9X9cxoN/GF8Tx6c3Kf+oLOyDA6vhIPfwIkNteUQDD7QdZSaWMXVQ71Q+MC2exAhhBBCCCE6GSmYLhxyNLuYOz/dTWpeGQAhRjfevHYgo3oF2ne0WkFbHfRVlsB3d4NiBb27mkglbj70miTlEIQQQgghhGhBUjC9E6uyWCk2mVt8Weeqg5k88s1+yqpr402KCeb1awbUlnSwWuDkFnXmLnkT3L8LXNzBKxgufwQCoyF6Brg5ntlTCCGEEEII0TCH9uh1796dJ554ot6C6a+//jrJyckNnNlxtOc9ehditSqsS8pmdUIWBWVV+Hm4MC324hO1WKwKb649yjsbjwPqCstHpvThD+N7odUAp/fAoWVw6NvacggAN6+AHuMu8qnq11rBrBBCCCGEEO1Nqydj8fb25vTp03UuXlhYSGRkJMXFxc29ZLvTkQO9NQlZLNmagl6rxejuQlF5FWarldtHd2dqbKhD1ywsr+LBL/ey8cgZQM2q+db1A5kYE6ImT/lwMpzeXXtCaH+1HELcPPCJbInHstNawawQQgghhBDtVasnY5GC6e1XlcXK6oQs9FqtLeulj7sLafllrE7IYkJMcLNnvo5lF3PX0t9JyS0FYFRgOW/HJxMQFqt20GjUOnfl+dXB3XwI6tOiz3W+dUnZdsFsdlEFS7amADgczAohhBBCCNFZSMH0TqbYZKagrAqju32BcqNBT0FZFcUmc+1euiZYnZDFw1/tw62ygIW637jFexe9Sw7BdsDTFcY8qHac9rK6D68NyiG0RjArhBBCCCFEZ+JQoPfkk08C8Morr9Q5tmjRIrvXUqavbXkb9Ph5qDNcPucEe0UmMyFGN7wNTf8r/2RrCpt++oJ3tKu53O0geo0VTIDBV82Y2f3y2s6ujdTMa2EtHcwKIYQQQgjR2TgU6Enw1n656LRMiw1lydYU0vLLMBr0FJnMmK1WpsWGXnimy1yBUvH/27vvsKiuvA/g32kMdeiCKCCRIIolFjS2XUWs6L4aC+qqUaPvxsQ0NepqdhOzqWo0b6qJMW6iWWuMGqIxmsQoGAUrqKhBsSEoAaSNwJTz/sFyw0hxqDMM38/z8Dxw7rn3/u49DDM/zjn3FGBV3O94/6cUPKm4joGKMzAoHID2UUCncUDbQYDScolUfSazRERERES2iJ+IbVBkex8AkB5U4qNRSw8qqZTRAFw9DCRtgzi/G8ecBuL9W9EAgF/sB+Kvf+oD/97jADunxrqEatU5mSUiIiIisnFmJ3o7d+4EAIwePVr6viqjR4+uQ0hUHXOWE5DLZRgS5ouBoS2qrisE9DcSoD+zDeqLuyAruF1aDBlytLcAAP4eDvh45gD4e1lHgldejZNZIiIiIqJmxOzlFZydSxe3LigokL6vSkFBQd0jszBrW16hPpcTMBoFzhz4Cl2PPC2V3XVtj2+N/fBhZmdkwBPtW2rwxYxwtNDY1/el1Cuuo0dEREREzUWDLK9QPnmzhUSuqanTcgJ3rwNnvwbybgEjVuBA8m1sSG2NZaqHkezSBz/I+2H/HQ20JQYAQK8gD6x9vAc09qrqj2sFVAo5H7xCRERERHQfztFrAmq1nEBBJnB+J5C0HbhxtLRMJoeu73zsO5cBoXDA2vbrUVCkx08Xb0tJ3uAOPnh/UlfYqxTVxsNeNCIiIiIi61XjOXrm4By9+lWj5QSKcoHtM4HLPwOiNHmDg3vpcgidxiNf4YYc7Q1oHFTQlpQmeYXFpfX8XO3xxphOVSZ59Tl8lIiIiIiIGo7Zid6UKVPMPiiHdtav6pYTaOUMaG78CLQbVrpYuVoDZKcCSjUQGgV0HAe0jZCWQ3AxGOHuqMLNnHu4kJEvJXmt3BzQK8gdbo5VD9es0/BRIiIiIiJqNLWao0eN6/7lBNzUMrTOPY4hhT+jX8YRKC8UALN/Blp1K032ojcC7oGVLoegUsgxIMQbf/8mCQX/TfJ8NfZo7W6PYR1bVjkUs1bDR4mIiIiIyCI4R6+JiGzvA9esMyg5vRmdb/0MV2MOgNLlENCmP2DU/1HZp0OVxynWG7Dl+E0pyWvhokafth4Y1rFltUsT1Gj4KBERERERWVSNEj2DwYCEhAQ8+uijUtnx48fx8ssvIycnB6NHj8aLL74ImYzzteqbXC5Dr2ufANk/AgCMLbtC3mkcZB0fAzR+Zh3DYBSYt+UMYlN+BwD0f9gLK8d3gYeT3QN746obPuqjUcPFnv8zICIiIiKyFjX6dL5p0yYcOHBASvSysrIwbNgweHt7o0uXLli2bBkcHR0xd+7cBgm22es5G/DvBXQcC7lXcI12FULgpZ1J+C4pHQDQLcANn0ztDkc7834F7h8+qrFXIq9ID73RiKFhvrUatqkt0SM9twgtXe3NjoOIiIiIiB6sRp+uP/74Y6xevVr6eceOHZDJZIiPj4eLiws2b96Mt99+m4leQ2k3vPSrFt7+/iI2xd8AAIT6umD99J41Tq7KhnaWPXXTR6OWnrpZE3q9EasOXEJM4i0UFhvgpFZgZGc/zIsMgVLJeX5ERERERHUlE0IIcytrNBpkZGTA0bH0YRxTp04FAGzYsAEAkJubi8DAQNy9e7f+I21kNVl13tp9eugy3thzAQAQ4OGI7U/2RguNfa2PV9d19JZ/fwEbjl6DQiaDvZ0CRSUGGITA1EcDsXBYaK3jIiIiIiKyZTXJUWr0Kd3BwQGZmZnSz0eOHDGZr2c0GqFQVL3QNjW+Y1ey8Obe0iSvhYsaG5/oVackDygdxmnOvL7KaEv0iEm8BYVMBk9nNZzslPB0VkMhkyEm8Ra0JfoHH8SK6QxGZBeWQGcwWjoUIiIiImrGajR2r0+fPliyZAlWrFiBffv2ITU1FcOGDZO2JyUloUuXLvUeJNVO7j0dXthyGkIAdko5/j2jJwI8HS0aU3puEQqLDbC3M/2HgL1KjsJiA9Jzi9DW29lC0dUeF5MnIiIiImtSo0TvtddeQ2RkJFq1agUAeOaZZ9C2bVtp+9q1azFr1qz6jZBqRQiBpd8k4VZuEQBg6Yj26OBn+SGoLV3t4aRWIO+eHk7l5ggW6YzQOCjR0rVuvY2WwsXkiYiIiMia1CjRCwsLw4ULF3D06FF4eHggPDzcZPvUqVMRERFRrwFS7ew4mYaYxNInbA5s541pvQMtHFEpRzslRnb2w4aj15BVUAx7lRxFOiMMQmBkZ78m+fRNLiZPRERERNamxp+qXV1dMXTo0Eq3DRkypM4BUd1dyyrEP3edBQB4OdthxfguNVrbsK4PW3mQeZEhACA9dVPjoJSeutkUcTF5IiIiIrI2Ta/7hKqlMxjx3ObTKCwxAABWjO8CL2e1Wfs21jwzpVKOhcNCMTci2CbW0eNi8kRERERkbTiezMa8/+NvOH3jLgBgep82GNiuhdn7ls0zu51XDHuVQppndiD5doPE6minRFtv5yad5AF/LCavNxpxI1uLXG0JbmRr67SYPBERERFRXTTtT9hkIj41Gx/8nAIAaOfjgsXDzV+TjvPM6qa+FpMnIiIiIqoPTPRsRNlSCsb/LqXw3qSusFeZv6Yh55nVjVwuw5AwXwwMbdGg8xuJiIiIiMzBT6I2QAiBf+w8i7S79wAAS4aHop2vS42OUTbPLO+ezqQ8r0gPd0cV55mZqS6LyRMRERER1Rd+GrUBBy9mYveZWwCAAe288XifNjU+BueZERERERHZDnbT2ICvT94EADjZKbBiXM2WUijP3HlmDb38AhERERER1Q0TvSauSGfATxfuAAAGtfeBt0v1SylUl6Q9aJ5ZYy2/QEREREREdcNEr4k7ePEOtP9dM29EJ98q69UkSSubZ3a/suUXlHI5NA4qafkFABgSVvW5iYiIiIiocXHcXRP3XVIGAMDRToEB1ayZV9c18u5ffsHVQQV/D0co5XLsO5cBncFYL9dDRERERER1x0SvCSvSGfDTfxO1iNAWVS6nUB9JmjnLLxARERERkXVgoteE/XIpE4X/HbYZ1alllfXqI0lriOUXdAYjsgtL2BtIRERERFTPOEevCduTlA4AcFBVP2yzLEm7nVcM13LJXl6RHj4atVlJWtnyC5/HpeJGthYaeyXyivS1Wn6BD3UhIiIiImpYTPSaqCKdAT8mlz5tMyK0BRzsKh+2CdRfkmbu8gsPwoe6EBERERE1LCZ6TdTh335HQXHpkMsRVQzbLL+UQn0kaQ9afsEc988XBABXBxVuZGux71wGBoa24Np8RERERER1xESviSobtmmvkmNgqLfJtuqGRtYlSStT1fIL5jBnvmBtj01ERERERKXYddIEFesNOHC+9GmbA9u1gKOdab5e3VIKZUmapXrNGuKhLkREREREZIqJXhN0+NLvyK9i2Ka1r3dXNl9QbzTiRrYWudoS3MjW1uqhLkREREREVDl2nzRBe86WDttUK+WICDV92mZ9DI3UluiRnluElq72FXoL60N9PdSFiIiIiIgqx0SviSnWG7C/3LBNJ7VpE9ZlKQW93ohVBy4hJvEWCosNcFIrMLKzH+ZFhkCprL+etvp4qAsREREREVWNn66bmLiU36UFzod3qrgUQV2GRq46cAkbjl5D3j09VEo58u7pseHoNaw6cKlBrsXS8wWJiIiIiGyVxXv0srKysHXrVty+fRudOnXCmDFjIJdX/8HfnH3i4uJw5MgRKJVK9OvXD+Hh4Q15GY3mu8QMAICdUo5BVQx1rM3QSG2JHjGJt6CQyeDprAYAONkpkVVQjJjEW5gbEdwgwziJiIiIiKj+WbQrJTU1FZ06dcKWLVtQWFiI+fPnY9SoUTAaq35gyIP2MRqN6N27NxYvXozMzExcvnwZERERmDdvXmNdVoMp0Rux/3xpotf/YS/cziuCtkQPncGI7MIS6UErBiHQo40H/jW6I1aO74K3xnbGkDBfyOWyKo+dnluEwmID7O9beN1eJUdhsQHpuUUNd2FERERERFSvZEIIYamTT5gwATdv3sThw4ehUChw5coVtGvXDl9++SUmTZpUq32EEIiPj0evXr2kffbs2YOoqCicPXsWYWFhZsWWl5cHV1dX5ObmQqPR1Mv11tXPF+9gxvoEAICnkwpClM5383Syg5+rA9yd7ODrao+M3Hu4e09vsn5edUkeUNqjN+zdQ8i7p5d69AAgq6AYGgclvn/+T+zRIyIiIiKyoJrkKBbr0dPr9fj2228xZcoUKBSlvUgPPfQQ/vznP2PHjh213kcmk5kkeQDQrVs3AMCNGzca6nIaxZ7EdOl7vUHACCBHq0NKZgGuZ2uRnJGHDUevITk9v8L6eQ/iaKfEyM5+MAiBrIJiFBbrkFVQDIMQGNnZj0keEREREVETYrFE7/r16ygqKkJwcLBJeXBwMC5dqvzhH7XZBwA2btwItVqN7t27V1mnuLgYeXl5Jl/WRGcwYt9/h20q5aXz6PQGATuFDAqZHBn5RdCWGKCQyXBPZ4CLWlnj9fPmRYZg6qOB0DgooTMIaByUmPpoIOZFhjT05RERERERUT2yWDdNYWEhAFTocnR1dZW21cc+sbGxeOmll/Dmm2/C29u7ynjefPNNLFu2zOz4G9uRy1nIu1f6tE0ntRJGARiFgFwmA+QCOoPAvRID7FUKlBiM0BmMUMsVNVo/T6mUY+GwUMyNCG7QdfSIiIiIiKhhWaxHz9nZGQCQm5trUn737l1pW133SUhIwMiRI/Hss8/ihRdeqDaev//978jNzZW+rG2YZ/lhmxACchkgl8lgFAIGI6BSyOBgp0CRzgA7hVxasiCvqHSuXnXr593P0U6Jtt7OTPKIiIiIiJooiyV6AQEBcHJywsWLF03KL168iPbt29d5nxMnTmDIkCF44oknsHz58gfGo1arodFoTL6sRflhm4GejjACyC4sgVIOlBgEDMIIHxd7ONopYBACDioF8ot0Zq+fR0REREREtsVin/4VCgXGjBmDL7/8EiUlJQCA8+fPIzY2FuPHj5fq7dixA++++26N9jl58iQGDx6MJ554Au+8807jXVQD0RsE5g4MRtcAN8wdECzNo5PLZHB3VCHY2xmBno5o76vB1EcD0b6lC4r0Rvho1JjZN6ja9fOIiIiIiMj2WHR5hbS0NPTv3x/u7u7o3r07du/ejQEDBmDTpk2QyUqXA5g1axaOHj2Ks2fPmrVPYWEhAgICoFQqMWPGDJPzjR071uyF061xeQUAEEJAJpNBW6KX5tGpFHLkF+nhYq+ESiGHzmA0+ZmIiIiIiJq+muQoFp2E1apVKyQmJmL37t24ffs2JkyYgMjISJM6Y8eORe/evc3eRy6X48UXX6z0fGq1utLypqQsAS6bR1em/INWVAr5Ax+8QkREREREtsuiPXrWzFp79IiIiIiIqHlqEgumExERERERUcNgokdERERERGRjmOgRERERERHZGCZ6RERERERENoaJHhERERERkY1hokcVaEv0uJxZAG2J3tKhEBERERFRLVh0HT2yLnq9EasOXEJM4i0UFhvgpFZgZGc/zIsMgVLJ/wkQERERETUVTPRIsurAJWw4eg0KmQz2dgrk3dNjw9FrAICFw0ItHB0REREREZmL3TQEoHS4ZkziLShkMng6q+Fkp4SnsxoKmQwxibc4jJOIiIiIqAlhotdEVTaPTmcwIruwBDqDscbHS88tQmGxAfZ2CpNye5UchcUGpOcW1TlmIiIiIiJqHBy62cRUNo9uRKeW6NLaDQeSbyNHq4O7owpDw3wR2d4HcrnMrOO2dLWHk7p0uKaT3R+/FkU6IzQOSrR0tW+oSyIiIiIionrGRK+JqWwe3RdHrsLd0Q4PeTtD46DC7bxifB6XCgAYEuZr1nEd7ZQY2dkPG45eQ1ZBMexVchTpjDAIgZGd/eBox18VIiIiIqKmgkM3m5DK5tF5ONlBbxDIKixBS1d7uDqo4O/hCKVcjn3nMmo0jHNeZAimPhoIjYMSOoOAxkGJqY8GYl5kSANeFRERERER1Td20zQhlc2jMwoBmQwQQkCr00OjsAMAaOyVyNHqkF+kh4eTnVnHVyrlWDgsFHMjgpGeW4SWrvbsySMiIiIiaoLYo9eElM2jKyoxSGVymQxCADKZDI6qP5KyvCI93B1VcLGveaLmaKdEW29nJnlERERERE0UE70mpGwenUEIZBUUo7BYh+zCEigVMng62SE9twi52hLcyNZCbzRiaJgvVAo2MRERERFRc8MumyambL5c2VM3NQ5KjOjkb/LUTR+NWnrqJlC67EJ+kR4u9komfkREREREzYBMCCEsHYQ1ysvLg6urK3Jzc6HRaCwdTgXaEn2FeXT3J3RGo8CB5NvYdy6j1ssuEBERERGRdahJjsIevSaqbB5deSqF3OTBKweSb+PzuFQo5fJaL7tARERERERND8fx2SidwYh95zKglMvh7+FYp2UXiIiIiIioaWGiZ6Pyi/TILiyBvUoOY7nRueWXXSAiIiIiItvEoZs2yGgUOHolC5czC5BfpIebowqt3R3R2s0BeUV6+GjUtVp2gYiIiIiImgZ+2rdBB5Jv48tfr8LJTomCYgNyCnXI1ebi94JiuDqouOwCEREREZGN46d9G1N+bl4XfzeE+Wng5qiCAFBYrMfjvdtIyy4QEREREZFtYo+ejckv0iNHq4PGQQWZTIbW7o7wc3VAVkEx9EKg10OeXFqBiIiIiMjGsUfPxrjYK+HuqELePZ1UJpfLUKQ3wtPJjnPziIiIiIiaASZ6NkalkGNomC/0RiNuZGuRqy3BjWwt9EYj5+YRERERETUT7N6xQWVz8Pady0COVgcfjRpDw3w5N4+IiIiIqJlgomeD5HIZhoT5YmBoC+QX6eFir2RPHhERERFRM8JEz4apFHJ4ONlZOgwiIiIiImpk7OYhIiIiIiKyMUz0iIiIiIiIbAwTPSIiIiIiIhvDRI+IiIiIiMjGMNEjIiIiIiKyMUz0iIiIiIiIbAwTPSIiIiIiIhvDRI+IiIiIiMjGMNEjIiIiIiKyMUpLB2CthBAAgLy8PAtHQkRERERE9EduUparVIeJXhXy8/MBAP7+/haOhIiIiIiI6A/5+flwdXWtto5MmJMONkNGoxG3bt2Ci4sLZDKZpcNBXl4e/P39cePGDWg0GkuHQ1VgO1k/tpH1YxtZP7ZR08B2sn5sI+tnbW0khEB+fj78/Pwgl1c/C489elWQy+Vo3bq1pcOoQKPRWMUvGVWP7WT92EbWj21k/dhGTQPbyfqxjayfNbXRg3ryyvBhLERERERERDaGiR4REREREZGNYaLXRKjVarz88stQq9WWDoWqwXayfmwj68c2sn5so6aB7WT92EbWrym3ER/GQkREREREZGPYo0dERERERGRjmOgRERERERHZGCZ6RERERERENobr6DURV65cQU5ODkJDQ+Hk5GTpcAhAUlIStFotevXqVel2o9GIc+fOQQiBsLAwKBSKRo6wedPpdLh48SIcHR0RGBhY5f1PTU1FdnY2X1sWkpGRgfT0dLRp0wbu7u6V1snMzMTVq1cRGBiIFi1aNHKEVObUqVMoLCxEv379Kmy7d+8ezp8/D1dXVwQHB1sguuYrPj4eJSUlJmUBAQEICAgwKTMajTh//jwMBgM6duzI9yQL0Ov1SE5OhkajQWBgYKV1rl69it9//x2hoaFwdnZu5Aibr6SkJOTm5lYod3Z2xiOPPGJSlpWVhStXrsDf3x++vr6NFGEtCbJqd+/eFQMHDhQuLi4iJCREuLi4iK+++srSYTVrn3/+uXjkkUeEu7u78PT0rLROYmKiaNu2rWjZsqVo1aqVCAwMFCdPnmzkSJun4uJisWTJEuHl5SXCwsJEq1atRNu2bcXBgwdN6uXm5orIyEjh7OwsQkJChLOzs/jyyy8tFHXzc+zYMdG7d2/RunVr0aVLF2Fvby+mTZsmiouLTeotWLBAqNVq0aFDB6FWq8UzzzwjjEajhaJuvr7//nuhUChEZR8btm3bJlxdXcXDDz8sNBqN6Nevn8jKyrJAlM2Tj4+PCAkJEX379pW+Pv30U5M6586dE8HBwcLX11e0atVKBAQEiISEBAtF3Dx99dVXwsvLSwQHB4sOHTqIqKgocffuXWl7QUGBGD58uHBychLt2rUTjo6O4rPPPrNgxM3L3LlzTV5Dffv2FSqVSgwePNik3pIlS0zek/73f/9XGAwGC0X9YEz0rNz06dNFhw4dpD8GH3/8sVCpVCIlJcXCkTVfixcvFidOnBCrV6+uNNEzGAwiNDRUREdHSx9Ip0yZIh566CGh0+kaO9xmJzs7W7z++usiLy9PCFHaHs8884xwd3cX+fn5Ur1Zs2aJdu3aiezsbCGEEGvXrhVKpVJcvHjRInE3N1u2bBFnzpyRfk5JSREuLi5i9erVUtnGjRuFg4ODOHHihBBCiDNnzghHR0exbt26xg63WUtPTxf+/v7i+eefr5DoXbt2TajVavHee+8JIYTIy8sTHTt2FJMmTbJEqM2Sj4+P2LBhQ5XbDQaDCAsLE+PGjZPekx5//HERGBhY4R8r1DD27t0r5HK52LRpk1T2/fffi99++036ee7cueKhhx4SmZmZQgghNmzYIORyuUhKSmr0eEmIS5cuCQAmnSvbt28XdnZ24tdffxVCCHH+/Hnh4uIiPvzwQ0uF+UBM9KyYVqsV9vb2Ys2aNVKZwWAQPj4+4uWXX7ZcYCSEEFUmeocOHRIAxNmzZ6WyixcvCgBi//79jRki/dfZs2cFAHHs2DEhhBBFRUXC0dFRfPDBB1Ido9Eo/Pz8xNKlSy0VZrPXoUMHsWDBAunniIgIMW7cOJM6EydOFH379m3s0Joto9EoIiMjxcqVK8X69esrJHpvvPGG8PT0FHq9Xir77LPPhEqlErm5uY0dbrPk4+MjVq1aJRISEsTt27crbD9y5IgAIE6fPi2VpaSkCABi7969jRlqsxUeHi4ee+yxKrfrdDqh0WjEypUrTcqDgoLE/PnzGzo8qsSiRYuEh4eHuHfvnlQ2YsQIMXLkSJN606dPF927d2/s8MzGh7FYseTkZBQVFaF79+5SmVwuR/fu3XHq1CkLRkbVOXXqFNRqNcLCwqSykJAQaDQatpuFJCQkQC6XIygoCABw8eJFaLVak9eWTCZDjx492EaNqKSkBLGxsdi/fz+ef/55FBQU4Mknn5S2nzp1yqSNAKBnz55so0b01ltvQQiBefPmVbr91KlTeOSRR0zme/Xs2RM6nQ7nzp1rrDCbvVdeeQWzZs1CUFAQIiIicO3aNWnbqVOnoFQq0blzZ6msbdu28PDw4GupEeTm5uL48eMYNWoUcnNzceLECdy+fdukzpUrV5CXl1fh7114eDjbyAL0ej2+/PJLTJ06Ffb29lJ5Ve9JiYmJMBqNjR2mWZjoWbHs7GwAgKenp0m5p6entI2sT3Z2doU2A9hulnL9+nUsXLgQTz75JLy9vQHwtWUtcnNzsXjxYsyfPx9r167FzJkz0aZNGwCAEAJ3796ttI20Wi2Ki4stEHHz8uuvv+Ldd9/FF198AZlMVmmdyv7elf3M11LjeOONN5CVlYXTp0/j6tWr0Gq1mDhxIoQQAErbwcPDo0Ib8u9d48jIyIAQAseOHUO7du0we/ZstG3bFqNGjUJeXh4AvidZmz179iA9PR2zZs0yKa/q751Op0N+fn5jhmg2JnpWTKVSAQCKiopMyu/duwc7OztLhERmUKlUFdoMYLtZwu3btzFkyBB07doVq1atksr52rIO3t7eiI2NRWJiIs6cOYOPP/4Yr7zyCoDSHlalUllpGwF/tCE1nL/+9a+YOnUqUlNTERsbi99++w0AEBsbi7S0NACV/70rayO+lhrHzJkzoVSWPkTd29sbr732Go4ePYqrV68C4HuSpZX9rTp48CDOnz+PkydP4vLly0hMTMTSpUtN6vA9yTqsW7cOvXv3RseOHU3Km+LfOyZ6Vqzs0btlb6hl0tLSKjw2maxHYGAgcnJyoNVqpbLi4mJkZWWx3RrRnTt3EBERAX9/f+zatQtqtVraxteW9QkODsaYMWOwd+9eqSwgIKDSNmrdujXkcr59NbSAgAAcPXoUixcvxuLFi7Ft2zYAwOLFi3H48GEApa+lytqobH9qfD4+PgD+aIfAwEDk5eWZ9DiUlJQgMzOTbdQIWrVqBaVSiQkTJsDDwwNAaRuNHj3a5HUE8D3JGmRkZGDPnj2YPXt2hW1V/b3z8vKCg4NDY4VYI3yntGJt2rRBcHAwdu/eLZWlp6cjPj4egwcPtmBkVJ2IiAjI5XLExMRIZXv27IFer8egQYMsGFnzkZmZiYiICLRs2RK7d+82GWMPAK1bt0ZoaKjJa+vOnTv49ddf+dpqJIWFhRXKUlJSTIbFDB48GDExMdIQNCEEdu/ezTZqJAcPHkRsbKz0tWTJEgClPXoTJ04EUNpGp06dws2bN6X9du3ahYCAAISEhFgk7uakstfRDz/8AKVSidDQUADAwIEDoVQq8e2330p19u3bh5KSEkRGRjZarM2VWq3GgAEDKiQIN2/elKYTeHl54ZFHHjF5T8rJycGhQ4f4966R/fvf/4ajoyMmTJhQYdvgwYPx3XffwWAwSGW7du2y6jbigulW7q233sLEiRPh6+uL9u3b46233kKXLl0q/QWkxnH+/HlkZ2cjNTUVer0esbGxAIBu3brB0dERfn5+ePbZZ/H0009Dq9VCoVDgxRdfxJw5c6T5R9RwCgoKMGjQIBQUFGDRokU4ceKEtK1Dhw7Sf1TffPNNjBs3Dn5+fujYsSOWL1+OsLAwTJo0yVKhNytRUVEYNGgQunXrBr1ej+3bt+PQoUP44YcfpDqLFi3Cli1bMHXqVERHR+Prr79Gamoqtm/fbsHIqbzRo0ejZ8+eGD16NJYsWYKUlBS899571c7ro/pz8OBBvPvuu5g8eTL8/PwQFxeHFStW4O9//zu8vLwAlPYevfDCC3j22WdRXFwMlUqFhQsXSnPFqOG9/vrrGDRoEIKCghAeHo7Dhw9j165d2LNnj1TnjTfewKhRoxAQEICuXbvinXfeQdu2bTFt2jQLRt78fP7555g8eTKcnJwqbFuwYAE2btyIyZMnY8qUKdi9ezfOnz+P9evXWyBS88hE2b9KyWrt27cPn332GXJychAeHo5FixbBzc3N0mE1W4sWLUJcXFyF8g0bNkhPdTQajfj000+xe/duCCEQFRWFOXPmmDyZjhrG9evXMXny5Eq3vfnmm+jfv7/08/79+7F27VpkZ2ejR48eWLRoEdzd3Rsr1GYtPz8fH330EeLi4iCTyRAaGlrpP0MuXbqEFStW4PLlywgKCsKCBQvQvn17ywTdzO3duxevv/669M+tMnl5eVixYgV+/fVXuLq6YsaMGRg5cqSFomx+jhw5gvXr1+P69esICAjA5MmTMXDgQJM6RqMRn332GXbt2gWj0YgRI0Zgzpw50tw+angnT57Ee++9h5s3b6JNmzZ48skn0aNHD5M6P//8M9asWYOsrCx07doVixYtkhJ2aniXLl3CzJkz8eGHH6JLly6V1rly5QqWL1+O3377DQEBAZg3bx46derUyJGaj4keERERERGRjeEcPSIiIiIiIhvDRI+IiIiIiMjGMNEjIiIiIiKyMUz0iIiIiIiIbAwTPSIiIiIiIhvDRI+IiIiIiMjGMNEjIiIiIiKyMUz0iIismE6nw+bNm5GTk9Mg9euiMc8FAFlZWfj2228b5Ni3b9/G1q1bG+TY1UlLS8PXX3/d6Od9kPvvR33HaU3XXZe2r+/rSElJweHDh+vteETUvDHRIyKqodTUVGzevBmbN2/G1q1bcejQIeTm5tb5uCUlJdi8eTPu3r0rlRUWFmLSpEm4fPmyWceoaf3GjK2uFixYgGPHjjXIsZOSkjB58uQGOXZ1EhIS8Pjjjzf4ebRaLbZs2QKDwWBW/fvvR33H2VjXbY66tH19X4eTkxPGjBmDa9eu1dsxiaj5YqJHRFRDv/zyCyZNmoSdO3fi66+/xrPPPovAwMA69wjl5eVh0qRJuHr1qlRmZ2eH6OhoeHh4mHWMmtZvzNjqIjk5GVu2bMH8+fMb/FyNqXXr1hg3blyDn2ffvn145ZVXoFAoarV/Y8XZ1NT3fWnZsiUmTJiAV199td6OSUTNl9LSARARNVWbN2+Wvp8zZw6eeOIJ/OUvf8G3334Lg8EAhUKBgIAAdO3aFXZ2dlLde/fuYdeuXYiKisL169dx8eJFdO3aFQcOHABQ+qH8woUL8PLywp///GeMHj0a7u7uJucuKCjA0aNHYTAY0Lt3b2g0GgCASqUyqV/+XBkZGbhw4QICAwPRuXNnk+Nt27at2pi/+eYbs2PLyMhAfHw81Go1+vTpAxcXl0qvPTMzE8nJyWjVqhUeeeSRau/1hx9+iFGjRtX6XOXvc1BQEADg2LFj+P3339GpU6cqz5uWloYTJ07A1dUV3bp1Mzn+tWvXcPr0aYwcORLHjh1DWloaRowYAScnpwrHuXv3Lo4fPw4A6NGjB9zc3ACUfrAfNWqUVO+7775Dfn5+hf1HjRolHbe6mKoSExODkSNHVlunuvtxf5zVXVP5+3LmzBncuHED3bt3R+vWras8d1ZWFvbv3w8AsLe3x8MPP4ywsDBpe0FBAWJiYjBs2DDpPEDpPyD27NljUm7O/TGn7c251oZov6lTpyIiIgIrV66s8PtORFQjgoiIamT9+vXi/j+f33//vQAgzp49K6ZOnSqio6PF2LFjRUhIiAgNDRVXr16V6t64cUMAEFFRUSIkJESMGzdOHDx4UIwZM0YAEEOHDhXR0dHipZdeEjk5OQKASEhIkPbfsWOHcHNzE126dBFDhw4VwcHBIi4uTgghKtQvO9fw4cNF27ZtxdChQ4Wjo6N4+umnTeJ/UMzmxvbRRx8JBwcHMWDAANGtWzfh7u4uDhw4UOHaR40aJdq3by+ioqKEi4uLmDNnTrX3PDAwUKxZs8akzNxz3X+fDQaDGDNmjHBzcxPDhw8X/v7+YujQoUKhUJgcf+nSpcLNzU0MGzZM9O3bV/j4+IiDBw9K2zds2CA0Go3o37+/6N27t4iOjhZ37typEPuBAweEq6ur6Nevnxg2bJgICgoSu3btEkII8c033wgnJyep7nPPPSeio6Olr65duwoA4vr162bFVBmj0Sh8fX2rrGfO/bg/zuquqey+9OnTR/Ts2VP0799fqNVqsXHjxiqP99tvv0nX/Je//EV4e3uLUaNGCZ1OJ11DUFCQeOedd0xi/+CDD4SPj49U70H3x9y2L6+x20+v1wtnZ2exbdu2KmMiIjIHEz0iohqqLNF7//33BQCRlZVlUm4wGER0dLSYMmWKVFaWgDz22GNCr9dL5ZmZmQKAOHXqlFR2fzJ15coVoVarxcqVK6U6d+7ceWCiN3DgQFFcXCyEEOL48eNCoVCIn3/+udLrqyxmc2Ozs7Mz+UD//PPPi4CAAHHv3j2TeKZNmyYMBoMQQojY2FgBQFy+fLnSeLKysgQAcejQIamsJue6/z5/8cUXQqPRSIlsbm6uaN++vcmH/a1btwo/Pz+RlpYmlX3wwQeidevWoqSkRAhRmtAAEKtXr6407jKRkZFi4cKF0s95eXli//79QoiKiUJ56enponXr1mL27Nlmx1SZ+Ph44ebmJiVD9zPnftwfZ3XXVHZfli5dKm1fvXq1cHV1FdnZ2Q+87rIY2rZtKz777DOp7LXXXhNhYWEm9bp16yZefPFFIYR598eca72fJdovPDzc5JxERLXBOXpERLW0efNmbNq0Ca+++iqWLl2KWbNmSfPVkpOTERMTg61bt8LLywvx8fEV9n/66adrPGdq8+bN8PT0xAsvvCCVeXt7o0+fPtXu99xzz0lDMbt3745BgwZhy5YtJnXMibk6O3bsgK+vL/76179KZS+99BKuX7+OI0eOmNT929/+Brm89C2oT58+UKlUuHTpUqXH/f333wHAZBhbTc51/33eunUrJkyYgMDAQACARqPBnDlzTPZZv349OnbsiCNHjmDbtm3YunUr1Go1bt68iZSUFKmeQqHAU089Ve19cXBwwOXLl1FYWAgAcHFxQWRkZLX7lJSUYOzYsWjTpg0+/PDDGsV0v7Ihj0pl5bM1zLkftbmmBQsWSN8//fTTMBgM+OGHH6o8psFgQHx8PL755hvs2bMHAQEBJr+DM2bMwIULF6SyxMREnDx5EjNnzgRg3v1pqGu9X13bz93dXfq9JyKqLc7RIyKqpZ07d0Iul6NFixb4/PPP8dhjj6G4uBj/8z//g/j4eISHh8PNzQ1paWm4c+dOhf1btmxZ43Nev34dwcHBUpJkrjZt2pj8HBQUJD3ZryYxV+fatWt46KGHTMo8PT3h6upa4SmC5R/gIpPJYGdnh6KiokqP6+zsDADSB+2anuv++3z9+nX07t3bpKxs3l6Zq1evQqlUYvv27Sbl0dHRFc5Zfi5jZVauXIknnngCLVq0wKOPPoqRI0fib3/7GxwdHavc56mnnsLNmzeRkJAAlUpVo5juFxMTg3nz5lW53Zz7UdNrcnNzM5lLp1Kp0KpVqyqfJnn58mUMGTIEQgh06NABzs7OuHnzJlxdXaU6fn5+GD58OD7//HP07NkT69atQ+/evREaGgrAvPvTENdambq2X2FhoVlzL4mIqsNEj4iolso/jKXMV199hbNnz+LatWvSB7U1a9Zg8eLFFerKZLIan9PNzQ1ZWVk13u/+te5ycnLg5eVV45ir4+XlhezsbJMynU6H/Px86Vy14evrC41Gg9TUVPTq1avG57r/Pnt6elZ6P8rTaDTo3LkzPv3002pjM6cNQ0JCcPjwYWRmZuKnn37Ca6+9hv3792PPnj2V1n///fexadMmxMbGokWLFjWOqbz09HQkJiZi+PDhVdYx537U9Jry8/Oh1+tNehHL/87db9myZejYsSN27dollU2cOLFC8j979mxMmzYNb7/9Nr766iu89dZb0jZz7k9DXOv96qP9rl69atJbTURUGxy6SURUjzIyMuDn52fy33hzF1Qu67mqqmcLAIYMGYLz589LTwAsk5mZWe2xd+7cKX2fn5+P/fv3o2/fvmbHbE5s/fr1w9mzZ02GYO7YsQMqlQo9evSoNr7qyOVyDBgwAHFxcfVyrn79+klPRi2/b3nDhg3D9u3bKwyfS0tLq3H8Zft4e3sjOjoaCxcuxNGjRyut+/PPP2P+/PlYv349unbtWueYYmJi8Oijj1a7BIY596Om12QwGBATEyP9HBcXh8zMzAq9aWUyMjLQrl076ee7d+/ixx9/rFAvKioKTk5OmD59OoqKikx6w8y5Pw1xreXVR/tdvXoVaWlpDxweSkT0IOzRIyKqR1FRUXj55Zfx7LPPonPnzti1a1eFpKwq9vb2CAsLw/LlyzF27Fj4+PhUSFoGDhyIGTNmYMiQIXjuuefg4+OD3bt3Y+LEiZg2bVqVx/7Pf/4Do9GIDh06YN26dWjZsiVmzJhhdszmxBYREYHRo0djyJAhmDdvHvLy8vD2229j6dKltRqmWt7s2bMxe/ZsrF69Gkqlsk7neuGFF7Bu3ToMGzYM48ePR2xsLGJjY03qLFiwAHv37kV4eDjmzJkDV1dXHD9+HAkJCTh9+nSNYn/88cfh6+uLvn37wmAw4P/+7/8wfvz4CvWMRiPGjx+PHj16wGg0mvQYjxo1qlYxmbOsgjn3o6bXpFarMXfuXFy4cAF2dnZYvnw5Zs6cifbt21d6vNGjR2Px4sXw9PSEs7Mz1qxZA71eX6GeQqHA9OnT8cYbb2D69Okm/5ww5/40xLWWqa/227JlC/70pz/h4YcfrjYuIqIHYY8eEVENBQUFVTkvqkuXLoiLi4MQAnFxcRg6dCh27tyJsWPHSnUcHR0RHR0trX1X3u7du/Hwww9j7969+OWXXypdlHzdunVYv349MjIykJSUhOeee05K8qpaxDwmJgb+/v6Ij4/HyJEjERsbK80tMydmc2PbsmUL/vnPf+L06dO4efMm/vOf/+Af//jHA6993Lhx1a6zFhUVhVatWpk8QKa25/Lw8EBCQgK6d++OhIQEhIeHY+/evSZt6uzsjMOHD+OVV15BSkoKTp8+jd69e5s8HKRNmzYYPXp0lTGX2bdvH0aMGIHExEQkJyfjX//6Fz766CMAFRfcjoyMREBAAHbu3GnypdVqzYqpvOLiYvz4448PTPTMuR/3x1ndNQGlQ4x/+uknFBYWIjExEcuWLcMnn3xS5fGeeuoprF27FikpKUhKSsKyZcuwatUq9O/fv0K8Zfe87CEsZcy5P+Zc6/0as/10Oh0++eQTvPTSS1XGQ0RkLpkQQlg6CCIiahg3b96Ev78/kpOTpYdWNFUJCQnYuXMnXn/9dUuH0iTs3bsXTz31FFJTUxv1vBs3bsSCBQuQkZHRIMd/9dVXsWnTJiQnJzfI8S3p2LFjiImJwb/+9S9Lh0JENoBDN4mIqEkIDw9HeHi4pcNoMnJzc7Fw4UJLh1FvkpKSEBsbi1WrVuGDDz6wdDgNolevXtIDh4iI6oqJHhGRDatumCjZtokTJ1rkvOYOaa2p5ORkHDlyBMuXL8eUKVPq/fhERLaGQzeJiIiIiIhsDB/GQkREREREZGOY6BEREREREdkYJnpEREREREQ2hokeERERERGRjWGiR0REREREZGOY6BEREREREdkYJnpEREREREQ2hokeERERERGRjWGiR0REREREZGP+HyST0ZuCZFgbAAAAAElFTkSuQmCC" alt="output figure" loading="lazy"></div></div>
+<h2 id="5-the-shortcut-and-what-it-assumes">5. The shortcut, and what it assumes<a class="headerlink" href="#5-the-shortcut-and-what-it-assumes" title="Permanent link">#</a></h2>
+<p><code>costs.fit_from_fills</code> does all of the above from a run's fork with no
+arguments. It has to choose a reference price without being told one, and it
+uses the size-weighted average of the other fills at the same instant, which
+measures how far through the book each fill reached rather than how far from
+the mid the order ended up.</p>
+<p>That makes it a measure of <em>depth consumed</em>, available whenever an order
+walked more than one level, and it is the right tool when the decision price
+was never recorded. When you do know the decision price, build the samples
+yourself as above.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">shortcut</span> <span class="o">=</span> <span class="n">costs</span><span class="o">.</span><span class="n">fit_from_fills</span><span class="p">(</span><span class="n">probe_fork</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="s2">&quot;sqrt&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;shortcut  intercept </span><span class="si">{</span><span class="n">shortcut</span><span class="o">.</span><span class="n">intercept</span><span class="si">:</span><span class="s2">+.5f</span><span class="si">}</span><span class="s2">  coefficient </span><span class="si">{</span><span class="n">shortcut</span><span class="o">.</span><span class="n">coefficient</span><span class="si">:</span><span class="s2">+.5f</span><span class="si">}</span><span class="s2">  &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;observations </span><span class="si">{</span><span class="n">shortcut</span><span class="o">.</span><span class="n">observations</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;explicit  intercept </span><span class="si">{</span><span class="n">sqrt_fit</span><span class="o">.</span><span class="n">intercept</span><span class="si">:</span><span class="s2">+.5f</span><span class="si">}</span><span class="s2">  coefficient </span><span class="si">{</span><span class="n">sqrt_fit</span><span class="o">.</span><span class="n">coefficient</span><span class="si">:</span><span class="s2">+.5f</span><span class="si">}</span><span class="s2">  &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;observations </span><span class="si">{</span><span class="n">sqrt_fit</span><span class="o">.</span><span class="n">observations</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">They answer different questions and should not be expected to agree.&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">shortcut  intercept -0.01706  coefficient +0.00049  observations 194
+explicit  intercept +0.01865  coefficient +0.00772  observations 56
+
+They answer different questions and should not be expected to agree.</pre></div></div>
+<h2 id="6-charging-the-model-somewhere-cheaper">6. Charging the model somewhere cheaper<a class="headerlink" href="#6-charging-the-model-somewhere-cheaper" title="Permanent link">#</a></h2>
+<p>The reason to fit a cost model is to use it where the data cannot support the
+measurement: a daily bar backtest, or any replay with only a top-of-book
+quote. Collapsing this book to one level per side is exactly that backtest --
+all the depth, none of the walking, everything filled at the touch.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">sides</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span>
+    <span class="p">[</span>
+        <span class="n">quote</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()[[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="s2">&quot;bid&quot;</span><span class="p">,</span> <span class="s2">&quot;bid_depth&quot;</span><span class="p">]]</span>
+        <span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;bid&quot;</span><span class="p">:</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;bid_depth&quot;</span><span class="p">:</span> <span class="s2">&quot;size&quot;</span><span class="p">})</span>
+        <span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">side</span><span class="o">=</span><span class="s2">&quot;buy&quot;</span><span class="p">),</span>
+        <span class="n">quote</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()[[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="s2">&quot;ask&quot;</span><span class="p">,</span> <span class="s2">&quot;ask_depth&quot;</span><span class="p">]]</span>
+        <span class="o">.</span><span class="n">rename</span><span class="p">(</span><span class="n">columns</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;ask&quot;</span><span class="p">:</span> <span class="s2">&quot;price&quot;</span><span class="p">,</span> <span class="s2">&quot;ask_depth&quot;</span><span class="p">:</span> <span class="s2">&quot;size&quot;</span><span class="p">})</span>
+        <span class="o">.</span><span class="n">assign</span><span class="p">(</span><span class="n">side</span><span class="o">=</span><span class="s2">&quot;sell&quot;</span><span class="p">),</span>
+    <span class="p">]</span>
+<span class="p">)</span><span class="o">.</span><span class="n">sort_values</span><span class="p">([</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="s2">&quot;side&quot;</span><span class="p">])</span>
+<span class="n">sides</span><span class="p">[</span><span class="s2">&quot;ts_event&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sides</span><span class="p">[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">]</span>
+<span class="n">sides</span><span class="p">[</span><span class="s2">&quot;instrument_id&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">SYMBOL</span>
+<span class="n">sides</span><span class="p">[</span><span class="s2">&quot;outcome&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">sides</span><span class="p">[</span><span class="s2">&quot;action&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;snapshot&quot;</span>
+<span class="n">sides</span><span class="p">[</span><span class="s2">&quot;event_index&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sides</span><span class="o">.</span><span class="n">groupby</span><span class="p">(</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="n">sort</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span><span class="o">.</span><span class="n">ngroup</span><span class="p">()</span>
+<span class="n">sides</span><span class="p">[</span><span class="s2">&quot;is_last&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="n">sides</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;sell&quot;</span>
+<span class="n">sides</span><span class="p">[</span><span class="s2">&quot;source_vendor&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;collapsed&quot;</span>
+<span class="n">collapsed</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">Table</span><span class="o">.</span><span class="n">from_pandas</span><span class="p">(</span>
+    <span class="n">sides</span><span class="p">[</span><span class="n">cu</span><span class="o">.</span><span class="n">BOOK_DELTAS_SCHEMA</span><span class="o">.</span><span class="n">names</span><span class="p">],</span> <span class="n">schema</span><span class="o">=</span><span class="n">cu</span><span class="o">.</span><span class="n">BOOK_DELTAS_SCHEMA</span><span class="p">,</span> <span class="n">preserve_index</span><span class="o">=</span><span class="kc">False</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">collapsed</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> rows, one level a side, all the size at the touch&quot;</span><span class="p">)</span>
+<span class="n">collapsed</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span><span class="o">.</span><span class="n">head</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">3,108 rows, one level a side, all the size at the touch</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>ts_init</th>
+      <th>ts_event</th>
+      <th>instrument_id</th>
+      <th>outcome</th>
+      <th>action</th>
+      <th>side</th>
+      <th>price</th>
+      <th>size</th>
+      <th>event_index</th>
+      <th>is_last</th>
+      <th>source_vendor</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>buy</td>
+      <td>289.79</td>
+      <td>69916.12160</td>
+      <td>0</td>
+      <td>False</td>
+      <td>collapsed</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>2026-06-01 13:30:00.067981</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>289.85</td>
+      <td>20974.83648</td>
+      <td>0</td>
+      <td>True</td>
+      <td>collapsed</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>2026-06-01 13:30:01.150309</td>
+      <td>2026-06-01 13:30:01.150309</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>buy</td>
+      <td>289.75</td>
+      <td>27966.44864</td>
+      <td>1</td>
+      <td>False</td>
+      <td>collapsed</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>2026-06-01 13:30:01.150309</td>
+      <td>2026-06-01 13:30:01.150309</td>
+      <td>ACME</td>
+      <td>0</td>
+      <td>snapshot</td>
+      <td>sell</td>
+      <td>289.80</td>
+      <td>13983.22432</td>
+      <td>1</td>
+      <td>True</td>
+      <td>collapsed</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">cheap</span> <span class="o">=</span> <span class="n">h5i_db</span><span class="o">.</span><span class="n">Database</span><span class="p">(</span><span class="n">cu</span><span class="o">.</span><span class="n">fresh_db</span><span class="p">(</span><span class="s2">&quot;04_calibrating_costs_top_of_book&quot;</span><span class="p">),</span> <span class="n">create</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">table</span> <span class="ow">in</span> <span class="p">(</span>
+    <span class="p">(</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="n">tape</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">]),</span>
+    <span class="p">(</span><span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="n">collapsed</span><span class="p">),</span>
+    <span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="n">tape</span><span class="p">[</span><span class="s2">&quot;trades&quot;</span><span class="p">]),</span>
+<span class="p">):</span>
+    <span class="n">cheap</span><span class="o">.</span><span class="n">create_table</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">.</span><span class="n">schema</span><span class="p">,</span> <span class="n">time_column</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">)</span>
+    <span class="n">cheap</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="p">)</span>
+<span class="n">cheap</span><span class="o">.</span><span class="n">snapshot</span><span class="p">(</span><span class="s2">&quot;top-v1&quot;</span><span class="p">,</span> <span class="n">tables</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;instruments&quot;</span><span class="p">,</span> <span class="s2">&quot;book_deltas&quot;</span><span class="p">,</span> <span class="s2">&quot;trades&quot;</span><span class="p">])</span>
+<span class="n">backtest</span><span class="o">.</span><span class="n">create_signal_table</span><span class="p">(</span><span class="n">cheap</span><span class="p">)</span>
+<span class="n">cheap</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="n">signals</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="s2">&quot;the same probe orders, cheaper book&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">collapsed</span><span class="o">.</span><span class="n">num_rows</span><span class="si">:</span><span class="s2">,</span><span class="si">}</span><span class="s2"> book rows and the same </span><span class="si">{</span><span class="n">signals</span><span class="o">.</span><span class="n">num_rows</span><span class="si">}</span><span class="s2"> orders&quot;</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">3,108 book rows and the same 56 orders</pre></div></div>
+<p>One thing to check against your own build before charging anything.
+<code>slippage_ticks</code> shifts the book by a <em>fixed</em> 0.0001 per unit in the current
+Python binding, not by the instrument's <code>tick_size</code>. On a prediction market
+those are the same number; on a 290-dollar share they differ by a hundred
+times. The charge below is therefore expressed in units of 0.0001, and the
+assertion at the end of this section is what would catch it if that changed.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">SLIPPAGE_UNIT</span> <span class="o">=</span> <span class="mf">0.0001</span>
+<span class="n">probe</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+    <span class="n">cheap</span><span class="p">,</span>
+    <span class="s2">&quot;top-unit-check&quot;</span><span class="p">,</span>
+    <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000_000.0</span><span class="p">,</span>
+    <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span>
+    <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;top-v1&quot;</span><span class="p">,</span>
+    <span class="n">fee_kind</span><span class="o">=</span><span class="s2">&quot;proportional&quot;</span><span class="p">,</span>
+    <span class="n">fee_rate</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">slippage_ticks</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span>
+    <span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">600_000_000_000</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">probe_prices</span> <span class="o">=</span> <span class="n">cheap</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="n">probe</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;bt_fills&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">plain</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+    <span class="n">cheap</span><span class="p">,</span>
+    <span class="s2">&quot;top-unit-base&quot;</span><span class="p">,</span>
+    <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000_000.0</span><span class="p">,</span>
+    <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span>
+    <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;top-v1&quot;</span><span class="p">,</span>
+    <span class="n">fee_kind</span><span class="o">=</span><span class="s2">&quot;proportional&quot;</span><span class="p">,</span>
+    <span class="n">fee_rate</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+    <span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">600_000_000_000</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">plain_prices</span> <span class="o">=</span> <span class="n">cheap</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="n">plain</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;bt_fills&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="n">shift</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">probe_prices</span><span class="p">[</span><span class="n">probe_prices</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;buy&quot;</span><span class="p">][</span><span class="s2">&quot;price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+    <span class="o">-</span> <span class="n">plain_prices</span><span class="p">[</span><span class="n">plain_prices</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;buy&quot;</span><span class="p">][</span><span class="s2">&quot;price&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+<span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;100 slippage units moved the average buy by </span><span class="si">{</span><span class="n">shift</span><span class="si">:</span><span class="s2">.5f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">shift</span> <span class="o">-</span> <span class="mi">100</span> <span class="o">*</span> <span class="n">SLIPPAGE_UNIT</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mf">1e-6</span><span class="p">,</span> <span class="s2">&quot;slippage_ticks is not what this recipe assumes&quot;</span>
+
+<span class="n">typical</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="n">decision</span><span class="p">[</span><span class="s2">&quot;participation&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">median</span><span class="p">())</span>
+<span class="n">charge</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="nb">round</span><span class="p">(</span><span class="n">sqrt_fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">typical</span><span class="p">)</span> <span class="o">/</span> <span class="n">SLIPPAGE_UNIT</span><span class="p">))</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;median participation </span><span class="si">{</span><span class="n">typical</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> -&gt; predicted cost &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">sqrt_fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="n">typical</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> = </span><span class="si">{</span><span class="n">charge</span><span class="si">}</span><span class="s2"> slippage units&quot;</span><span class="p">)</span>
+
+<span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">ticks</span> <span class="ow">in</span> <span class="p">((</span><span class="s2">&quot;uncharged&quot;</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="s2">&quot;fitted charge&quot;</span><span class="p">,</span> <span class="n">charge</span><span class="p">)):</span>
+    <span class="n">run</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+        <span class="n">cheap</span><span class="p">,</span>
+        <span class="sa">f</span><span class="s2">&quot;top-</span><span class="si">{</span><span class="n">label</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+        <span class="n">starting_cash</span><span class="o">=</span><span class="mf">10_000_000.0</span><span class="p">,</span>
+        <span class="n">signals</span><span class="o">=</span><span class="s2">&quot;signals&quot;</span><span class="p">,</span>
+        <span class="n">snapshot</span><span class="o">=</span><span class="s2">&quot;top-v1&quot;</span><span class="p">,</span>
+        <span class="n">fee_kind</span><span class="o">=</span><span class="s2">&quot;proportional&quot;</span><span class="p">,</span>
+        <span class="n">fee_rate</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+        <span class="n">slippage_ticks</span><span class="o">=</span><span class="n">ticks</span><span class="p">,</span>
+        <span class="n">equity_interval_nanos</span><span class="o">=</span><span class="mi">600_000_000_000</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">fork</span> <span class="o">=</span> <span class="n">cheap</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="n">run</span><span class="p">[</span><span class="s2">&quot;fork&quot;</span><span class="p">])</span>
+    <span class="n">got</span> <span class="o">=</span> <span class="n">fork</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="s2">&quot;bt_fills&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+    <span class="n">priced</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">merge_asof</span><span class="p">(</span>
+        <span class="n">got</span><span class="o">.</span><span class="n">sort_values</span><span class="p">(</span><span class="s2">&quot;ts&quot;</span><span class="p">),</span>
+        <span class="n">quote</span><span class="o">.</span><span class="n">reset_index</span><span class="p">()[[</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span> <span class="s2">&quot;mid&quot;</span><span class="p">]],</span>
+        <span class="n">left_on</span><span class="o">=</span><span class="s2">&quot;ts&quot;</span><span class="p">,</span>
+        <span class="n">right_on</span><span class="o">=</span><span class="s2">&quot;ts_init&quot;</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">signed</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">priced</span><span class="p">[</span><span class="s2">&quot;side&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;buy&quot;</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">cost</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span>
+        <span class="p">(</span><span class="n">signed</span> <span class="o">*</span> <span class="p">(</span><span class="n">priced</span><span class="p">[</span><span class="s2">&quot;price&quot;</span><span class="p">]</span> <span class="o">-</span> <span class="n">priced</span><span class="p">[</span><span class="s2">&quot;mid&quot;</span><span class="p">])</span> <span class="o">*</span> <span class="n">priced</span><span class="p">[</span><span class="s2">&quot;quantity&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+        <span class="o">/</span> <span class="n">priced</span><span class="p">[</span><span class="s2">&quot;quantity&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span>
+    <span class="p">)</span>
+    <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;book&quot;</span><span class="p">:</span> <span class="n">label</span><span class="p">,</span> <span class="s2">&quot;slippage units&quot;</span><span class="p">:</span> <span class="n">ticks</span><span class="p">,</span> <span class="s2">&quot;cost per share&quot;</span><span class="p">:</span> <span class="n">cost</span><span class="p">,</span>
+                 <span class="s2">&quot;shares&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">priced</span><span class="p">[</span><span class="s2">&quot;quantity&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">())})</span>
+    <span class="n">fork</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+
+<span class="n">truth</span> <span class="o">=</span> <span class="n">costs</span><span class="o">.</span><span class="n">implementation_shortfall</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span>
+<span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">({</span><span class="s2">&quot;book&quot;</span><span class="p">:</span> <span class="s2">&quot;full ladder (truth)&quot;</span><span class="p">,</span> <span class="s2">&quot;slippage units&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+             <span class="s2">&quot;cost per share&quot;</span><span class="p">:</span> <span class="n">truth</span><span class="p">,</span> <span class="s2">&quot;shares&quot;</span><span class="p">:</span> <span class="nb">float</span><span class="p">(</span><span class="n">decision</span><span class="p">[</span><span class="s2">&quot;quantity&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">sum</span><span class="p">())})</span>
+<span class="n">comparison</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span>
+<span class="n">comparison</span><span class="o">.</span><span class="n">round</span><span class="p">(</span><span class="mi">4</span><span class="p">)</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">100 slippage units moved the average buy by 0.01000
+median participation 3.33 -&gt; predicted cost 0.0328 = 328 slippage units</pre><div class="nb-html"><div>
+
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>book</th>
+      <th>slippage units</th>
+      <th>cost per share</th>
+      <th>shares</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>uncharged</td>
+      <td>0.0</td>
+      <td>0.0225</td>
+      <td>125791.6122</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>fitted charge</td>
+      <td>328.0</td>
+      <td>0.0553</td>
+      <td>125791.6122</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>full ladder (truth)</td>
+      <td>NaN</td>
+      <td>0.0534</td>
+      <td>125791.6122</td>
+    </tr>
+  </tbody>
+</table>
+</div></div></div></div>
+<p>The uncharged top-of-book run pays half a tick on every order regardless of
+size, which is the error a cost model exists to remove. Charging the fitted
+number moves it into the neighbourhood of what the real book did.</p>
+<p>It does not land exactly, and it cannot: a constant tick charge is a flat
+approximation to a curve, so it overcharges the small orders and undercharges
+the largest. What the fit buys is a defensible average and, more importantly,
+a statement about <em>which</em> orders the backtest is still lying about.</p>
+<div class="nb-cell has-output"><div class="highlight"><pre><span></span><span class="n">uncharged</span> <span class="o">=</span> <span class="n">comparison</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">comparison</span><span class="p">[</span><span class="s2">&quot;book&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;uncharged&quot;</span><span class="p">,</span> <span class="s2">&quot;cost per share&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">charged</span> <span class="o">=</span> <span class="n">comparison</span><span class="o">.</span><span class="n">loc</span><span class="p">[</span><span class="n">comparison</span><span class="p">[</span><span class="s2">&quot;book&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;fitted charge&quot;</span><span class="p">,</span> <span class="s2">&quot;cost per share&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error before charging  </span><span class="si">{</span><span class="nb">abs</span><span class="p">(</span><span class="n">uncharged</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">truth</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> per share&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;error after charging   </span><span class="si">{</span><span class="nb">abs</span><span class="p">(</span><span class="n">charged</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">truth</span><span class="p">)</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2"> per share&quot;</span><span class="p">)</span>
+<span class="k">assert</span> <span class="nb">abs</span><span class="p">(</span><span class="n">charged</span> <span class="o">-</span> <span class="n">truth</span><span class="p">)</span> <span class="o">&lt;</span> <span class="nb">abs</span><span class="p">(</span><span class="n">uncharged</span> <span class="o">-</span> <span class="n">truth</span><span class="p">),</span> <span class="s2">&quot;the charge made it worse&quot;</span>
+</pre></div>
+<div class="nb-output"><div class="nb-output-label">output</div><pre class="">error before charging  0.0309 per share
+error after charging   0.0019 per share</pre></div></div>
+<h2 id="takeaways">Takeaways<a class="headerlink" href="#takeaways" title="Permanent link">#</a></h2>
+<ul>
+<li>Slippage is measurable from a replay that had depth to walk; it does not
+  have to be a parameter someone chose.</li>
+<li>Collapse the fills of one order into one sample. Each decision is one
+  observation, not one per level it reached.</li>
+<li><code>fit_impact</code> defaults to the square root because a linear fit extrapolates
+  badly into the large orders that decide capacity.</li>
+<li><code>CostFit.is_usable</code> is a sample-size reminder, and thirty fills is a floor
+  rather than a licence.</li>
+<li><code>fit_from_fills</code> needs no reference price and therefore measures depth
+  consumed rather than shortfall against a decision. Know which you asked for.</li>
+<li>The point of the fit is to charge it where the data is thinner. Validate it
+  by running the cheaper backtest against the richer one, not by admiring the
+  R-squared.</li>
+</ul>
+<div class="nb-cell"><div class="highlight"><pre><span></span><span class="n">probe_fork</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+<span class="n">cheap</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+<span class="n">db</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</pre></div>
+</div>
+    <nav class="page-nav"><a class="prev" href="/cookbook/04_event_driven_backtesting/10_execution_algorithms/"><span class="dir">← Previous</span><span class="pn-title">Execution algorithms and the cost of not finishing</span></a><a class="next" href="/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/"><span class="dir">Next →</span><span class="pn-title">Searching a strategy space without fooling yourself</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#terms-used-here">Terms used here</a></li><li><a href="#1-a-book-with-something-behind-the-touch">1. A book with something behind the touch</a></li><li><a href="#2-probe-orders">2. Probe orders</a></li><li><a href="#3-one-sample-per-order">3. One sample per order</a></li><li><a href="#4-fitting-the-shape">4. Fitting the shape</a></li><li><a href="#5-the-shortcut-and-what-it-assumes">5. The shortcut, and what it assumes</a></li><li><a href="#6-charging-the-model-somewhere-cheaper">6. Charging the model somewhere cheaper</a></li><li><a href="#takeaways">Takeaways</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

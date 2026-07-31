@@ -25,7 +25,7 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [Exceptions](https://db.h5i.dev/api/exceptions/): The typed error hierarchy: every h5i-db error carries a stable code, a hint you can act on, and a retryable flag.
 
 ## Cookbook
-- [Cookbook](https://db.h5i.dev/cookbook/): Executed notebook tutorials for h5i-db: fundamentals, market data engineering, alpha research, and risk & production workflows.
+- [Cookbook](https://db.h5i.dev/cookbook/): Executed notebook tutorials for h5i-db: fundamentals, market data engineering, alpha research, risk & production, event-driven backtesting, prediction markets, performance analytics.
 
 ## Cookbook: Fundamentals
 - [Quickstart: your first h5i-db market database](https://db.h5i.dev/cookbook/00_fundamentals/01_quickstart/): h5i-db is an embedded, versioned time-series database for quant workloads. There is no server to run.
@@ -75,6 +75,37 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [Fixed income: versioned curve marks, restatements, carry & rolldown](https://db.h5i.dev/cookbook/03_risk_and_production/09_fixed_income_curves/): A rates desk's core dataset is small but unforgiving. One par curve per mark date, and every number on it feeds risk, P&L and client marks.
 - [Performance tuning: pruning, projection, commit granularity, caches](https://db.h5i.dev/cookbook/03_risk_and_production/10_performance_tuning/): h5i-db stores each table as immutable, time-sorted Parquet segments under a versioned manifest.
 - [arrival-delta: which of last night's backtests actually held up?](https://db.h5i.dev/cookbook/03_risk_and_production/11_arrival_delta/): A research agent runs forty backtests overnight. So does a parameter sweep, or a junior with a for-loop. In the morning there are forty Sharpes.
+
+## Cookbook: Event-driven backtesting
+- [Your first event-driven backtest](https://db.h5i.dev/cookbook/04_event_driven_backtesting/01_first_event_driven_run/): The backtests in section 02 are vectorized. Compute a signal for every date, multiply it by the return that followed, and sum.
+- [Stress-test execution assumptions](https://db.h5i.dev/cookbook/04_event_driven_backtesting/02_execution_realism/): Every backtest contains execution assumptions, and most of them are never written down. Fills happen at the price you asked for.
+- [Operate reproducible backtests](https://db.h5i.dev/cookbook/04_event_driven_backtesting/03_reproducible_backtest_operations/): A backtest is a claim about the past, and it is worth what the evidence behind it is worth.
+- [A production data contract for Kaggle Polymarket L2](https://db.h5i.dev/cookbook/04_event_driven_backtesting/04_kaggle_polymarket_data_contract/): A public dataset is not a research input. It is a pile of files carrying whatever timestamps, units and duplicate rows the recorder happened to produce…
+- [Causal signal replay on real Polymarket books](https://db.h5i.dev/cookbook/04_event_driven_backtesting/05_kaggle_polymarket_replay/): Synthetic data proves the plumbing works. It cannot tell you whether a strategy works, because what you find in it is the structure the generator put…
+- [Order lifecycle and account risk](https://db.h5i.dev/cookbook/04_event_driven_backtesting/06_order_lifecycle_and_risk/): Most backtests model an order as a single event. It is sent and it fills. Real orders have a life.
+- [Path-dependent Python strategies](https://db.h5i.dev/cookbook/04_event_driven_backtesting/07_python_strategy_callbacks/): Some strategies cannot be written as a table of order intent. A rule that enters only once the previous position is confirmed closed, or that waits…
+- [From a vectorized equity backtest to an event-driven one](https://db.h5i.dev/cookbook/04_event_driven_backtesting/08_equity_bars_to_event_driven/): Section 02 backtests a monthly momentum rule by multiplying a signal by the return that followed. Section 04 has so far replayed prediction markets.
+- [Market making: inventory, latency, and being run over](https://db.h5i.dev/cookbook/04_event_driven_backtesting/09_market_making_inventory/): Every other recipe in this section takes liquidity. A market maker supplies it, and the job is different in kind. There is no forecast.
+- [Execution algorithms and the cost of not finishing](https://db.h5i.dev/cookbook/04_event_driven_backtesting/10_execution_algorithms/): Recipe 01/02 measures VWAP and TWAP as benchmarks. This one trades to them. The order is 20,000 shares to buy in a name that shows a few hundred at the…
+- [Calibrating costs from your own fills](https://db.h5i.dev/cookbook/04_event_driven_backtesting/11_calibrating_costs_from_fills/): Recipe 04/02 varies fees, slippage and latency to see whether a conclusion survives them.
+- [Searching a strategy space without fooling yourself](https://db.h5i.dev/cookbook/04_event_driven_backtesting/12_searching_a_strategy_space/): A backtest that has been run once is a measurement. A backtest that has been run four hundred times and reported once is a selection, and the number on…
+- [Replaying an account's ledger](https://db.h5i.dev/cookbook/04_event_driven_backtesting/13_replaying_an_account_ledger/): Every other recipe in this section asks what a strategy would have done. This one asks the strictest question a backtester can be asked: here are the…
+
+## Cookbook: Prediction markets
+- [Binary parity and the fee curve](https://db.h5i.dev/cookbook/05_prediction_markets/01_binary_parity_and_fee_curves/): A binary event contract has an arithmetic identity: YES and NO settle to exactly 1.00 between them. When both offers sum to less than 1.00 you can buy…
+- [Is the market's probability any good?](https://db.h5i.dev/cookbook/05_prediction_markets/02_probability_calibration/): A prediction market quotes a probability, so it can be scored the way any forecast is scored.
+- [Trading the favorite-longshot bias](https://db.h5i.dev/cookbook/05_prediction_markets/03_favorite_longshot_bias/): The oldest documented anomaly in event contracts is that longshots are overpriced and favorites underpriced.
+- [What your data can and cannot tell you about execution](https://db.h5i.dev/cookbook/05_prediction_markets/04_execution_fidelity_and_depth/): Prediction-market research usually runs on periodic book snapshots, because that is what the public APIs give you.
+- [Two ways a prediction-market backtest lies to you](https://db.h5i.dev/cookbook/05_prediction_markets/05_settlement_and_selection_risk/): The first is settlement. A replay that stops before a market resolves still holds a position, and marking it to the eventual winner books money nobody…
+- [From a vendor mirror to canonical tables](https://db.h5i.dev/cookbook/05_prediction_markets/06_vendor_data_onramp/): Most prediction-market research starts with a directory of vendor Parquet already on disk: hourly full-feed archives, or per-day channel files.
+- [The whole loop, once](https://db.h5i.dev/cookbook/05_prediction_markets/07_end_to_end_workflow/): Vendor files to a decision, with nothing skipped: ingest, pin, build a strategy from the pack, search it walk-forward with the holdout spent on a…
+- [The whole loop on real Polymarket books](https://db.h5i.dev/cookbook/05_prediction_markets/08_real_polymarket_end_to_end/): Recipe 05/07 runs the pipeline on a synthetic panel, which proves the plumbing and nothing about the world.
+
+## Cookbook: Performance analytics
+- [Tearsheets and performance statistics](https://db.h5i.dev/cookbook/06_performance_analytics/01_tearsheets_and_performance_stats/): Every recipe so far ends with a P&L number and a chart drawn by hand. That is fine for one strategy and hopeless for twenty, and it is how two people end…
+- [Factor panels: IC, quantiles, turnover](https://db.h5i.dev/cookbook/06_performance_analytics/02_factor_panels_and_reports/): Recipe 02/05 builds a factor and scores it with pandas and scipy. That is the right way to learn what an information coefficient is, and the wrong way to…
+- [Cross-validation that a time series survives](https://db.h5i.dev/cookbook/06_performance_analytics/03_cross_validation_without_leakage/): A backtest measures what happened. Cross-validation is supposed to answer a harder question: was the parameter that won chosen for a reason, or was it…
+- [Sweeps, verification, and what a restatement did to your alpha](https://db.h5i.dev/cookbook/06_performance_analytics/04_sweeps_verification_restatements/): Three questions arrive in order at the end of a piece of research. What did the parameter grid say? Can somebody else reproduce the number?
 
 ## Optional
 - [Full documentation in one file](https://db.h5i.dev/llms-full.txt): the entire manual and Python API reference as plain markdown.

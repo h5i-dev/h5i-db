@@ -3,7 +3,7 @@
 > h5i-db is a high-performance, embedded, versioned analytical database for quantitative finance and time-series workloads. It runs full DataFusion SQL with native ASOF joins, OHLCV/VWAP rollups, time travel, and previewable mutations over immutable, time-sorted Parquet segments — driven from a CLI, Rust, or Python, and designed to be safe for AI agents. Written in Rust; Apache-2.0.
 
 Canonical site: https://db.h5i.dev/
-This file concatenates the manual and Python API reference as plain markdown for LLM ingestion. Cookbook tutorials (36 executed notebooks) are at https://db.h5i.dev/cookbook/.
+This file concatenates the manual and Python API reference as plain markdown for LLM ingestion. Cookbook tutorials are at https://db.h5i.dev/cookbook/.
 
 
 
