@@ -21,6 +21,7 @@ import pyarrow.compute as pc
 
 from ._bars import parse_interval
 from ._canonical import (
+    BOOK_DELTAS_SCHEMA,
     CORPORATE_ACTIONS_SCHEMA,
     REFERENCES_SCHEMA,
     TRADES_SCHEMA,
@@ -34,6 +35,8 @@ from ._markets import MarketSpec
 __all__ = [
     "corporate_actions_from_rows",
     "ingest_corporate_actions",
+    "ingest_predexon_orderbooks",
+    "predexon_book_from_snapshots",
     "manifold_markets_from_json",
     "manifold_trades_from_json",
     "ingest_manifold_bets",
@@ -225,6 +228,148 @@ def ingest_manifold_bets(
         report.loaded_window = (pc.min(stamps).as_py(), pc.max(stamps).as_py())
     else:
         report.skipped.append({"reason": "no_rows_matched"})
+    return report
+
+
+def predexon_book_from_snapshots(
+    snapshots: Iterable[Mapping[str, Any]],
+    *,
+    markets: Sequence[MarketSpec],
+    source_vendor: str = "predexon",
+    report: Optional[IngestReport] = None,
+) -> pa.Table:
+    """Canonical `book_deltas` rows from Predexon's Kalshi orderbook history.
+
+    Every record is a *full* book, so nothing accumulates: each becomes one
+    snapshot event per outcome, and a dropped record costs one sample rather
+    than corrupting every level after it. That is the main reason to prefer
+    this source over an archive of relative deltas.
+
+    Two conversions happen here, both exact.
+
+    Prices arrive as whole cents, so they are divided by 100. Predexon's own
+    documentation notes this endpoint rounds to whole cents, which is lossy now
+    that Kalshi quotes sub-cent; the loss is the vendor's, not this function's,
+    and it is worth knowing before pricing anything at the touch.
+
+    Predexon publishes one YES book with bids and asks, while the outcome-major
+    tables here give each outcome its own book of bids. A YES ask at 91 cents
+    is a NO bid at 9 cents, the same resting interest described from the other
+    side, so asks are folded into outcome 1 at `100 - price`. That keeps this
+    source directly comparable with `KALSHI_PMXT_LAYOUT`, which is the point of
+    having two sources for one venue.
+
+    `sequence` is deliberately not read. It looks like a per-market update
+    counter and is not one: over a single ticker's day it steps by a median of
+    45, jumps by as much as 21 million, and runs backwards nine times. Whatever
+    it counts is not this market's updates, so differencing it would report
+    holes that do not exist. What *is* reported is the sampling cadence, the
+    time between consecutive snapshots, which is measured rather than inferred
+    and tells you the resolution you actually have.
+    """
+    by_ticker = {spec.instrument_id: spec for spec in markets}
+    rows: dict[str, list[Any]] = {name: [] for name in BOOK_DELTAS_SCHEMA.names}
+    event_index = 0
+    cadence: dict[str, list[int]] = {}
+    last_stamp: dict[str, int] = {}
+    unknown: set[str] = set()
+
+    def emit(
+        stamp: int, instrument: str, outcome: int, levels: list[tuple[float, float]]
+    ) -> None:
+        nonlocal event_index
+        event_index += 1
+        payload = levels or [(None, None)]
+        for position, (price, size) in enumerate(payload):
+            rows["ts_init"].append(stamp)
+            rows["ts_event"].append(stamp)
+            rows["instrument_id"].append(instrument)
+            rows["outcome"].append(outcome)
+            rows["action"].append("snapshot")
+            rows["side"].append("buy" if price is not None else None)
+            rows["price"].append(price)
+            rows["size"].append(size)
+            rows["event_index"].append(event_index)
+            rows["is_last"].append(position == len(payload) - 1)
+            rows["source_vendor"].append(source_vendor)
+
+    for record in snapshots:
+        ticker = str(record.get("ticker") or "")
+        spec = by_ticker.get(ticker)
+        if spec is None:
+            unknown.add(ticker)
+            continue
+        stamp = record.get("timestamp")
+        if stamp is None:
+            continue
+        stamp_ns = int(stamp) * 1_000_000
+
+        previous = last_stamp.get(ticker)
+        if previous is not None and stamp_ns > previous:
+            cadence.setdefault(ticker, []).append(stamp_ns - previous)
+        last_stamp[ticker] = stamp_ns
+
+        yes = [
+            (float(level["price"]) / 100.0, float(level["size"]))
+            for level in (record.get("yes_bids") or [])
+            if level.get("price") is not None and level.get("size") is not None
+        ]
+        no = [
+            ((100.0 - float(level["price"])) / 100.0, float(level["size"]))
+            for level in (record.get("yes_asks") or [])
+            if level.get("price") is not None and level.get("size") is not None
+        ]
+        emit(stamp_ns, spec.instrument_id, 0, yes)
+        if spec.outcome_count > 1:
+            emit(stamp_ns, spec.instrument_id, 1, no)
+
+    if report is not None:
+        spans = sorted(span for gaps in cadence.values() for span in gaps)
+        if spans:
+            # The resolution of this source, measured rather than claimed. A
+            # median of seconds is a usable book; a median of minutes means the
+            # touch moved unobserved between samples, and a strategy reading it
+            # as continuous will fill at prices nobody quoted.
+            report.gaps.append(
+                {
+                    "reason": "snapshot_cadence",
+                    "samples": len(spans) + len(cadence),
+                    "median_ns": spans[len(spans) // 2],
+                    "max_ns": spans[-1],
+                }
+            )
+        if unknown:
+            report.unknown_instruments = sorted(unknown)
+
+    return pa.table(
+        {
+            name: pa.array(values, type=BOOK_DELTAS_SCHEMA.field(name).type)
+            for name, values in rows.items()
+        },
+        schema=BOOK_DELTAS_SCHEMA,
+    )
+
+
+def ingest_predexon_orderbooks(
+    db: Any,
+    *,
+    snapshots: Iterable[Mapping[str, Any]],
+    markets: Sequence[MarketSpec],
+    chunk_rows: int = 250_000,
+    note: Optional[str] = None,
+) -> IngestReport:
+    """Normalise Predexon orderbook snapshots into `book_deltas`."""
+    report = IngestReport(vendor="predexon")
+    book = predexon_book_from_snapshots(snapshots, markets=markets, report=report)
+    if not book.num_rows:
+        report.skipped.append({"reason": "no_rows_matched"})
+        return report
+    ensure_tables(db, ["book_deltas"])
+    report.tables["book_deltas"] = commit(
+        db, "book_deltas", book, note=note, chunk_rows=chunk_rows
+    )
+    stamps = pc.cast(book.column("ts_init"), pa.int64())
+    report.loaded_window = (pc.min(stamps).as_py(), pc.max(stamps).as_py())
     return report
 
 
