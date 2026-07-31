@@ -634,10 +634,22 @@ cannot reconstruct queue position and must not be presented as exact L2
 replay. REST snapshots likewise describe only the instant at which they were
 requested.
 
-A third-party archive does now carry historical Kalshi order-book data, and
-`h5i_db.venues.KALSHI_PMXT_LAYOUT` reads it, so trade-driven and book-driven
-research no longer has to wait for a capture to accumulate. It is not a
-substitute for prospective capture where queue accuracy matters. Its deltas are
+Two third-party sources now carry historical Kalshi order books, so this
+research no longer has to wait for a capture to accumulate.
+
+`h5i_db.venues.predexon_book_from_snapshots` reads the one to prefer for
+anything after January 2026: full book snapshots rather than accumulated
+changes, so a lost record costs one sample instead of corrupting every level
+after it, and finalized daily. Read its report before trusting a window. It
+measures the sampling cadence, which on a liquid market runs to a median of a
+few seconds with occasional holes of over an hour, and a strategy that reads
+one of those holes as continuous will fill at prices nobody quoted. Its free
+endpoint also rounds prices to whole cents, which is a real loss at the touch
+now that Kalshi quotes sub-cent.
+
+`h5i_db.venues.KALSHI_PMXT_LAYOUT` reads the other, which reaches further back.
+It is not a substitute for prospective capture where queue accuracy matters.
+Its deltas are
 signed size changes replayed into absolute levels at ingest, its snapshots
 carry no venue timestamp and so seed the book rather than being replayed at
 their own stamp, and it has no per-market sequence numbers, so the ingest

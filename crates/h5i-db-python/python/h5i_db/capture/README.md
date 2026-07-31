@@ -1,4 +1,4 @@
-# h5i-db-capture
+# h5i_db.capture
 
 A websocket recorder. It connects to a venue, writes every frame it receives to
 disk with the nanosecond it arrived, and does nothing else.
@@ -11,11 +11,23 @@ timestamp at all, so queue position cannot be reconstructed from them. If you
 want queue-accurate Kalshi data, you have to record it while it happens. There
 is no way to obtain it afterwards.
 
-It is a separate crate from `h5i-db-venues` on purpose. That crate is
+It is a separate package from `h5i_db.venues` on purpose. That package is
 parse-only: every function there takes bytes the caller already downloaded,
 which is what makes the mapping a pure function testable offline against
 recorded payloads. Sockets, credentials and reconnect policy would end that, so
-they live here. The two crates meet at a file format, not at a function call.
+they live here. The two meet at a file format, not at a function call.
+
+## Installing
+
+```sh
+pip install 'h5i-db[capture]'
+```
+
+The extra pulls in `websockets`, `cryptography` and `lz4`. It is an extra
+because most users read archives somebody else recorded and none of them should
+have to build a TLS stack to do it. `import h5i_db.capture` works without the
+extra: every one of those imports happens inside the function that needs it, so
+a missing one names the package to install instead of failing at import time.
 
 ## Two rules of the write path
 
@@ -23,24 +35,28 @@ they live here. The two crates meet at a file format, not at a function call.
 only clock a backtest can honestly order on. Venue timestamps are the venue's
 opinion about a moment you could not have acted on, and they arrive out of
 order. An arrival stamp cannot be reconstructed later, so a capture that omits
-it is permanently broken.
+it is permanently broken. `datetime` only carries microseconds, which is why
+the stamp is formatted from an integer rather than routed through one.
 
 **Never normalise.** The payload goes to disk exactly as it came off the
 socket. Parsing on the write path means a parser bug costs you the data rather
-than an afternoon, because you cannot re-run the recorder over yesterday.
+than an afternoon, because you cannot re-run the recorder over yesterday. A
+frame that parses as JSON is spliced into the line as the venue's own bytes, so
+`1.50` stays `1.50`; the parse only decides whether it was JSON at all.
 
 ## Running it
 
 ```sh
-cargo run -p h5i-db-capture --release -- \
+h5i-capture \
     --venue polymarket \
     --out ./capture \
     --market 71321045679252212594626385532706912750332728571942532289631379312455583992563
 ```
 
 ```sh
-export KALSHI_API_TOKEN=…            # never a flag: see below
-cargo run -p h5i-db-capture --release -- \
+export KALSHI_API_KEY_ID=…                     # never a flag: see below
+export KALSHI_PRIVATE_KEY_PATH=~/.kalshi/key.pem
+h5i-capture \
     --venue kalshi \
     --out ./capture \
     --market KXPRESPARTY-28-D,KXBTCD-25DEC31
@@ -62,17 +78,40 @@ flushes the buffer, writes the lz4 end mark, fsyncs and exits.
 | `--flush-secs` | 5 | How often buffered blocks are pushed to the file |
 | `--keepalive-secs` | 10 | Kalshi gets a websocket ping, Polymarket the literal `PING` it requires |
 
-`RUST_LOG` controls log verbosity, defaulting to `info`.
+`H5I_CAPTURE_LOG` controls log verbosity, defaulting to `INFO`.
 
 ### Credentials
 
 Kalshi's websocket is authenticated; Polymarket's market channel is public.
-The Kalshi bearer token is read from `KALSHI_API_TOKEN` and is deliberately not
-accepted as a flag: a flag lands in shell history, in `ps` output for every
-user on the box, and in whatever supervisor log wraps the command. A recorder
-runs for weeks under exactly such a supervisor. The token is also marked
-sensitive on the outgoing request so it does not appear in a logged handshake
-failure.
+
+Kalshi signs each handshake with an RSA key pair. Export the key id and the
+path to the PEM:
+
+```sh
+export KALSHI_API_KEY_ID=8f2a…
+export KALSHI_PRIVATE_KEY_PATH=~/.kalshi/key.pem
+```
+
+Neither is accepted as a flag: a flag lands in shell history, in `ps` output for
+every user on the box, and in whatever supervisor log wraps the command. A
+recorder runs for weeks under exactly such a supervisor. The key travels as a
+path rather than as a value for the same reason, and because a PEM does not
+survive being pasted into an env file intact.
+
+The signature is RSA-PSS over `timestamp_ms + "GET" + path`, SHA-256, MGF1 with
+SHA-256, and a **salt length equal to the digest length**. That last one is the
+detail worth stating: `cryptography`'s own default salt length is the maximum
+the key allows, and a signature made that way fails Kalshi's check with a bare
+authentication error that names nothing. The path is the URL's path without its
+query string, so `--url` can point at the demo host
+(`wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2`) or the newer
+`external-api-ws.kalshi.com` host without touching the credential. It goes out
+as `KALSHI-ACCESS-KEY`, `KALSHI-ACCESS-SIGNATURE` and `KALSHI-ACCESS-TIMESTAMP`,
+recomputed on every connect attempt because the timestamp is inside the signed
+message and a reconnect three hours later cannot reuse it.
+
+`KALSHI_API_TOKEN` still works for an account that was issued a bearer token out
+of band.
 
 If a credential is missing, the process exits in its first second rather than
 spending a night retrying a 401.
@@ -88,11 +127,14 @@ Each file is a single lz4 frame containing newline-delimited JSON, one message
 per line. The date and hour are UTC and refer to **arrival**, not to anything
 in the payload, so the name is a true statement about the file's contents.
 
-There is a part number because `lz4_flex`'s decoder stops at the first frame's
+There is a part number because the lz4 frame decoder stops at the first frame's
 end mark: a file holding two concatenated frames reads back as only its first
 frame, silently. A recorder restarted inside an hour it already wrote therefore
-cannot append and must not truncate, so it opens the next part. Glob
-`<HH>*.ndjson.lz4` to read an hour whole.
+cannot append and must not truncate, so it opens the next part.
+
+Read an hour with `read_hour`, not with a bare glob. Part zero has no suffix, so
+`sorted(glob("14*.ndjson.lz4"))` puts `14.001` before `14` and hands you the
+hour with its two runs swapped.
 
 ### The line format
 
@@ -105,9 +147,9 @@ cannot append and must not truncate, so it opens the next part. Glob
   *string* rather than dropped, because losing nothing outranks tidiness.
 
 This is exactly the envelope Hyperliquid's own archives use, and a unit test
-asserts our lines are byte-identical to the ones
-`h5i_db_venues::hyperliquid::archive_line` produces. That is the point: one
-reader handles both a recording and a vendor download.
+asserts our lines are byte-identical to the ones the Rust archive writer
+produces. That is the point: one reader handles both a recording and a vendor
+download.
 
 ### Markers
 
@@ -130,23 +172,20 @@ The `reconnect` marker is written **on reconnect rather than on disconnect**,
 because only then is the length of the hole known. This matters more than it
 looks: silently resuming is how a hole becomes invisible. Every marker is a
 place where messages may be missing, and for Kalshi the sequence numbers in the
-payloads tell you whether any actually were. `h5i-db-venues`'
-`kalshi::OrderbookDecoder` already checks them and emits `MarketEvent::Gap` on
-a miss.
+payloads tell you whether any actually were.
 
 ## Reading it back
 
-In Rust, through the reader that already exists:
+```python
+from h5i_db.capture import read_capture, read_hour
 
-```rust
-let bytes = std::fs::read("capture/kalshi/2026-07-31/14.ndjson.lz4")?;
-let read = h5i_db_venues::hyperliquid::read_archive_lz4(&bytes)?;
+lines = read_capture("capture/kalshi/2026-07-31/14.ndjson.lz4")
+hour = read_hour("capture/kalshi/2026-07-31", "14")   # every part, in order
 ```
 
-That reader models Hyperliquid's channels, so for Kalshi and Polymarket it will
-count the lines as skipped. Feed the `raw` bodies to the venue's own decoder
-instead: `kalshi::OrderbookDecoder::decode(body, received_at)` for the book, or
-`polymarket::` for the CLOB shapes.
+Both tolerate a file with no end mark by default, which is what a killed
+recorder leaves; pass `tolerant=False` to have that refused instead of
+recovered.
 
 From a shell, the files are ordinary lz4 frames:
 
@@ -161,20 +200,19 @@ A clean stop writes the frame's end mark and fsyncs, so the file is complete.
 
 A `kill -9` does not get that chance. Completed lz4 blocks are flushed to the
 file every `--flush-secs`, so a killed recorder leaves a frame that is missing
-only its end mark: a reader that tolerates the trailing error still recovers
-every flushed block. Strict readers, including `read_archive_lz4`, will refuse
-such a file, so re-frame it first if you hit this. The bound on what is lost is
-the flush interval, not the hour.
+only its end mark: `read_capture` still recovers every flushed block, and a
+half-written trailing line is dropped rather than handed back. Strict readers
+refuse such a file, so re-frame it first if you need one. The bound on what is
+lost is the flush interval, not the hour.
 
 ## Limits
 
-* Kalshi authentication is bearer-token only. Accounts using RSA key-pair
-  request signing must exchange the key for a token out of band, since carrying
-  a signing implementation here would add a crypto dependency for one venue's
-  handshake.
 * Arrival stamps come from the wall clock, because a backtest needs an absolute
   epoch and no monotonic clock provides one. An NTP step can therefore make two
   lines non-monotonic; readers should sort rather than trust file order.
 * The recorder subscribes to what you pass and does not discover markets. A
   market list that goes stale is your problem, and the `start` marker records
   exactly what was asked for so you can tell later.
+* The Kalshi signing scheme is tested against a throwaway key pair, not against
+  Kalshi. Every documented property holds (message, algorithm, salt length,
+  headers), but nobody here has watched the venue accept one.

@@ -242,3 +242,38 @@ price, and a strategy that bought at 50 the day before a 2-for-1 bought at 50.
 a past date; rows with no announcement are dropped under a cutoff rather than
 assumed early enough, since assuming is how a run ends up trading a split
 nobody had heard of.
+
+## Recording a live feed
+
+`h5i-capture` (from `pip install h5i-db[capture]`) records a venue websocket to
+the same lz4 NDJSON format `hyperliquid_archive` reads, so a capture and an
+archive load through the same path.
+
+```sh
+export KALSHI_API_KEY_ID=…            # never a flag: it lands in ps output
+export KALSHI_PRIVATE_KEY_PATH=/path/to/key.pem
+h5i-capture --venue kalshi --out ./capture --market KXBTCD-25DEC31
+```
+
+It stamps arrival in nanoseconds and writes the payload verbatim. Both rules
+exist for the same reason: an arrival stamp cannot be reconstructed later, and
+parsing on the write path means a parser bug costs the data rather than an
+afternoon.
+
+Record only what an archive cannot give you. For Kalshi after January 2026,
+`predexon_book_from_snapshots` is usually the better answer, and recording
+buys sub-cent precision, your own arrival clock, and independence from a free
+service rather than access to otherwise-missing data.
+
+## Predexon
+
+```python
+snapshots = fetch_pages(...)          # your script, your API key
+report = venues.ingest_predexon_orderbooks(db, snapshots=snapshots, markets=specs)
+```
+
+Check `report.gaps` for `snapshot_cadence` before trusting a window: it carries
+the measured median and worst gap between samples. The worst gap is the number
+that matters. The vendor's `sequence` field is deliberately unread, because it
+is not a per-market counter (it steps by a median of 45, jumps by millions, and
+runs backwards), so differencing it invents holes that are not there.

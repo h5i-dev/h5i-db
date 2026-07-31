@@ -90,7 +90,7 @@ looking for "do you support X" should find one list, not two.
 
 | Source | Lands in | Loader |
 |---|---|---|
-| Kalshi | `book_deltas`, `trades`, `bars`, `instruments` | Rust `kalshi`; Python `KALSHI_PMXT_LAYOUT` |
+| Kalshi | `book_deltas`, `trades`, `bars`, `instruments` | Rust `kalshi`; Python `KALSHI_PMXT_LAYOUT`, `predexon_book_from_snapshots` |
 | Polymarket | `book_deltas`, `trades`, `instruments`, `resolutions` | Rust `polymarket`; Python `PMXT_LAYOUT`, `TELONEX_LAYOUT`, `KAGGLE_POLYMARKET_*` |
 | Hyperliquid | all of the above plus `funding`, `references` | Rust `hyperliquid`, `hyperliquid_archive` |
 | Limitless | `book_deltas`, `trades` | Python `LIMITLESS_PMXT_LAYOUT` |
@@ -117,9 +117,18 @@ Bars and published series both carry a knowability rule the loaders enforce.
 until its interval ends, and a series value is readable only after its
 publication lag. Neither has a safe default, so neither has a default.
 
-Nothing above is a live feed. `h5i-db-capture` is the recorder for data no
-archive sells, and it writes the same lz4 NDJSON format `hyperliquid_archive`
-reads.
+Nothing above is a live feed. `h5i_db.capture` (installed as `h5i-capture`) is
+the recorder, and it writes the same lz4 NDJSON format `hyperliquid_archive`
+reads, so a capture and an archive load through the same path.
+
+Record when you need something an archive cannot give you, which is a narrower
+case than it used to be. For Kalshi after January 2026 the Predexon reader is
+usually the better answer: full snapshots rather than accumulated changes, so a
+lost record costs one sample instead of every level after it, and finalized
+daily rather than weeks behind. What recording still buys is sub-cent
+precision (that vendor's free endpoint rounds to whole cents), your own arrival
+clock, and independence from a free service that could change terms. Those are
+insurance and precision arguments, not availability ones.
 
 ## Adding a venue
 
