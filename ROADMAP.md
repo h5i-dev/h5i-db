@@ -5,7 +5,7 @@ own date and provenance in its heading, so this preamble no longer repeats
 them.
 
 **Read this file in two modes.** *Open now* below is the whole of what is not
-done — start there. Everything after it is the reasoning: what was tried, what
+done, and it is where to start. Everything after it is the reasoning: what was tried, what
 was rejected and why, and the constraints a future change has to respect. That
 reasoning is the point of keeping delivered parts around. The code says what
 shipped; only this says what was deliberately not built, and those paragraphs
@@ -2050,7 +2050,7 @@ names its segments by path, so there is no chain to walk.
 
 ---
 
-# Part XI — Live execution without a backtest tax (2026-07-31)
+# Part XI. Live execution without a backtest tax (2026-07-31)
 
 Live execution is a stated non-goal today (`README.md`: "the backtester never
 routes a real order"). This part does not change that. It records what the
@@ -2061,9 +2061,9 @@ removed by someone who does not know why they are there.
 
 ## The finding that motivates it
 
-Splitting NautilusTrader the same way we split ourselves — an arm whose
-strategy never subscribes, so the engine streams every quote through its
-message bus and venue but never calls Python — decomposed the gap:
+Splitting NautilusTrader the same way we split ourselves decomposed the gap.
+Their control arm is a strategy that never subscribes: the engine streams
+every quote through its message bus and venue, and never calls Python.
 
 | | engine, no Python | strategy boundary | total |
 |---|---:|---:|---:|
@@ -2072,18 +2072,18 @@ message bus and venue but never calls Python — decomposed the gap:
 
 The engine term is 10.9×, and it is the whole of our path-dependent
 advantage: our boundary is no better than theirs and possibly worse. The
-composition inverts — Nautilus spends 82% of a run in the engine and 18%
+composition inverts. Nautilus spends 82% of a run in the engine and 18%
 crossing into Python; we spend roughly a quarter and three quarters.
 
-**The 3.593 µs is what their engine costs with zero callbacks attached.**
+The 3.593 µs is what their engine costs with zero callbacks attached.
 That is not waste. It is the price of a message bus: events are published to
 a topic, components subscribe handlers at runtime, and dispatch is a lookup
 plus a handler walk plus dynamic dispatch, on every event. It buys the thing
-we do not have — the same strategy code running live and in backtest, with
+we do not have: the same strategy code running live and in backtest, with
 components addable without touching the engine.
 
-So the honest statement of our 10.9× is not that we are faster at the same
-job. It is that we are solving a smaller one.
+So our 10.9× says we are solving a smaller job, not that we are faster at the
+same one.
 
 ## Why the tax is avoidable
 
@@ -2137,8 +2137,8 @@ Two of the three edges are in the codebase, and both were built for this.
 seam: "The simulator implements it; a live adapter would implement the same
 one … if simulation and production reach the venue through different code,
 they diverge, and nothing detects it because there is no shared surface to
-compare." It carries *intent* — submit, cancel, amend — and deliberately
-never a fill, because in production fills can only come the other way.
+compare." It carries *intent* (submit, cancel, amend) and deliberately never
+a fill, because in production fills can only come the other way.
 
 **Inbound.** `RecordSource` is `Box<dyn Iterator<Item = Result<Record>>>`. A
 channel receiver is an `Iterator`, so a live feed is a `RecordSource` with no
@@ -2150,9 +2150,8 @@ arrival order and therefore monotonic by construction.
 
 1. **Fills reverse direction.** The engine produces fills today, in
    `match_resting`. Live must accept them from the venue instead. This is the
-   large change — a mode distinction in the middle of the engine, not at its
-   edges — and the fact that a seam exists for the outbound half does not
-   make it small.
+   large change: a mode distinction in the middle of the engine rather than at
+   its edges. A seam existing for the outbound half does not make it small.
 2. **`step()` is synchronous.** A strategy that takes 10 ms blocks the loop
    for 10 ms. Backtest does not care; live needs a stated backpressure policy
    (drop, queue, or block). A design decision, not an optimization.
@@ -2172,10 +2171,10 @@ dispatch paths can drift, and a bug in one that is absent in the other is the
 worst kind: it appears only in production.
 
 Three mitigations, in order of strength. The engine, order lifecycle, risk,
-portfolio and settlement stay **one implementation** — only dispatch differs,
-and dispatch is small enough to review as a unit. `ExecutionClient` keeps a
+portfolio and settlement stay one implementation. Only dispatch differs, and
+dispatch is small enough to review as a unit. `ExecutionClient` keeps a
 shared surface at the venue edge, which is what it was for. And the
-divergence becomes **testable**: record a live session into the canonical
+divergence becomes testable: record a live session into the canonical
 tables, replay it through the backtest path, and assert the strategy's
 decisions are identical. That is the shape `result.verify()` already has.
 
@@ -2186,10 +2185,10 @@ built.
 ## Status
 
 Design only. Nothing here is implemented or measured, and the 0.329 µs figure
-holds under the assumption that there is no live path — whether it survives
-one is not knowable until there is one to measure. What is established is
-that a design exists in which backtest pays nothing for live's flexibility,
-and that half of its seams are already load-bearing in the current code.
+holds under the assumption that there is no live path. Whether it survives one
+is not knowable until there is one to measure. What is established is that a
+design exists in which backtest pays nothing for live's flexibility, and that
+half of its seams already carry weight in the current code.
 
 Do not remove `ExecutionClient`'s intent-only contract, or narrow
 `RecordSource` to a concrete type, without reading this part first.
