@@ -49,9 +49,9 @@ lives; this table is an index, not a replacement for it.
 
 Two more, measured 2026-07-31 and written up in
 `benchmarks/backtest_compare/RESULTS.md` rather than given a part here,
-because both are sweep features rather than optimizations: **decode shared
-across study trials** (23% of a four-trial study) and **trials run
-concurrently across forks**. They are the only remaining backtest-performance
+because both are sweep features rather than optimizations: decode shared
+across study trials (23% of a four-trial study) and trials run
+concurrently across forks. They are the only remaining backtest-performance
 items that are multiplier-class; the rest are percent-class and the machine's
 own noise floor is now comparable to them.
 ---
