@@ -221,6 +221,81 @@ fn a_real_archive_book_is_deep_and_uncrossed() {
 }
 
 #[test]
+fn the_asset_ctxs_archive_is_the_historical_mark_and_oracle() {
+    // Real rows from s3://hyperliquid-archive/asset_ctxs/20250101.csv.lz4.
+    // This file is the only *historical* source of marks and oracles the
+    // venue publishes: metaAndAssetCtxs answers for right now, and the
+    // hourly market_data files carry books alone.
+    let contexts = hyperliquid::parse_asset_ctxs_csv(&fixture("asset_ctxs.csv")).unwrap();
+    assert!(contexts.len() >= 8);
+    assert!(contexts.iter().any(|c| c.coin == "BTC"));
+    assert!(contexts.iter().any(|c| c.coin == "ETH"));
+
+    let btc = contexts.iter().find(|c| c.coin == "BTC").unwrap();
+    assert_eq!(btc.mark, Price::from_f64(93_620.0).unwrap());
+    assert_eq!(btc.oracle, Price::from_f64(93_576.0).unwrap());
+    assert!(
+        btc.mark != btc.mid,
+        "the mark is not the mid, which is the entire reason to carry it"
+    );
+    assert!(btc.premium.is_positive());
+
+    // One minute apart, sorted.
+    let times: Vec<i64> = contexts.iter().map(|c| c.at.get()).collect();
+    assert!(times.windows(2).all(|pair| pair[0] <= pair[1]));
+
+    // Compressed and plain agree.
+    let raw = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/hyperliquid/asset_ctxs.csv.lz4"),
+    )
+    .unwrap();
+    assert_eq!(hyperliquid::read_asset_ctxs_lz4(&raw).unwrap(), contexts);
+}
+
+#[test]
+fn asset_ctxs_produce_reference_prices_and_deliberately_no_funding() {
+    // The trap this guards: the file samples the standing funding rate once
+    // a minute. Emitting each sample as a payment would charge a carry
+    // sixty times an hour. Settlements come from fundingHistory.
+    let contexts = hyperliquid::parse_asset_ctxs_csv(&fixture("asset_ctxs.csv")).unwrap();
+    assert!(
+        contexts.iter().all(|c| !c.funding_rate.is_zero()),
+        "the rate is present in the row"
+    );
+
+    let records = hyperliquid::asset_context_records(&contexts, None).unwrap();
+    assert_eq!(records.len(), contexts.len());
+    assert!(
+        records
+            .iter()
+            .all(|record| matches!(record.event, MarketEvent::Reference { .. })),
+        "prices only: a sampled rate is not a payment due"
+    );
+
+    // Filtering to a subset is how a run picks its handful out of 168 coins.
+    let only_btc =
+        hyperliquid::asset_context_records(&contexts, Some(&["BTC".to_string()])).unwrap();
+    assert!(!only_btc.is_empty());
+    assert!(
+        only_btc
+            .iter()
+            .all(|record| record.instrument.as_str() == "BTC-PERP")
+    );
+}
+
+#[test]
+fn an_asset_ctxs_file_whose_columns_moved_is_refused() {
+    // Read by position after a silent schema change, a mark lands in the
+    // open-interest column and the numbers stay plausible for a long time.
+    let shuffled = "time,coin,funding,open_interest,prev_day_px,day_ntl_vlm,\
+                    premium,mark_px,oracle_px,mid_px,impact_bid_px,impact_ask_px\n";
+    let error = hyperliquid::parse_asset_ctxs_csv(shuffled).unwrap_err();
+    assert!(error.to_string().contains("expected"), "{error}");
+    assert!(hyperliquid::parse_asset_ctxs_csv("").is_err());
+}
+
+#[test]
 fn real_funding_rates_are_hourly_and_keep_their_sign() {
     let records = hyperliquid::parse_funding(&fixture("funding.json"), "BTC-PERP").unwrap();
     assert!(records.len() >= 2);

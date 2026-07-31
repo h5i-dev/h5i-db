@@ -660,6 +660,162 @@ fn parse_archive_time(text: &str) -> Option<i64> {
         .checked_add(nanos)
 }
 
+/// One row of the archive's daily `asset_ctxs` file: what the venue thought
+/// a coin was worth, once a minute.
+///
+/// This is the only *historical* source of marks and oracles the venue
+/// publishes -- `metaAndAssetCtxs` answers for right now, and the hourly
+/// `market_data` files carry books alone.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AssetContext {
+    pub at: UnixNanos,
+    pub coin: String,
+    /// The hourly funding rate *prevailing* at this minute.
+    ///
+    /// **Not a payment.** The file samples the rate sixty times an hour;
+    /// turning each sample into a funding event would charge a position
+    /// sixty times over. Settlements come from `fundingHistory`, which is
+    /// why [`asset_context_records`] emits reference prices and no funding.
+    pub funding_rate: Price,
+    pub open_interest: Qty,
+    /// The mark's deviation from the oracle, which is what funding is
+    /// derived from.
+    pub premium: Price,
+    pub oracle: Price,
+    pub mark: Price,
+    pub mid: Price,
+    pub impact_bid: Price,
+    pub impact_ask: Price,
+}
+
+const ASSET_CTX_COLUMNS: [&str; 12] = [
+    "time",
+    "coin",
+    "funding",
+    "open_interest",
+    "prev_day_px",
+    "day_ntl_vlm",
+    "premium",
+    "oracle_px",
+    "mark_px",
+    "mid_px",
+    "impact_bid_px",
+    "impact_ask_px",
+];
+
+/// Parse a decompressed `asset_ctxs/<date>.csv` file.
+///
+/// The header is checked against the columns this expects rather than
+/// trusted by position. A venue that inserts a column would otherwise shift
+/// every field silently, and reading a mark out of the open-interest column
+/// is the kind of error that produces plausible numbers for a long time.
+pub fn parse_asset_ctxs_csv(body: &str) -> Result<Vec<AssetContext>> {
+    let mut lines = body.lines();
+    let header = lines.next().ok_or(BacktestError::Parse {
+        what: "asset_ctxs",
+        value: "empty file".to_string(),
+    })?;
+    let columns: Vec<&str> = header.trim().split(',').collect();
+    if columns != ASSET_CTX_COLUMNS {
+        return Err(BacktestError::invalid(format!(
+            "asset_ctxs header is {columns:?}, expected {ASSET_CTX_COLUMNS:?}; \
+             reading these by position after a schema change would put a \
+             mark in the open-interest column"
+        )));
+    }
+
+    let mut out = Vec::new();
+    for (index, line) in lines.enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields: Vec<&str> = line.split(',').collect();
+        if fields.len() != ASSET_CTX_COLUMNS.len() {
+            return Err(BacktestError::invalid(format!(
+                "asset_ctxs row {} has {} fields, expected {}",
+                index + 2,
+                fields.len(),
+                ASSET_CTX_COLUMNS.len()
+            )));
+        }
+        let number = |at: usize, what: &'static str| -> Result<f64> {
+            fields[at].parse::<f64>().map_err(|_| BacktestError::Parse {
+                what,
+                value: fields[at].to_string(),
+            })
+        };
+        let at = parse_archive_time(fields[0]).ok_or(BacktestError::Parse {
+            what: "asset_ctxs.time",
+            value: fields[0].to_string(),
+        })?;
+        out.push(AssetContext {
+            at: UnixNanos::new(at),
+            coin: fields[1].to_string(),
+            funding_rate: Price::from_f64(number(2, "asset_ctxs.funding")?)?,
+            open_interest: Qty::from_f64(number(3, "asset_ctxs.open_interest")?)?,
+            premium: Price::from_f64(number(6, "asset_ctxs.premium")?)?,
+            oracle: Price::from_f64(number(7, "asset_ctxs.oracle_px")?)?,
+            mark: Price::from_f64(number(8, "asset_ctxs.mark_px")?)?,
+            mid: Price::from_f64(number(9, "asset_ctxs.mid_px")?)?,
+            impact_bid: Price::from_f64(number(10, "asset_ctxs.impact_bid_px")?)?,
+            impact_ask: Price::from_f64(number(11, "asset_ctxs.impact_ask_px")?)?,
+        });
+    }
+    out.sort_by_key(|context| context.at.get());
+    Ok(out)
+}
+
+/// [`parse_asset_ctxs_csv`] over an LZ4 frame, which is how the archive
+/// ships it.
+pub fn read_asset_ctxs_lz4(bytes: &[u8]) -> Result<Vec<AssetContext>> {
+    let mut decoded = Vec::new();
+    std::io::Read::read_to_end(&mut lz4_flex::frame::FrameDecoder::new(bytes), &mut decoded)
+        .map_err(|error| BacktestError::Parse {
+            what: "asset_ctxs lz4 frame",
+            value: error.to_string(),
+        })?;
+    let text = String::from_utf8(decoded).map_err(|error| BacktestError::Parse {
+        what: "asset_ctxs utf8",
+        value: error.to_string(),
+    })?;
+    parse_asset_ctxs_csv(&text)
+}
+
+/// Turn parsed contexts into replayable reference records.
+///
+/// Only the mark and the oracle: those are prices, and the engine values,
+/// margins and funds against them. The funding *rate* in the same row is a
+/// sample of a standing rate rather than a payment due, so it deliberately
+/// produces no [`MarketEvent::Funding`] -- sixty samples an hour would
+/// charge a carry sixty times.
+///
+/// `coins` filters the universe, because a day is a hundred and sixty-odd
+/// of them and a run usually wants a handful.
+pub fn asset_context_records(
+    contexts: &[AssetContext],
+    coins: Option<&[String]>,
+) -> Result<Vec<Record>> {
+    let mut out = Vec::with_capacity(contexts.len());
+    for context in contexts {
+        if let Some(coins) = coins
+            && !coins.iter().any(|coin| coin == &context.coin)
+        {
+            continue;
+        }
+        out.push(Record::new(
+            Stamps::immediate(context.at),
+            perp_instrument_id(&context.coin)?,
+            OutcomeId::FIRST,
+            MarketEvent::Reference {
+                mark: Some(context.mark),
+                oracle: Some(context.oracle),
+            },
+        ));
+    }
+    out.sort_by_key(|record| record.ts().get());
+    Ok(out)
+}
+
 /// Read a decompressed archive stream: one JSON envelope per line.
 ///
 /// Hyperliquid publishes its history as hourly LZ4 files of newline-
