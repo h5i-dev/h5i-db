@@ -67,6 +67,9 @@ pub struct IngestPlan {
     pub trades: Vec<Record>,
     /// Perpetual funding, empty for venues that have none.
     pub funding: Vec<Record>,
+    /// Venue-published mark and oracle prices, which are not the book.
+    /// Empty for the venues that publish neither, which is most of them.
+    pub references: Vec<Record>,
     /// How markets resolved. Never read on the strategy path.
     pub resolutions: Vec<Resolution>,
 }
@@ -99,6 +102,11 @@ impl IngestPlan {
         self
     }
 
+    pub fn with_references(mut self, records: Vec<Record>) -> Self {
+        self.references = records;
+        self
+    }
+
     pub fn with_resolutions(mut self, resolutions: Vec<Resolution>) -> Self {
         self.resolutions = resolutions;
         self
@@ -110,13 +118,19 @@ impl IngestPlan {
         self.book_events.extend(other.book_events);
         self.trades.extend(other.trades);
         self.funding.extend(other.funding);
+        self.references.extend(other.references);
         self.resolutions.extend(other.resolutions);
         self.sort();
         self
     }
 
     fn sort(&mut self) {
-        for stream in [&mut self.book_events, &mut self.trades, &mut self.funding] {
+        for stream in [
+            &mut self.book_events,
+            &mut self.trades,
+            &mut self.funding,
+            &mut self.references,
+        ] {
             stream.sort_by_key(|record| record.ts().get());
         }
     }
@@ -140,6 +154,7 @@ impl IngestPlan {
             (b"b".as_slice(), &self.book_events),
             (b"t".as_slice(), &self.trades),
             (b"f".as_slice(), &self.funding),
+            (b"r".as_slice(), &self.references),
         ] {
             hasher.update(label);
             for record in stream {
@@ -177,7 +192,7 @@ impl IngestPlan {
     }
 
     pub fn record_count(&self) -> usize {
-        self.book_events.len() + self.trades.len() + self.funding.len()
+        self.book_events.len() + self.trades.len() + self.funding.len() + self.references.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -195,6 +210,7 @@ impl IngestPlan {
             .iter()
             .chain(&self.trades)
             .chain(&self.funding)
+            .chain(&self.references)
             .map(|record| record.ts().get());
         let (min, max) = stamps.fold((i64::MAX, i64::MIN), |(lo, hi), ts| {
             (lo.min(ts), hi.max(ts))
@@ -220,6 +236,7 @@ impl IngestPlan {
             ("book_events", &self.book_events),
             ("trades", &self.trades),
             ("funding", &self.funding),
+            ("references", &self.references),
         ] {
             let mut previous: Option<i64> = None;
             for record in stream {
@@ -371,6 +388,9 @@ pub async fn write_plan(
     }
     if !plan.funding.is_empty() {
         store::write_funding(db, &plan.funding).await?;
+    }
+    if !plan.references.is_empty() {
+        store::write_references(db, &plan.references).await?;
     }
     if !plan.resolutions.is_empty() {
         store::write_resolutions(db, &plan.resolutions).await?;
