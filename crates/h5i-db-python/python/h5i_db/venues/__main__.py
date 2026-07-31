@@ -202,14 +202,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.from_trades:
                 if not args.interval:
                     parser.error("--from-trades needs --interval, the bar length to bucket into")
-                _emit(
-                    bars_from_trades(
+                try:
+                    report = bars_from_trades(
                         db,
                         interval=args.interval,
                         chunk_rows=args.chunk_rows,
                         note=args.note,
-                    ).to_dict()
-                )
+                    )
+                except ValueError as error:
+                    # Asking to aggregate trades that are not there is a
+                    # mistake in the command, not a defect, so it reads as one.
+                    print(str(error), file=sys.stderr)
+                    return 2
+                _emit(report.to_dict())
                 return 0
             layout = _BAR_LAYOUTS[args.layout]
             if args.interval:
