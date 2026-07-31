@@ -263,17 +263,14 @@ Metodología y resultados completos en [benchmarks](benchmarks).
 Medianas de tres ejecuciones en procesos nuevos tras un calentamiento; cada
 adaptador verifica que vio los 200 k eventos y envió las 200 órdenes. Las fronteras
 medidas difieren, como dice la columna, y el benchmark comprueba recuentos en lugar
-de equivalencia de PnL. Ambas notas están desarrolladas en
-[`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
-
+de equivalencia de PnL.
 ⁶ Medido de nuevo dos días después, tras agrupar los commits de metadatos. La
-  revisión previa midió 386 ms ese día frente a 331 ms el original: la máquina
-  estaba más lenta, no más rápida.
-
+revisión previa midió 386 ms ese día frente a 331 ms el original: la máquina
+estaba más lenta, no más rápida.
 ⁷ Las otras filas nunca llaman a Python; esta cruza en cada evento, igual que
-  Nautilus. Callback contra callback la distancia es 3,1× y no 13×. Cifra
-  derivada (núcleo nativo más el coste de frontera medido), no cronometrada
-  directamente.
+Nautilus. Callback contra callback la distancia es 3,1× y no 13×. Cifra
+derivada (núcleo nativo más el coste de frontera medido), no cronometrada
+directamente.
 
 ---
 
