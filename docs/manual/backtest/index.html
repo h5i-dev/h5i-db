@@ -470,15 +470,39 @@ it is right now, so the archive is the only source of book history the venue
 offers. <code>read_archive_lz4</code> reads the hourly files; <code>parse_ws_message</code>
 handles a live capture, dispatching <code>l2Book</code> and <code>trades</code> by the coin in the
 payload so one call covers a capture spanning many markets.</p>
-<p><code>s3://hyperliquid-archive</code> is a <strong>Requester Pays</strong> bucket: anonymous reads
-get a 403 whatever headers you send, and you need an AWS account and pay the
-transfer.</p>
+<p><code>s3://hyperliquid-archive</code> (us-east-1) is a <strong>Requester Pays</strong> bucket:
+anonymous reads get a 403 whatever headers you send, and you need an AWS
+account and pay the transfer. Pull from us-east-1 and the transfer is free;
+you pay only GET requests, which are a fraction of a cent.</p>
 <div class="highlight"><pre><span></span><code>aws<span class="w"> </span>s3<span class="w"> </span>ls<span class="w"> </span>s3://hyperliquid-archive/market_data/20250101/0/l2Book/<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--request-payer<span class="w"> </span>requester
 aws<span class="w"> </span>s3<span class="w"> </span>cp<span class="w"> </span>s3://hyperliquid-archive/market_data/20250101/0/l2Book/BTC.lz4<span class="w"> </span>.<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--request-payer<span class="w"> </span>requester
 </code></pre></div>
 
+<p>Measured on <code>20250101/0</code>: 166 coins, 77 MB compressed for the hour, so
+roughly 1.8 GB a day and 670 GB a year. BTC alone is 700 KB an hour, 6,301
+snapshots, one every 0.57 seconds.</p>
+<p>Two things the archive is <strong>not</strong>:</p>
+<ul>
+<li><strong>It has no trades.</strong> <code>market_data/&lt;date&gt;/&lt;hour&gt;/</code> contains <code>l2Book/</code> and
+  nothing else. Prints have to come from a live websocket capture, and
+  without them the queue-position fill model has nothing to work with. This
+  is the single biggest remaining gap for a Hyperliquid market-making
+  backtest.</li>
+<li><strong>It is not bucketed by venue time.</strong> Files are grouped by when the
+  archiver received a message, so the <code>00</code> hour file opens with a message
+  the venue stamped at <code>23:59:59.877</code> the day before. Load a window with an
+  hour of slack on each side.</li>
+</ul>
+<p>Each line is <code>{"time": &lt;archiver receive, ISO nanoseconds&gt;, "ver_num": 1,
+"raw": &lt;the live websocket envelope&gt;}</code>, and the venue's own stamp is inside
+at <code>raw.data.time</code>. <strong>Both matter.</strong> The archiver trails the venue by 57 ms
+at the median and 3.2 seconds at the worst, so the outer stamp is <code>ts_init</code>
+and the inner one is <code>ts_event</code>; reading only the inner one hands a strategy
+up to three seconds of look-ahead on every book update. <code>read_archive</code> keeps
+them apart, and clamps <code>ts_init</code> to at least <code>ts_event</code> so a skewed clock
+cannot claim a message was known before it was sent.</p>
 <p>The live endpoints need no credentials, which is where
 <code>tests/fixtures/hyperliquid</code> came from. Refresh them with:</p>
 <div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-sX<span class="w"> </span>POST<span class="w"> </span>https://api.hyperliquid.xyz/info<span class="w"> </span><span class="se">\</span>

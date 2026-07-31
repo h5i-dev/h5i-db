@@ -2514,9 +2514,10 @@ offers. `read_archive_lz4` reads the hourly files; `parse_ws_message`
 handles a live capture, dispatching `l2Book` and `trades` by the coin in the
 payload so one call covers a capture spanning many markets.
 
-`s3://hyperliquid-archive` is a **Requester Pays** bucket: anonymous reads
-get a 403 whatever headers you send, and you need an AWS account and pay the
-transfer.
+`s3://hyperliquid-archive` (us-east-1) is a **Requester Pays** bucket:
+anonymous reads get a 403 whatever headers you send, and you need an AWS
+account and pay the transfer. Pull from us-east-1 and the transfer is free;
+you pay only GET requests, which are a fraction of a cent.
 
 ```bash
 aws s3 ls s3://hyperliquid-archive/market_data/20250101/0/l2Book/ \
@@ -2524,6 +2525,31 @@ aws s3 ls s3://hyperliquid-archive/market_data/20250101/0/l2Book/ \
 aws s3 cp s3://hyperliquid-archive/market_data/20250101/0/l2Book/BTC.lz4 . \
     --request-payer requester
 ```
+
+Measured on `20250101/0`: 166 coins, 77 MB compressed for the hour, so
+roughly 1.8 GB a day and 670 GB a year. BTC alone is 700 KB an hour, 6,301
+snapshots, one every 0.57 seconds.
+
+Two things the archive is **not**:
+
+- **It has no trades.** `market_data/<date>/<hour>/` contains `l2Book/` and
+  nothing else. Prints have to come from a live websocket capture, and
+  without them the queue-position fill model has nothing to work with. This
+  is the single biggest remaining gap for a Hyperliquid market-making
+  backtest.
+- **It is not bucketed by venue time.** Files are grouped by when the
+  archiver received a message, so the `00` hour file opens with a message
+  the venue stamped at `23:59:59.877` the day before. Load a window with an
+  hour of slack on each side.
+
+Each line is `{"time": <archiver receive, ISO nanoseconds>, "ver_num": 1,
+"raw": <the live websocket envelope>}`, and the venue's own stamp is inside
+at `raw.data.time`. **Both matter.** The archiver trails the venue by 57 ms
+at the median and 3.2 seconds at the worst, so the outer stamp is `ts_init`
+and the inner one is `ts_event`; reading only the inner one hands a strategy
+up to three seconds of look-ahead on every book update. `read_archive` keeps
+them apart, and clamps `ts_init` to at least `ts_event` so a skewed clock
+cannot claim a message was known before it was sent.
 
 The live endpoints need no credentials, which is where
 `tests/fixtures/hyperliquid` came from. Refresh them with:

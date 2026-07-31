@@ -576,7 +576,20 @@ pub fn parse_ws_message(body: &str) -> Result<Vec<Record>> {
 }
 
 fn records_from_envelope(json: &Value) -> Result<Vec<Record>> {
-    // Archive lines wrap the live envelope; unwrap either shape.
+    // Archive lines wrap the live envelope and add the instant the archiver
+    // received it. That is `ts_init` -- when this system could first have
+    // known the message -- and the venue's own stamp inside is `ts_event`.
+    //
+    // Keeping them apart is not bookkeeping. Measured over an hour of BTC,
+    // the archiver trails the venue by 57ms at the median and 3.2s at the
+    // worst, so stamping both from the venue's clock hands a strategy up to
+    // three seconds of look-ahead on every book update -- the exact failure
+    // the dual stamp exists to prevent, arriving through the data loader
+    // rather than the engine.
+    let known_at = json
+        .get("time")
+        .and_then(Value::as_str)
+        .and_then(parse_archive_time);
     let envelope = json.get("raw").unwrap_or(json);
     let Some(channel) = envelope.get("channel").and_then(Value::as_str) else {
         return Ok(Vec::new());
@@ -588,11 +601,63 @@ fn records_from_envelope(json: &Value) -> Result<Vec<Record>> {
         return Ok(Vec::new());
     };
     let id = perp_instrument_id(coin)?;
-    match channel {
-        "l2Book" => Ok(vec![book_from_value(data, &id)?]),
-        "trades" => trades_from_value(data, &id),
-        _ => Ok(Vec::new()),
+    let mut records = match channel {
+        "l2Book" => vec![book_from_value(data, &id)?],
+        "trades" => trades_from_value(data, &id)?,
+        _ => return Ok(Vec::new()),
+    };
+    if let Some(known_at) = known_at {
+        for record in &mut records {
+            // Never earlier than the event: a clock that says otherwise is
+            // skewed, and the honest reading of skew is "known immediately",
+            // not "known before it happened".
+            let ts_init = UnixNanos::new(known_at).max(record.stamps.ts_event);
+            record.stamps = Stamps::new(record.stamps.ts_event, ts_init)?;
+        }
     }
+    Ok(records)
+}
+
+/// The archive's own timestamp: `2025-01-01T00:00:02.238437296`, UTC, with
+/// no zone suffix and up to nanosecond precision.
+///
+/// Deliberately narrow, like the Polymarket parser: only the exact shape
+/// the archive uses is accepted, and anything else yields `None` rather
+/// than a plausible wrong instant.
+fn parse_archive_time(text: &str) -> Option<i64> {
+    let (date, time) = text.split_once('T')?;
+    let mut date_parts = date.split('-');
+    let year: i32 = date_parts.next()?.parse().ok()?;
+    let month: u32 = date_parts.next()?.parse().ok()?;
+    let day: u32 = date_parts.next()?.parse().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+
+    let time = time.strip_suffix('Z').unwrap_or(time);
+    let (clock, fraction) = match time.split_once('.') {
+        Some((clock, fraction)) => (clock, fraction),
+        None => (time, ""),
+    };
+    let mut clock_parts = clock.split(':');
+    let hour: u32 = clock_parts.next()?.parse().ok()?;
+    let minute: u32 = clock_parts.next()?.parse().ok()?;
+    let second: u32 = clock_parts.next()?.parse().ok()?;
+    if clock_parts.next().is_some()
+        || fraction.len() > 9
+        || !fraction.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    // Right-pad to nanoseconds so ".238" and ".238437296" both scale.
+    let nanos: i64 = format!("{fraction:0<9}").parse().ok()?;
+
+    let date = chrono::NaiveDate::from_ymd_opt(year, month, day)?;
+    let time = chrono::NaiveTime::from_hms_opt(hour, minute, second)?;
+    date.and_time(time)
+        .and_utc()
+        .timestamp_nanos_opt()?
+        .checked_add(nanos)
 }
 
 /// Read a decompressed archive stream: one JSON envelope per line.

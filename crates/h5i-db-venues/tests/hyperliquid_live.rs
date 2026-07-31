@@ -125,6 +125,102 @@ fn real_candles_become_knowable_at_their_close() {
 }
 
 #[test]
+fn a_real_archive_slice_reads_and_keeps_both_timestamps_apart() {
+    // Six consecutive lines from
+    // s3://hyperliquid-archive/market_data/20250101/0/l2Book/BTC.lz4,
+    // byte for byte. The archive wraps the live envelope in
+    // `{"time": <archiver receive>, "ver_num": 1, "raw": {...}}`, and the
+    // venue's own stamp lives inside `raw.data.time`.
+    //
+    // That pair is the whole reason to read the outer object. Over the full
+    // hour this slice came from, the archiver trails the venue by 57ms at
+    // the median and 3.2 seconds at the worst; stamping both from the
+    // venue's clock would hand a strategy up to three seconds of look-ahead
+    // on every book update.
+    let raw = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/hyperliquid/archive_l2book_btc.lz4"),
+    )
+    .unwrap();
+    let read = hyperliquid::read_archive_lz4(&raw).unwrap();
+
+    assert_eq!(read.lines, 6);
+    assert_eq!(read.records.len(), 6);
+    assert_eq!(read.malformed, 0);
+    assert_eq!(read.skipped, 0);
+    assert_eq!(
+        read.barren_ratio(),
+        0.0,
+        "every line of a real archive file must produce a record"
+    );
+    read.require_yield(0.99).unwrap();
+
+    for record in &read.records {
+        assert_eq!(record.instrument.as_str(), "BTC-PERP");
+        assert!(matches!(record.event, MarketEvent::BookSnapshot { .. }));
+        assert!(
+            record.stamps.ts_init > record.stamps.ts_event,
+            "the archiver cannot have received a message before the venue \
+             sent it, and in practice it is measurably later"
+        );
+        // Sub-second in the common case; the tail is what makes it matter.
+        assert!(record.stamps.delay_nanos() < 5_000_000_000);
+    }
+    // Replay orders by ts_init, so the reader must too.
+    assert!(
+        read.records
+            .windows(2)
+            .all(|pair| pair[0].ts() <= pair[1].ts())
+    );
+
+    // The uncompressed path reads identically.
+    let plain = hyperliquid::read_archive(std::io::BufReader::new(
+        std::fs::File::open(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/hyperliquid/archive_l2book_btc.jsonl"),
+        )
+        .unwrap(),
+    ))
+    .unwrap();
+    assert_eq!(plain.records, read.records);
+}
+
+#[test]
+fn a_real_archive_book_is_deep_and_uncrossed() {
+    // The reason to pay for the archive at all: the REST book is a single
+    // snapshot of now, and this is depth over time.
+    let raw = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/hyperliquid/archive_l2book_btc.lz4"),
+    )
+    .unwrap();
+    let read = hyperliquid::read_archive_lz4(&raw).unwrap();
+    let universe = hyperliquid::parse_meta(&fixture("meta.json")).unwrap();
+    let instrument = universe
+        .iter()
+        .find(|a| a.name == "BTC")
+        .unwrap()
+        .instrument()
+        .unwrap();
+
+    for record in &read.records {
+        let MarketEvent::BookSnapshot { bids, asks } = &record.event else {
+            panic!("expected a snapshot");
+        };
+        assert!(
+            bids.len() > 5 && asks.len() > 5,
+            "the archive carries depth"
+        );
+        assert!(bids[0].0 < asks[0].0, "an uncrossed book");
+        for (price, _) in bids.iter().chain(asks) {
+            instrument
+                .check_price(*price)
+                .unwrap_or_else(|error| panic!("archived quote {price}: {error}"));
+        }
+    }
+}
+
+#[test]
 fn real_funding_rates_are_hourly_and_keep_their_sign() {
     let records = hyperliquid::parse_funding(&fixture("funding.json"), "BTC-PERP").unwrap();
     assert!(records.len() >= 2);
