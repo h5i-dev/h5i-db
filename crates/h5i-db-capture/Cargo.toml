@@ -1,0 +1,48 @@
+[package]
+name = "h5i-db-capture"
+description = "Record venue websockets to lz4 NDJSON, preserving arrival timestamps and raw payloads"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+futures = { workspace = true }
+lz4_flex = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# rustls-tls-native-roots rather than webpki-roots so a capture box picks up
+# the same trust store as everything else on it (corporate MITM proxies
+# included), and so we reuse the rustls-native-certs copy reqwest already
+# pulls in.
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+# tokio-tungstenite depends on rustls with no crypto provider feature, so
+# building this crate alone leaves rustls with none and `ClientConfig::builder`
+# panics on the first connect. Naming the provider here, and installing it in
+# `main`, makes that a compile-time fact instead of a 3am discovery.
+# aws-lc-rs rather than ring because it is the provider the rest of the
+# workspace already resolves to (via reqwest), so no second one enters the
+# graph and the "which provider" ambiguity never arises.
+rustls = { version = "0.23", default-features = false, features = [
+    "aws-lc-rs",
+    "std",
+    "tls12",
+    "logging",
+] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# Only to prove, in a test, that a line we write is byte-identical to one
+# `hyperliquid::archive_line` writes. The recorder itself must not link the
+# query stack: it runs unattended on a small box, and every dependency it
+# carries is one more thing that can fail at 3am for reasons unrelated to
+# recording bytes.
+h5i-db-venues = { workspace = true }
+h5i-db-backtest = { workspace = true }
