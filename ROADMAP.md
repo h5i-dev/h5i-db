@@ -2078,6 +2078,23 @@ advantage: our boundary is no better than theirs and possibly worse. The
 composition inverts. Nautilus spends 82% of a run in the engine and 18%
 crossing into Python; we spend roughly a quarter and three quarters.
 
+**The two arms were not compiled with the same integer width, and the
+10.9× is not decomposed until they are.** Nautilus switches its fixed-point
+raw type with a `high-precision` Cargo feature, defaulting to `i64` in the
+Rust crate but to `i128` in the Python package (`build.py` sets
+`HIGH_PRECISION=True` unless the environment says otherwise, and forces it
+off only on Windows). The 1.230.0 aarch64 wheel these numbers came from
+reports `HIGH_PRECISION 1`, `PRECISION_BYTES 16`, so it was doing 128-bit
+arithmetic at a scale of 1e-16 while our arm was doing 64-bit arithmetic at
+1e-9. An `i128` add spans two registers where an `i64` add is one
+instruction, so some unmeasured share of the gap is width, not dispatch.
+
+The message-bus explanation below is still the one the architecture
+supports, but it is now an explanation for an *undecomposed* number. The
+separation is a measurement, not an argument: build one wheel with
+`HIGH_PRECISION=false` and re-run the no-subscription arm. Until that is
+done, quote the 10.9× as an engine-to-engine total and not as a bus cost.
+
 The 3.593 µs is what their engine costs with zero callbacks attached.
 That is not waste. It is the price of a message bus: events are published to
 a topic, components subscribe handlers at runtime, and dispatch is a lookup
@@ -2202,7 +2219,12 @@ Do not remove `ExecutionClient`'s intent-only contract, or narrow
 
 `Price`, `Qty` and `Money` are `i64` scaled by `1e-9` (`types.rs:25`). This
 part records what that costs, what NautilusTrader does about the same problem,
-and why copying their fix would not be enough here. Nothing is implemented.
+and why copying their fix would not be enough here.
+
+> **Implemented on branch `feature-i128`.** The survey below is kept as
+> written, because it is what the design was argued from. What was built,
+> and where it deliberately departs from the survey's own recommendation,
+> is in *Part XII implementation status* at the end.
 
 ## There are two limits, and they are 1024x apart
 
@@ -2334,3 +2356,128 @@ The one thing that should happen soon is independent of all of it: correct the
 the boundary at 9,007,199 rather than imply there is not one. A test that
 passes because its input was already a float is not testing what its name
 says.
+
+## Part XII implementation status (2026-07-31, branch `feature-i128`)
+
+Built, in four commits: `1ddd4188` (switchable raw type), `f589fcf0` (the
+wide build, green), `59416110` (the decimal encoding layer), `bbea27bd`
+(per-table encoding wired through schema and store).
+
+| | |
+|---|---|
+| `--features wide` | `Raw` becomes `i128`; default stays `i64` |
+| `FixedEncoding::{Float, Decimal}` | per table, chosen at creation |
+| tests | 338 pass on `i64`, 338 pass on `i128` |
+| lint | `clippy --all-targets` clean in both modes |
+
+### Two deliberate departures from the survey above
+
+**The scale does not move.** The survey's item 1 says "a `cfg`-switched raw
+type *and a scale that moves with it*, following the Nautilus shape". That
+was wrong, and the survey says why three paragraphs earlier: raising `SCALE`
+to `1e16` would drop the f64 exactness ceiling to 0.9 units. Nautilus moves
+the scale because 18-decimal wei needs the decimal places. Our binding limit
+is range, not decimal places, so `SCALE` stays `1e-9` in both modes. The tick
+grid, the f64 conversion and every value already written are untouched, and
+there is nothing to migrate -- which is the cost Nautilus is still paying at
+`fixed.rs:34`.
+
+**The storage encoding is not the build's to choose.** A compile-time
+encoding is what makes a Nautilus catalog unreadable by the other build.
+Here the encoding is a property of the table, recorded in its schema:
+`create_market_data_tables_with(db, FixedEncoding::Decimal)` decides it once,
+every writer reads it back with `encoding_of`, and every reader dispatches on
+the array it is handed. Both builds read both encodings. A narrow build
+meeting a decimal value too large for its `Raw` refuses it through the same
+checked `narrow()` as every other conversion, rather than truncating.
+
+`Decimal128(38, 9)` fits by construction: its backing value is an `i128` at
+scale `1e-9`, which is exactly what a `Raw` is, so encode and decode are
+integer moves with no float in the path.
+
+### What the audit found that the compiler would not have
+
+**Nine silent-wrap narrowings.** Sites that promoted to `i128`, did
+arithmetic, then wrote `as i64` -- which wraps rather than errors. In a
+fixed-point type that is how a position becomes its own negation. All nine
+now go through a checked `narrow()`. This is a fix to the shipping `i64`
+build, not something the feature introduced.
+
+**A test asserting the wrong thing.** `checked_arithmetic_reports_overflow`
+hardcoded `i64::MAX`; under `wide` it would have passed while testing
+nothing. It now asserts against `Raw::MAX`.
+
+**What must not widen.** Nanosecond timestamps, tick counts, outcome counts
+and slice counts stay `i64`. Only raw fixed-point values follow `Raw`.
+Widening those too would have compiled and been wrong.
+
+### The correction this Part asked for, made
+
+The survey's closing recommendation -- fix the `store.rs` doc claim and make
+the round-trip test assert the boundary -- is done.
+`float_storage_round_trips_exactly` is now
+`float_storage_is_exact_up_to_the_mantissa_and_not_past_it`, and it starts
+from raw integers rather than float literals, which is the flaw the survey
+identified. The `store.rs` and `schema.rs` module docs now say nine million
+and name the decimal encoding as the way past it.
+
+### The mode symbol is not needed here
+
+Nautilus exports `HIGH_PRECISION_MODE` with `no_mangle` because Python reads
+their raw integers across FFI, where a build mismatch is a silent
+corruption. Our Python boundary (`crates/h5i-db-python`) passes `f64` in and
+out and never sees a raw, so a wide build is invisible from Python and cannot
+corrupt anything by being unnoticed. The symbol would be ceremony.
+
+### What the wide build costs, measured
+
+`benches/replay_path.rs` now reports `build.raw_bits`, because the two builds
+produce otherwise identical JSON and comparing the wrong pair is the easiest
+mistake to make with a compile-time switch. It also takes
+`--encoding float|decimal|both`, which measures the storage dimension in one
+process since that half is a runtime choice.
+
+Method: the two binaries alternated **ABBA**, ten pairs, 200k book events and
+40k trades, after a warm-up run. Order alternation matters here -- a first
+attempt ran the arms in a fixed order and every phase came out "slower",
+which is what monotonic drift looks like when it all lands on the second arm.
+
+`i128` versus `i64`, same source:
+
+| phase | i64 median | i128 median | i128 min vs i64 min | i128 slower in |
+|---|---:|---:|---:|---:|
+| kernel (replay + engine) | 75.8 ms | 95.0 ms | **+53%** | 10/10 |
+| decode (arrow -> Record) | 63.5 ms | 71.4 ms | +11% | 9/10 |
+| seed (write) | 381.5 ms | 353.9 ms | -2% | 3/10 |
+
+The kernel result is the one to quote: 10/10 pairs and a 53% gap between the
+two arms' best times, well clear of this machine's noise. It is also the
+expected shape -- an `i128` add spans two registers. Wide mode buys range and
+pays for it in the arithmetic, which is why it is not the default.
+
+**The i64 path is not measurably changed, but I cannot claim it is free.**
+Against the pre-feature commit (`914fe0cc`), same ten-pair ABBA method, the
+kernel differs by +14% median and +12% min with today's build slower in 8/10
+pairs -- and the same arm's own samples range from 58 to 106 ms, so the noise
+floor at n=10 is wider than the effect being looked for. What can be said is
+that no phase moved by more than the run-to-run spread. What cannot be said
+is "zero cost", and one candidate is real: `notional` is on the fill path and
+now ends in a checked `narrow()` where it used to end in `as i64`. That is a
+compare and a branch bought in exchange for not wrapping a position into its
+negation, which is not a trade worth undoing. Resolving an effect that small
+needs a microbenchmark of `notional` itself, which this phase-split bench
+cannot provide.
+
+Storage encoding, same process, both builds: decimal decode runs at **0.85 to
+0.89x** the float decode. Faster, not slower -- decoding a decimal is an
+integer move, decoding a float is a multiply, a round and a range check.
+The cost of the decimal encoding is bytes on disk and the pruning gap below,
+not decode time.
+
+### Still open
+
+Core's `Decimal128` support is the T1.2 row in Part III and is *not* done: a
+decimal column gets no min/max zone-map pruning and no aggregate-state
+acceleration. Pruning fails open, so a scan over a decimal table is correct
+and prunes by time only. That is the standing cost of choosing the encoding
+today, and closing T1.2 removes it.

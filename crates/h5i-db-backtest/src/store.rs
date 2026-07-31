@@ -6,9 +6,18 @@
 //! back as ordinary tables, so they are queryable with the same SQL as the
 //! market data.
 //!
-//! Storage holds `f64` and the kernel holds fixed point. The conversion is
-//! exact for everything the fixed-point type can represent, and
-//! [`tests::float_storage_round_trips_exactly`] is the test that says so.
+//! Storage holds `f64` by default and the kernel holds fixed point. That
+//! conversion is exact up to `2^53` raw units -- about nine million at nine
+//! decimal places -- and not above it;
+//! [`tests::float_storage_is_exact_up_to_the_mantissa_and_not_past_it`]
+//! is the test that says where the line is rather than implying there is
+//! none. Every price a venue quotes is well inside it.
+//!
+//! A table that will hold more than that is created with
+//! [`FixedEncoding::Decimal`], which stores the raw integer itself and has
+//! no such ceiling. The encoding belongs to the table, so every writer here
+//! reads it back with [`encoding_of`] instead of choosing, and every reader
+//! dispatches on the array it is handed. See [`crate::decimal`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -2174,29 +2183,43 @@ mod tests {
     use super::*;
     use crate::types::SCALE;
 
+    /// Where the float encoding stops being exact, asserted from both sides.
+    ///
+    /// The older version of this test fed it float *literals*, which are by
+    /// definition values an `f64` already holds, so the trip back was
+    /// identity and it would have passed at any magnitude. It therefore said
+    /// nothing about the ceiling it was cited as proving. These cases start
+    /// from raw integers, which is what a fixed-point value actually is.
     #[test]
-    fn float_storage_round_trips_exactly() {
-        // The claim the schema doc makes: every value the fixed-point type
-        // can represent survives a trip through f64 storage unchanged.
-        let cases = [
-            0.0,
-            1.0,
-            0.5,
-            0.42,
-            0.0001,
-            0.999999999,
-            123.456789,
-            1e6,
-            -0.37,
-            0.123456789,
-            9_999_999.999999999,
-        ];
-        for value in cases {
-            let original = Price::from_f64(value).unwrap();
-            let stored = original.to_f64();
-            let restored = Price::from_f64(stored).unwrap();
-            assert_eq!(original, restored, "{value} did not survive the round trip");
+    fn float_storage_is_exact_up_to_the_mantissa_and_not_past_it() {
+        // 2^53 is the last integer after which an f64 stops holding
+        // consecutive values, so it is the ceiling on raw units -- about
+        // nine million at nine decimal places.
+        const MANTISSA: crate::types::Raw = 9_007_199_254_740_992;
+
+        let survives = |raw: crate::types::Raw| {
+            Price::from_f64(Price::from_raw(raw).to_f64()).unwrap() == Price::from_raw(raw)
+        };
+
+        // Below the ceiling, consecutive raws all survive. Odd values are
+        // the ones that fail first, so the sweep must include them.
+        for offset in 0..64 {
+            for base in [0, 1, SCALE, 123_456_789, MANTISSA / 2] {
+                let raw = base + offset;
+                assert!(survives(raw), "{raw} must survive below the mantissa");
+                assert!(survives(-raw), "{} must survive below the mantissa", -raw);
+            }
         }
+
+        // Above it, they do not, and the point of the assertion is that this
+        // is a known boundary rather than a surprise. If this ever starts
+        // failing, an f64 has grown a mantissa and the decimal encoding has
+        // lost its reason to exist.
+        let past = (0..64).filter(|offset| !survives(MANTISSA + 1 + 2 * offset));
+        assert!(
+            past.count() > 0,
+            "odd raw values above 2^53 must not round-trip through f64"
+        );
     }
 
     #[test]
