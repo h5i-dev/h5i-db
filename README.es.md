@@ -254,8 +254,11 @@ Metodología y resultados completos en [benchmarks](benchmarks).
 | motor | frontera medida | mediana | rendimiento |
 |---|---|---:|---:|
 | **h5i-db** | registros decodificados por el núcleo de replay | **65,7 ms** | **3,05 M eventos/s** |
+| h5i-db `wide` | mismo núcleo, punto fijo de 128 bits | 94 ms⁷ | 2,13 M eventos/s⁷ |
 | **h5i-db** | mismo núcleo, estrategia como callback de Python por evento | 278 ms⁶ | 719 k eventos/s⁶ |
+| h5i-db `wide` | ídem, punto fijo de 128 bits | 306 ms⁶ ⁷ | 653 k eventos/s⁶ ⁷ |
 | **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 280 ms | 713 k eventos/s |
+| h5i-db `wide` | ídem, punto fijo de 128 bits | 280 ms⁸ | 713 k eventos/s⁸ |
 | NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
 | LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
 
@@ -267,6 +270,18 @@ de equivalencia de PnL.
 Nautilus. Callback contra callback la distancia es 3,1× y no 13×. Cifra
 derivada (núcleo nativo más el coste de frontera medido), no cronometrada
 directamente.
+⁷ `--features wide`, que hace que el tipo de punto fijo sea `i128`. Desactivado
+por defecto; véase [Precisión y rango](https://db.h5i.dev/manual/backtest/). La
+cifra del núcleo es la fila de encima multiplicada por **1,43×**, la mediana de
+12 pares alternados en la misma máquina con esta carga: más lento en los 12,
+medianas de 68,2 a 97,5 ms, y los rangos de ambos brazos no se solapan. Se da
+escalada porque esta máquina ejecuta el núcleo i64 en 68,2 ms y no en 65,7, y
+esa diferencia es de la máquina. El término de frontera de la fila de callback
+se mantiene: cruzar a Python no depende del ancho del entero.
+⁸ Sin cambio, que no es lo mismo que sin medir. En esos mismos 12 pares la
+ejecución persistida fue más lenta con `wide` en 6 y más rápida en 6, con
+medianas dentro del 2%. La domina el fsync que paga cada commit, y eso no lo
+toca el ancho de la aritmética.
 
 ---
 

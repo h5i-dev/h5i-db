@@ -238,8 +238,11 @@ Full methodology and results in [benchmarks](benchmarks).
 | engine | measured boundary | median | throughput |
 |---|---|---:|---:|
 | **h5i-db** | decoded records through the replay kernel | **65.7 ms** | **3.05 M events/s** |
+| h5i-db `wide` | same kernel, 128-bit fixed point | 94 ms⁷ | 2.13 M events/s⁷ |
 | **h5i-db** | same kernel, strategy as a Python callback per event | 278 ms⁶ | 719 k events/s⁶ |
+| h5i-db `wide` | same, 128-bit fixed point | 306 ms⁶ ⁷ | 653 k events/s⁶ ⁷ |
 | **h5i-db** | full persisted run: scan, decode, fork, replay, write | 280 ms | 713 k events/s |
+| h5i-db `wide` | same, 128-bit fixed point | 280 ms⁸ | 713 k events/s⁸ |
 | NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
 | LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
 
@@ -249,6 +252,19 @@ as the column says, and the benchmark checks counts rather than PnL equivalence.
 ⁶ The other rows never call Python; this one crosses into it per event, as
 Nautilus does. Callback against callback the gap is 3.1×, not 13×. Derived
 (native kernel plus measured boundary cost), not timed directly.
+⁷ `--features wide`, which makes the fixed-point type `i128`. Off by default;
+see [Precision and range](https://db.h5i.dev/manual/backtest/). The kernel
+figure is the row above it scaled by **1.43×**, the median of 12 alternating
+same-machine pairs on this workload — slower in 12 of 12, medians 68.2 → 97.5
+ms, with the two arms' ranges not overlapping. Scaled rather than quoted
+directly because this machine runs the i64 kernel at 68.2 ms rather than 65.7,
+and that difference belongs to the machine. The boundary term in the callback
+row is carried over unchanged: crossing into Python does not depend on the
+integer width.
+⁸ Unchanged rather than unmeasured. Across those same 12 pairs the persisted
+run was slower under `wide` in 6 of them and faster in 6, medians within 2%.
+It is dominated by the fsyncs a commit pays for, which the arithmetic width
+does not touch.
 
 ---
 

@@ -257,8 +257,11 @@ Méthodologie et résultats complets dans [benchmarks](benchmarks).
 | moteur | frontière mesurée | médiane | débit |
 |---|---|---:|---:|
 | **h5i-db** | enregistrements décodés à travers le noyau de rejeu | **65,7 ms** | **3,05 M évén./s** |
+| h5i-db `wide` | même noyau, virgule fixe 128 bits | 94 ms⁷ | 2,13 M évén./s⁷ |
 | **h5i-db** | même noyau, stratégie en callback Python par événement | 278 ms⁶ | 719 k évén./s⁶ |
+| h5i-db `wide` | idem, virgule fixe 128 bits | 306 ms⁶ ⁷ | 653 k évén./s⁶ ⁷ |
 | **h5i-db** | exécution persistée complète : balayage, décodage, fork, rejeu, écriture | 280 ms | 713 k évén./s |
+| h5i-db `wide` | idem, virgule fixe 128 bits | 280 ms⁸ | 713 k évén./s⁸ |
 | NautilusTrader 1.230.0 | objets en mémoire à travers `BacktestEngine.run()` | 767 ms | 261 k évén./s |
 | LEAN `11ba019f6` | du premier callback `Slice` à `OnEndOfAlgorithm`, alimenté par disque | 2033 ms | 98,4 k évén./s |
 
@@ -270,6 +273,19 @@ des comptages plutôt qu'une équivalence de PnL.
 événement, comme Nautilus. Callback contre callback, l'écart est de 3,1× et
 non de 13×. Chiffre dérivé (noyau natif plus coût de frontière mesuré), non
 chronométré directement.
+⁷ `--features wide`, qui fait du type à virgule fixe un `i128`. Désactivé par
+défaut ; voir [Précision et plage](https://db.h5i.dev/manual/backtest/). Le
+chiffre du noyau est la ligne au-dessus multipliée par **1,43×**, la médiane de
+12 paires alternées sur la même machine pour cette charge : plus lent sur les
+12, médianes de 68,2 à 97,5 ms, les plages des deux bras ne se recouvrant pas.
+Mis à l'échelle plutôt que cité tel quel parce que cette machine exécute le
+noyau i64 en 68,2 ms et non 65,7, et cet écart appartient à la machine. Le
+terme de frontière de la ligne callback est repris tel quel : passer en Python
+ne dépend pas de la largeur de l'entier.
+⁸ Inchangé, ce qui n'est pas la même chose que non mesuré. Sur ces mêmes 12
+paires, l'exécution persistée a été plus lente avec `wide` 6 fois et plus
+rapide 6 fois, les médianes tenant dans 2%. Elle est dominée par les fsync que
+paie chaque commit, et la largeur de l'arithmétique n'y touche pas.
 
 ---
 
