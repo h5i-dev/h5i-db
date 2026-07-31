@@ -261,7 +261,7 @@ Méthodologie et résultats complets dans [benchmarks](benchmarks).
 | **h5i-db** | même noyau, stratégie en callback Python par événement | 278 ms⁶ | 719 k évén./s⁶ |
 | h5i-db `wide` | idem, virgule fixe 128 bits | 306 ms⁶ ⁷ | 653 k évén./s⁶ ⁷ |
 | **h5i-db** | exécution persistée complète : balayage, décodage, fork, rejeu, écriture | 280 ms | 713 k évén./s |
-| h5i-db `wide` | idem, virgule fixe 128 bits | 280 ms⁸ | 713 k évén./s⁸ |
+| h5i-db `wide` | idem, virgule fixe 128 bits | 280 ms | 713 k évén./s |
 | NautilusTrader 1.230.0 | objets en mémoire à travers `BacktestEngine.run()` | 767 ms | 261 k évén./s |
 | LEAN `11ba019f6` | du premier callback `Slice` à `OnEndOfAlgorithm`, alimenté par disque | 2033 ms | 98,4 k évén./s |
 
@@ -274,10 +274,9 @@ des comptages plutôt qu'une équivalence de PnL.
 non de 13×. Chiffre dérivé (noyau natif plus coût de frontière mesuré), non
 chronométré directement.
 ⁷ `--features wide`, désactivé par défaut ; voir
-[Précision et plage](https://db.h5i.dev/manual/backtest/). Mis à l'échelle
-depuis la ligne au-dessus par un **1,43×** mesuré, non chronométré directement ;
-méthode dans [RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
-⁸ Mesuré, et inchangé : cette ligne est dominée par les fsync.
+[Précision et plage](https://db.h5i.dev/manual/backtest/). Chiffre dérivé, non
+chronométré directement ; méthode dans
+[RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
 
 ---
 

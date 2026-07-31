@@ -238,7 +238,7 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
 | **h5i-db** | 同じカーネル、戦略はイベントごとの Python コールバック | 278 ms⁶ | 71.9万 events/s⁶ |
 | h5i-db `wide` | 同上、128ビット固定小数点 | 306 ms⁶ ⁷ | 65.3万 events/s⁶ ⁷ |
 | **h5i-db** | 永続化を含む実行全体: スキャン、デコード、fork、リプレイ、書き込み | 280 ms | 71.3万 events/s |
-| h5i-db `wide` | 同上、128ビット固定小数点 | 280 ms⁸ | 71.3万 events/s⁸ |
+| h5i-db `wide` | 同上、128ビット固定小数点 | 280 ms | 71.3万 events/s |
 | NautilusTrader 1.230.0 | メモリ上のオブジェクトが `BacktestEngine.run()` を通る区間 | 767 ms | 26.1万 events/s |
 | LEAN `11ba019f6` | 最初の `Slice` コールバックから `OnEndOfAlgorithm` まで、ディスク供給 | 2,033 ms | 9.84万 events/s |
 
@@ -249,10 +249,8 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
 Nautilus と同じ形。コールバック同士なら差は13倍ではなく3.1倍。導出値
 （ネイティブカーネル＋実測した境界費用）で、直接計測ではない。
 ⁷ `--features wide`。既定では無効。詳しくは
-[精度と範囲](https://db.h5i.dev/manual/backtest/)。直接の計測ではなく、実測した
-**1.43倍**を一つ上の行に掛けた値。手法は
+[精度と範囲](https://db.h5i.dev/manual/backtest/)。直接計測ではなく導出値。手法は
 [RESULTS.md](benchmarks/backtest_compare/RESULTS.md)。
-⁸ 計測した上で、変わらなかった。この行は fsync が支配的。
 
 ---
 

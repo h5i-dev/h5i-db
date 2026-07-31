@@ -258,7 +258,7 @@ Metodología y resultados completos en [benchmarks](benchmarks).
 | **h5i-db** | mismo núcleo, estrategia como callback de Python por evento | 278 ms⁶ | 719 k eventos/s⁶ |
 | h5i-db `wide` | ídem, punto fijo de 128 bits | 306 ms⁶ ⁷ | 653 k eventos/s⁶ ⁷ |
 | **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 280 ms | 713 k eventos/s |
-| h5i-db `wide` | ídem, punto fijo de 128 bits | 280 ms⁸ | 713 k eventos/s⁸ |
+| h5i-db `wide` | ídem, punto fijo de 128 bits | 280 ms | 713 k eventos/s |
 | NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
 | LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
 
@@ -271,10 +271,9 @@ Nautilus. Callback contra callback la distancia es 3,1× y no 13×. Cifra
 derivada (núcleo nativo más el coste de frontera medido), no cronometrada
 directamente.
 ⁷ `--features wide`, desactivado por defecto; véase
-[Precisión y rango](https://db.h5i.dev/manual/backtest/). Escalada desde la fila
-de encima por un **1,43×** medido, no cronometrada directamente; método en
+[Precisión y rango](https://db.h5i.dev/manual/backtest/). Cifra derivada, no
+cronometrada directamente; método en
 [RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
-⁸ Medido, y sin cambio: esta fila la dominan los fsync.
 
 ---
 

@@ -242,7 +242,7 @@ Full methodology and results in [benchmarks](benchmarks).
 | **h5i-db** | same kernel, strategy as a Python callback per event | 278 ms⁶ | 719 k events/s⁶ |
 | h5i-db `wide` | same, 128-bit fixed point | 306 ms⁶ ⁷ | 653 k events/s⁶ ⁷ |
 | **h5i-db** | full persisted run: scan, decode, fork, replay, write | 280 ms | 713 k events/s |
-| h5i-db `wide` | same, 128-bit fixed point | 280 ms⁸ | 713 k events/s⁸ |
+| h5i-db `wide` | same, 128-bit fixed point | 280 ms | 713 k events/s |
 | NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
 | LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
 
@@ -253,10 +253,8 @@ as the column says, and the benchmark checks counts rather than PnL equivalence.
 Nautilus does. Callback against callback the gap is 3.1×, not 13×. Derived
 (native kernel plus measured boundary cost), not timed directly.
 ⁷ `--features wide`, off by default; see
-[Precision and range](https://db.h5i.dev/manual/backtest/). Scaled from the row
-above by a measured **1.43×** rather than timed directly; method in
-[RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
-⁸ Measured, and unchanged: this row is fsync-bound.
+[Precision and range](https://db.h5i.dev/manual/backtest/). Derived, not timed
+directly; method in [RESULTS.md](benchmarks/backtest_compare/RESULTS.md).
 
 ---
 
