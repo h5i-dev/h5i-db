@@ -652,7 +652,24 @@ impl Database {
         }
         self.backend.sync_objects(&spec_paths).await?;
 
-        let mut results = Vec::with_capacity(prepared.len());
+        // The v0 manifests are published in one barrier, not one commit each.
+        //
+        // `commit_manifest_locked` is the right shape when a table has a
+        // history to contend with: revalidate HEAD, fsync the manifest, swap.
+        // A create has none of that to defend against. The `table_id` was
+        // generated a few lines above, so no other writer can name it; the
+        // sequence is always 0, so there is no parent to revalidate against;
+        // and the manifest references no segments. Those five fsyncs were
+        // buying isolation from a writer that cannot exist.
+        //
+        // Write every manifest, sync them together, then swap the heads. The
+        // crash-safety order is unchanged -- no HEAD points at a manifest
+        // that is not durable -- and a crash between the two leaves
+        // unreachable manifests with no catalog entry, which is exactly what
+        // the per-table path left behind too.
+        self.hook("pre_publish")?;
+        let mut published = Vec::with_capacity(prepared.len());
+        let mut manifest_paths: Vec<ObjPath> = Vec::with_capacity(prepared.len());
         for (name, table_id, spec) in &prepared {
             let mut manifest = VersionManifest {
                 format: layout::FORMAT_VERSION,
@@ -673,21 +690,72 @@ impl Database {
                 segments: vec![],
             };
             manifest.recompute_rollups();
-            results.push(
-                self.commit_manifest_locked(
+            let bytes = manifest.to_bytes()?;
+            let checksum = crate::util::checksum_hex(&bytes);
+            let path = layout::manifest_path(*table_id, manifest.sequence);
+            if self.backend.local_root.is_some() {
+                self.backend.put(&path, bytes.into()).await?;
+            } else {
+                crate::backend_object::create_manifest_slot(
+                    &self.backend.store,
                     name,
                     *table_id,
-                    None,
-                    &mut manifest,
-                    0,
-                    CommitInputs {
-                        segment_limit: Some(spec.max_segments_per_manifest),
-                        parent_committed_at_ns: None,
-                    },
+                    manifest.sequence,
+                    bytes,
                 )
-                .await?,
-            );
+                .await?;
+            }
+            manifest_paths.push(path);
+            published.push((manifest, checksum));
         }
+        let swaps: Vec<crate::backend::HeadSwap> = prepared
+            .iter()
+            .zip(&published)
+            .map(
+                |((name, table_id, _), (manifest, checksum))| crate::backend::HeadSwap {
+                    table_id: *table_id,
+                    table_name: name.clone(),
+                    // A create: there must be no HEAD to displace.
+                    expected: None,
+                    new_head: Head {
+                        format: layout::FORMAT_VERSION,
+                        table_id: *table_id,
+                        sequence: manifest.sequence,
+                        manifest_checksum: checksum.clone(),
+                    },
+                },
+            )
+            .collect();
+
+        let backend = self.backend.clone();
+        let hook = self.commit_hook.clone();
+        let publish = Box::pin(async move {
+            if let Some(h) = &hook {
+                h("post_manifest_put")?;
+            }
+            backend.sync_objects(&manifest_paths).await?;
+            if let Some(h) = &hook {
+                h("pre_head_swap")?;
+            }
+            Ok(())
+        });
+        self.backend.heads.commit_batch(&swaps, publish).await?;
+        self.hook("post_head_swap")?;
+
+        let results: Vec<CommitResult> = prepared
+            .iter()
+            .zip(&published)
+            .map(|((name, _, _), (manifest, _))| CommitResult {
+                table: name.clone(),
+                sequence: manifest.sequence,
+                op: manifest.op.to_string(),
+                rows_total: manifest.rows,
+                segments_total: manifest.segments.len(),
+                segments_added: 0,
+                segments_deduped: 0,
+                committed_at_ns: manifest.committed_at_ns,
+            })
+            .collect();
 
         // Registration last, and into the fork's catalog when we are in one:
         // a table created inside a fork is invisible to the base database and
@@ -2169,18 +2237,26 @@ impl Database {
             .sync_objects(std::slice::from_ref(&journal_path))
             .await?;
 
+        // The journal is durable, so the swaps are a roll-forward the
+        // recovery scan can finish. Batched, they share the HEAD flushes the
+        // way the manifests above already share theirs.
+        let swaps: Vec<crate::backend::HeadSwap> = staged
+            .iter()
+            .zip(&new_heads)
+            .map(|(commit, new_head)| crate::backend::HeadSwap {
+                table_id: commit.entry.table_id,
+                table_name: commit.entry.name.clone(),
+                expected: Some(commit.head.tag.clone()),
+                new_head: new_head.clone(),
+            })
+            .collect();
+        self.backend
+            .heads
+            .commit_batch(&swaps, Box::pin(std::future::ready(Ok(()))))
+            .await?;
+
         let mut results = Vec::with_capacity(staged.len());
-        for (commit, new_head) in staged.iter().zip(new_heads) {
-            self.backend
-                .heads
-                .commit(
-                    commit.entry.table_id,
-                    &commit.entry.name,
-                    Some(&commit.head.tag),
-                    &new_head,
-                    Box::pin(async { Ok(()) }),
-                )
-                .await?;
+        for (commit, _new_head) in staged.iter().zip(new_heads) {
             results.push(CommitResult {
                 table: commit.entry.name.clone(),
                 sequence: commit.manifest.sequence,

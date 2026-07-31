@@ -368,7 +368,23 @@ where
     // state that spans rows, and the grouping is what makes a truncated
     // snapshot detectable. Trades and funding stream, which is where the
     // volume is on a tick day.
-    let book_events = store::read_book_events(db, spec.read_at.clone(), spec.window).await?;
+    //
+    // The run's own tables are created alongside that read rather than
+    // after the replay. Creating them is almost pure fsync latency -- five
+    // specs, five empty manifests, five HEADs, five catalog entries, and
+    // nothing to compute -- and it depends on nothing the replay produces,
+    // so `write_run` doing it at the end put a metadata barrier in series
+    // with work that could have hidden it. Reading the book is the one
+    // phase reliably long enough to hide it behind.
+    //
+    // `write_run` still creates them, because it is called directly
+    // elsewhere and must stand alone. By then they exist, so that call
+    // costs one catalog listing and commits nothing.
+    let (_, book_events) = futures::future::try_join(
+        store::create_run_tables(db),
+        store::read_book_events(db, spec.read_at.clone(), spec.window),
+    )
+    .await?;
     let trades = store::trade_source(db, spec.read_at.clone(), spec.window).await?;
     // Funding only exists for perpetuals; the reader treats an absent
     // table as no funding rather than as a failure.

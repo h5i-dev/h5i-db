@@ -1778,6 +1778,7 @@ dependencies = [
  "arrow",
  "arrow-schema",
  "blake3",
+ "futures",
  "h5i-db-core",
  "rand 0.9.5",
  "serde_json",

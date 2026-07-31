@@ -10,6 +10,7 @@ description = "Deterministic event-driven backtesting on versioned h5i-db data"
 [dependencies]
 h5i-db-core = { workspace = true }
 arrow = { workspace = true }
+futures = { workspace = true }
 arrow-schema = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
