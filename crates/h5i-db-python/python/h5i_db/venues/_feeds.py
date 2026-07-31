@@ -252,12 +252,11 @@ def predexon_book_from_snapshots(
     that Kalshi quotes sub-cent; the loss is the vendor's, not this function's,
     and it is worth knowing before pricing anything at the touch.
 
-    Predexon publishes one YES book with bids and asks, while the outcome-major
-    tables here give each outcome its own book of bids. A YES ask at 91 cents
-    is a NO bid at 9 cents, the same resting interest described from the other
-    side, so asks are folded into outcome 1 at `100 - price`. That keeps this
-    source directly comparable with `KALSHI_PMXT_LAYOUT`, which is the point of
-    having two sources for one venue.
+    Predexon already publishes what the canonical tables want: one YES book
+    with both sides, which is also what the live Rust decoder produces and what
+    `KALSHI_PMXT_LAYOUT` folds its two bid books into. So asks stay asks. A
+    one-sided book would be worse than merely inconsistent: nothing could fill
+    a buy against it, and the run would cancel orders rather than fail.
 
     `sequence` is deliberately not read. It looks like a per-market update
     counter and is not one: over a single ticker's day it steps by a median of
@@ -275,18 +274,21 @@ def predexon_book_from_snapshots(
     unknown: set[str] = set()
 
     def emit(
-        stamp: int, instrument: str, outcome: int, levels: list[tuple[float, float]]
+        stamp: int,
+        instrument: str,
+        outcome: int,
+        levels: list[tuple[str, float, float]],
     ) -> None:
         nonlocal event_index
         event_index += 1
-        payload = levels or [(None, None)]
-        for position, (price, size) in enumerate(payload):
+        payload = levels or [(None, None, None)]
+        for position, (side, price, size) in enumerate(payload):
             rows["ts_init"].append(stamp)
             rows["ts_event"].append(stamp)
             rows["instrument_id"].append(instrument)
             rows["outcome"].append(outcome)
             rows["action"].append("snapshot")
-            rows["side"].append("buy" if price is not None else None)
+            rows["side"].append(side)
             rows["price"].append(price)
             rows["size"].append(size)
             rows["event_index"].append(event_index)
@@ -309,19 +311,15 @@ def predexon_book_from_snapshots(
             cadence.setdefault(ticker, []).append(stamp_ns - previous)
         last_stamp[ticker] = stamp_ns
 
-        yes = [
-            (float(level["price"]) / 100.0, float(level["size"]))
-            for level in (record.get("yes_bids") or [])
+        levels = [
+            (side, float(level["price"]) / 100.0, float(level["size"]))
+            for side, field in (("buy", "yes_bids"), ("sell", "yes_asks"))
+            for level in (record.get(field) or [])
             if level.get("price") is not None and level.get("size") is not None
         ]
-        no = [
-            ((100.0 - float(level["price"])) / 100.0, float(level["size"]))
-            for level in (record.get("yes_asks") or [])
-            if level.get("price") is not None and level.get("size") is not None
-        ]
-        emit(stamp_ns, spec.instrument_id, 0, yes)
-        if spec.outcome_count > 1:
-            emit(stamp_ns, spec.instrument_id, 1, no)
+        # Both sides in one event: a snapshot that replaced only the bids would
+        # leave asks standing from an earlier instant.
+        emit(stamp_ns, spec.instrument_id, 0, levels)
 
     if report is not None:
         spans = sorted(span for gaps in cadence.values() for span in gaps)

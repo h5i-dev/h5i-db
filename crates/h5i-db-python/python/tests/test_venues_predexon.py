@@ -35,22 +35,23 @@ def _snapshot(timestamp_ms, sequence, yes_bids, yes_asks):
     }
 
 
-def test_a_yes_ask_is_stored_as_the_no_bid_it_already_is():
+def test_the_yes_book_keeps_both_of_its_sides():
     book = venues.predexon_book_from_snapshots(
         [_snapshot(1_785_000_000_000, 1, [(90, 494)], [(91, 1196)])],
         markets=[_spec()],
     )
     rows = book.to_pylist()
-    yes = [r for r in rows if r["outcome"] == 0]
-    no = [r for r in rows if r["outcome"] == 1]
 
-    # Cents become dollars, and resting interest offered as a YES ask at 91 is
-    # the same interest bid on NO at 9. Storing it as an ask on outcome 0 would
-    # make this source incomparable with the archive layout for the same venue.
-    assert [(r["price"], r["size"]) for r in yes] == [(0.90, 494.0)]
-    assert [(r["price"], r["size"]) for r in no] == [(0.09, 1196.0)]
-    # Every outcome quotes bids, which is what outcome-major means.
-    assert {r["side"] for r in rows} == {"buy"}
+    # Cents become dollars and the sides stay as the vendor gives them, which
+    # is already the shape the live decoder produces. Splitting the ask off
+    # into a second outcome would leave a book nothing can buy against.
+    assert {r["outcome"] for r in rows} == {0}
+    assert [(r["price"], r["size"]) for r in rows if r["side"] == "buy"] == [
+        (0.90, 494.0)
+    ]
+    assert [(r["price"], r["size"]) for r in rows if r["side"] == "sell"] == [
+        (0.91, 1196.0)
+    ]
 
 
 def test_each_record_is_a_whole_book_so_nothing_accumulates():
@@ -67,14 +68,15 @@ def test_each_record_is_a_whole_book_so_nothing_accumulates():
     # than corrupting every level after it, which is the reason to prefer this
     # source over an archive of relative changes.
     assert {r["action"] for r in rows} == {"snapshot"}
-    # Two records, two outcomes each.
-    assert len({r["event_index"] for r in rows}) == 4
+    # One event per record, carrying that record's whole two-sided book.
+    assert len({r["event_index"] for r in rows}) == 2
     groups: dict[int, list] = {}
     for row in rows:
         groups.setdefault(row["event_index"], []).append(row)
     assert all(sum(1 for r in rs if r["is_last"]) == 1 for rs in groups.values())
-    # One event never mixes outcomes.
+    # One event never mixes outcomes, and carries both sides of the one it has.
     assert all(len({r["outcome"] for r in rs}) == 1 for rs in groups.values())
+    assert all({r["side"] for r in rs} == {"buy", "sell"} for rs in groups.values())
 
 
 def test_a_wild_sequence_field_produces_no_phantom_gaps():

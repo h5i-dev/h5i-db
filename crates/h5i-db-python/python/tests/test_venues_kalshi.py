@@ -109,7 +109,7 @@ def _ingest(rows, tmp: Path):
     return db, report
 
 
-def test_one_snapshot_row_becomes_one_event_per_outcome():
+def test_two_bid_books_become_one_two_sided_book():
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         db, _ = _ingest(
@@ -117,15 +117,75 @@ def test_one_snapshot_row_becomes_one_event_per_outcome():
         )
         book = db.sql("SELECT * FROM book_deltas ORDER BY event_index, is_last").to_pandas()
 
-        # The row holds two books, so it is two events, never one mixed event.
+        # A NO bid at 0.58 is a YES ask at 0.42: the same resting interest,
+        # priced from the other side. Keeping the two as separate one-sided
+        # books leaves a market with no asks at all, and a backtest over it
+        # cancels every buy instead of filling one.
         assert set(book.action) == {"snapshot"}
-        assert (book.groupby("event_index").outcome.nunique() == 1).all()
-        assert set(book.outcome) == {0, 1}
-        # Both outcomes are quoted as bids: an ask on YES is a bid on NO, and
-        # calling one of them an ask would double-count the same resting order.
-        assert set(book.side) == {"buy"}
-        assert sorted(book[book.outcome == 1].price.tolist()) == [0.58]
+        assert set(book.outcome) == {0}
+        assert sorted(book[book.side == "buy"].price.tolist()) == [0.40, 0.41]
+        assert book[book.side == "sell"].price.tolist() == [0.42]
+        # Both sides ship as one event: replacing only the bids would leave
+        # asks standing from an earlier instant.
+        assert book.event_index.nunique() == 1
         assert (book.groupby("event_index").is_last.sum() == 1).all()
+
+
+def test_a_buy_can_actually_fill_against_the_reconstructed_book():
+    """The regression this shape exists to prevent.
+
+    Two one-sided books look plausible in a table and fail silently in a run:
+    with no ask side an order cannot fill, so it is cancelled and the strategy
+    reads as having chosen not to trade.
+    """
+    import pyarrow as pa
+
+    from h5i_db import backtest
+
+    second = 1_000_000_000
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        base_ns = BASE_MS * 1_000_000
+        rows = [
+            _snapshot(BASE_MS, [(0.40, 500.0)], [(0.58, 500.0)]),
+            # Deltas carry the stream forward, which is what a seeded feed
+            # looks like: one base and then changes on the venue clock.
+            _delta(BASE_MS + 30_000, BASE_MS * 1000 + 30_000_000, "yes", 0.40, 100.0),
+            _delta(BASE_MS + 90_000, BASE_MS * 1000 + 90_000_000, "no", 0.58, 100.0),
+        ]
+        db, _ = _ingest(rows, root)
+        venues.write_markets(db, [_spec()])
+        db.snapshot("loaded", tables=["instruments", "book_deltas"])
+        backtest.create_signal_table(db, "signals")
+        db.append(
+            "signals",
+            backtest.signal_table(
+                [
+                    {
+                        "ts": base_ns + 60 * second,
+                        "instrument_id": TICKER,
+                        "outcome": 0,
+                        "side": "buy",
+                        "quantity": 10.0,
+                        "tag": "yes",
+                    }
+                ]
+            ),
+        )
+        result = backtest.execute(
+            db,
+            backtest.BacktestConfig(
+                run_id="fill",
+                data=backtest.DataConfig(signals="signals", snapshot="loaded"),
+                portfolio=backtest.PortfolioConfig(starting_cash=1_000.0),
+            ),
+        )
+        fills = result.fills.to_pandas()
+
+        assert len(fills) == 1
+        # It lifted the ask the NO bids imply, 1 - 0.58, and not the bid.
+        assert float(fills.price.iloc[0]) == pytest.approx(0.42)
+        db.close()
 
 
 def test_a_delta_is_a_change_in_size_not_a_new_size():
@@ -216,10 +276,10 @@ def test_divergence_against_later_snapshots_is_measured_and_reported():
         )
         divergence = [g for g in report.gaps if g["reason"] == "snapshot_divergence"]
         assert divergence
-        # Two probes per snapshot row (one per outcome); the YES book is
-        # reproduced once and missed once, and both empty NO books match.
-        assert divergence[0]["probes"] == 4
-        assert divergence[0]["reproduced"] == 3
+        # One probe per later snapshot row, since a row is one book. The first
+        # agrees with the reconstruction at 125, the second does not.
+        assert divergence[0]["probes"] == 2
+        assert divergence[0]["reproduced"] == 1
         assert divergence[0]["unreproduced"] == 1
 
 

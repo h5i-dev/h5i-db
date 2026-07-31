@@ -56,11 +56,18 @@ class LevelLayout:
     columns of structs, one row per book state. `flat` means one row per level,
     with the side in its own column. `payload` means the whole event is a JSON
     string in one column, which is what a websocket capture written straight to
-    Parquet looks like. `outcome_nested` means one list column *per outcome*,
-    each holding that outcome's own book, which is how a venue that quotes each
-    side of a binary market separately describes it: there is no ask column,
-    because an ask on one outcome is a bid on the other. All four reduce to the
-    same canonical rows.
+    Parquet looks like.
+
+    `binary_complement` is how a venue that quotes both sides of a binary
+    market describes it: two columns of *bids*, one per outcome, and no ask
+    column at all, because a bid on one outcome is an ask on the other. It is
+    folded into a single two-sided book here rather than stored as two
+    one-sided ones. That is not a stylistic choice: a book with only bids
+    cannot fill a buy, so a backtest over it can only ever sell, and it fails by
+    cancelling orders rather than by raising. `asks_column` names the
+    complementary outcome's bids, whose prices become asks at `1 - price`.
+
+    All four reduce to the same canonical rows.
     """
 
     style: str = "nested"
@@ -73,24 +80,30 @@ class LevelLayout:
     size_column: str = "size"
     bid_values: tuple[str, ...] = ("buy", "bid", "b")
     ask_values: tuple[str, ...] = ("sell", "ask", "offer", "s", "a")
-    #: `outcome_nested` only: the level column for each outcome, in outcome
-    #: order, so index i is outcome i.
-    outcome_columns: tuple[str, ...] = ()
-    #: The canonical side those per-outcome columns hold. A venue that quotes
-    #: both outcomes separately is publishing bids on each.
-    outcome_side: str = "buy"
+    #: What one contract pays when its outcome wins, which is the total a
+    #: complementary pair costs and so the number a price is complemented
+    #: against. One dollar everywhere so far, but stated rather than assumed.
+    complement_total: float = 1.0
 
     def __post_init__(self) -> None:
-        if self.style not in ("nested", "flat", "payload", "outcome_nested"):
+        if self.style not in ("nested", "flat", "payload", "binary_complement"):
             raise ValueError(
-                "level style must be 'nested', 'flat', 'payload' or 'outcome_nested'"
+                "level style must be 'nested', 'flat', 'payload' or "
+                "'binary_complement'"
             )
-        if self.style == "outcome_nested" and len(self.outcome_columns) < 2:
+        if self.style == "binary_complement" and not (
+            self.bids_column and self.asks_column
+        ):
             raise ValueError(
-                "an outcome_nested layout needs outcome_columns, one per outcome"
+                "a binary_complement layout needs bids_column and asks_column, "
+                "the two outcomes' bid books"
             )
-        if self.outcome_side not in ("buy", "sell"):
-            raise ValueError("outcome_side must be 'buy' or 'sell'")
+        if self.complement_total <= 0:
+            raise ValueError("complement_total must be positive")
+
+    def complement(self, price: float) -> float:
+        """The same resting interest, priced from the other outcome's side."""
+        return self.complement_total - price
 
     def side_of(self, raw: Any) -> str:
         text = str(raw).strip().lower()
@@ -197,20 +210,13 @@ class ArchiveLayout:
                 "relative delta feed, where a snapshot supplies the base the "
                 "changes accumulate onto"
             )
-        if self.levels.style == "outcome_nested" and not self.outcome_labels:
-            raise ValueError(
-                f"{self.name}: an outcome_nested layout needs outcome_labels, "
-                "because a delta row names its outcome rather than carrying a "
-                "per-outcome token"
-            )
-        if (
-            self.levels.style == "outcome_nested"
-            and len(self.outcome_labels) != len(self.levels.outcome_columns)
+        if self.levels.style == "binary_complement" and not (
+            self.levels.bid_values and self.levels.ask_values
         ):
             raise ValueError(
-                f"{self.name}: {len(self.levels.outcome_columns)} outcome columns "
-                f"for {len(self.outcome_labels)} outcome labels; index i of each "
-                "must describe the same outcome"
+                f"{self.name}: a binary_complement layout needs bid_values and "
+                "ask_values naming which outcome a delta row belongs to, "
+                "because a delta names its outcome rather than carrying a token"
             )
 
     @property
@@ -234,11 +240,11 @@ class ArchiveLayout:
             wanted.append(self.payload_column)  # type: ignore[arg-type]
         elif self.levels.style == "nested":
             wanted += [self.levels.bids_column, self.levels.asks_column]
-        elif self.levels.style == "outcome_nested":
-            # Both the per-outcome book columns and the flat delta columns: an
-            # outcome-major feed carries snapshots and deltas in one file, in
-            # different columns of the same row.
-            wanted += list(self.levels.outcome_columns)
+        elif self.levels.style == "binary_complement":
+            # Both outcomes' bid books and the flat delta columns: this shape
+            # carries snapshots and deltas in one file, in different columns of
+            # the same row.
+            wanted += [self.levels.bids_column, self.levels.asks_column]
             wanted += [
                 self.levels.side_column,
                 self.levels.price_column,
@@ -356,8 +362,11 @@ OPINION_PMXT_LAYOUT = _pmxt_clob_layout("opinion-pmxt")
 # rather than a variation on the Polymarket feed, and each is measured from the
 # files rather than taken from the vendor's description:
 #
-#   * The book is outcome-major. A row carries `yes_bids` and `no_bids`, two
-#     books of bids, because a Kalshi ask on YES is a bid on NO.
+#   * A row carries `yes_bids` and `no_bids`, two books of bids, because a
+#     Kalshi ask on YES is a bid on NO. They are folded into one two-sided book
+#     on the YES outcome, matching what the live Rust decoder produces, so an
+#     archive replay and a live replay agree. Storing them as two one-sided
+#     books instead leaves a market with no asks, which cancels every buy.
 #   * `delta` is a signed change in resting size, not a new size. Replaying it
 #     with exact decimal arithmetic reproduces a later snapshot exactly for
 #     about half of the snapshot pairs in an hour; the rest fail because the
@@ -386,9 +395,13 @@ KALSHI_PMXT_LAYOUT = ArchiveLayout(
     delta_relative=True,
     snapshot_role="seed",
     levels=LevelLayout(
-        style="outcome_nested",
-        outcome_columns=("yes_bids", "no_bids"),
-        outcome_side="buy",
+        style="binary_complement",
+        # Two books of bids. The NO bids are the YES asks, at one minus their
+        # price, which is what makes this a single two-sided book.
+        bids_column="yes_bids",
+        asks_column="no_bids",
+        bid_values=("yes",),
+        ask_values=("no",),
         # The struct fields are positional in the file and literally named
         # "1" and "2"; price first, size second.
         price_field="1",
@@ -617,7 +630,10 @@ class _Pending:
     instrument_id: str
     outcome: int
     kind: str
-    levels: tuple[tuple[Decimal, Decimal], ...]
+    #: `(side, price, size)` per level. A snapshot carries both sides of the
+    #: book in one entry, because replacing half a book would leave the other
+    #: half standing from an earlier instant.
+    levels: tuple[tuple[str, Decimal, Decimal], ...]
     sequence: int
 
     @property
@@ -654,14 +670,16 @@ def _levels_exact(value: Any, layout: LevelLayout) -> list[tuple[Decimal, Decima
 _FINGERPRINT_MASK = (1 << 64) - 1
 
 
-def _level_hash(price: Decimal, size: Decimal) -> int:
+def _level_hash(side: str, price: Decimal, size: Decimal) -> int:
     """A stable hash of one price level.
 
     Summed across a book it gives an order-independent fingerprint that can be
     updated one level at a time, which is what makes it affordable to ask after
-    every single change whether the book now matches a vendor snapshot.
+    every single change whether the book now matches a vendor snapshot. The
+    side is part of the hash because a bid and an ask can rest at one price and
+    are not the same resting interest.
     """
-    return zlib.crc32(f"{price}:{size}".encode("utf-8"))
+    return zlib.crc32(f"{side}:{price}:{size}".encode("utf-8"))
 
 
 def _reconstruct_events(
@@ -713,9 +731,11 @@ def _reconstruct_events(
             continue
         if item.key in seeded_keys:
             fingerprint = 0
-            for price, size in item.levels:
+            for side, price, size in item.levels:
                 if size != 0:
-                    fingerprint = (fingerprint + _level_hash(price, size)) & _FINGERPRINT_MASK
+                    fingerprint = (
+                        fingerprint + _level_hash(side, price, size)
+                    ) & _FINGERPRINT_MASK
             bucket = probe_counts.setdefault(item.key, {})
             bucket[fingerprint] = bucket.get(fingerprint, 0) + 1
             probe_total += 1
@@ -732,7 +752,9 @@ def _reconstruct_events(
             item.ts_event = start - 1
         emit.append(item)
 
-    state: dict[tuple[str, int], dict[Decimal, Decimal]] = {}
+    # One book per instrument and outcome, keyed inside by `(side, price)`: a
+    # bid and an ask can rest at the same price and are different interest.
+    state: dict[tuple[str, int], dict[tuple[str, Decimal], Decimal]] = {}
     marks: dict[tuple[str, int], int] = {}
     seen: dict[tuple[str, int], set[int]] = {}
     unseeded = 0
@@ -746,14 +768,18 @@ def _reconstruct_events(
 
     for item in sorted(emit, key=lambda row: (row.ts_init, row.ts_event, row.sequence)):
         if item.kind == "snapshot":
-            book = {price: size for price, size in item.levels if size != 0}
+            book = {
+                (side, price): size for side, price, size in item.levels if size != 0
+            }
             state[item.key] = book
-            marks[item.key] = 0
-            for price, size in book.items():
-                marks[item.key] = (
-                    marks[item.key] + _level_hash(price, size)
-                ) & _FINGERPRINT_MASK
+            mark = 0
+            for (side, price), size in book.items():
+                mark = (mark + _level_hash(side, price, size)) & _FINGERPRINT_MASK
+            marks[item.key] = mark
             observe(item.key)
+            # Both sides go out as one event. A snapshot that replaced only the
+            # bids would leave asks standing from an earlier instant, which is
+            # a book that never existed.
             accumulator.book_event(
                 ts_event=item.ts_event,
                 ts_init=item.ts_init,
@@ -761,8 +787,8 @@ def _reconstruct_events(
                 outcome=item.outcome,
                 action="snapshot",
                 levels=[
-                    (layout.levels.outcome_side, float(price), float(size))
-                    for price, size in item.levels
+                    (side, float(price), float(size))
+                    for side, price, size in item.levels
                 ],
             )
             continue
@@ -773,8 +799,8 @@ def _reconstruct_events(
             unseeded += 1
             continue
         mark = marks.get(item.key, 0)
-        for price, change in item.levels:
-            previous = book.get(price, Decimal(0))
+        for side, price, change in item.levels:
+            previous = book.get((side, price), Decimal(0))
             updated = previous + change
             if updated < 0:
                 # Only reachable when a message was lost, which this feed gives
@@ -782,13 +808,13 @@ def _reconstruct_events(
                 clamped += 1
                 updated = Decimal(0)
             if previous != 0:
-                mark = (mark - _level_hash(price, previous)) & _FINGERPRINT_MASK
+                mark = (mark - _level_hash(side, price, previous)) & _FINGERPRINT_MASK
             if updated == 0:
-                book.pop(price, None)
+                book.pop((side, price), None)
                 action, size = "delete", Decimal(0)
             else:
-                book[price] = updated
-                mark = (mark + _level_hash(price, updated)) & _FINGERPRINT_MASK
+                book[(side, price)] = updated
+                mark = (mark + _level_hash(side, price, updated)) & _FINGERPRINT_MASK
                 action, size = "set", updated
             marks[item.key] = mark
             observe(item.key)
@@ -798,7 +824,7 @@ def _reconstruct_events(
                 instrument_id=item.instrument_id,
                 outcome=item.outcome,
                 action=action,
-                levels=[(layout.levels.outcome_side, float(price), float(size))],
+                levels=[(side, float(price), float(size))],
             )
 
     if probe_total:
@@ -870,7 +896,7 @@ def ingest_archive(
 
     # An outcome-major feed names the instrument and picks the outcome with a
     # label, so it needs no per-outcome token and must not demand one.
-    by_outcome_column = layout.levels.style == "outcome_nested"
+    by_outcome_column = layout.levels.style == "binary_complement"
     tokens = token_index(markets)
     if not tokens and not by_outcome_column:
         raise ValueError(
@@ -880,10 +906,6 @@ def ingest_archive(
     by_instrument = {spec.instrument_id: spec for spec in markets}
     wanted_tokens = pa.array(sorted(tokens), pa.string())
     wanted_instruments = pa.array(sorted(by_instrument), pa.string())
-    outcome_index_of = {
-        str(label).strip().lower(): index
-        for index, label in enumerate(layout.outcome_labels)
-    }
     pending: list[_Pending] = []
     sequence = 0
 
@@ -975,7 +997,8 @@ def ingest_archive(
         )
         arrivals = columns.get("__arrival_ns")
         outcome_levels = {
-            name: columns.get(name) for name in layout.levels.outcome_columns
+            name: columns.get(name)
+            for name in (layout.levels.bids_column, layout.levels.asks_column)
         }
         trade_ids = (
             columns.get(layout.trade_id_column) if layout.trade_id_column else None
@@ -1041,37 +1064,42 @@ def ingest_archive(
                     continue
 
                 if kind == "snapshot":
-                    # One row carries every outcome's book, so it becomes one
-                    # event per outcome rather than one event.
-                    for index, column_name in enumerate(layout.levels.outcome_columns):
-                        if index >= spec.outcome_count:
-                            continue
+                    # One row carries both outcomes' bids, which together are
+                    # one two-sided book: the other outcome's bids are this
+                    # one's asks, at the complement of their price.
+                    levels: list[tuple[str, Decimal, Decimal]] = []
+                    for side, column_name in (
+                        ("buy", layout.levels.bids_column),
+                        ("sell", layout.levels.asks_column),
+                    ):
                         source = outcome_levels.get(column_name)
-                        levels = _levels_exact(
+                        parsed = _levels_exact(
                             source[row] if source is not None else None, layout.levels
                         )
-                        if layout.max_levels is not None and len(levels) > layout.max_levels:
-                            levels.sort(
-                                key=lambda level: level[0],
-                                reverse=layout.levels.outcome_side == "buy",
-                            )
-                            dropped_levels += len(levels) - layout.max_levels
-                            levels = levels[: layout.max_levels]
-                        ts_event, ts_init = stamps_for(row, spec.instrument_id, index)
-                        loaded_low = ts_event if loaded_low is None else min(loaded_low, ts_event)
-                        loaded_high = ts_event if loaded_high is None else max(loaded_high, ts_event)
-                        sequence += 1
-                        pending.append(
-                            _Pending(
-                                ts_init=ts_init,
-                                ts_event=ts_event,
-                                instrument_id=spec.instrument_id,
-                                outcome=index,
-                                kind="snapshot",
-                                levels=tuple(levels),
-                                sequence=sequence,
-                            )
+                        if side == "sell":
+                            total = Decimal(str(layout.levels.complement_total))
+                            parsed = [(total - price, size) for price, size in parsed]
+                        if layout.max_levels is not None and len(parsed) > layout.max_levels:
+                            # Best first: highest bids, lowest asks.
+                            parsed.sort(key=lambda level: level[0], reverse=side == "buy")
+                            dropped_levels += len(parsed) - layout.max_levels
+                            parsed = parsed[: layout.max_levels]
+                        levels += [(side, price, size) for price, size in parsed]
+                    ts_event, ts_init = stamps_for(row, spec.instrument_id, 0)
+                    loaded_low = ts_event if loaded_low is None else min(loaded_low, ts_event)
+                    loaded_high = ts_event if loaded_high is None else max(loaded_high, ts_event)
+                    sequence += 1
+                    pending.append(
+                        _Pending(
+                            ts_init=ts_init,
+                            ts_event=ts_event,
+                            instrument_id=spec.instrument_id,
+                            outcome=0,
+                            kind="snapshot",
+                            levels=tuple(levels),
+                            sequence=sequence,
                         )
+                    )
                 elif kind == "delta":
                     if flat_side is None or flat_price is None or flat_size is None:
                         raise ValueError(
@@ -1081,10 +1109,11 @@ def ingest_archive(
                             f"{layout.levels.size_column} columns; {path} has none"
                         )
                     label = str(flat_side[row]).strip().lower()
-                    index = outcome_index_of.get(label)
-                    if index is None or index >= spec.outcome_count:
-                        # The side names an outcome this market does not have.
-                        # Guessing which one it meant would attribute one
+                    try:
+                        side = layout.levels.side_of(label)
+                    except ValueError:
+                        # The row names an outcome this layout does not know.
+                        # Guessing which side it meant would attribute one
                         # side's depth to the other.
                         unknown_events[f"outcome:{label}"] = (
                             unknown_events.get(f"outcome:{label}", 0) + 1
@@ -1093,7 +1122,10 @@ def ingest_archive(
                     if flat_price[row] is None or flat_size[row] is None:
                         unparseable += 1
                         continue
-                    ts_event, ts_init = stamps_for(row, spec.instrument_id, index)
+                    price = Decimal(str(flat_price[row]))
+                    if side == "sell":
+                        price = Decimal(str(layout.levels.complement_total)) - price
+                    ts_event, ts_init = stamps_for(row, spec.instrument_id, 0)
                     loaded_low = ts_event if loaded_low is None else min(loaded_low, ts_event)
                     loaded_high = ts_event if loaded_high is None else max(loaded_high, ts_event)
                     sequence += 1
@@ -1102,11 +1134,12 @@ def ingest_archive(
                             ts_init=ts_init,
                             ts_event=ts_event,
                             instrument_id=spec.instrument_id,
-                            outcome=index,
+                            outcome=0,
                             kind="delta",
                             levels=(
                                 (
-                                    Decimal(str(flat_price[row])),
+                                    side,
+                                    price,
                                     Decimal(str(flat_size[row])),
                                 ),
                             ),

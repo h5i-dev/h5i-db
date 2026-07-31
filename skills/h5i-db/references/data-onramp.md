@@ -144,7 +144,7 @@ user agent, which reads exactly like a blocked network and is not one. Set any
 
 ## Kalshi
 
-Kalshi's hourly archive is outcome-major and its deltas are signed changes in
+Kalshi's hourly archive quotes both outcomes as bids, and its deltas are signed changes in
 resting size, so it needs its own layout. Everything else is the same three
 steps. A market needs no `tokens=`: the files name the instrument and pick the
 outcome with a label, so the outcome order comes from `outcome_labels`.
@@ -277,3 +277,16 @@ the measured median and worst gap between samples. The worst gap is the number
 that matters. The vendor's `sequence` field is deliberately unread, because it
 is not a per-market counter (it steps by a median of 45, jumps by millions, and
 runs backwards), so differencing it invents holes that are not there.
+
+### One book, two sides
+
+Kalshi publishes `yes_bids` and `no_bids`, two books of bids, because an ask on
+YES is a bid on NO. Both the archive layout and the Predexon reader fold them
+into a single two-sided book on outcome 0, at `1 - price` for the NO side,
+which is what the live Rust decoder already produced. A capture, an archive and
+a Predexon pull therefore give the same canonical shape.
+
+That fold is not cosmetic. Storing the two as separate one-sided books leaves a
+market with no asks at all, and an order that cannot fill is **cancelled**
+rather than rejected, so the run completes and the strategy simply reads as
+having declined to trade.
