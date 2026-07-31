@@ -247,16 +247,11 @@ Full methodology and results in [benchmarks](benchmarks).
 Medians of three fresh-process runs after one warm-up; each adapter verifies it
 saw all 200k events and submitted all 200 orders. The measured boundaries differ,
 as the column says, and the benchmark checks counts rather than PnL equivalence.
-Both footnotes are worked through in
-[`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
-
 ⁶ Re-measured two days later, after batched metadata commits. The pre-change
-  revision measured 386 ms that day against 331 ms originally, so the machine
-  was slower, not faster.
-
-⁷ The other rows never call Python; this one crosses into it per event, as
-  Nautilus does. Callback against callback the gap is 3.1×, not 13×. Derived
-  (native kernel plus measured boundary cost), not timed directly.
+revision measured 386 ms that day against 331 ms originally, so the machine
+was slower, not faster. ⁷ The other rows never call Python; this one crosses into it per event, as
+Nautilus does. Callback against callback the gap is 3.1×, not 13×. Derived
+(native kernel plus measured boundary cost), not timed directly.
 
 ---
 
