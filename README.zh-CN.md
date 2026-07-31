@@ -229,22 +229,16 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 | LEAN `11ba019f6` | 从首个 `Slice` 回调到 `OnEndOfAlgorithm`，数据来自磁盘 | 2033 ms | 9.84 万 事件/秒 |
 
 先热身一次，之后每次都用全新进程测三遍取中位数；每个适配器都会验证自己确实看到了
-20 万个事件、发出了 200 笔订单。各家测量的边界并不相同，就是表中那一列写的意思：
-这份基准校验的是事件数和订单数，不是 PnL 的等价性；而且 Nautilus 每来一个报价就要调
-一次 Python 策略回调，另外两者跑的是原生代码。
+20 万个事件、发出了 200 笔订单。各家测量的边界并不相同，就是表中那一列写的意思；
+这份基准校验的是事件数和订单数，不是 PnL 的等价性。两条脚注的完整推导见
+[`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md)。
 
-⁷ 上面几行是声明式路径：策略是 `signals` 表，重放期间一次都不调 Python。这一行
-  是同一个内核，由 `backtest.EventStrategy` 驱动，和 Nautilus 一样每个事件都要
-  跨进 Python。一次回调 1.1 µs，而一整步原生内核只要 0.33 µs，所以第一行与
-  Nautilus 之间的差距有相当一部分来自边界而不是引擎：同一天用回调对回调来比，是 3.1 倍
-  而不是 13 倍。此数字为推导值而非直接计时（原生内核加上实测的边界开销），各组
-  数据见
-  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md)。
+⁶ 把元数据提交批量化之后，比其他几行晚两天重新测的。改动前的版本那天是 386 ms，
+  最初那天是 331 ms，所以是机器变慢了。
 
-⁶ 在把元数据提交批量化、削掉一次运行所付的持久化开销之后，比其他几行晚两天重新测的。
-  内核没有改动。改动前的版本在重测那天是 386 ms，而在最初那天是 331 ms，所以是机器变慢了，
-  不是变快了。两侧的测量值和方法都在
-  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md)。
+⁷ 其他行重放期间不调 Python；这一行每个事件都跨进去，和 Nautilus 一样。回调对
+  回调来比，差距是 3.1 倍而不是 13 倍。此数字为推导值（原生内核加实测边界开销），
+  并非直接计时。
 
 ---
 

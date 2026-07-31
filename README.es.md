@@ -260,28 +260,20 @@ Metodología y resultados completos en [benchmarks](benchmarks).
 | NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
 | LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
 
-Medianas de tres ejecuciones en procesos nuevos tras un calentamiento, y cada
+Medianas de tres ejecuciones en procesos nuevos tras un calentamiento; cada
 adaptador verifica que vio los 200 k eventos y envió las 200 órdenes. Las fronteras
-medidas difieren, como dice la columna: el benchmark comprueba recuentos de eventos
-y de órdenes, no equivalencia de PnL, y Nautilus invoca un callback de estrategia en
-Python por cada cotización mientras los otros dos ejecutan código nativo.
+medidas difieren, como dice la columna, y el benchmark comprueba recuentos en lugar
+de equivalencia de PnL. Ambas notas están desarrolladas en
+[`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
 
-⁷ Las filas declarativas de arriba nunca llaman a Python durante el replay,
-  porque la estrategia es una tabla `signals`. Esta fila es el mismo núcleo movido
-  por `backtest.EventStrategy`, que cruza a Python en cada evento igual que
-  Nautilus. Un callback cuesta 1,1 µs frente a 0,33 µs de un paso completo del
-  núcleo nativo: buena parte de la distancia entre la primera fila y Nautilus
-  está en la frontera, no en el motor. Medido callback contra callback, el mismo
-  día, es 3,1× y no 13×. Cifra derivada, no cronometrada directamente (núcleo
-  nativo más el coste de frontera medido); los brazos están en
-  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
+⁶ Medido de nuevo dos días después, tras agrupar los commits de metadatos. La
+  revisión previa midió 386 ms ese día frente a 331 ms el original: la máquina
+  estaba más lenta, no más rápida.
 
-⁶ Medido de nuevo dos días después que las demás filas, una vez que agrupar los
-  commits de metadatos redujo el coste de durabilidad que paga una ejecución. El
-  núcleo no cambia. La revisión previa al cambio midió 386 ms el día de la nueva
-  medición frente a 331 ms el día original: la máquina estaba más lenta, no más
-  rápida. Ambas mediciones y el método están en
-  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
+⁷ Las otras filas nunca llaman a Python; esta cruza en cada evento, igual que
+  Nautilus. Callback contra callback la distancia es 3,1× y no 13×. Cifra
+  derivada (núcleo nativo más el coste de frontera medido), no cronometrada
+  directamente.
 
 ---
 

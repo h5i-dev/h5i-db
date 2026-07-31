@@ -244,27 +244,19 @@ Full methodology and results in [benchmarks](benchmarks).
 | NautilusTrader 1.230.0 | in-memory objects through `BacktestEngine.run()` | 767 ms | 261 k events/s |
 | LEAN `11ba019f6` | first `Slice` callback to `OnEndOfAlgorithm`, disk-fed | 2,033 ms | 98.4 k events/s |
 
-Medians of three fresh-process runs after one warm-up, each adapter verifying it
+Medians of three fresh-process runs after one warm-up; each adapter verifies it
 saw all 200k events and submitted all 200 orders. The measured boundaries differ,
-as the column says: the benchmark checks event and order counts rather than PnL
-equivalence, and Nautilus invokes a Python strategy callback per quote where the
-other two run native code.
+as the column says, and the benchmark checks counts rather than PnL equivalence.
+Both footnotes are worked through in
+[`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
 
-⁷ The declarative rows above never call Python during replay, because the
-  strategy is a `signals` table. This row is the same kernel driven by
-  `backtest.EventStrategy`, which crosses into Python for every event as
-  Nautilus does. One callback costs 1.1 µs against 0.33 µs for a whole native
-  kernel step, so much of the gap between the first row and Nautilus is the
-  boundary rather than the engine: measured callback-to-callback, the same day,
-  it is 3.1× rather than 13×. Derived, not timed directly (native kernel plus
-  the measured boundary cost); the arms are in
-  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
+⁶ Re-measured two days later, after batched metadata commits. The pre-change
+  revision measured 386 ms that day against 331 ms originally, so the machine
+  was slower, not faster.
 
-⁶ Re-measured two days after the other rows, once batched metadata commits cut
-  the durability cost a run pays. The kernel is untouched. The pre-change
-  revision measured 386 ms on the re-measurement day against 331 ms on the
-  original one, so the machine was slower, not faster; both arms and the method
-  are in [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
+⁷ The other rows never call Python; this one crosses into it per event, as
+  Nautilus does. Callback against callback the gap is 3.1×, not 13×. Derived
+  (native kernel plus measured boundary cost), not timed directly.
 
 ---
 

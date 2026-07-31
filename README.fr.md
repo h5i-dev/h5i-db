@@ -263,30 +263,20 @@ Méthodologie et résultats complets dans [benchmarks](benchmarks).
 | NautilusTrader 1.230.0 | objets en mémoire à travers `BacktestEngine.run()` | 767 ms | 261 k évén./s |
 | LEAN `11ba019f6` | du premier callback `Slice` à `OnEndOfAlgorithm`, alimenté par disque | 2033 ms | 98,4 k évén./s |
 
-Médianes de trois exécutions en processus neufs après un échauffement, chaque
-adaptateur vérifiant qu'il a vu les 200 k événements et soumis les 200 ordres. Les
-frontières mesurées diffèrent, comme l'indique la colonne : le benchmark vérifie des
-comptages d'événements et d'ordres, pas une équivalence de PnL, et Nautilus appelle
-un callback de stratégie Python à chaque cotation là où les deux autres exécutent du
-code natif.
+Médianes de trois exécutions en processus neufs après un échauffement ; chaque
+adaptateur vérifie qu'il a vu les 200 k événements et soumis les 200 ordres. Les
+frontières mesurées diffèrent, comme l'indique la colonne, et le benchmark vérifie
+des comptages plutôt qu'une équivalence de PnL. Les deux notes sont détaillées dans
+[`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
 
-⁷ Les lignes déclaratives ci-dessus n'appellent jamais Python pendant le rejeu,
-  la stratégie étant une table `signals`. Cette ligne est le même noyau piloté par
-  `backtest.EventStrategy`, qui franchit la frontière Python à chaque événement
-  comme le fait Nautilus. Un callback coûte 1,1 µs contre 0,33 µs pour une étape
-  complète du noyau natif : une bonne part de l'écart entre la première ligne et
-  Nautilus tient donc à la frontière et non au moteur. Mesuré callback contre
-  callback, le même jour, le rapport est de 3,1× et non de 13×. Chiffre dérivé et
-  non chronométré directement (noyau natif plus le coût de frontière mesuré) ; les
-  bras sont dans
-  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
+⁶ Mesuré à nouveau deux jours plus tard, après le regroupement des commits de
+  métadonnées. La révision d'avant mesurait 386 ms ce jour-là contre 331 ms le
+  jour d'origine : la machine était plus lente, pas plus rapide.
 
-⁶ Mesuré à nouveau deux jours après les autres lignes, une fois que le regroupement
-  des commits de métadonnées a réduit le coût de durabilité payé par une exécution.
-  Le noyau est inchangé. La révision d'avant le changement a mesuré 386 ms le jour de
-  la reprise contre 331 ms le jour d'origine : la machine était plus lente, pas plus
-  rapide. Les deux mesures et la méthode sont dans
-  [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
+⁷ Les autres lignes n'appellent jamais Python ; celle-ci y passe à chaque
+  événement, comme Nautilus. Callback contre callback, l'écart est de 3,1× et
+  non de 13×. Chiffre dérivé (noyau natif plus coût de frontière mesuré), non
+  chronométré directement.
 
 ---
 
