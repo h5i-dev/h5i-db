@@ -13,9 +13,10 @@ The three arms run the same 200k events over the same database, so
 everything outside the strategy boundary (scan, decode, fork creation, the
 result write) is identical and cancels in the differences:
 
-    signals    declarative; no Python during replay        the fast default
-    noop       EventStrategy.on_event returns None         pure boundary cost
-    trading    EventStrategy submits the same 200 orders   boundary + work
+    signals     declarative; no Python during replay       the fast default
+    fills_only  wants fills only, on_event not overridden   a skipped callback
+    noop        EventStrategy.on_event returns None         pure boundary cost
+    trading     EventStrategy submits the same 200 orders   boundary + work
 
     per-event boundary cost = (noop - signals) / events
 
@@ -199,6 +200,22 @@ class NoopStrategy(backtest.EventStrategy):
         return None
 
 
+class FillsOnlyStrategy(backtest.EventStrategy):
+    """Wants fills and nothing else, so `on_event` is left as the base no-op.
+
+    `EventStrategy` defines every callback, so this used to be indistinguishable
+    from a strategy that wanted every event: the adapter crossed the boundary
+    200k times to be handed `None`. This arm is what that costs.
+    """
+
+    def __init__(self) -> None:
+        self.fills = 0
+
+    def on_fill(self, context, event):
+        self.fills += 1
+        return None
+
+
 class TradingStrategy(backtest.EventStrategy):
     """The same orders the signals table holds, decided in Python instead.
 
@@ -246,7 +263,10 @@ def run_arm(db, arm: str, run_id: str, events: int, signals: int):
             db, run_id, starting_cash=1_000_000.0, signals="signals", snapshot="seed"
         )
     else:
-        strategy = NoopStrategy() if arm == "noop" else TradingStrategy(spacing, signals)
+        strategy = {
+            "noop": NoopStrategy,
+            "fills_only": FillsOnlyStrategy,
+        }.get(arm, lambda: TradingStrategy(spacing, signals))()
         report = backtest.run_strategy(
             db,
             run_id,
@@ -267,7 +287,7 @@ def main() -> None:
     parser.add_argument("--output", type=str, default=None)
     args = parser.parse_args()
 
-    arms = ("signals", "noop", "trading")
+    arms = ("signals", "fills_only", "noop", "trading")
     with tempfile.TemporaryDirectory() as tmp:
         print(f"seeding {args.events} events ...", flush=True)
         db = seed(f"{tmp}/boundary.db", args.events, args.signals)

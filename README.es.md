@@ -255,7 +255,7 @@ Metodología y resultados completos en [benchmarks](benchmarks).
 | motor | frontera medida | mediana | rendimiento |
 |---|---|---:|---:|
 | **h5i-db** | registros decodificados por el núcleo de replay | **65,7 ms** | **3,05 M eventos/s** |
-| **h5i-db** | mismo núcleo, estrategia como callback de Python por evento | 568 ms⁷ | 352 k eventos/s⁷ |
+| **h5i-db** | mismo núcleo, estrategia como callback de Python por evento | 278 ms⁷ | 719 k eventos/s⁷ |
 | **h5i-db** | ejecución persistida completa: escaneo, decodificación, fork, replay, escritura | 280 ms⁶ | 713 k eventos/s⁶ |
 | NautilusTrader 1.230.0 | objetos en memoria por `BacktestEngine.run()` | 767 ms | 261 k eventos/s |
 | LEAN `11ba019f6` | del primer callback `Slice` a `OnEndOfAlgorithm`, desde disco | 2033 ms | 98,4 k eventos/s |
@@ -269,10 +269,10 @@ Python por cada cotización mientras los otros dos ejecutan código nativo.
 ⁷ Las filas declarativas de arriba nunca llaman a Python durante el replay,
   porque la estrategia es una tabla `signals`. Esta fila es el mismo núcleo movido
   por `backtest.EventStrategy`, que cruza a Python en cada evento igual que
-  Nautilus. Un callback cuesta 2,5 µs frente a 0,33 µs de un paso completo del
-  núcleo nativo: la mayor parte de la distancia entre la primera fila y Nautilus
+  Nautilus. Un callback cuesta 1,1 µs frente a 0,33 µs de un paso completo del
+  núcleo nativo: buena parte de la distancia entre la primera fila y Nautilus
   está en la frontera, no en el motor. Medido callback contra callback, el mismo
-  día, es 1,5× y no 13×. Cifra derivada, no cronometrada directamente (núcleo
+  día, es 3,1× y no 13×. Cifra derivada, no cronometrada directamente (núcleo
   nativo más el coste de frontera medido); los brazos están en
   [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md).
 

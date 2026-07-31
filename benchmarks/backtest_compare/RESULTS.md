@@ -85,28 +85,40 @@ were asked to do, and the ratio alone invites the reading that the kernel is
 an order of magnitude faster at the same job. It is not.
 
 h5i has the other path too. `backtest.EventStrategy` is public, and its
-adapter reacquires the GIL for every callback deliberately. Three arms over
-one seeded database, alternating within one process, medians of five after one
-warm-up:
+adapter reacquires the GIL for every callback deliberately. Arms run over one
+seeded database, alternating within one process, so everything outside the
+strategy boundary is identical and cancels in the differences.
 
-| arm | strategy | median | fills |
+Measuring it first showed most of the cost was not the call. It was building
+argument dictionaries the callback never read, so the adapter was changed and
+measured again. The `signals` arm is the control: nothing in the change
+touches it, and it moved 394.6 → 395.9 ms, which is how much this machine
+drifted between the two sessions.
+
+| arm | strategy | before | after |
 |---|---|---:|---:|
-| `signals` | declarative; no Python during replay | 394.6 ms | 200 |
-| `noop` | `EventStrategy.on_event` returns `None` | 775.8 ms | 0 |
-| `trading` | `EventStrategy` submits the same 200 orders | 897.4 ms | 200 |
+| `signals` | declarative; no Python during replay | 394.6 ms | 395.9 ms |
+| `fills_only` | wants fills; `on_event` left as the base no-op | — | 416.0 ms |
+| `noop` | `EventStrategy.on_event` returns `None` | 775.8 ms | 535.3 ms |
+| `trading` | `EventStrategy` submits the same 200 orders | 897.4 ms | 608.3 ms |
 
-Everything outside the strategy boundary is identical across the three, so the
-differences are the boundary and nothing else:
+| per event | before | after | |
+|---|---:|---:|---:|
+| crossing into Python and back (`noop` − `signals`) | 1.906 µs | 0.697 µs | -63 % |
+| both, with a body (`trading` − `signals`) | 2.514 µs | 1.062 µs | -58 % |
+| a callback the strategy never overrode | 1.906 µs | 0.101 µs | -95 % |
+| a whole native kernel step, for comparison | 0.329 µs | 0.329 µs | untouched |
 
-| | µs/event |
-|---|---:|
-| crossing into Python and back (`noop` − `signals`) | 1.906 |
-| the strategy body, in Python (`trading` − `noop`) | 0.608 |
-| both (`trading` − `signals`) | 2.514 |
-| the whole native kernel step, for comparison | 0.329 |
+A callback costs **3.2× a complete native kernel step** now rather than 7.6×.
+Book application, matching, mark bookkeeping and liquidation checks together
+are still cheaper than handing the event to Python, which is the shape of the
+problem and not something an adapter can fix.
 
-One Python callback costs **7.7× a complete native kernel step** — book
-application, matching, mark bookkeeping, liquidation checks and all.
+The last row is a separate finding. `EventStrategy` defines all four callbacks
+as no-ops, so a strategy that only wanted fills was indistinguishable from one
+that wanted every event: the adapter crossed the boundary 200k times to be
+handed `None`. Resolving the bound methods once, and skipping any the strategy
+left at the base class's version, removes that entirely.
 
 Nautilus was re-run the same day for a like-for-like comparison: 884 / 864 /
 784 ms, median **864.3 ms** against the 766.6 ms recorded on 2026-07-29, which
@@ -117,13 +129,14 @@ which is the work the `trading` arm does.
 | comparison | h5i | Nautilus | |
 |---|---:|---:|---:|
 | declarative path against callback path | 65.7 ms | 864.3 ms | 13.2× |
-| callback against callback | 568.5 ms¹ | 864.3 ms | **1.52×** |
+| callback against callback, before | 568.5 ms¹ | 864.3 ms | 1.52× |
+| callback against callback, after | 278.1 ms¹ | 864.3 ms | **3.11×** |
 
 ¹ Derived, not measured: the native kernel (65.7 ms) plus the measured
-  `trading` boundary cost (502.8 ms). The Python API exposes only the
-  persisted-run boundary, so the kernel-with-callback figure cannot be
-  timed directly. The boundary term is measured; the kernel term is from
-  the same day's `replay_path` run.
+  `trading` boundary cost. The Python API exposes only the persisted-run
+  boundary, so the kernel-with-callback figure cannot be timed directly. The
+  boundary term is measured; the kernel term is from the same day's
+  `replay_path` run.
 
 So the order-of-magnitude figure is mostly a difference in boundary, not in
 engine. What survives as an architectural difference is narrower and worth
@@ -131,13 +144,17 @@ stating precisely: because the strategy can be a table, h5i can *choose* not
 to have a boundary, and a system whose strategy is always an object receiving
 callbacks has no equivalent choice. That choice is only available where the
 decision is path-independent. React to your own fills and the run is on
-`EventStrategy`, paying 2.5 µs an event like everyone else.
+`EventStrategy`, paying about a microsecond an event.
 
 ```sh
 python3 benchmarks/backtest_compare/h5i_callback_boundary.py \
-    --events 200000 --signals 200 --rounds 5 \
+    --events 200000 --signals 200 --rounds 11 \
     --output benchmarks/backtest_compare/callback_boundary.json
 ```
+
+Eleven rounds rather than five because the arms are close enough now that five
+put `trading` below `noop`, which cannot be true: the medians were not
+separated, and reporting them would have been reporting noise.
 
 ## Interpretation limits
 

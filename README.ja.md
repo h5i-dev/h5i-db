@@ -235,7 +235,7 @@ python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、�
 | エンジン | 計測した境界 | 中央値 | スループット |
 |---|---|---:|---:|
 | **h5i-db** | デコード済みレコードがリプレイカーネルを通る区間 | **65.7 ms** | **305万 events/s** |
-| **h5i-db** | 同じカーネル、戦略はイベントごとの Python コールバック | 568 ms⁷ | 35.2万 events/s⁷ |
+| **h5i-db** | 同じカーネル、戦略はイベントごとの Python コールバック | 278 ms⁷ | 71.9万 events/s⁷ |
 | **h5i-db** | 永続化を含む実行全体: スキャン、デコード、fork、リプレイ、書き込み | 280 ms⁶ | 71.3万 events/s⁶ |
 | NautilusTrader 1.230.0 | メモリ上のオブジェクトが `BacktestEngine.run()` を通る区間 | 767 ms | 26.1万 events/s |
 | LEAN `11ba019f6` | 最初の `Slice` コールバックから `OnEndOfAlgorithm` まで、ディスク供給 | 2,033 ms | 9.84万 events/s |
@@ -249,9 +249,9 @@ PnLの一致ではないし、Nautilusは気配ごとにPythonの戦略コール
 ⁷ 上の宣言的な行は、戦略が `signals` テーブルなのでリプレイ中に Python を
   一度も呼ばない。この行は同じカーネルを `backtest.EventStrategy` で駆動した
   もので、Nautilus と同じくイベントごとに Python へ渡る。コールバック1回が
-  2.5 µs、ネイティブのカーネル1ステップ全体が 0.33 µs なので、1行目と Nautilus
-  の差の大半はエンジンではなく境界にある。同日にコールバック同士で比べると
-  13倍ではなく1.5倍。直接計測ではなく導出値（ネイティブカーネル＋実測した境界
+  1.1 µs、ネイティブのカーネル1ステップ全体が 0.33 µs なので、1行目と Nautilus
+  の差のかなりの部分はエンジンではなく境界にある。同日にコールバック同士で比べると
+  13倍ではなく3.1倍。直接計測ではなく導出値（ネイティブカーネル＋実測した境界
   費用）で、各アームは
   [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md)
   にある。

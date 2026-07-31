@@ -223,7 +223,7 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 | 引擎 | 测量边界 | 中位数 | 吞吐 |
 |---|---|---:|---:|
 | **h5i-db** | 已解码记录穿过重放内核 | **65.7 ms** | **305 万 事件/秒** |
-| **h5i-db** | 同一内核，策略是每事件一次的 Python 回调 | 568 ms⁷ | 35.2 万 事件/秒⁷ |
+| **h5i-db** | 同一内核，策略是每事件一次的 Python 回调 | 278 ms⁷ | 71.9 万 事件/秒⁷ |
 | **h5i-db** | 含持久化的完整运行：扫描、解码、fork、重放、写回 | 280 ms⁶ | 71.3 万 事件/秒⁶ |
 | NautilusTrader 1.230.0 | 内存中的对象穿过 `BacktestEngine.run()` | 767 ms | 26.1 万 事件/秒 |
 | LEAN `11ba019f6` | 从首个 `Slice` 回调到 `OnEndOfAlgorithm`，数据来自磁盘 | 2033 ms | 9.84 万 事件/秒 |
@@ -235,8 +235,8 @@ python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然�
 
 ⁷ 上面几行是声明式路径：策略是 `signals` 表，重放期间一次都不调 Python。这一行
   是同一个内核，由 `backtest.EventStrategy` 驱动，和 Nautilus 一样每个事件都要
-  跨进 Python。一次回调 2.5 µs，而一整步原生内核只要 0.33 µs，所以第一行与
-  Nautilus 之间的差距大部分来自边界而不是引擎：同一天用回调对回调来比，是 1.5 倍
+  跨进 Python。一次回调 1.1 µs，而一整步原生内核只要 0.33 µs，所以第一行与
+  Nautilus 之间的差距有相当一部分来自边界而不是引擎：同一天用回调对回调来比，是 3.1 倍
   而不是 13 倍。此数字为推导值而非直接计时（原生内核加上实测的边界开销），各组
   数据见
   [`benchmarks/backtest_compare/RESULTS.md`](benchmarks/backtest_compare/RESULTS.md)。
