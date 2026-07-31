@@ -855,8 +855,7 @@ pub fn archive_line(received_at: UnixNanos, message: &str) -> Result<String> {
 pub fn format_archive_time(at: UnixNanos) -> String {
     let seconds = at.get().div_euclid(1_000_000_000);
     let nanos = at.get().rem_euclid(1_000_000_000);
-    let stamp = chrono::DateTime::from_timestamp(seconds, nanos as u32)
-        .unwrap_or_else(chrono::DateTime::<chrono::Utc>::default);
+    let stamp = chrono::DateTime::from_timestamp(seconds, nanos as u32).unwrap_or_default();
     format!("{}{:09}", stamp.format("%Y-%m-%dT%H:%M:%S."), nanos)
 }
 
