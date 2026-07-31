@@ -17,9 +17,7 @@ escritos en Rust.**
   del núcleo de replay, 11,7× NautilusTrader y 31× LEAN en una carga compartida
   sobre el tope del libro.
 - **Soporte nativo de mercados:** Hyperliquid, Polymarket, Kalshi y cualquier
-  cosa que escriba las tablas canónicas — el punto de extensión es el esquema, no
-  una API de plugins, así que un cargador es un script en el lenguaje que sea.
-  [Qué cubre cada mercado](crates/h5i-db-venues/README.md).
+  cosa que escriba las [tablas canónicas](crates/h5i-db-venues/README.md).
 - **Análisis estadístico profesional:** métricas de factores y de rendimiento
   con paridad `alphalens` y `empyrical`, además de Sharpe deflactado y detección de
   la probabilidad de sobreajuste.

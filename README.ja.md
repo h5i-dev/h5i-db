@@ -12,10 +12,8 @@
   それ以降の行は入りようがない。先読みバイアスは構造的に起こらない。
 - **速いイベント駆動バックテスタ:** リプレイカーネルは毎秒305万イベントを処理し、
   同一ワークロードでNautilusTraderの11.7倍、LEANの31倍。
-- **取引所をそのまま扱える:** Hyperliquid、Polymarket、Kalshi、そして正規化
-  テーブルを書けるものなら何でも。拡張点はプラグインAPIではなくスキーマなので、
-  ローダは好きな言語のスクリプトでよい。
-  [各取引所の対応範囲](crates/h5i-db-venues/README.md)。
+- **取引所をそのまま扱える:** Hyperliquid、Polymarket、Kalshi、そのほか
+  [正規化テーブル](crates/h5i-db-venues/README.md)を書けるものなら何でも。
 - **本格的な統計分析:** `alphalens`・`empyrical` と一致するファクターおよび
   パフォーマンス指標に加えて、deflated Sharpeと過剰適合確率の検出。
 - **データベースをミリ秒でforkできる:** forkはデータをコピーせず共有する。

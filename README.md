@@ -14,10 +14,8 @@ Embedded, written in Rust.**
 - **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- **Native venue support:** Hyperliquid, Polymarket, Kalshi and anything else
-  that writes the canonical tables — the extension point is the schema, not a
-  plugin API, so a loader is a script in any language.
-  [What each venue covers](crates/h5i-db-venues/README.md).
+- **Native venue support:** Hyperliquid, Polymarket and Kalshi, plus anything
+  else that writes the [canonical tables](crates/h5i-db-venues/README.md).
 - **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.

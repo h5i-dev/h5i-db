@@ -18,10 +18,7 @@ et pensés pour les agents, au service de la recherche quantitative. Embarqués,
   noyau de rejeu, soit 11,7× NautilusTrader et 31× LEAN sur une charge partagée
   portant sur le haut du carnet.
 - **Prise en charge native des places :** Hyperliquid, Polymarket, Kalshi, et
-  tout ce qui sait écrire les tables canoniques — le point d'extension est le
-  schéma et non une API de plugins, si bien qu'un chargeur est un script, dans
-  le langage de votre choix.
-  [Ce que couvre chaque place](crates/h5i-db-venues/README.md).
+  tout ce qui écrit les [tables canoniques](crates/h5i-db-venues/README.md).
 - **Analyse statistique professionnelle :** métriques de facteurs et de
   performance à parité `alphalens` et `empyrical`, plus le Sharpe dégonflé et la
   détection de la probabilité de surapprentissage.

@@ -12,9 +12,8 @@
   就不可能包含此后的行。从构造上杜绝前视偏差。
 - **高效的事件驱动回测器：** 重放内核每秒处理 305 万个事件，在同一份盘口最优价
   工作负载上是 NautilusTrader 的 11.7 倍、LEAN 的 31 倍。
-- **原生支持交易场所：** Hyperliquid、Polymarket、Kalshi，以及任何能写规范表的
-  东西——扩展点是这套 schema 而不是插件 API，所以加载器就是一个脚本，用什么语言都行。
-  [各家的覆盖范围](crates/h5i-db-venues/README.md)。
+- **原生支持交易场所：** Hyperliquid、Polymarket、Kalshi，以及任何能写
+  [规范表](crates/h5i-db-venues/README.md)的东西。
 - **专业的统计分析：** 与 `alphalens`、`empyrical` 对齐的因子与绩效指标，外加
   deflated Sharpe 和过拟合概率检测。
 - **毫秒级 fork 一个数据库：** fork 共享数据而不是复制数据。智能体因此可以
