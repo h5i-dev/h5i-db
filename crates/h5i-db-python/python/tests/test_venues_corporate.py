@@ -134,3 +134,95 @@ def test_reingesting_the_same_actions_replays_instead_of_duplicating():
 
         assert first.replayed is False and second.replayed is True
         assert int(rows) == 3
+
+
+def test_a_run_replays_actions_written_by_this_loader():
+    """The cross-language seam: Python writes the table, Rust reads it.
+
+    The two schemas are maintained separately, so a drift in nullability or
+    column order would not fail either side's own tests. It would fail here,
+    when the replay asks the store for the stream.
+    """
+    import pyarrow as pa
+
+    from h5i_db import backtest
+
+    second = 1_000_000_000
+    base = 1_777_000_000 * second
+    with tempfile.TemporaryDirectory() as tmp:
+        db = h5i_db.Database(str(Path(tmp) / "run.db"), create=True)
+        spec = venues.MarketSpec(
+            instrument_id="EQ", venue="test", outcome_labels=("YES", "NO")
+        )
+        venues.write_markets(db, [spec])
+        venues.ensure_tables(db, ["book_deltas"])
+
+        rows = []
+        for step in range(6):
+            stamp = base + step * 30 * second
+            for outcome, (bid, ask) in enumerate(((0.40, 0.42), (0.57, 0.59))):
+                for index, (side, price) in enumerate((("buy", bid), ("sell", ask))):
+                    rows.append(
+                        {
+                            "ts_init": stamp,
+                            "ts_event": stamp,
+                            "instrument_id": "EQ",
+                            "outcome": outcome,
+                            "action": "snapshot",
+                            "side": side,
+                            "price": price,
+                            "size": 500.0,
+                            "event_index": step * 2 + outcome + 1,
+                            "is_last": index == 1,
+                            "source_vendor": "test",
+                        }
+                    )
+        book = pa.table(
+            {
+                name: pa.array(
+                    [row[name] for row in rows],
+                    type=venues.BOOK_DELTAS_SCHEMA.field(name).type,
+                )
+                for name in venues.BOOK_DELTAS_SCHEMA.names
+            },
+            schema=venues.BOOK_DELTAS_SCHEMA,
+        )
+        db.append("book_deltas", book)
+
+        venues.ingest_corporate_actions(
+            db,
+            actions=[
+                {"instrument_id": "EQ", "kind": "dividend", "per_share": 0.01,
+                 "effective": base + 90 * second, "announced": base},
+            ],
+        )
+        db.snapshot("loaded", tables=["instruments", "book_deltas", "corporate_actions"])
+
+        backtest.create_signal_table(db, "signals")
+        db.append(
+            "signals",
+            backtest.signal_table(
+                [
+                    {
+                        "ts": base + 60 * second + 1_000,
+                        "instrument_id": "EQ",
+                        "outcome": 0,
+                        "side": "buy",
+                        "quantity": 10.0,
+                        "tag": "yes",
+                    }
+                ]
+            ),
+        )
+        result = backtest.execute(
+            db,
+            backtest.BacktestConfig(
+                run_id="with-actions",
+                data=backtest.DataConfig(signals="signals", snapshot="loaded"),
+                portfolio=backtest.PortfolioConfig(starting_cash=1_000.0),
+            ),
+        )
+        # Reaching a fill means the replay assembled every source, including
+        # the corporate stream, from tables this loader wrote.
+        assert len(result.fills.to_pandas()) == 1
+        db.close()
