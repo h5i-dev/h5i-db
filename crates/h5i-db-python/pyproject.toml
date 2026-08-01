@@ -15,10 +15,16 @@ dynamic = ["version"]
 # TPE parameter search only. Everything else, including seeded random search,
 # works without it, so it stays an extra rather than a dependency.
 optuna = ["optuna>=3.4"]
+# The live websocket recorder (`h5i_db.capture`). An extra because most users
+# read archives somebody else recorded, and none of them should have to build a
+# TLS stack to do it. Every one of these is imported inside the function that
+# needs it, so `import h5i_db.capture` works without them.
+capture = ["websockets>=12", "cryptography>=42", "lz4>=4"]
 
 [project.scripts]
 h5i-backtest = "h5i_db.backtest:main"
 h5i-venues = "h5i_db.venues.__main__:main"
+h5i-capture = "h5i_db.capture.__main__:main"
 
 [tool.maturin]
 module-name = "h5i_db._native"

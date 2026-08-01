@@ -16,8 +16,7 @@ escritos en Rust.**
 - **Backtester orientado a eventos y eficiente:** 3,05 M de eventos/s a través
   del núcleo de replay, 11,7× NautilusTrader y 31× LEAN en una carga compartida
   sobre el tope del libro.
-- **Soporte nativo de mercados:** Hyperliquid, Polymarket, Kalshi y cualquier
-  cosa que escriba las [tablas canónicas](crates/h5i-db-venues/README.md).
+- **Soporte nativo de mercados:** [Kalshi](#fuentes-de-datos), [Polymarket](#fuentes-de-datos), [Hyperliquid](#fuentes-de-datos), [Binance](#fuentes-de-datos) y más.
 - **Análisis estadístico profesional:** métricas de factores y de rendimiento
   con paridad `alphalens` y `empyrical`, además de Sharpe deflactado y detección de
   la probabilidad de sobreajuste.
@@ -201,6 +200,33 @@ ordena las pruebas por lo que necesita a una persona a continuación: decisión
 requerida, luego fallidas o con avisos, luego terminadas y no vistas, luego en
 ejecución, luego vistas. Recorrer una lista no marca el trabajo como revisado; una
 prueba cuenta como vista solo cuando se abre su detalle.
+
+---
+
+## Fuentes de datos
+
+Los cargadores leen archivos y respuestas que ya tienes. Nada aquí descarga, así
+que las credenciales, los reintentos y los límites de tasa se quedan en tu script.
+
+| Fuente | Libro de órdenes | Operaciones | Barras | Además |
+|---|---|---|---|---|
+| Kalshi | ✓ | ✓ | ✓ | liquidación |
+| Polymarket | ✓ | ✓ | derivadas | liquidación, emisión y canje de conjunto completo |
+| Hyperliquid | ✓ | ✓ | ✓ | financiación, precios de marca y oráculo, límites de apalancamiento |
+| Limitless | ✓ | ✓ | derivadas | |
+| Opinion | ✓ | ✓ | derivadas | |
+| Manifold | n/d | ✓ | derivadas | liquidación |
+| Binance | | ✓ | ✓ | volcados masivos de spot y futuros |
+| Cualquier exportación OHLCV | | | ✓ | un CSV de bróker, `yfinance`, Stooq |
+| Cualquier volcado de operaciones | | ✓ | derivadas | |
+| Series publicadas | | | | precios de referencia, para un tipo o un índice |
+| Eventos corporativos | | | | splits, dividendos, exclusiones de cotización |
+
+`derivadas` significa que las barras se agregan desde las propias operaciones de
+esa fuente en lugar de descargarse, así que los huecos siguen visibles como
+barras ausentes. `n/d` significa que el mercado no tiene ese concepto: Manifold
+es un creador de mercado automatizado, así que tiene operaciones pero no libro.
+Consulta la [guía de mercados](crates/h5i-db-venues/README.md) para el detalle.
 
 ---
 

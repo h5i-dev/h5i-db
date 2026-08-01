@@ -30,6 +30,7 @@ wide = ["h5i-db-backtest/wide"]
 h5i-db-core = { workspace = true }
 h5i-db-query = { workspace = true }
 h5i-db-backtest = { path = "../h5i-db-backtest", version = "0.1.2" }
+h5i-db-venues = { path = "../h5i-db-venues", version = "0.1.2" }
 arrow = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }

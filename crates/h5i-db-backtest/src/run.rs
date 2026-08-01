@@ -392,6 +392,9 @@ where
     // The venue's own mark and oracle, where it publishes them. Absent for
     // any venue that does not, which is most of them.
     let references = store::reference_source(db, spec.read_at.clone(), spec.window).await?;
+    // Splits, dividends and delistings. Absent for a venue whose instruments
+    // have no issuer to act on them, which is every venue here except equities.
+    let corporate = store::corporate_source(db, spec.read_at.clone(), spec.window).await?;
 
     let coverage = spec.window.map(|requested| {
         // Coverage is measured on the book stream, which is the one that
@@ -416,6 +419,7 @@ where
     let mut replay = Replay::builder()
         .stream("book", priority::SNAPSHOT, book_events)
         .source("trades", priority::TRADE, trades)
+        .source("corporate", priority::CORPORATE, corporate)
         .source("references", priority::REFERENCE, references)
         .source("funding", priority::FUNDING, funding)
         .build()?;

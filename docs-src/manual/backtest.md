@@ -634,6 +634,32 @@ cannot reconstruct queue position and must not be presented as exact L2
 replay. REST snapshots likewise describe only the instant at which they were
 requested.
 
+Two third-party sources now carry historical Kalshi order books, so this
+research no longer has to wait for a capture to accumulate.
+
+`h5i_db.venues.predexon_book_from_snapshots` reads the one to prefer for
+anything after January 2026: full book snapshots rather than accumulated
+changes, so a lost record costs one sample instead of corrupting every level
+after it, and finalized daily. Read its report before trusting a window. It
+measures the sampling cadence, which on a liquid market runs to a median of a
+few seconds with occasional holes of over an hour, and a strategy that reads
+one of those holes as continuous will fill at prices nobody quoted. Its free
+endpoint also rounds prices to whole cents, which is a real loss at the touch
+now that Kalshi quotes sub-cent.
+
+`h5i_db.venues.KALSHI_PMXT_LAYOUT` reads the other, which reaches further back.
+It is not a substitute for prospective capture where queue accuracy matters.
+Its deltas are
+signed size changes replayed into absolute levels at ingest, its snapshots
+carry no venue timestamp and so seed the book rather than being replayed at
+their own stamp, and it has no per-market sequence numbers, so the ingest
+reports divergence against later snapshots instead of detecting a dropped
+message directly. The report says how many vendor snapshots the reconstruction
+reproduced exactly; treat a low number as a signal to load the neighbouring
+hours rather than as a reason to trust the book less than it deserves. Coverage
+on that host also lags the present by weeks, which is its own reason to keep
+recording.
+
 Use `KalshiFees` (or Python's `fee_kind="kalshi"`) with rates pinned from the
 applicable series fee schedule. It implements the quadratic curve, centicent
 trade-fee rounding, whole-cent cash movement, and per-order partial-fill

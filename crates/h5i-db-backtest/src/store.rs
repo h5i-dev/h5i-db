@@ -32,6 +32,7 @@ use h5i_db_core::Database;
 use h5i_db_core::database::{ReadAt, ScanOptions, WriteOptions};
 
 use crate::book::{BookDelta, OrderBook};
+use crate::corporate::CorporateAction;
 use crate::decimal::{FixedBuilder, FixedEncoding, read_fixed, read_fixed_value};
 use crate::engine::RunResult;
 use crate::error::{BacktestError, Result};
@@ -300,6 +301,19 @@ const TRADE_COLUMNS: &[&str] = &[
 ];
 
 const FUNDING_COLUMNS: &[&str] = &["ts_init", "ts_event", "instrument_id", "rate"];
+
+// `announced_ns` is deliberately not projected. It exists so a caller can ask
+// the table for only what had been disclosed by a given date; the replay path
+// itself takes whatever rows it is given, exactly as it does for a time window.
+const CORPORATE_COLUMNS: &[&str] = &[
+    "ts_init",
+    "ts_event",
+    "instrument_id",
+    "kind",
+    "ratio",
+    "per_share",
+    "final_price",
+];
 
 const REFERENCE_COLUMNS: &[&str] = &[
     "ts_init",
@@ -949,6 +963,198 @@ pub async fn read_funding(
     }
     out.sort_by_key(|record| record.ts().get());
     Ok(out)
+}
+
+// -- corporate actions ------------------------------------------------------
+
+/// Store split, dividend and delisting records.
+///
+/// `announced_ns` is left null here: a [`Record`] says when an action applies,
+/// not when it was disclosed, and those are different facts. A loader that
+/// knows the announcement instant writes this table directly rather than going
+/// through an event, which is what the Python venue layer does.
+pub async fn write_corporate_actions(db: &Database, records: &[Record]) -> Result<()> {
+    let encoding = encoding_of(db, schema::CORPORATE_ACTIONS).await;
+    let mut ts_init = TimestampNanosecondBuilder::new();
+    let mut ts_event = TimestampNanosecondBuilder::new();
+    let mut instrument = StringBuilder::new();
+    let mut kind = StringBuilder::new();
+    let mut ratio = FixedBuilder::new(encoding);
+    let mut per_share = FixedBuilder::new(encoding);
+    let mut final_price = FixedBuilder::new(encoding);
+    let mut announced = Int64Builder::new();
+    let mut vendor = StringBuilder::new();
+
+    for record in records {
+        let MarketEvent::Corporate(action) = &record.event else {
+            return Err(BacktestError::invalid(
+                "write_corporate_actions takes corporate records only",
+            ));
+        };
+        action.validate()?;
+        ts_init.append_value(record.stamps.ts_init.get());
+        ts_event.append_value(record.stamps.ts_event.get());
+        instrument.append_value(record.instrument.as_str());
+        kind.append_value(action.kind());
+        // Exactly one value column carries a number. The others being null is
+        // how a row says it is not that kind of action, which is the same
+        // shape `resolutions` uses and for the same reason.
+        match action {
+            CorporateAction::Split { ratio: value } => {
+                ratio.append(value.raw());
+                per_share.append_null();
+                final_price.append_null();
+            }
+            CorporateAction::Dividend { per_share: value } => {
+                ratio.append_null();
+                per_share.append(value.raw());
+                final_price.append_null();
+            }
+            CorporateAction::Delist {
+                final_price: value, ..
+            } => {
+                ratio.append_null();
+                per_share.append_null();
+                final_price.append(value.raw());
+            }
+        }
+        announced.append_null();
+        vendor.append_null();
+    }
+
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(ts_init.finish()),
+        Arc::new(ts_event.finish()),
+        Arc::new(instrument.finish()),
+        Arc::new(kind.finish()),
+        ratio.finish(),
+        per_share.finish(),
+        final_price.finish(),
+        Arc::new(announced.finish()),
+        Arc::new(vendor.finish()),
+    ];
+    append(
+        db,
+        schema::CORPORATE_ACTIONS,
+        schema::corporate_actions(encoding),
+        columns,
+    )
+    .await
+}
+
+fn decode_corporate(
+    batch: &RecordBatch,
+    out: &mut std::collections::VecDeque<Record>,
+) -> Result<()> {
+    let ts_init = column::<TimestampNanosecondArray>(batch, "ts_init")?;
+    let ts_event = column::<TimestampNanosecondArray>(batch, "ts_event")?;
+    let mut instruments = Instruments::new(batch)?;
+    let kind = column::<StringArray>(batch, "kind")?;
+    let ratio = fixed(batch, "ratio")?;
+    let per_share = fixed(batch, "per_share")?;
+    let final_price = fixed(batch, "final_price")?;
+    for row in 0..batch.num_rows() {
+        let name = kind.value(row);
+        // A row whose value column is null cannot be applied, and applying a
+        // zero in its place would halve a position on a split or pay nothing
+        // on a dividend. Both are silent, so neither is allowed.
+        let action = match name {
+            "split" => {
+                if ratio.is_null(row) {
+                    return Err(BacktestError::invalid(
+                        "a split corporate action is missing its ratio",
+                    ));
+                }
+                CorporateAction::Split {
+                    ratio: Price::from_raw(read_fixed_value(ratio, row, "ratio")?),
+                }
+            }
+            "dividend" => {
+                if per_share.is_null(row) {
+                    return Err(BacktestError::invalid(
+                        "a dividend corporate action is missing its per_share amount",
+                    ));
+                }
+                CorporateAction::Dividend {
+                    per_share: Money::from_raw(read_fixed_value(per_share, row, "per_share")?),
+                }
+            }
+            "delist" => {
+                if final_price.is_null(row) {
+                    return Err(BacktestError::invalid(
+                        "a delist corporate action is missing its final_price",
+                    ));
+                }
+                CorporateAction::Delist {
+                    final_price: Price::from_raw(read_fixed_value(
+                        final_price,
+                        row,
+                        "final_price",
+                    )?),
+                }
+            }
+            other => {
+                return Err(BacktestError::Parse {
+                    what: "corporate action kind",
+                    value: other.to_string(),
+                });
+            }
+        };
+        action.validate()?;
+        out.push_back(Record::new(
+            Stamps::new(
+                UnixNanos::new(ts_event.value(row)),
+                UnixNanos::new(ts_init.value(row)),
+            )?,
+            instruments.get(row)?,
+            OutcomeId::FIRST,
+            MarketEvent::Corporate(action),
+        ));
+    }
+    Ok(())
+}
+
+pub async fn read_corporate_actions(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<Vec<Record>> {
+    let batches = scan_optional(
+        db,
+        schema::CORPORATE_ACTIONS,
+        at,
+        window,
+        Some(CORPORATE_COLUMNS),
+    )
+    .await?;
+    let mut out = std::collections::VecDeque::new();
+    for batch in &batches {
+        decode_corporate(batch, &mut out)?;
+    }
+    let mut records: Vec<Record> = out.into();
+    records.sort_by_key(|record| record.ts().get());
+    Ok(records)
+}
+
+/// Stream splits, dividends and delistings into a replay.
+pub async fn corporate_source(
+    db: &Database,
+    at: ReadAt,
+    window: Option<TimeWindow>,
+) -> Result<crate::replay::RecordSource> {
+    let batches = scan_optional(
+        db,
+        schema::CORPORATE_ACTIONS,
+        at,
+        window,
+        Some(CORPORATE_COLUMNS),
+    )
+    .await?;
+    Ok(Box::new(BatchDecoder {
+        batches: batches.into_iter(),
+        buffer: Default::default(),
+        decode: decode_corporate,
+    }))
 }
 
 // -- resolutions ------------------------------------------------------------

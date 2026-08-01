@@ -14,8 +14,7 @@ Embedded, written in Rust.**
 - **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- **Native venue support:** Hyperliquid, Polymarket and Kalshi, plus anything
-  else that writes the [canonical tables](crates/h5i-db-venues/README.md).
+- **Native venue support:** [Kalshi](#data-sources), [Polymarket](#data-sources), [Hyperliquid](#data-sources), [Binance](#data-sources) and more.
 - **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.
@@ -188,6 +187,32 @@ dropped.
 trials by what needs a human next: decision required, then failed or warned, then
 finished and unseen, then running, then seen. Scanning a list does not mark work
 reviewed; a trial counts as seen only when its detail is opened.
+
+---
+
+## Data sources
+
+Loaders read files and payloads you already have. Nothing here fetches, so
+credentials, retries and rate limits stay in your script.
+
+| Source | Order book | Trades | Bars | Also |
+|---|---|---|---|---|
+| Kalshi | ✓ | ✓ | ✓ | settlement |
+| Polymarket | ✓ | ✓ | derived | settlement, complete-set mint and redeem |
+| Hyperliquid | ✓ | ✓ | ✓ | funding, mark and oracle prices, leverage caps |
+| Limitless | ✓ | ✓ | derived | |
+| Opinion | ✓ | ✓ | derived | |
+| Manifold | n/a | ✓ | derived | settlement |
+| Binance | | ✓ | ✓ | spot and futures bulk dumps |
+| Any OHLCV export | | | ✓ | a broker CSV, `yfinance`, Stooq |
+| Any trade dump | | ✓ | derived | |
+| Published series | | | | reference prices, for a rate or an index |
+| Corporate actions | | | | splits, dividends, delistings |
+
+`derived` means bars are aggregated from that source's own prints rather than
+fetched, so gaps stay visible as missing bars. `n/a` means the venue has no
+such concept: Manifold is an automated market maker, so it has prints but no
+book. See [venue guide](crates/h5i-db-venues/README.md) for the detail.
 
 ---
 

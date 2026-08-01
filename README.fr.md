@@ -17,8 +17,7 @@ et pensés pour les agents, au service de la recherche quantitative. Embarqués,
 - **Un backtester événementiel efficace :** 3,05 M d'événements/s à travers le
   noyau de rejeu, soit 11,7× NautilusTrader et 31× LEAN sur une charge partagée
   portant sur le haut du carnet.
-- **Prise en charge native des places :** Hyperliquid, Polymarket, Kalshi, et
-  tout ce qui écrit les [tables canoniques](crates/h5i-db-venues/README.md).
+- **Prise en charge native des places :** [Kalshi](#sources-de-données), [Polymarket](#sources-de-données), [Hyperliquid](#sources-de-données), [Binance](#sources-de-données) et plus.
 - **Analyse statistique professionnelle :** métriques de facteurs et de
   performance à parité `alphalens` et `empyrical`, plus le Sharpe dégonflé et la
   détection de la probabilité de surapprentissage.
@@ -203,6 +202,34 @@ requête inter-forks, celle qui en vaut la peine est `promote`, et le reste est 
 requise, puis en échec ou avec avertissement, puis terminés et non vus, puis en
 cours, puis vus. Parcourir une liste ne marque rien comme revu ; un essai ne compte
 comme vu que lorsque son détail est ouvert.
+
+---
+
+## Sources de données
+
+Les chargeurs lisent des fichiers et des réponses que vous avez déjà. Rien ici ne
+télécharge : les identifiants, les reprises et les limites de débit restent dans
+votre script.
+
+| Source | Carnet d'ordres | Transactions | Barres | Aussi |
+|---|---|---|---|---|
+| Kalshi | ✓ | ✓ | ✓ | règlement |
+| Polymarket | ✓ | ✓ | dérivées | règlement, émission et rachat d'un ensemble complet |
+| Hyperliquid | ✓ | ✓ | ✓ | financement, prix de marque et d'oracle, plafonds de levier |
+| Limitless | ✓ | ✓ | dérivées | |
+| Opinion | ✓ | ✓ | dérivées | |
+| Manifold | s.o. | ✓ | dérivées | règlement |
+| Binance | | ✓ | ✓ | exports en masse spot et futures |
+| Tout export OHLCV | | | ✓ | un CSV de courtier, `yfinance`, Stooq |
+| Tout export de transactions | | ✓ | dérivées | |
+| Séries publiées | | | | prix de référence, pour un taux ou un indice |
+| Opérations sur titres | | | | divisions, dividendes, retraits de cote |
+
+`dérivées` signifie que les barres sont agrégées à partir des transactions de la
+source elle-même plutôt que téléchargées : les trous restent visibles sous forme
+de barres absentes. `s.o.` signifie que la place n'a pas cette notion : Manifold
+est un teneur de marché automatisé, il a donc des transactions mais pas de
+carnet. Voir le [guide des places](crates/h5i-db-venues/README.md) pour le détail.
 
 ---
 

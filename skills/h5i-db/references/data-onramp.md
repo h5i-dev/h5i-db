@@ -141,3 +141,152 @@ archive.
 One practical trap: these hosts answer `403` to the default `Python-urllib`
 user agent, which reads exactly like a blocked network and is not one. Set any
 `User-Agent`.
+
+## Kalshi
+
+Kalshi's hourly archive quotes both outcomes as bids, and its deltas are signed changes in
+resting size, so it needs its own layout. Everything else is the same three
+steps. A market needs no `tokens=`: the files name the instrument and pick the
+outcome with a label, so the outcome order comes from `outcome_labels`.
+
+```python
+specs = [
+    venues.MarketSpec(
+        instrument_id="KXBTC15M-26JUN100815-15",
+        venue="kalshi",
+        outcome_labels=("yes", "no"),
+    )
+]
+report = venues.ingest_archive(
+    db,
+    files=venues.discover("/mnt/kalshi", pattern="kalshi_orderbook_*.parquet"),
+    markets=specs,
+    layout=venues.KALSHI_PMXT_LAYOUT,
+)
+```
+
+Read two numbers out of the report before trusting the result:
+
+* `report.gaps` carries a `snapshot_divergence` entry saying how many vendor
+  snapshots the reconstruction reproduced exactly. This feed has no sequence
+  numbers, so that comparison is the only integrity check available. A low
+  share almost always means the window's deltas are incomplete, and the fix is
+  to load the neighbouring hours, not to lower expectations.
+* `report.skipped` counts changes that arrived with no book to apply them to
+  (`delta_before_snapshot`). An hour that was never snapshotted for a market
+  contributes nothing rather than inventing a base of zero.
+
+`LIMITLESS_PMXT_LAYOUT` and `OPINION_PMXT_LAYOUT` read the same host's other
+venues, which share the Polymarket dialect.
+
+## Bars
+
+Anything shaped like OHLCV goes through one on-ramp, whatever produced it.
+
+```python
+# a vendor dump on disk
+venues.ingest_bars(db, files=[...], layout=venues.BINANCE_KLINES_LAYOUT,
+                   instrument_id="BINANCE:BTCUSDT")
+
+# anything already in memory: a broker export, yfinance, your own frame
+bars = venues.bars_from_dataframe(frame, instrument_id="AAPL")
+
+# a venue that publishes no candles at all
+venues.bars_from_trades(db, interval="1m")
+```
+
+`ts_init` is the bar **close** and `ts_event` the open, because a bar is not
+knowable until its interval ends. That is why a layout must supply either a
+close-time column or an `interval`: there is no safe default, so there is no
+default. The same rule is why `references_from_series` makes you state
+`published_after`. A daily rate for Monday is published on Tuesday, and
+stamping it at Monday lets a strategy read it a day early.
+
+Yahoo has had no official API since 2017, so `yfinance` is a scraper that
+breaks when Yahoo changes internals. Fetch with it if you like, then hand the
+frame to `bars_from_dataframe`: that keeps the breakage in your script instead
+of in a parser here. Stooq downloads now sit behind a browser check, so fetch
+those by hand and point `read_bars_csv` at the file.
+
+## Trades and corporate actions
+
+A venue that publishes bulk trade files gives you real microstructure for free.
+
+```python
+venues.ingest_trades(db, files=[...], layout=venues.BINANCE_TRADES_LAYOUT,
+                     instrument_id="BINANCE:BTCUSDT")
+```
+
+The one field worth reading twice is the aggressor. Binance ships
+`isBuyerMaker`, which is true when the **buyer** was resting, so the taker was
+the seller. Read straight through it inverts every trade sign, and the result
+still balances and still sums to the right volume. `TradeLayout` therefore
+takes either `buyer_is_maker_column` or `aggressor_column`, never both.
+
+Corporate actions are what make an equity backtest correct rather than
+plausible. Without them a 2-for-1 split reads as a 50% overnight crash.
+
+```python
+venues.ingest_corporate_actions(
+    db,
+    actions=[{"instrument_id": "AAPL", "kind": "split", "ratio": 2.0,
+              "effective": "2026-03-02", "announced": "2026-02-01"}],
+    known_by=simulated_now_ns,   # drop what had not been announced yet
+)
+```
+
+`effective` is the replay clock, because that is when positions and resting
+orders change. Past prices are never rewritten: nobody traded the adjusted
+price, and a strategy that bought at 50 the day before a 2-for-1 bought at 50.
+`announced` is kept separately so `known_by` can reproduce what was knowable on
+a past date; rows with no announcement are dropped under a cutoff rather than
+assumed early enough, since assuming is how a run ends up trading a split
+nobody had heard of.
+
+## Recording a live feed
+
+`h5i-capture` (from `pip install h5i-db[capture]`) records a venue websocket to
+the same lz4 NDJSON format `hyperliquid_archive` reads, so a capture and an
+archive load through the same path.
+
+```sh
+export KALSHI_API_KEY_ID=…            # never a flag: it lands in ps output
+export KALSHI_PRIVATE_KEY_PATH=/path/to/key.pem
+h5i-capture --venue kalshi --out ./capture --market KXBTCD-25DEC31
+```
+
+It stamps arrival in nanoseconds and writes the payload verbatim. Both rules
+exist for the same reason: an arrival stamp cannot be reconstructed later, and
+parsing on the write path means a parser bug costs the data rather than an
+afternoon.
+
+Record only what an archive cannot give you. For Kalshi after January 2026,
+`predexon_book_from_snapshots` is usually the better answer, and recording
+buys sub-cent precision, your own arrival clock, and independence from a free
+service rather than access to otherwise-missing data.
+
+## Predexon
+
+```python
+snapshots = fetch_pages(...)          # your script, your API key
+report = venues.ingest_predexon_orderbooks(db, snapshots=snapshots, markets=specs)
+```
+
+Check `report.gaps` for `snapshot_cadence` before trusting a window: it carries
+the measured median and worst gap between samples. The worst gap is the number
+that matters. The vendor's `sequence` field is deliberately unread, because it
+is not a per-market counter (it steps by a median of 45, jumps by millions, and
+runs backwards), so differencing it invents holes that are not there.
+
+### One book, two sides
+
+Kalshi publishes `yes_bids` and `no_bids`, two books of bids, because an ask on
+YES is a bid on NO. Both the archive layout and the Predexon reader fold them
+into a single two-sided book on outcome 0, at `1 - price` for the NO side,
+which is what the live Rust decoder already produced. A capture, an archive and
+a Predexon pull therefore give the same canonical shape.
+
+That fold is not cosmetic. Storing the two as separate one-sided books leaves a
+market with no asks at all, and an order that cannot fill is **cancelled**
+rather than rejected, so the run completes and the strategy simply reads as
+having declined to trade.

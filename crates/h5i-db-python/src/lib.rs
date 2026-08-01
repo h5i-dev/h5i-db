@@ -28,6 +28,7 @@ use h5i_db_query::datafusion::error::DataFusionError;
 use h5i_db_query::{DEFAULT_TOLERANCE, H5iSession, SessionOptions, arrival_delta};
 
 mod python_strategy;
+mod venues;
 
 // -- exceptions -------------------------------------------------------------
 //
@@ -1365,6 +1366,7 @@ impl NativeDatabase {
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = m.py();
     m.add_class::<NativeDatabase>()?;
+    venues::register(m)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     // Which fixed-point width this wheel's backtest kernel was built with:
     // 64 by default, 128 under the `wide` feature. A compile-time choice is
