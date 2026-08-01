@@ -162,13 +162,7 @@ credentials, retries and rate limits stay in your script.
 `derived` means bars are aggregated from that source's own prints rather than
 fetched, so gaps stay visible as missing bars. `n/a` means the venue has no
 such concept: Manifold is an automated market maker, so it has prints but no
-book.
-
-Prediction-market book history comes from third-party archives, since neither
-Kalshi nor Polymarket publishes its own. `h5i-capture` records a venue
-websocket when you need something an archive cannot give you. The
-[venue guide](crates/h5i-db-venues/README.md) covers which archive to prefer
-and what each one costs you in resolution.
+book. See [venue guide](crates/h5i-db-venues/README.md) for the detail.
 
 ---
 
