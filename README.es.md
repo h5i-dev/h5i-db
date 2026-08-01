@@ -203,24 +203,6 @@ prueba cuenta como vista solo cuando se abre su detalle.
 
 ---
 
-## Cuándo *no* usar h5i-db
-
-- **Almacenes distribuidos de varios terabytes:** por diseño es de un solo nodo
-  y embebida. Para eso están ClickHouse, Snowflake o un lakehouse.
-- **OLTP o servicio con alta concurrencia:** un escritor cada vez, sin MVCC a
-  nivel de fila ni transacciones interactivas. Usa Postgres.
-- **Captura de ticks por debajo del microsegundo:** la cadencia de escritura
-  para la que está pensada son barras de un minuto, cierres de jornada y
-  archivos de proveedores, no la capa de captura en sí. Ese es el terreno de
-  kdb+.
-- **Bases de datos sin columna temporal:** todo el diseño presupone un índice
-  temporal; sin él pierdes la poda, el ASOF join y las lecturas point-in-time.
-- **Operar en real:** el backtester nunca enruta una orden de verdad. No hay
-  adaptadores de bróker, ni optimizador de cartera, ni API de gráficos; el límite
-  es la simulación y la evaluación.
-
----
-
 ## Fuentes de datos
 
 Los cargadores leen archivos y respuestas que ya tienes. Nada aquí descarga, así
@@ -245,6 +227,24 @@ esa fuente en lugar de descargarse, así que los huecos siguen visibles como
 barras ausentes. `n/d` significa que el mercado no tiene ese concepto: Manifold
 es un creador de mercado automatizado, así que tiene operaciones pero no libro.
 Consulta la [guía de mercados](crates/h5i-db-venues/README.md) para el detalle.
+
+---
+
+## Cuándo *no* usar h5i-db
+
+- **Almacenes distribuidos de varios terabytes:** por diseño es de un solo nodo
+  y embebida. Para eso están ClickHouse, Snowflake o un lakehouse.
+- **OLTP o servicio con alta concurrencia:** un escritor cada vez, sin MVCC a
+  nivel de fila ni transacciones interactivas. Usa Postgres.
+- **Captura de ticks por debajo del microsegundo:** la cadencia de escritura
+  para la que está pensada son barras de un minuto, cierres de jornada y
+  archivos de proveedores, no la capa de captura en sí. Ese es el terreno de
+  kdb+.
+- **Bases de datos sin columna temporal:** todo el diseño presupone un índice
+  temporal; sin él pierdes la poda, el ASOF join y las lecturas point-in-time.
+- **Operar en real:** el backtester nunca enruta una orden de verdad. No hay
+  adaptadores de bróker, ni optimizador de cartera, ni API de gráficos; el límite
+  es la simulación y la evaluación.
 
 ---
 

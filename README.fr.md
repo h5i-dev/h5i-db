@@ -205,24 +205,6 @@ comme vu que lorsque son détail est ouvert.
 
 ---
 
-## Quand *ne pas* utiliser h5i-db
-
-- **Entrepôts distribués de plusieurs téraoctets :** mononœud et embarquée par
-  conception. Tournez-vous vers ClickHouse, Snowflake ou un lakehouse.
-- **OLTP ou service à forte concurrence :** un seul écrivain à la fois, pas de
-  MVCC au niveau de la ligne, pas de transactions interactives. Prenez Postgres.
-- **Capture de ticks sous la microseconde :** la cadence d'écriture visée, ce
-  sont les barres à la minute, les clôtures de journée et les fichiers de
-  fournisseurs, pas la couche de capture elle-même. C'est le domaine de kdb+.
-- **Bases sans colonne temporelle :** toute la conception suppose un index
-  temporel ; sans lui, vous perdez l'élagage, la jointure ASOF et les lectures
-  point-in-time.
-- **Le trading réel :** le backtester ne route jamais un ordre véritable. Pas
-  d'adaptateurs de courtier, pas d'optimiseur de portefeuille, pas d'API de tracé ;
-  la frontière, c'est la simulation et l'évaluation.
-
----
-
 ## Sources de données
 
 Les chargeurs lisent des fichiers et des réponses que vous avez déjà. Rien ici ne
@@ -248,6 +230,24 @@ source elle-même plutôt que téléchargées : les trous restent visibles sous 
 de barres absentes. `s.o.` signifie que la place n'a pas cette notion : Manifold
 est un teneur de marché automatisé, il a donc des transactions mais pas de
 carnet. Voir le [guide des places](crates/h5i-db-venues/README.md) pour le détail.
+
+---
+
+## Quand *ne pas* utiliser h5i-db
+
+- **Entrepôts distribués de plusieurs téraoctets :** mononœud et embarquée par
+  conception. Tournez-vous vers ClickHouse, Snowflake ou un lakehouse.
+- **OLTP ou service à forte concurrence :** un seul écrivain à la fois, pas de
+  MVCC au niveau de la ligne, pas de transactions interactives. Prenez Postgres.
+- **Capture de ticks sous la microseconde :** la cadence d'écriture visée, ce
+  sont les barres à la minute, les clôtures de journée et les fichiers de
+  fournisseurs, pas la couche de capture elle-même. C'est le domaine de kdb+.
+- **Bases sans colonne temporelle :** toute la conception suppose un index
+  temporel ; sans lui, vous perdez l'élagage, la jointure ASOF et les lectures
+  point-in-time.
+- **Le trading réel :** le backtester ne route jamais un ordre véritable. Pas
+  d'adaptateurs de courtier, pas d'optimiseur de portefeuille, pas d'API de tracé ;
+  la frontière, c'est la simulation et l'évaluation.
 
 ---
 

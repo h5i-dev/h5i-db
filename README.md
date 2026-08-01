@@ -190,23 +190,6 @@ reviewed; a trial counts as seen only when its detail is opened.
 
 ---
 
-## When *not* to use h5i-db
-
-- **Distributed, multi-terabyte warehouses:** single-node and embedded by
-  design. Reach for ClickHouse, Snowflake or a lakehouse.
-- **OLTP or high-concurrency serving:** one writer at a time, no row-level
-  MVCC, no interactive transactions. Use Postgres.
-- **Sub-microsecond tick capture:** the write cadence this is built for is
-  minute bars, end-of-day, and vendor files, not the capture layer itself.
-  That is kdb+ territory.
-- **Databases with no time column:** the whole design assumes a time index;
-  without one you lose pruning, the ASOF join, and point-in-time reads.
-- **Live trading:** the backtester never routes a real order. There are no
-  brokerage adapters, no portfolio optimiser and no plotting API; the boundary
-  is simulation and evaluation.
-
----
-
 ## Data sources
 
 Loaders read files and payloads you already have. Nothing here fetches, so
@@ -230,6 +213,23 @@ credentials, retries and rate limits stay in your script.
 fetched, so gaps stay visible as missing bars. `n/a` means the venue has no
 such concept: Manifold is an automated market maker, so it has prints but no
 book. See [venue guide](crates/h5i-db-venues/README.md) for the detail.
+
+---
+
+## When *not* to use h5i-db
+
+- **Distributed, multi-terabyte warehouses:** single-node and embedded by
+  design. Reach for ClickHouse, Snowflake or a lakehouse.
+- **OLTP or high-concurrency serving:** one writer at a time, no row-level
+  MVCC, no interactive transactions. Use Postgres.
+- **Sub-microsecond tick capture:** the write cadence this is built for is
+  minute bars, end-of-day, and vendor files, not the capture layer itself.
+  That is kdb+ territory.
+- **Databases with no time column:** the whole design assumes a time index;
+  without one you lose pruning, the ASOF join, and point-in-time reads.
+- **Live trading:** the backtester never routes a real order. There are no
+  brokerage adapters, no portfolio optimiser and no plotting API; the boundary
+  is simulation and evaluation.
 
 ---
 
