@@ -138,6 +138,14 @@ ladder, and a validation flagged for human sign-off.
   <img src="./docs/_static/backtest-ui.png" alt="demo ui view" width="99%">
 </p>
 
+<p align="center">
+  <img src="./docs/_static/report-screenshot-1.png" width="49%" />
+  <img src="./docs/_static/report-screenshot-2.png" width="49%" />
+  <br />
+  <img src="./docs/_static/report-screenshot-3.png" width="49%" />
+  <img src="./docs/_static/report-screenshot-4.png" width="49%" />
+</p>
+
 ---
 
 ## Why it's fast
