@@ -14,8 +14,9 @@ Embedded, written in Rust.**
 - **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- **Native venue support:** Hyperliquid, Polymarket and Kalshi, plus anything
-  else that writes the [canonical tables](crates/h5i-db-venues/README.md).
+- **Native venue support:** Kalshi, Polymarket, Hyperliquid, Binance and more
+  ([full list](#data-sources)), plus anything else that writes the
+  [canonical tables](crates/h5i-db-venues/README.md).
 - **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.
@@ -138,6 +139,38 @@ ladder, and a validation flagged for human sign-off.
 <p align="center">
   <img src="./docs/_static/backtest-ui.png" alt="demo ui view" width="99%">
 </p>
+
+---
+
+## Data sources
+
+Loaders read files and payloads you already have. Nothing here fetches, so
+credentials, retries and rate limits stay in your script.
+
+| Source | Order book | Trades | Bars | Also |
+|---|---|---|---|---|
+| Kalshi | ✓ | ✓ | ✓ | settlement |
+| Polymarket | ✓ | ✓ | derived | settlement, complete-set mint and redeem |
+| Hyperliquid | ✓ | ✓ | ✓ | funding, mark and oracle prices, leverage caps |
+| Limitless | ✓ | ✓ | derived | |
+| Opinion | ✓ | ✓ | derived | |
+| Manifold | n/a | ✓ | derived | settlement |
+| Binance | | ✓ | ✓ | spot and futures bulk dumps |
+| Any OHLCV export | | | ✓ | a broker CSV, `yfinance`, Stooq |
+| Any trade dump | | ✓ | derived | |
+| Published series | | | | reference prices, for a rate or an index |
+| Corporate actions | | | | splits, dividends, delistings |
+
+`derived` means bars are aggregated from that source's own prints rather than
+fetched, so gaps stay visible as missing bars. `n/a` means the venue has no
+such concept: Manifold is an automated market maker, so it has prints but no
+book.
+
+Prediction-market book history comes from third-party archives, since neither
+Kalshi nor Polymarket publishes its own. `h5i-capture` records a venue
+websocket when you need something an archive cannot give you. The
+[venue guide](crates/h5i-db-venues/README.md) covers which archive to prefer
+and what each one costs you in resolution.
 
 ---
 
