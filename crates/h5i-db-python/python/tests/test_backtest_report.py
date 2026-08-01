@@ -241,6 +241,29 @@ def test_html_summary_is_the_report():
         db.close()
 
 
+def test_verify_re_executes_instead_of_reading_its_own_result():
+    """A pinned config is deduplicable, and verify must not dedupe to itself.
+
+    The trial ledger identifies a trial by its inputs, not by its run_id, so
+    the verification run looks identical to the run being verified. Served
+    from the ledger it would compare the run against itself and then drop the
+    fork it was verifying.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db, result = _run(tmp, "rep-verify")
+        verification = result.verify()
+        surviving = set(db.fork_names())
+        rows = result.fills.num_rows
+        db.close()
+    assert verification["verified"]
+    assert result.fork_name in surviving
+    assert rows == 1
+    # Exactly one fork: the verification run cleaned up after itself.
+    assert [name for name in surviving if name.startswith("bt-")] == [
+        result.fork_name
+    ]
+
+
 def test_the_cli_report_verb_writes_the_run_report(tmp_path, capsys):
     with tempfile.TemporaryDirectory() as tmp:
         database = f"{tmp}/bt.db"

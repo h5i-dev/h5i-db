@@ -295,7 +295,13 @@ class BacktestResult(dict):
         )
         candidate: Optional[BacktestResult] = None
         try:
-            candidate = execute(self._db, verify_config, strategy=strategy)
+            # `reuse=False`, or the trial ledger recognises this configuration
+            # as one it has already run and hands back *this* result: the
+            # comparison would then be the run against itself, and the drop
+            # below would delete the run being verified.
+            candidate = execute(
+                self._db, verify_config, strategy=strategy, reuse=False
+            )
             compared = self.compare(candidate)
             compared["tables_equal"] = {
                 name: self.table(name).equals(candidate.table(name))
@@ -306,7 +312,8 @@ class BacktestResult(dict):
             ) and all(compared["tables_equal"].values())
             return compared
         finally:
-            if candidate is not None:
+            # Never drop a fork this call did not create.
+            if candidate is not None and candidate.fork_name != self.fork_name:
                 self._db.drop_fork(candidate.fork_name)
 
     def promote(self, tables: Optional[Iterable[str]] = None) -> list[dict[str, Any]]:

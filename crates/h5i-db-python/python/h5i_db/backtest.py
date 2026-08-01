@@ -536,8 +536,15 @@ def execute(
     *,
     preflight: bool = True,
     strategy: Any = None,
+    reuse: bool = True,
 ) -> BacktestResult:
-    """Execute a complete typed configuration through the native kernel."""
+    """Execute a complete typed configuration through the native kernel.
+
+    ``reuse=False`` forces the kernel to run even when the trial ledger
+    already holds this exact configuration. Reuse is what keeps a search from
+    paying twice for the same trial, but it is the wrong answer when the
+    point of the call *is* to execute again, as in ``BacktestResult.verify``.
+    """
     if not isinstance(config, BacktestConfig):
         raise TypeError("config must be a BacktestConfig")
     inspection = inspect(db, config)
@@ -555,7 +562,8 @@ def execute(
     # Unpinned inputs and callback implementations lack a complete reusable
     # identity. They still produce an on-ledger run, but cannot be cached.
     deduplicable = (
-        any(
+        reuse
+        and any(
             (
                 data.snapshot is not None,
                 data.version is not None,
