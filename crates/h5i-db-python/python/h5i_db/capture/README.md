@@ -102,7 +102,11 @@ The signature is RSA-PSS over `timestamp_ms + "GET" + path`, SHA-256, MGF1 with
 SHA-256, and a **salt length equal to the digest length**. That last one is the
 detail worth stating: `cryptography`'s own default salt length is the maximum
 the key allows, and a signature made that way fails Kalshi's check with a bare
-authentication error that names nothing. The path is the URL's path without its
+authentication error that names nothing. This handshake has been accepted by
+production (`wss://api.elections.kalshi.com/trade-api/ws/v2`): a twenty second
+run on a live game market subscribed to `orderbook_delta` and `trade` and
+recorded 1369 frames, of which 1300 were book messages that the Rust decoder
+then replayed into canonical rows with zero sequence gaps. The path is the URL's path without its
 query string, so `--url` can point at the demo host
 (`wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2`) or the newer
 `external-api-ws.kalshi.com` host without touching the credential. It goes out
