@@ -2191,10 +2191,11 @@ came from.
 Every market-data table is time-indexed on `ts_init`, the column replay
 sorts by, so a range scan prunes on exactly the right column.
 
-Numbers are `Float64` on disk and fixed point in the kernel. The conversion
-is exact for every value the fixed-point type can represent (nine decimal
-places, magnitudes below about 9e9); a test walks the entire 0.0001 tick
-grid to confirm it rather than assuming.
+Numbers are fixed point in the kernel and `Float64` on disk by default. The
+conversion keeps all nine decimal places and is exact up to a magnitude of
+about nine million, which covers every price a venue quotes; a test walks the
+entire 0.0001 tick grid to confirm it rather than assuming. For a book that
+will hold larger numbers than that, see [Precision and range](#precision-and-range).
 
 ### Snapshots are grouped
 
@@ -2213,6 +2214,79 @@ without complaint.
 The index values themselves only have to *change* between events. They are not
 required to increase with `ts_init`, since grouping follows row order and ends
 at `is_last`, so a recorder that writes instrument-major is fine.
+
+## Precision and range
+
+Two independent choices decide how large a number can get. Both default to
+the cheaper option, and most books never need to change either.
+
+**On disk**, a fixed-point column is `Float64` by default. That is exact to
+about nine million units; past that an `f64` mantissa stops holding
+consecutive values and writes begin to round. A table that will hold more is
+created with the decimal encoding instead, which stores the number itself and
+rounds nothing:
+
+```rust
+use h5i_db_backtest::{FixedEncoding, store};
+
+store::create_market_data_tables_with(&db, FixedEncoding::Decimal).await?;
+```
+
+The encoding belongs to the table rather than to your binary: it is recorded
+in the table's schema, and every reader follows what it finds. Two tables in
+one database can differ, and any build reads both. The call above skips
+tables that already exist, so running it before an ingest is enough -- the
+loaders write whichever encoding the table already declares, and existing
+tables keep the one they were created with.
+
+**In the kernel**, arithmetic is `i64` scaled by 1e-9, which tops out at
+±9,223,372,036. The `wide` feature makes it `i128`:
+
+```toml
+h5i-db-backtest = { version = "0.1", features = ["wide"] }
+```
+
+The scale does not move when the integer widens, so nothing already written
+changes meaning and there is nothing to migrate.
+
+| | exact to | kernel cost |
+|---|---:|---:|
+| default | 9.0e6 units | -- |
+| decimal columns | 9.2e9 units | none |
+| decimal columns + `wide` | 1.7e29 units | ~50% slower |
+
+The middle row is the one worth knowing about. On an ordinary build, decimal
+storage is exact across the entire range the default arithmetic can produce,
+and costs nothing at run time because the kernel never sees a column. What it
+does cost is disk: sixteen bytes a value instead of eight.
+
+### Filtering a decimal column in SQL
+
+Write the comparison value as a cast, not a bare literal:
+
+```sql
+-- exact
+SELECT * FROM trades WHERE price > CAST('9007199.254740993' AS DECIMAL(38,9));
+
+-- lossy above ~9e6: the literal is Float64, so the column is coerced to f64
+SELECT * FROM trades WHERE price > 9007199.254740993;
+```
+
+A bare decimal literal is typed `Float64`, so comparing a decimal column
+against one converts the column to `f64` for the comparison and gives up the
+exactness the column was chosen for. It is exact below about nine million,
+which is where a `Float64` column would have been fine anyway; past that,
+equality can miss the row it names. The cast keeps the comparison in decimal.
+
+Filtering on time is unaffected, which is the path a replay takes.
+
+Reach for `wide` only when you need to *compute* past 9.2e9 units -- a
+yen-denominated book, or token quantities in the trillions. It buys range and
+pays for it in arithmetic, because an `i128` add spans two registers.
+
+Nothing is silently truncated in either direction. A default build reading a
+decimal value too large for its `i64` refuses it, the same way arithmetic
+overflow is refused rather than allowed to wrap.
 
 ## A run
 
@@ -2249,14 +2323,33 @@ disposes of the rest.
 `bt_fills` is authoritative. Positions are a fold over it and nothing else,
 so a stored run can be rebuilt and checked rather than trusted.
 
-## From a run to a tearsheet
+## From a run to a report
+
+```python
+result.report("run.html")
+```
+
+One self-contained HTML file: no dependencies, no network access at view
+time, so it can be attached to a review, committed beside the run, or opened
+years later. It opens with the evidence that says how far the numbers can be
+trusted (replay fidelity, the pin, coverage, preflight findings), then the
+performance panels, then the execution record: order lifecycle, rejection
+reasons, every fill. The configuration is carried verbatim at the end, so the
+page is enough to re-run the run it describes. In a notebook, the result
+renders as that page.
+
+A run that produced no equity curve still reports. The performance panels
+drop out and the execution evidence stays, because a tearsheet of nothing is
+worse than a manifest.
+
+For the performance statistics alone, the equity curve is an ordinary table:
 
 ```python
 from h5i_db import quant
 
 fork = db.fork("bt-momentum-001")
 series = quant.from_levels(fork, "bt_equity")
-quant.tearsheet(series, path="run.html")
+quant.tearsheet(series, path="tearsheet.html")
 ```
 
 The statistics are the same empyrical-parity set documented in
@@ -2288,9 +2381,11 @@ python -m h5i_db.backtest verify  market.db momentum-001
 
 Two flags are worth knowing. `run --allow-preflight-errors` records the
 findings and runs anyway, for the case where you know why the data is thin.
-`report --execution-only` renders the execution manifest instead of an equity
-tearsheet; `report` falls back to it on its own when a run produced no equity
-curve, because a tearsheet of nothing is worse than a manifest.
+`report` writes the run report described above; `report --tearsheet` renders
+the equity tearsheet alone instead, and falls back to the run report when a
+run produced no equity curve, because a tearsheet of nothing is worse than a
+manifest. (`--execution-only`, which used to select a bare manifest, still
+works and now selects the run report, which contains that manifest.)
 
 Exit codes are distinct on purpose: a refused config (`2`) and a run that
 failed to reproduce (`3`) call for different responses, and a script should not
@@ -2710,6 +2805,32 @@ historical L2 deltas. Those records support trade-driven or bar research, but
 cannot reconstruct queue position and must not be presented as exact L2
 replay. REST snapshots likewise describe only the instant at which they were
 requested.
+
+Two third-party sources now carry historical Kalshi order books, so this
+research no longer has to wait for a capture to accumulate.
+
+`h5i_db.venues.predexon_book_from_snapshots` reads the one to prefer for
+anything after January 2026: full book snapshots rather than accumulated
+changes, so a lost record costs one sample instead of corrupting every level
+after it, and finalized daily. Read its report before trusting a window. It
+measures the sampling cadence, which on a liquid market runs to a median of a
+few seconds with occasional holes of over an hour, and a strategy that reads
+one of those holes as continuous will fill at prices nobody quoted. Its free
+endpoint also rounds prices to whole cents, which is a real loss at the touch
+now that Kalshi quotes sub-cent.
+
+`h5i_db.venues.KALSHI_PMXT_LAYOUT` reads the other, which reaches further back.
+It is not a substitute for prospective capture where queue accuracy matters.
+Its deltas are
+signed size changes replayed into absolute levels at ingest, its snapshots
+carry no venue timestamp and so seed the book rather than being replayed at
+their own stamp, and it has no per-market sequence numbers, so the ingest
+reports divergence against later snapshots instead of detecting a dropped
+message directly. The report says how many vendor snapshots the reconstruction
+reproduced exactly; treat a low number as a signal to load the neighbouring
+hours rather than as a reason to trust the book less than it deserves. Coverage
+on that host also lags the present by weeks, which is its own reason to keep
+recording.
 
 Use `KalshiFees` (or Python's `fee_kind="kalshi"`) with rates pinned from the
 applicable series fee schedule. It implements the quadratic curve, centicent

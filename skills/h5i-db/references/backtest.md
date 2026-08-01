@@ -27,7 +27,15 @@ result.summary()      # fills, final cash, how far it actually simulated
 result.explain()      # why orders were rejected or never filled
 result.fills          # Arrow; or SQL it on the fork
 result.verify()       # re-execute the stored config and compare
+result.report("run.html")   # one self-contained page of the whole run
 ```
+
+`report()` writes a single HTML file with no dependencies and no network
+access at view time: the replay fidelity and the pin first, then the
+performance panels, then order lifecycle, rejections and fills, and the
+configuration verbatim at the end so the page is enough to re-run itself. In a
+notebook the result renders as that page. A run with no equity curve still
+reports; the performance panels drop out and the execution evidence stays.
 
 `execute` returns a `BacktestResult`, which is a dict *and* an object: `result["fills"]`
 and `result.fills` are different things. The mapping keys are summary metrics; the
@@ -178,7 +186,7 @@ strategies are not reused, because their identity is not complete.
 python -m h5i_db.backtest inspect market.db config.json
 python -m h5i_db.backtest run     market.db config.json [--allow-preflight-errors]
 python -m h5i_db.backtest list    market.db
-python -m h5i_db.backtest report  market.db momentum-001 --output run.html [--execution-only]
+python -m h5i_db.backtest report  market.db momentum-001 --output run.html [--tearsheet]
 python -m h5i_db.backtest verify  market.db momentum-001
 ```
 

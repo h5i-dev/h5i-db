@@ -320,24 +320,41 @@ class BacktestResult(dict):
     def drop(self) -> int:
         return self._db.drop_fork(self.fork_name)
 
-    def html_summary(self, path: Optional[Union[str, Path]] = None) -> str:
-        """Small dependency-free execution report for runs without equity."""
-        summary = self.summary()
-        explanation = self.explain()
-        body = (
-            "<!doctype html><meta charset='utf-8'>"
-            f"<title>{html.escape(self.run_id)}</title>"
-            "<style>body{font:15px system-ui;max-width:960px;margin:40px auto;"
-            "padding:0 20px}pre{background:#f5f5f5;padding:16px;overflow:auto}</style>"
-            f"<h1>{html.escape(self.run_id)}</h1>"
-            "<h2>Run manifest</h2>"
-            f"<pre>{html.escape(json.dumps(summary, indent=2, default=str))}</pre>"
-            "<h2>Execution diagnostics</h2>"
-            f"<pre>{html.escape(json.dumps(explanation, indent=2, default=str))}</pre>"
+    def report(
+        self,
+        path: Optional[Union[str, Path]] = None,
+        *,
+        title: Optional[str] = None,
+    ) -> str:
+        """One self-contained HTML file: evidence, performance, executions.
+
+        No network access at view time and no dependencies, so the file can
+        be attached to a review, committed beside the run, or opened years
+        later. A run without an equity curve still reports: the performance
+        panels drop out and the execution evidence remains.
+        """
+        from . import quant
+
+        return quant.report.backtest_report(
+            self, path=str(path) if path is not None else None, title=title
         )
-        if path is not None:
-            Path(path).write_text(body, encoding="utf-8")
-        return body
+
+    def html_summary(self, path: Optional[Union[str, Path]] = None) -> str:
+        """The report, under its original name."""
+        return self.report(path)
+
+    def _repr_html_(self) -> str:
+        """Render inside a notebook without leaking styles into it.
+
+        The report is a whole document with its own theme; an iframe is what
+        keeps that from repainting the notebook around it.
+        """
+        document = html.escape(self.report(), quote=True)
+        return (
+            f'<iframe srcdoc="{document}" style="width:100%;height:820px;'
+            'border:1px solid rgba(127,127,127,.35);border-radius:8px" '
+            'loading="lazy"></iframe>'
+        )
 
 
 def open_result(db: Any, run_id: str) -> BacktestResult:

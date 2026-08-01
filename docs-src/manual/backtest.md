@@ -172,14 +172,33 @@ disposes of the rest.
 `bt_fills` is authoritative. Positions are a fold over it and nothing else,
 so a stored run can be rebuilt and checked rather than trusted.
 
-## From a run to a tearsheet
+## From a run to a report
+
+```python
+result.report("run.html")
+```
+
+One self-contained HTML file: no dependencies, no network access at view
+time, so it can be attached to a review, committed beside the run, or opened
+years later. It opens with the evidence that says how far the numbers can be
+trusted (replay fidelity, the pin, coverage, preflight findings), then the
+performance panels, then the execution record: order lifecycle, rejection
+reasons, every fill. The configuration is carried verbatim at the end, so the
+page is enough to re-run the run it describes. In a notebook, the result
+renders as that page.
+
+A run that produced no equity curve still reports. The performance panels
+drop out and the execution evidence stays, because a tearsheet of nothing is
+worse than a manifest.
+
+For the performance statistics alone, the equity curve is an ordinary table:
 
 ```python
 from h5i_db import quant
 
 fork = db.fork("bt-momentum-001")
 series = quant.from_levels(fork, "bt_equity")
-quant.tearsheet(series, path="run.html")
+quant.tearsheet(series, path="tearsheet.html")
 ```
 
 The statistics are the same empyrical-parity set documented in
@@ -211,9 +230,11 @@ python -m h5i_db.backtest verify  market.db momentum-001
 
 Two flags are worth knowing. `run --allow-preflight-errors` records the
 findings and runs anyway, for the case where you know why the data is thin.
-`report --execution-only` renders the execution manifest instead of an equity
-tearsheet; `report` falls back to it on its own when a run produced no equity
-curve, because a tearsheet of nothing is worse than a manifest.
+`report` writes the run report described above; `report --tearsheet` renders
+the equity tearsheet alone instead, and falls back to the run report when a
+run produced no equity curve, because a tearsheet of nothing is worse than a
+manifest. (`--execution-only`, which used to select a bare manifest, still
+works and now selects the run report, which contains that manifest.)
 
 Exit codes are distinct on purpose: a refused config (`2`) and a run that
 failed to reproduce (`3`) call for different responses, and a script should not
