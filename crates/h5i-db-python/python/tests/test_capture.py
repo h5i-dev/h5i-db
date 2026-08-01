@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import importlib.util
 import json
 import os
 import signal
@@ -38,6 +39,14 @@ from h5i_db.capture import (
     read_capture_text,
     read_hour,
     sign_kalshi,
+)
+
+# The writer needs the [capture] extra. Skipping without it keeps a plain
+# checkout green, and CI installs the extra so these still run there: the
+# lz4 framing rule they pin fails silently, so it must not go unchecked.
+requires_lz4 = pytest.mark.skipif(
+    importlib.util.find_spec("lz4") is None,
+    reason="lz4 comes with the [capture] extra: pip install 'h5i-db[capture]'",
 )
 
 # 2025-01-01T00:00:02.238437296Z, the stamp the Rust tests use.
@@ -124,6 +133,7 @@ def test_now_nanos_is_nanoseconds_not_scaled_milliseconds():
 # --------------------------------------------------------------------------
 
 
+@requires_lz4
 def test_a_written_file_round_trips(tmp_path):
     payloads = [
         '{"type":"orderbook_delta","seq":48213}',
@@ -150,6 +160,7 @@ def test_a_written_file_round_trips(tmp_path):
     assert '"px":1.50' in read_capture_text(path)
 
 
+@requires_lz4
 def test_lines_land_in_the_hour_they_arrived_in(tmp_path):
     writer = CaptureWriter(tmp_path, "kalshi", 3600.0)
     writer.write_line(HOUR_00, "a")
@@ -162,6 +173,7 @@ def test_lines_land_in_the_hour_they_arrived_in(tmp_path):
     assert writer.lines == 2
 
 
+@requires_lz4
 def test_flushing_mid_file_leaves_one_frame_that_still_reads_whole(tmp_path):
     # A zero flush interval flushes after every line. If a flush ever ended the
     # frame instead of the block, the decoder would stop at the first line and
@@ -186,6 +198,7 @@ def test_a_second_frame_in_a_file_would_read_back_as_silence(tmp_path):
     assert read_capture_text(path) == "first\n"
 
 
+@requires_lz4
 def test_a_restart_inside_the_same_hour_opens_the_next_part(tmp_path):
     for line in ["first", "second", "third"]:
         writer = CaptureWriter(tmp_path, "kalshi", 3600.0)
@@ -198,6 +211,7 @@ def test_a_restart_inside_the_same_hour_opens_the_next_part(tmp_path):
     assert read_capture_text(day / "00.002.ndjson.lz4", tolerant=False) == "third\n"
 
 
+@requires_lz4
 def test_read_hour_sees_every_part(tmp_path):
     for index in range(3):
         writer = CaptureWriter(tmp_path, "kalshi", 3600.0)
@@ -208,6 +222,7 @@ def test_read_hour_sees_every_part(tmp_path):
     assert [line["raw"]["n"] for line in lines] == [0, 1, 2]
 
 
+@requires_lz4
 def test_a_killed_capture_still_yields_its_flushed_blocks(tmp_path):
     """Simulates kill -9: flush, then never close, so the frame has no end mark.
 
@@ -228,6 +243,7 @@ def test_a_killed_capture_still_yields_its_flushed_blocks(tmp_path):
         read_capture_text(path, tolerant=False)
 
 
+@requires_lz4
 def test_writing_after_a_close_opens_a_fresh_part(tmp_path):
     # `close` is idempotent and leaves the writer usable, which is what makes
     # the shutdown path safe to call from both the signal handler and __del__.
@@ -450,6 +466,7 @@ def test_market_flags_repeat_and_split_on_commas():
     assert args.keepalive_secs == 10.0
 
 
+@requires_lz4
 def test_the_recorder_records_markers_frames_and_a_reconnect(tmp_path):
     """The whole loop, against a socket that drops once.
 

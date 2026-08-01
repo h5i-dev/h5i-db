@@ -286,8 +286,11 @@ jobs:
       - name: Python test suite
         run: |
           # pandas and polars are optional at runtime, installed here so the
-          # to_pandas / to_polars converters are actually exercised.
-          pip install pytest pandas polars
+          # to_pandas / to_polars converters are actually exercised. The
+          # recorder's extra is installed for the same reason: without it the
+          # capture tests skip, and the lz4 framing rule they pin is the kind
+          # of thing that breaks silently.
+          pip install pytest pandas polars lz4 websockets cryptography
           python -m pytest crates/h5i-db-python/python/tests -q
       - uses: actions/upload-artifact@v4
         with:

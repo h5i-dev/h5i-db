@@ -1292,9 +1292,7 @@ async fn a_corporate_row_missing_its_value_is_refused_rather_than_zeroed() {
 
     // A split row with no ratio. Reading it as zero would empty a position,
     // and reading it as one would silently skip the split.
-    use arrow::array::{
-        Float64Array, Int64Array, StringArray, TimestampNanosecondArray,
-    };
+    use arrow::array::{Float64Array, Int64Array, StringArray, TimestampNanosecondArray};
     use arrow::record_batch::RecordBatch;
 
     let schema = h5i_db_backtest::schema::corporate_actions(FixedEncoding::Float);

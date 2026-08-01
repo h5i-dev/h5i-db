@@ -32,10 +32,10 @@ use h5i_db_core::Database;
 use h5i_db_core::database::{ReadAt, ScanOptions, WriteOptions};
 
 use crate::book::{BookDelta, OrderBook};
+use crate::corporate::CorporateAction;
 use crate::decimal::{FixedBuilder, FixedEncoding, read_fixed, read_fixed_value};
 use crate::engine::RunResult;
 use crate::error::{BacktestError, Result};
-use crate::corporate::CorporateAction;
 use crate::event::{MarketEvent, Record};
 use crate::instrument::{
     Instrument, InstrumentId, InstrumentKind, InstrumentSet, OutcomeId, PriceRule,
