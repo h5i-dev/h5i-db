@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/backtest/#article","headline":"Backtesting","name":"Backtesting","description":"Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.","url":"https://db.h5i.dev/manual/backtest/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/backtest/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Backtesting","item":"https://db.h5i.dev/manual/backtest/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/backtest/#article","headline":"Backtesting","name":"Backtesting","description":"Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.","url":"https://db.h5i.dev/manual/backtest/","inLanguage":"en","dateModified":"2026-07-31","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/backtest/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Backtesting","item":"https://db.h5i.dev/manual/backtest/"}]}]}</script>
 </head>
 <body>
 
@@ -125,10 +125,11 @@ came from.</p>
 </table></div>
 <p>Every market-data table is time-indexed on <code>ts_init</code>, the column replay
 sorts by, so a range scan prunes on exactly the right column.</p>
-<p>Numbers are <code>Float64</code> on disk and fixed point in the kernel. The conversion
-is exact for every value the fixed-point type can represent (nine decimal
-places, magnitudes below about 9e9); a test walks the entire 0.0001 tick
-grid to confirm it rather than assuming.</p>
+<p>Numbers are fixed point in the kernel and <code>Float64</code> on disk by default. The
+conversion keeps all nine decimal places and is exact up to a magnitude of
+about nine million, which covers every price a venue quotes; a test walks the
+entire 0.0001 tick grid to confirm it rather than assuming. For a book that
+will hold larger numbers than that, see <a href="#precision-and-range">Precision and range</a>.</p>
 <h3 id="snapshots-are-grouped">Snapshots are grouped<a class="headerlink" href="#snapshots-are-grouped" title="Permanent link">#</a></h3>
 <p>A snapshot is many rows sharing an <code>event_index</code>, with <code>is_last</code> on the
 final one. Applying half a snapshot would leave a crossed or hollow book, so
@@ -143,18 +144,95 @@ without complaint.</p>
 <p>The index values themselves only have to <em>change</em> between events. They are not
 required to increase with <code>ts_init</code>, since grouping follows row order and ends
 at <code>is_last</code>, so a recorder that writes instrument-major is fine.</p>
-<h2 id="a-run">A run<a class="headerlink" href="#a-run" title="Permanent link">#</a></h2>
-<div class="highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">h5i_db_backtest</span>::<span class="p">{</span><span class="n">run_in_fork</span><span class="p">,</span><span class="w"> </span><span class="n">RunSpec</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span><span class="p">};</span>
+<h2 id="precision-and-range">Precision and range<a class="headerlink" href="#precision-and-range" title="Permanent link">#</a></h2>
+<p>Two independent choices decide how large a number can get. Both default to
+the cheaper option, and most books never need to change either.</p>
+<p><strong>On disk</strong>, a fixed-point column is <code>Float64</code> by default. That is exact to
+about nine million units; past that an <code>f64</code> mantissa stops holding
+consecutive values and writes begin to round. A table that will hold more is
+created with the decimal encoding instead, which stores the number itself and
+rounds nothing:</p>
+<div class="highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">h5i_db_backtest</span><span class="p">::{</span><span class="n">FixedEncoding</span><span class="p">,</span><span class="w"> </span><span class="n">store</span><span class="p">};</span>
 
-<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SignalReplay</span>::<span class="n">new</span><span class="p">(</span><span class="n">intents</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<span class="n">store</span><span class="p">::</span><span class="n">create_market_data_tables_with</span><span class="p">(</span><span class="o">&amp;</span><span class="n">db</span><span class="p">,</span><span class="w"> </span><span class="n">FixedEncoding</span><span class="p">::</span><span class="n">Decimal</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</code></pre></div>
+
+<p>The encoding belongs to the table rather than to your binary: it is recorded
+in the table's schema, and every reader follows what it finds. Two tables in
+one database can differ, and any build reads both. The call above skips
+tables that already exist, so running it before an ingest is enough -- the
+loaders write whichever encoding the table already declares, and existing
+tables keep the one they were created with.</p>
+<p><strong>In the kernel</strong>, arithmetic is <code>i64</code> scaled by 1e-9, which tops out at
+±9,223,372,036. The <code>wide</code> feature makes it <code>i128</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="n">h5i-db-backtest</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">version</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;0.1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;wide&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
+</code></pre></div>
+
+<p>The scale does not move when the integer widens, so nothing already written
+changes meaning and there is nothing to migrate.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">exact to</th>
+<th style="text-align: right;">kernel cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>default</td>
+<td style="text-align: right;">9.0e6 units</td>
+<td style="text-align: right;">--</td>
+</tr>
+<tr>
+<td>decimal columns</td>
+<td style="text-align: right;">9.2e9 units</td>
+<td style="text-align: right;">none</td>
+</tr>
+<tr>
+<td>decimal columns + <code>wide</code></td>
+<td style="text-align: right;">1.7e29 units</td>
+<td style="text-align: right;">~50% slower</td>
+</tr>
+</tbody>
+</table></div>
+<p>The middle row is the one worth knowing about. On an ordinary build, decimal
+storage is exact across the entire range the default arithmetic can produce,
+and costs nothing at run time because the kernel never sees a column. What it
+does cost is disk: sixteen bytes a value instead of eight.</p>
+<h3 id="filtering-a-decimal-column-in-sql">Filtering a decimal column in SQL<a class="headerlink" href="#filtering-a-decimal-column-in-sql" title="Permanent link">#</a></h3>
+<p>Write the comparison value as a cast, not a bare literal:</p>
+<div class="highlight"><pre><span></span><code><span class="c1">-- exact</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">trades</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">price</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="k">CAST</span><span class="p">(</span><span class="s1">&#39;9007199.254740993&#39;</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="nb">DECIMAL</span><span class="p">(</span><span class="mi">38</span><span class="p">,</span><span class="mi">9</span><span class="p">));</span>
+
+<span class="c1">-- lossy above ~9e6: the literal is Float64, so the column is coerced to f64</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">trades</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">price</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="mi">9007199</span><span class="p">.</span><span class="mi">254740993</span><span class="p">;</span>
+</code></pre></div>
+
+<p>A bare decimal literal is typed <code>Float64</code>, so comparing a decimal column
+against one converts the column to <code>f64</code> for the comparison and gives up the
+exactness the column was chosen for. It is exact below about nine million,
+which is where a <code>Float64</code> column would have been fine anyway; past that,
+equality can miss the row it names. The cast keeps the comparison in decimal.</p>
+<p>Filtering on time is unaffected, which is the path a replay takes.</p>
+<p>Reach for <code>wide</code> only when you need to <em>compute</em> past 9.2e9 units -- a
+yen-denominated book, or token quantities in the trillions. It buys range and
+pays for it in arithmetic, because an <code>i128</code> add spans two registers.</p>
+<p>Nothing is silently truncated in either direction. A default build reading a
+decimal value too large for its <code>i64</code> refuses it, the same way arithmetic
+overflow is refused rather than allowed to wrap.</p>
+<h2 id="a-run">A run<a class="headerlink" href="#a-run" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="k">use</span><span class="w"> </span><span class="n">h5i_db_backtest</span><span class="p">::{</span><span class="n">run_in_fork</span><span class="p">,</span><span class="w"> </span><span class="n">RunSpec</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span><span class="p">};</span>
+
+<span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">strategy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SignalReplay</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">intents</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 <span class="kd">let</span><span class="w"> </span><span class="n">report</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">run_in_fork</span><span class="p">(</span>
 <span class="w">    </span><span class="o">&amp;</span><span class="n">db</span><span class="p">,</span>
-<span class="w">    </span><span class="n">RunSpec</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;momentum-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span>::<span class="n">from_units</span><span class="p">(</span><span class="mi">10_000</span><span class="p">)</span><span class="o">?</span><span class="p">)</span>
+<span class="w">    </span><span class="n">RunSpec</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;momentum-001&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Money</span><span class="p">::</span><span class="n">from_units</span><span class="p">(</span><span class="mi">10_000</span><span class="p">)</span><span class="o">?</span><span class="p">)</span>
 <span class="w">        </span><span class="p">.</span><span class="n">window</span><span class="p">(</span><span class="n">window</span><span class="p">)</span>
-<span class="w">        </span><span class="p">.</span><span class="n">read_at</span><span class="p">(</span><span class="n">ReadAt</span>::<span class="n">Snapshot</span><span class="p">(</span><span class="s">&quot;2024-q1&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">()))</span>
+<span class="w">        </span><span class="p">.</span><span class="n">read_at</span><span class="p">(</span><span class="n">ReadAt</span><span class="p">::</span><span class="n">Snapshot</span><span class="p">(</span><span class="s">&quot;2024-q1&quot;</span><span class="p">.</span><span class="n">into</span><span class="p">()))</span>
 <span class="w">        </span><span class="p">.</span><span class="n">minimum_coverage</span><span class="p">(</span><span class="mf">0.95</span><span class="p">),</span>
 <span class="w">    </span><span class="o">&amp;</span><span class="k">mut</span><span class="w"> </span><span class="n">strategy</span><span class="p">,</span>
-<span class="w">    </span><span class="o">|</span><span class="n">engine</span><span class="o">|</span><span class="w"> </span><span class="n">engine</span><span class="p">.</span><span class="n">fee_model</span><span class="p">(</span><span class="nb">Box</span>::<span class="n">new</span><span class="p">(</span><span class="n">PredictionMarketFees</span>::<span class="n">new</span><span class="p">(</span><span class="mf">0.07</span><span class="p">)</span><span class="o">?</span><span class="p">)),</span>
+<span class="w">    </span><span class="o">|</span><span class="n">engine</span><span class="o">|</span><span class="w"> </span><span class="n">engine</span><span class="p">.</span><span class="n">fee_model</span><span class="p">(</span><span class="nb">Box</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">PredictionMarketFees</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="mf">0.07</span><span class="p">)</span><span class="o">?</span><span class="p">)),</span>
 <span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 </code></pre></div>
 
@@ -195,12 +273,27 @@ aggregates a sweep, <code>promote</code> publishes a blessed run, and <code>drop
 disposes of the rest.</p>
 <p><code>bt_fills</code> is authoritative. Positions are a fold over it and nothing else,
 so a stored run can be rebuilt and checked rather than trusted.</p>
-<h2 id="from-a-run-to-a-tearsheet">From a run to a tearsheet<a class="headerlink" href="#from-a-run-to-a-tearsheet" title="Permanent link">#</a></h2>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">quant</span>
+<h2 id="from-a-run-to-a-report">From a run to a report<a class="headerlink" href="#from-a-run-to-a-report" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">result</span><span class="o">.</span><span class="n">report</span><span class="p">(</span><span class="s2">&quot;run.html&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<p>One self-contained HTML file: no dependencies, no network access at view
+time, so it can be attached to a review, committed beside the run, or opened
+years later. It opens with the evidence that says how far the numbers can be
+trusted (replay fidelity, the pin, coverage, preflight findings), then the
+performance panels, then the execution record: order lifecycle, rejection
+reasons, every fill. The configuration is carried verbatim at the end, so the
+page is enough to re-run the run it describes. In a notebook, the result
+renders as that page.</p>
+<p>A run that produced no equity curve still reports. The performance panels
+drop out and the execution evidence stays, because a tearsheet of nothing is
+worse than a manifest.</p>
+<p>For the performance statistics alone, the equity curve is an ordinary table:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">quant</span>
 
 <span class="n">fork</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="s2">&quot;bt-momentum-001&quot;</span><span class="p">)</span>
 <span class="n">series</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">from_levels</span><span class="p">(</span><span class="n">fork</span><span class="p">,</span> <span class="s2">&quot;bt_equity&quot;</span><span class="p">)</span>
-<span class="n">quant</span><span class="o">.</span><span class="n">tearsheet</span><span class="p">(</span><span class="n">series</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">&quot;run.html&quot;</span><span class="p">)</span>
+<span class="n">quant</span><span class="o">.</span><span class="n">tearsheet</span><span class="p">(</span><span class="n">series</span><span class="p">,</span> <span class="n">path</span><span class="o">=</span><span class="s2">&quot;tearsheet.html&quot;</span><span class="p">)</span>
 </code></pre></div>
 
 <p>The statistics are the same empyrical-parity set documented in
@@ -256,9 +349,11 @@ python<span class="w"> </span>-m<span class="w"> </span>h5i_db.backtest<span cla
 </table></div>
 <p>Two flags are worth knowing. <code>run --allow-preflight-errors</code> records the
 findings and runs anyway, for the case where you know why the data is thin.
-<code>report --execution-only</code> renders the execution manifest instead of an equity
-tearsheet; <code>report</code> falls back to it on its own when a run produced no equity
-curve, because a tearsheet of nothing is worse than a manifest.</p>
+<code>report</code> writes the run report described above; <code>report --tearsheet</code> renders
+the equity tearsheet alone instead, and falls back to the run report when a
+run produced no equity curve, because a tearsheet of nothing is worse than a
+manifest. (<code>--execution-only</code>, which used to select a bare manifest, still
+works and now selects the run report, which contains that manifest.)</p>
 <p>Exit codes are distinct on purpose: a refused config (<code>2</code>) and a run that
 failed to reproduce (<code>3</code>) call for different responses, and a script should not
 have to parse stdout to tell them apart.</p>
@@ -376,7 +471,7 @@ contracts and the derivation is not obvious; a test pins the equivalence.</p>
 <p>A market price on a prediction market <em>is</em> a forecast, so the natural
 question about a strategy is whether it forecast better. Fills cannot answer
 it: they record what a strategy did, not what it believed.</p>
-<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">record_forecast</span><span class="p">(</span><span class="o">&amp;</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Price</span>::<span class="n">from_f64</span><span class="p">(</span><span class="mf">0.65</span><span class="p">)</span><span class="o">?</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">record_forecast</span><span class="p">(</span><span class="o">&amp;</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Price</span><span class="p">::</span><span class="n">from_f64</span><span class="p">(</span><span class="mf">0.65</span><span class="p">)</span><span class="o">?</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
 </code></pre></div>
 
 <div class="highlight"><pre><span></span><code><span class="k">return</span> <span class="p">[{</span><span class="s2">&quot;action&quot;</span><span class="p">:</span> <span class="s2">&quot;forecast&quot;</span><span class="p">,</span> <span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="n">market</span><span class="p">,</span>
@@ -533,7 +628,7 @@ events; sixty samples an hour would charge a carry sixty times. Settlements
 come from <code>fundingHistory</code>.</p>
 <p><code>hyperliquid_archive::load_archive</code> walks a synced directory and commits it,
 so the whole path is one call:</p>
-<div class="highlight"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">spec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ArchiveSpec</span>::<span class="n">new</span><span class="p">(</span><span class="s">&quot;./archive&quot;</span><span class="p">).</span><span class="n">date</span><span class="p">(</span><span class="s">&quot;20250101&quot;</span><span class="p">).</span><span class="n">coin</span><span class="p">(</span><span class="s">&quot;BTC&quot;</span><span class="p">);</span>
+<div class="highlight"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="n">spec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ArchiveSpec</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="s">&quot;./archive&quot;</span><span class="p">).</span><span class="n">date</span><span class="p">(</span><span class="s">&quot;20250101&quot;</span><span class="p">).</span><span class="n">coin</span><span class="p">(</span><span class="s">&quot;BTC&quot;</span><span class="p">);</span>
 <span class="n">load_archive</span><span class="p">(</span><span class="o">&amp;</span><span class="n">db</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">spec</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">universe</span><span class="p">,</span><span class="w"> </span><span class="n">known_at</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 </code></pre></div>
 
@@ -561,8 +656,8 @@ calmly. Once fired the order is ordinary and meets the book from there, so a
 stop can and does fill well below its trigger — the gap it exists to protect
 against is the gap it suffers.</p>
 <div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">submit</span><span class="p">(</span>
-<span class="w">    </span><span class="n">OrderRequest</span>::<span class="n">market</span><span class="p">(</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Side</span>::<span class="n">Sell</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">)</span>
-<span class="w">        </span><span class="p">.</span><span class="n">with_trigger</span><span class="p">(</span><span class="n">Trigger</span>::<span class="n">stop_loss</span><span class="p">(</span><span class="n">Side</span>::<span class="n">Sell</span><span class="p">,</span><span class="w"> </span><span class="n">price</span><span class="p">)),</span>
+<span class="w">    </span><span class="n">OrderRequest</span><span class="p">::</span><span class="n">market</span><span class="p">(</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Side</span><span class="p">::</span><span class="n">Sell</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">)</span>
+<span class="w">        </span><span class="p">.</span><span class="n">with_trigger</span><span class="p">(</span><span class="n">Trigger</span><span class="p">::</span><span class="n">stop_loss</span><span class="p">(</span><span class="n">Side</span><span class="p">::</span><span class="n">Sell</span><span class="p">,</span><span class="w"> </span><span class="n">price</span><span class="p">)),</span>
 <span class="p">);</span>
 </code></pre></div>
 
@@ -575,7 +670,7 @@ against is the gap it suffers.</p>
 <p>Hyperliquid's TWAP is a native order type, not a client-side loop: the venue
 slices it into equal children on a fixed cadence (thirty seconds) and works
 them until the duration is up.</p>
-<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">twap</span><span class="p">(</span><span class="n">TwapRequest</span>::<span class="n">new</span><span class="p">(</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Side</span>::<span class="n">Buy</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">,</span><span class="w"> </span><span class="n">duration_nanos</span><span class="p">));</span>
+<div class="highlight"><pre><span></span><code><span class="n">ctx</span><span class="p">.</span><span class="n">twap</span><span class="p">(</span><span class="n">TwapRequest</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">market</span><span class="p">,</span><span class="w"> </span><span class="n">outcome</span><span class="p">,</span><span class="w"> </span><span class="n">Side</span><span class="p">::</span><span class="n">Buy</span><span class="p">,</span><span class="w"> </span><span class="n">size</span><span class="p">,</span><span class="w"> </span><span class="n">duration_nanos</span><span class="p">));</span>
 </code></pre></div>
 
 <p>Modelling it as one large market order gets the answer wrong in the
@@ -634,6 +729,29 @@ historical L2 deltas. Those records support trade-driven or bar research, but
 cannot reconstruct queue position and must not be presented as exact L2
 replay. REST snapshots likewise describe only the instant at which they were
 requested.</p>
+<p>Two third-party sources now carry historical Kalshi order books, so this
+research no longer has to wait for a capture to accumulate.</p>
+<p><code>h5i_db.venues.predexon_book_from_snapshots</code> reads the one to prefer for
+anything after January 2026: full book snapshots rather than accumulated
+changes, so a lost record costs one sample instead of corrupting every level
+after it, and finalized daily. Read its report before trusting a window. It
+measures the sampling cadence, which on a liquid market runs to a median of a
+few seconds with occasional holes of over an hour, and a strategy that reads
+one of those holes as continuous will fill at prices nobody quoted. Its free
+endpoint also rounds prices to whole cents, which is a real loss at the touch
+now that Kalshi quotes sub-cent.</p>
+<p><code>h5i_db.venues.KALSHI_PMXT_LAYOUT</code> reads the other, which reaches further back.
+It is not a substitute for prospective capture where queue accuracy matters.
+Its deltas are
+signed size changes replayed into absolute levels at ingest, its snapshots
+carry no venue timestamp and so seed the book rather than being replayed at
+their own stamp, and it has no per-market sequence numbers, so the ingest
+reports divergence against later snapshots instead of detecting a dropped
+message directly. The report says how many vendor snapshots the reconstruction
+reproduced exactly; treat a low number as a signal to load the neighbouring
+hours rather than as a reason to trust the book less than it deserves. Coverage
+on that host also lags the present by weeks, which is its own reason to keep
+recording.</p>
 <p>Use <code>KalshiFees</code> (or Python's <code>fee_kind="kalshi"</code>) with rates pinned from the
 applicable series fee schedule. It implements the quadratic curve, centicent
 trade-fee rounding, whole-cent cash movement, and per-order partial-fill
@@ -724,7 +842,7 @@ plotting API. The boundary is simulation and evaluation; see
 tables. It does not fetch: downloading belongs in a script, where credentials
 and rate limits belong, and this layer is the part that must be testable
 offline and byte-reproducible.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">venues</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">venues</span>
 
 <span class="n">specs</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">polymarket_markets_from_json</span><span class="p">(</span><span class="n">payloads</span><span class="p">)</span>   <span class="c1"># slug -&gt; outcomes, tokens</span>
 <span class="n">venues</span><span class="o">.</span><span class="n">write_markets</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">specs</span><span class="p">)</span>                         <span class="c1"># instruments, resolutions</span>
@@ -767,7 +885,7 @@ settlement is gated on when the result became knowable.</p>
 <h2 id="searching-without-fooling-yourself">Searching without fooling yourself<a class="headerlink" href="#searching-without-fooling-yourself" title="Permanent link">#</a></h2>
 <p><code>backtest.study</code> runs a grid by default. Three additions make the search
 shape explicit when it matters.</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">backtest</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">backtest</span>
 
 <span class="n">result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">study</span><span class="p">(</span>
     <span class="n">db</span><span class="p">,</span>
@@ -801,7 +919,7 @@ the isolation the reference stacks need is buying safety this API already has.</
 <p>A sweep produces one fork per trial, and opening twenty tearsheets is not
 comparing them. <code>quant.basket_report</code> assembles one document from stored tables
 only, with no re-simulation:</p>
-<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">quant</span>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">h5i_db</span><span class="w"> </span><span class="kn">import</span> <span class="n">quant</span>
 
 <span class="n">quant</span><span class="o">.</span><span class="n">basket_report</span><span class="p">(</span>
     <span class="n">db</span><span class="p">,</span>
@@ -857,7 +975,7 @@ pass/fail, because <em>where</em> the book refused is the finding.</p>
     <nav class="page-nav"><a class="prev" href="/manual/operations/"><span class="dir">← Previous</span><span class="pn-title">Operations guide</span></a><a class="next" href="/api/"><span class="dir">Next →</span><span class="pn-title">Overview</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-tearsheet">From a run to a tearsheet</a></li><li><a href="#from-the-shell">From the shell</a></li><li><a href="#settlement">Settlement</a><ul><li><a href="#not-every-market-picks-a-winner">Not every market picks a winner</a></li></ul></li><li><a href="#trading-stops-before-resolving">Trading stops before resolving</a></li><li><a href="#outcomes-cannot-be-borrowed">Outcomes cannot be borrowed</a></li><li><a href="#complete-sets">Complete sets</a><ul><li><a href="#negative-risk-conversion">Negative-risk conversion</a></li></ul></li><li><a href="#scoring-a-forecast">Scoring a forecast</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#perpetuals">Perpetuals</a><ul><li><a href="#three-prices-not-one">Three prices, not one</a></li><li><a href="#prices-the-venue-will-actually-accept">Prices the venue will actually accept</a></li><li><a href="#data">Data</a></li><li><a href="#post-only">Post-only</a></li><li><a href="#stops-and-take-profits">Stops and take-profits</a></li><li><a href="#twap">TWAP</a></li><li><a href="#fees-that-fall-with-volume">Fees that fall with volume</a></li><li><a href="#margin">Margin</a></li></ul></li><li><a href="#kalshi-data">Kalshi data</a></li><li><a href="#strategies">Strategies</a><ul><li><a href="#stamp-a-signal-after-the-quote-it-came-from">Stamp a signal after the quote it came from</a></li></ul></li><li><a href="#agent-trial-ledger">Agent trial ledger</a></li><li><a href="#what-is-not-here">What is not here</a></li><li><a href="#bringing-your-own-data">Bringing your own data</a></li><li><a href="#searching-without-fooling-yourself">Searching without fooling yourself</a></li><li><a href="#comparing-many-runs-at-once">Comparing many runs at once</a></li><li><a href="#a-pack-of-strategies-as-data">A pack of strategies, as data</a></li><li><a href="#replaying-an-accounts-ledger">Replaying an account's ledger</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-tables">The tables</a><ul><li><a href="#snapshots-are-grouped">Snapshots are grouped</a></li></ul></li><li><a href="#precision-and-range">Precision and range</a><ul><li><a href="#filtering-a-decimal-column-in-sql">Filtering a decimal column in SQL</a></li></ul></li><li><a href="#a-run">A run</a></li><li><a href="#from-a-run-to-a-report">From a run to a report</a></li><li><a href="#from-the-shell">From the shell</a></li><li><a href="#settlement">Settlement</a><ul><li><a href="#not-every-market-picks-a-winner">Not every market picks a winner</a></li></ul></li><li><a href="#trading-stops-before-resolving">Trading stops before resolving</a></li><li><a href="#outcomes-cannot-be-borrowed">Outcomes cannot be borrowed</a></li><li><a href="#complete-sets">Complete sets</a><ul><li><a href="#negative-risk-conversion">Negative-risk conversion</a></li></ul></li><li><a href="#scoring-a-forecast">Scoring a forecast</a></li><li><a href="#venue-models">Venue models</a></li><li><a href="#perpetuals">Perpetuals</a><ul><li><a href="#three-prices-not-one">Three prices, not one</a></li><li><a href="#prices-the-venue-will-actually-accept">Prices the venue will actually accept</a></li><li><a href="#data">Data</a></li><li><a href="#post-only">Post-only</a></li><li><a href="#stops-and-take-profits">Stops and take-profits</a></li><li><a href="#twap">TWAP</a></li><li><a href="#fees-that-fall-with-volume">Fees that fall with volume</a></li><li><a href="#margin">Margin</a></li></ul></li><li><a href="#kalshi-data">Kalshi data</a></li><li><a href="#strategies">Strategies</a><ul><li><a href="#stamp-a-signal-after-the-quote-it-came-from">Stamp a signal after the quote it came from</a></li></ul></li><li><a href="#agent-trial-ledger">Agent trial ledger</a></li><li><a href="#what-is-not-here">What is not here</a></li><li><a href="#bringing-your-own-data">Bringing your own data</a></li><li><a href="#searching-without-fooling-yourself">Searching without fooling yourself</a></li><li><a href="#comparing-many-runs-at-once">Comparing many runs at once</a></li><li><a href="#a-pack-of-strategies-as-data">A pack of strategies, as data</a></li><li><a href="#replaying-an-accounts-ledger">Replaying an account's ledger</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

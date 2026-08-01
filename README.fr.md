@@ -134,14 +134,15 @@ npx skills add h5i-dev/h5i-db        # installe la skill h5i-db depuis skills/h5
 **Le voir tourner**
 
 ```bash
-python examples/agent_swarm_demo.py   # trois agents, onze essais, puis l'interface
+python examples/backtest_report_demo.py
 ```
 
-Lance une flotte sur un seul jeu de données figé : un balayage de seuils, une
-échelle de coûts d'exécution, et une validation marquée pour signature humaine.
-
 <p align="center">
-  <img src="./docs/_static/backtest-ui.png" alt="vue de l'interface de la démo" width="99%">
+  <img src="./docs/_static/report-screenshot-1.png" width="49%" />
+  <img src="./docs/_static/report-screenshot-2.png" width="49%" />
+  <br />
+  <img src="./docs/_static/report-screenshot-3.png" width="49%" />
+  <img src="./docs/_static/report-screenshot-4.png" width="49%" />
 </p>
 
 ---

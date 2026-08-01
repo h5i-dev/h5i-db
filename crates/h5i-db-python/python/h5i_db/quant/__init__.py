@@ -50,7 +50,13 @@ from .calibration import (
     brier_decomposition,
     reliability_curve,
 )
-from .report import factor_report, report_payload, tearsheet
+from .report import (
+    backtest_payload,
+    backtest_report,
+    factor_report,
+    report_payload,
+    tearsheet,
+)
 from .validation import Split, combinatorial_purged, purged_kfold, walk_forward
 from .sweep import (
     SweepResult,
@@ -93,6 +99,8 @@ __all__ = [
     "report",
     "factor_report",
     "tearsheet",
+    "backtest_report",
+    "backtest_payload",
     "report_payload",
     "overfitting",
     "deflated_sharpe",

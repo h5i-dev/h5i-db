@@ -536,8 +536,15 @@ def execute(
     *,
     preflight: bool = True,
     strategy: Any = None,
+    reuse: bool = True,
 ) -> BacktestResult:
-    """Execute a complete typed configuration through the native kernel."""
+    """Execute a complete typed configuration through the native kernel.
+
+    ``reuse=False`` forces the kernel to run even when the trial ledger
+    already holds this exact configuration. Reuse is what keeps a search from
+    paying twice for the same trial, but it is the wrong answer when the
+    point of the call *is* to execute again, as in ``BacktestResult.verify``.
+    """
     if not isinstance(config, BacktestConfig):
         raise TypeError("config must be a BacktestConfig")
     inspection = inspect(db, config)
@@ -555,7 +562,8 @@ def execute(
     # Unpinned inputs and callback implementations lack a complete reusable
     # identity. They still produce an on-ledger run, but cannot be cached.
     deduplicable = (
-        any(
+        reuse
+        and any(
             (
                 data.snapshot is not None,
                 data.version is not None,
@@ -673,9 +681,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     report_parser.add_argument("run_id")
     report_parser.add_argument("--output", required=True)
     report_parser.add_argument(
-        "--execution-only",
+        "--tearsheet",
         action="store_true",
-        help="render the execution manifest instead of an equity tearsheet",
+        help="render the equity tearsheet instead of the full run report",
+    )
+    # The run report carries the execution manifest this flag used to select,
+    # alongside everything else, so it stays accepted and selects the default.
+    report_parser.add_argument(
+        "--execution-only", action="store_true", help=argparse.SUPPRESS
     )
 
     verify_parser = subparsers.add_parser("verify", help="re-execute a run")
@@ -706,10 +719,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         if args.command == "report":
             result = open_result(db, args.run_id)
-            if args.execution_only or result.equity.num_rows == 0:
-                result.html_summary(args.output)
+            if args.tearsheet and not args.execution_only:
+                # A tearsheet of nothing is worse than the run report.
+                if result.equity.num_rows:
+                    result.tearsheet(args.output)
+                else:
+                    result.report(args.output)
             else:
-                result.tearsheet(args.output)
+                result.report(args.output)
             print(str(Path(args.output)))
             return 0
         if args.command == "verify":
