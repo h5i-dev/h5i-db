@@ -122,14 +122,15 @@ npx skills add h5i-dev/h5i-db        # 从 skills/h5i-db/ 安装 h5i-db skill
 **跑起来看看**
 
 ```bash
-python examples/agent_swarm_demo.py   # 三个智能体、十一次试验，然后打开界面
+python examples/backtest_report_demo.py
 ```
 
-让一支小队在同一份固定的数据上跑：一次阈值扫描、一组执行成本的阶梯对比，以及一次
-标记为需要人工签字的验证。
-
 <p align="center">
-  <img src="./docs/_static/backtest-ui.png" alt="演示界面视图" width="99%">
+  <img src="./docs/_static/report-screenshot-1.png" width="49%" />
+  <img src="./docs/_static/report-screenshot-2.png" width="49%" />
+  <br />
+  <img src="./docs/_static/report-screenshot-3.png" width="49%" />
+  <img src="./docs/_static/report-screenshot-4.png" width="49%" />
 </p>
 
 ---

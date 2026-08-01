@@ -126,14 +126,15 @@ npx skills add h5i-dev/h5i-db        # skills/h5i-db/ からh5i-dbのskillを入
 **動かして見る**
 
 ```bash
-python examples/agent_swarm_demo.py   # 3体のエージェント、11試行、そしてUI
+python examples/backtest_report_demo.py
 ```
 
-固定した1つのデータセットに対して群れを走らせる。しきい値のスイープ、執行コストの
-段階比較、そして人間の承認待ちとして印を付けた検証の3種類だ。
-
 <p align="center">
-  <img src="./docs/_static/backtest-ui.png" alt="デモのUI画面" width="99%">
+  <img src="./docs/_static/report-screenshot-1.png" width="49%" />
+  <img src="./docs/_static/report-screenshot-2.png" width="49%" />
+  <br />
+  <img src="./docs/_static/report-screenshot-3.png" width="49%" />
+  <img src="./docs/_static/report-screenshot-4.png" width="49%" />
 </p>
 
 ---
