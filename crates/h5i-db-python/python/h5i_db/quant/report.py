@@ -663,29 +663,35 @@ def backtest_payload(
             }
         )
         if any(row.get("position_value") for row in sampled):
+            # As a share of equity, not as cash beside position value: those
+            # two are the same unit but not the same order of magnitude, and
+            # on one axis the smaller is a flat line against the bottom. The
+            # share answers the question the pair was there to answer -- how
+            # invested was this run, and when -- on a scale that fits it.
+            exposure = [
+                {
+                    "x": row["ts"],
+                    "y": (
+                        row["position_value"] / row["equity"]
+                        if row.get("equity")
+                        else None
+                    ),
+                }
+                for row in sampled
+            ]
+            peak = max(
+                (abs(point["y"]) for point in exposure if point["y"] is not None),
+                default=0.0,
+            )
             charts.append(
                 {
                     "kind": "line",
                     "id": "exposure",
-                    "title": "Cash and position value",
-                    "subtitle": "Where the equity was held",
-                    "yFormat": "money",
+                    "title": "Exposure",
+                    "subtitle": "Position value as a share of equity",
+                    "yFormat": "percent2" if peak < 0.02 else "percent1",
                     "xFormat": x_format,
-                    "series": [
-                        {
-                            "name": "Cash",
-                            "points": [
-                                {"x": row["ts"], "y": row["cash"]} for row in sampled
-                            ],
-                        },
-                        {
-                            "name": "Position value",
-                            "points": [
-                                {"x": row["ts"], "y": row["position_value"]}
-                                for row in sampled
-                            ],
-                        },
-                    ],
+                    "series": [{"name": "Exposure", "points": exposure}],
                 }
             )
     if fills:

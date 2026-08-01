@@ -130,6 +130,23 @@ def test_payload_matches_the_api():
     assert {p["y"] for p in plotted} == {row["price"] for row in fills}
 
 
+def test_exposure_is_a_share_rather_than_two_scales():
+    """Cash and position value are one unit but not one order of magnitude."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db, result = _run(tmp, "rep-exposure")
+        payload = quant.backtest_payload(result)
+        equity = result.equity.to_pylist()
+        db.close()
+    chart = next(c for c in payload["charts"] if c["id"] == "exposure")
+    assert len(chart["series"]) == 1
+    assert chart["yFormat"].startswith("percent")
+    plotted = {p["x"]: p["y"] for p in chart["series"][0]["points"]}
+    for row in equity:
+        if row["equity"]:
+            expected = row["position_value"] / row["equity"]
+            assert plotted[row["ts"].isoformat()] == pytest.approx(expected, rel=1e-12)
+
+
 def test_payload_is_json_serializable_without_nan():
     """NaN is not valid JSON; a report must never emit it."""
     with tempfile.TemporaryDirectory() as tmp:

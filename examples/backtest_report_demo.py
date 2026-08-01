@@ -215,7 +215,7 @@ def build_signals(db: Any) -> Any:
     that never existed. A report that only showed fills would leave that out.
     """
     panel = backtest.quote_panel(db, snapshot="research-pin")
-    plan = backtest.strategies.ema_crossover(panel, fast=4, slow=12, quantity=60.0)
+    plan = backtest.strategies.ema_crossover(panel, fast=4, slow=12, quantity=150.0)
     if plan.num_signals == 0:
         raise SystemExit("the generated market produced no crossovers; try --seed")
 
@@ -285,7 +285,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         config = backtest.BacktestConfig(
             run_id="report-demo",
             data=backtest.DataConfig(signals="signals", snapshot="research-pin"),
-            portfolio=backtest.PortfolioConfig(starting_cash=50_000.0),
+            # Sized so the run is visibly invested: the peak position is about a
+            # tenth of equity. A demo that risks 0.4% of its cash draws an
+            # exposure line flat against the axis and teaches nothing.
+            portfolio=backtest.PortfolioConfig(starting_cash=5_000.0),
             execution=backtest.ExecutionConfig(fee_kind="kalshi", fee_rate=0.07),
             output=backtest.OutputConfig(equity_interval_nanos=5 * 60 * SECOND_NS),
             metadata={"study": "report-demo", "candidate": plan.strategy},
@@ -327,7 +330,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print("   in the page, top to bottom:")
         print("     - replay fidelity and the preflight findings above everything")
         print("     - the pin, both digests, coverage, the execution model")
-        print("     - equity, drawdown, where the equity was held, every fill")
+        print("     - equity, drawdown, how invested it was, every fill")
         print("     - order lifecycle, the refusal in the engine's own words")
         print("     - the configuration verbatim: enough to re-run this run")
 
