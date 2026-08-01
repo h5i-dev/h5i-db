@@ -14,7 +14,7 @@ Embedded, written in Rust.**
 - **Efficient event-driven backtester:** 3.05M events/s through
   the replay kernel, 11.7× NautilusTrader and 31× LEAN on a shared
   top-of-book workload.
-- **Native venue support:** [Kalshi](https://github.com/h5i-dev/h5i-db/tree/improve-kalshi-support#data-sources), [Polymarket](https://github.com/h5i-dev/h5i-db/tree/improve-kalshi-support#data-sources), [Hyperliquid](https://github.com/h5i-dev/h5i-db/tree/improve-kalshi-support#data-sources), [Binance](https://github.com/h5i-dev/h5i-db/tree/improve-kalshi-support#data-sources) and more.
+- **Native venue support:** [Kalshi](#data-sources), [Polymarket](#data-sources), [Hyperliquid](#data-sources), [Binance](#data-sources) and more.
 - **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.
