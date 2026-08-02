@@ -1097,10 +1097,11 @@ async fn resolve_all_at(db: &Arc<Database>, at: ReadAt) -> DfResult<Vec<Resolved
             Err(e) => skipped = skipped.or(Some(e)),
         }
     }
-    if kept.is_empty() && listed > 0 {
-        if let Some(e) = skipped {
-            return Err(DataFusionError::External(Box::new(e)));
-        }
+    if kept.is_empty()
+        && listed > 0
+        && let Some(e) = skipped
+    {
+        return Err(DataFusionError::External(Box::new(e)));
     }
     Ok(kept)
 }

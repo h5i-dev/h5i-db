@@ -1269,4 +1269,3 @@ fn an_expired_market_does_not_liquidate_forever() {
         result.orders.len()
     );
 }
-

@@ -2203,8 +2203,7 @@ impl Engine {
                 .map(|instrument| instrument.kind.is_funded())
                 .unwrap_or(true);
             position_value = position_value.checked_add(exposure)?;
-            account_value =
-                account_value.checked_add(if funded { exposure } else { profit })?;
+            account_value = account_value.checked_add(if funded { exposure } else { profit })?;
             unrealized = unrealized.checked_add(profit)?;
         }
         // Collateral posted to an isolated bucket is still the account's
