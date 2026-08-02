@@ -307,11 +307,22 @@ impl TieredFees {
 
     /// The tier an account with this much rolling volume is in.
     pub fn tier_for(&self, volume: Money) -> FeeTier {
+        self.tier_for_raw(volume.raw() as i128)
+    }
+
+    /// The tier a rolling volume falls in, compared at the accumulator's own
+    /// width.
+    ///
+    /// The rolling window is summed in `i128` because it is a sum of many
+    /// notionals, not a quantity anything holds. The tier boundaries are
+    /// `Money`, so they lift into that width losslessly and the comparison
+    /// is the same one, minus a ceiling the window could actually reach.
+    pub fn tier_for_raw(&self, volume: i128) -> FeeTier {
         *self
             .tiers
             .iter()
             .rev()
-            .find(|tier| volume >= tier.volume_from)
+            .find(|tier| volume >= tier.volume_from.raw() as i128)
             .unwrap_or(&self.tiers[0])
     }
 }
@@ -328,18 +339,17 @@ impl FeeModel for TieredFees {
             let (_, amount) = traded.entries.pop_front().expect("peeked");
             traded.total -= amount as i128;
         }
-        // Refused rather than clamped. Every narrowing in this crate errors
-        // instead of wrapping, and a clamp is a wrap wearing a hat: past
-        // `Raw::MAX` the rolling total stops counting, the account freezes in
-        // whatever tier it had reached, and every later fill is priced from a
-        // volume that is no longer the volume. The floor at zero went with
-        // it: a negative total is a bookkeeping bug in the window, not
-        // something to round away.
-        let rolling = Money::from_raw(crate::types::narrow(
-            traded.total,
-            "TieredFees rolling volume",
-        )?);
-        let tier = self.tier_for(rolling);
+        // Compared in `i128`, the width the total is already accumulated in.
+        // Narrowing it to `Raw` first put a ceiling on the *window volume*
+        // rather than on any real quantity: at 1e-9 scale that is about
+        // 9.2e9 of rolling notional, which a busy month genuinely crosses,
+        // and crossing it killed a run that had nothing else wrong with it.
+        // Clamping instead would freeze the account in whatever tier it had
+        // reached, which is the silent-wrong answer. Widening the comparison
+        // is neither: the tier boundaries are `Money`, so lifting them to
+        // `i128` compares the same numbers without a range to fall off.
+        let rolling = traded.total;
+        let tier = self.tier_for_raw(rolling);
         // Priced at the tier reached *before* this fill, then the fill
         // counts towards the next one.
         traded.entries.push_back((ctx.ts.get(), gross.raw()));

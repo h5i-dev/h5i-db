@@ -1118,12 +1118,18 @@ fn a_cross_margin_call_leaves_an_isolated_position_alone() {
     );
 }
 
-/// Clamping the rolling volume at `Raw::MAX` froze the account in whatever
-/// tier it had reached and priced every later fill from a total that had
-/// stopped counting. Every other narrowing in the crate refuses (issue #68).
+/// A rolling fee window is a sum of many notionals, not a quantity anything
+/// holds, so it must not inherit `Raw`'s ceiling.
+///
+/// Clamping it froze the account in whatever tier it had reached and priced
+/// every later fill from a total that had stopped counting. Refusing instead
+/// (the first attempt at this) killed runs that had nothing else wrong with
+/// them: at 1e-9 scale the ceiling is about 9.2e9 of window notional, which
+/// a busy month genuinely crosses. Comparing at the accumulator's own width
+/// is neither.
 #[test]
 #[cfg(not(feature = "wide"))]
-fn a_rolling_fee_volume_past_the_raw_ceiling_is_refused_not_frozen() {
+fn a_rolling_fee_volume_past_the_raw_ceiling_still_prices() {
     let instrument = Instrument::perpetual(PERP, "hyperliquid").unwrap();
     let tiers = TieredFees::new(hyperliquid_shaped_tiers(), SECOND).unwrap();
     // Five billion of notional a fill, inside the same window: the third
@@ -1139,11 +1145,128 @@ fn a_rolling_fee_volume_past_the_raw_ceiling_is_refused_not_frozen() {
     };
     tiers.commission(fill).unwrap();
     tiers.commission(FeeContext { ts: ts(2), ..fill }).unwrap();
-    let error = tiers
+    let charged = tiers
         .commission(FeeContext { ts: ts(3), ..fill })
-        .unwrap_err();
-    assert!(
-        error.to_string().contains("TieredFees rolling volume"),
-        "a frozen tier is silent; an overflow is not: {error}"
+        .expect("a window past Raw::MAX still prices the fill");
+    // Ten billion of window volume is far into the top tier, and the tier
+    // is the one the total actually implies rather than the one it froze at.
+    let top = hyperliquid_shaped_tiers().pop().unwrap();
+    assert_eq!(
+        charged,
+        h5i_db_backtest::types::notional(top.taker, qty(5_000_000_000.0)).unwrap(),
+        "the third fill is priced at the top tier, not a stalled one"
     );
 }
+
+/// Isolated collateral is still the account's money.
+///
+/// Posting it moves cash into a bucket, so an equity curve that counts only
+/// `cash` plus unrealized PnL reads low by the whole bucket for the life of
+/// the position, then steps up by it on the close: a fake single-bar gain
+/// that every drawdown and Sharpe drawn from the curve inherits.
+#[test]
+fn isolated_collateral_stays_in_equity() {
+    let mut strategy = BuyOnce::new(qty(1.0));
+    let result = run(
+        &mut strategy,
+        vec![
+            book(1, 100.0, 100.0, 10.0),
+            book(2, 100.0, 100.0, 10.0),
+            book(3, 100.0, 100.0, 10.0),
+        ],
+        10_000.0,
+        |builder| {
+            builder
+                .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+                .isolate(perp_id())
+        },
+    )
+    .unwrap();
+
+    let last = result.equity.last().unwrap();
+    assert!(
+        last.cash < money(10_000.0),
+        "the bucket really did leave cash, or this test proves nothing"
+    );
+    assert!(
+        (last.equity.to_f64() - 10_000.0).abs() < 1.0,
+        "a flat position at its entry mark is worth what it started with, \
+         got equity {} against cash {}",
+        last.equity,
+        last.cash
+    );
+}
+
+/// `position_value` answers "how invested", so it stays marked exposure for
+/// every kind. Only `equity` cares whether opening the position moved cash.
+#[test]
+fn position_value_is_exposure_even_when_equity_is_not() {
+    let mut strategy = BuyOnce::new(qty(1.0));
+    let result = run(
+        &mut strategy,
+        vec![book(1, 100.0, 100.0, 10.0), book(2, 101.0, 101.0, 10.0)],
+        10_000.0,
+        |builder| builder,
+    )
+    .unwrap();
+
+    let last = result.equity.last().unwrap();
+    assert!(
+        last.position_value.to_f64() > 90.0,
+        "a one-lot perp marked near 101 is ~101 of exposure, got {}",
+        last.position_value
+    );
+    assert!(
+        last.equity < money(10_100.0),
+        "but equity must not carry the notional: got {}",
+        last.equity
+    );
+}
+
+/// A market that has stopped trading cannot be liquidated into.
+///
+/// `try_fill` refuses a close on an expired instrument, so a position left
+/// under maintenance when the market expires stays doomed for the rest of
+/// the run. Without a guard the margin call re-fires on every remaining
+/// record, each time minting an order that cannot fill and recording a
+/// `Liquidation` that never happened: the report shows thousands of closes
+/// on a position that is still open, and both vectors grow with the tail.
+#[test]
+fn an_expired_market_does_not_liquidate_forever() {
+    let mut set = InstrumentSet::new();
+    set.insert(
+        Instrument::perpetual(PERP, "hyperliquid")
+            .unwrap()
+            .with_expiration(ts(3)),
+    )
+    .unwrap();
+
+    // Enter at 100, collapse to 60 (a 10x book is far under maintenance),
+    // then let the market expire with a long tail of records behind it.
+    let mut records = vec![book(1, 100.0, 100.0, 10.0), book(2, 60.0, 60.0, 10.0)];
+    for at in 4..40 {
+        records.push(book(at, 60.0, 60.0, 10.0));
+    }
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, records)
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(set)
+        .starting_cash(money(1_000.0))
+        .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+        .build();
+    let mut strategy = BuyOnce::new(qty(1.0));
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert!(
+        result.liquidations.len() <= 1,
+        "a position can be liquidated once, not once per record: got {}",
+        result.liquidations.len()
+    );
+    assert!(
+        result.orders.len() <= 3,
+        "and a refused close must not mint an order per record: got {}",
+        result.orders.len()
+    );
+}
+

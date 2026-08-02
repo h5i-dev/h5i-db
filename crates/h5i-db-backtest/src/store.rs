@@ -508,11 +508,7 @@ pub async fn read_instruments(db: &Database, at: ReadAt) -> Result<InstrumentSet
                 Instrument::prediction_market(id.clone(), draft.venue.clone(), outcomes)?
             }
             InstrumentKind::Perpetual => Instrument::perpetual(id.clone(), draft.venue.clone())?,
-            InstrumentKind::Spot => {
-                let mut spot = Instrument::perpetual(id.clone(), draft.venue.clone())?;
-                spot.kind = InstrumentKind::Spot;
-                spot
-            }
+            InstrumentKind::Spot => Instrument::spot(id.clone(), draft.venue.clone())?,
         };
         // The rule comes first: it fixes the tick at the finest legal
         // increment, and the stored tick must win over that default so a

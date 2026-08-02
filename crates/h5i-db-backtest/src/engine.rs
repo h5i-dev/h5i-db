@@ -1790,6 +1790,13 @@ impl Engine {
                 return Ok(());
             };
             for instrument in &self.isolated {
+                // A closed market cannot be liquidated into; settlement
+                // resolves it instead. Without this the call repeats on
+                // every remaining record and invents a liquidation each
+                // time (same rule as the cross path).
+                if self.stopped_trading(instrument, ts).is_some() {
+                    continue;
+                }
                 let posted = self
                     .isolated_collateral
                     .get(instrument)
@@ -1862,11 +1869,21 @@ impl Engine {
                 self.orders.insert(id, order);
                 self.try_fill(id, ts, strategy)?;
 
+                // Same rule as the cross path: record the close the venue
+                // achieved, not the one it asked for.
+                let filled = self
+                    .orders
+                    .get(&id)
+                    .map(|attempt| attempt.filled)
+                    .unwrap_or(Qty::ZERO);
+                if filled.is_zero() {
+                    continue;
+                }
                 self.metrics.liquidations += 1;
                 self.liquidations.push(Liquidation {
                     instrument: instrument.clone(),
                     outcome,
-                    quantity,
+                    quantity: filled,
                     mark,
                     equity,
                     maintenance,
@@ -1960,6 +1977,15 @@ impl Engine {
             let Some(mark) = self.marks.get(&key).copied() else {
                 continue;
             };
+            // A market that has stopped trading cannot be liquidated into:
+            // `try_fill` refuses the close, and without this the position
+            // stays doomed for the rest of the run, so every later record
+            // manufactures another order and another `Liquidation` that
+            // never happened. Settlement, not the margin engine, is what
+            // resolves a position whose market has closed.
+            if self.stopped_trading(&position.instrument, ts).is_some() {
+                continue;
+            }
             let instrument = self.instruments.get(&position.instrument)?;
             let requirement = match self.margin.as_deref() {
                 Some(model) => model.maintenance_margin(instrument, position.quantity, mark)?,
@@ -2026,11 +2052,23 @@ impl Engine {
             self.orders.insert(id, order);
             self.try_fill(id, ts, strategy)?;
 
+            // A liquidation is what the venue *did*, not what it attempted.
+            // `try_fill` can decline (an empty book, a market that closed
+            // under the position), and recording the close anyway reports a
+            // flat position that is still open.
+            let filled = self
+                .orders
+                .get(&id)
+                .map(|attempt| attempt.filled)
+                .unwrap_or(Qty::ZERO);
+            if filled.is_zero() {
+                continue;
+            }
             self.metrics.liquidations += 1;
             self.liquidations.push(Liquidation {
                 instrument,
                 outcome,
-                quantity: closing,
+                quantity: filled,
                 mark,
                 equity: state.equity,
                 maintenance: state.maintenance,
@@ -2128,39 +2166,57 @@ impl Engine {
         Ok(())
     }
 
+    /// Record one point on the equity curve.
+    ///
+    /// Two different numbers are wanted here and they are not the same sum,
+    /// so they are computed separately.
+    ///
+    /// `position_value` is *marked exposure*: what the open book is worth at
+    /// the mark, for every position. It answers "how invested was this run",
+    /// which is what the report's allocation panel divides by equity, so it
+    /// has to stay comparable across instrument kinds.
+    ///
+    /// `equity` is what the account is worth, and there the funding model
+    /// matters. A funded position (a prediction-market contract, spot) was
+    /// paid for out of `cash`, so its marked value belongs in equity. A
+    /// perpetual was only collateralised: no cash left on entry, so adding
+    /// its notional would count the entry value twice and inflate every
+    /// return, drawdown and Sharpe drawn from `bt_equity`. Its contribution
+    /// is the profit alone, plus any collateral parked in an isolated bucket
+    /// (which left `cash` on entry and returns to it on close, so leaving it
+    /// out reads low for the life of the position and then steps up when it
+    /// closes).
     fn push_equity(&mut self, ts: UnixNanos) -> Result<()> {
         let mut position_value = Money::ZERO;
+        let mut account_value = Money::ZERO;
         let mut unrealized = Money::ZERO;
         for position in self.portfolio.open_positions() {
             let key = self.slots.key(&position.instrument, position.outcome);
             let Some(mark) = self.marks.get(&key) else {
                 continue;
             };
-            // What a position contributes to equity depends on whether
-            // opening it moved cash. A funded position (a prediction-market
-            // contract, spot) was paid for out of `cash`, so its whole marked
-            // value belongs in equity. A perpetual was only collateralised:
-            // no cash left on entry, so adding the notional here counts the
-            // entry value twice and inflates every return, drawdown and
-            // Sharpe derived from `bt_equity` by `average_price * quantity`.
+            let exposure = position.exposure(*mark)?;
+            let profit = position.unrealized_pnl(*mark)?;
             let funded = self
                 .instruments
                 .get(&position.instrument)
                 .map(|instrument| instrument.kind.is_funded())
                 .unwrap_or(true);
-            let contribution = if funded {
-                position.exposure(*mark)?
-            } else {
-                position.unrealized_pnl(*mark)?
-            };
-            position_value = position_value.checked_add(contribution)?;
-            unrealized = unrealized.checked_add(position.unrealized_pnl(*mark)?)?;
+            position_value = position_value.checked_add(exposure)?;
+            account_value =
+                account_value.checked_add(if funded { exposure } else { profit })?;
+            unrealized = unrealized.checked_add(profit)?;
+        }
+        // Collateral posted to an isolated bucket is still the account's
+        // money; it is simply not in `cash` while the position is open.
+        for posted in self.isolated_collateral.values() {
+            account_value = account_value.checked_add(*posted)?;
         }
         self.equity.push(EquityPoint {
             ts,
             cash: self.cash,
             position_value,
-            equity: self.cash.checked_add(position_value)?,
+            equity: self.cash.checked_add(account_value)?,
             realized_pnl: self.portfolio.realized_pnl()?,
             unrealized_pnl: unrealized,
         });

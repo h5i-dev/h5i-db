@@ -220,7 +220,14 @@ impl Instrument {
             outcomes: vec!["-".into()],
             tick_size: Price::from_raw(SCALE / 100),
             lot_size: Qty::from_raw(SCALE / 1_000),
-            settlement_currency: crate::currency::Currency::new("USD")?,
+            // The same currency every other constructor and the engine's own
+            // default reporting currency use. A settlement currency nothing
+            // has an FX rate for is not a harmless default: `margin_state`
+            // reports the position as unconvertible, which suppresses the
+            // liquidation call and makes `can_fund` accept everything, so a
+            // one-word difference here silently disables margin for the run.
+            // Say so explicitly with `with_settlement_currency` instead.
+            settlement_currency: crate::currency::Currency::new("USDC")?,
             expiration: None,
             settlement_observable: None,
             neg_risk: false,
