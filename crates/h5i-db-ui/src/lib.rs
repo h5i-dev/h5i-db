@@ -64,6 +64,25 @@ const YEAR_NS: f64 = 365.25 * 24.0 * 3600.0 * 1e9;
 /// only *sent* when the frame actually changed, so an idle database costs a
 /// metadata poll per tick and no traffic.
 const EVENTS_INTERVAL: Duration = Duration::from_secs(2);
+/// A fork that wrote this recently is still working. Sized well above the
+/// `/api/events` tick so a trial caught between two writes is never called
+/// quiet.
+const TRIAL_ACTIVE_WINDOW_NS: i64 = 15 * 1_000_000_000;
+/// How long a started trial may stay silent before the UI stops calling it
+/// live. Silence is not death: a run can spend minutes inside one scan
+/// without committing anything, so this is far longer than the liveness
+/// window, and what it produces is `stalled` ("started, nothing recorded,
+/// quiet for a long time"), never `failed`: the server sees forks, not
+/// processes, and cannot tell a crash from a long pause.
+const TRIAL_STALLED_AFTER_NS: i64 = 10 * 60 * 1_000_000_000;
+/// Forks `/api/experiments` derives in one request. Each costs an open, a
+/// table listing and up to four bounded scans, so an unbounded study turns a
+/// page load into minutes; past this the payload carries `truncated` and the
+/// fork counts rather than quietly showing part of a study as all of it.
+const EXPERIMENT_FORK_LIMIT: usize = 64;
+/// Experiment derivations running at once; extra requests queue at the route,
+/// exactly as they do for the scratchpad.
+const EXPERIMENT_CONCURRENCY: usize = 2;
 
 #[derive(Clone)]
 pub struct UiState {
@@ -111,8 +130,19 @@ pub async fn serve(
     port: u16,
     allow_mutations: bool,
 ) -> Result<(), Error> {
-    let reports = StdPath::new(&db_label).join(REPORTS_SUBDIR);
-    let state = UiState::new(db, db_label, allow_mutations).with_reports_dir(reports);
+    // `db_label` is whatever the human typed on the command line and exists
+    // only to be printed. Where the database actually lives is a question for
+    // the backend, which answers it only for local storage: an object-store
+    // database has no reports directory on this machine to serve.
+    let reports = db
+        .backend()
+        .local_root
+        .as_ref()
+        .map(|root| root.join(REPORTS_SUBDIR));
+    let mut state = UiState::new(db, db_label, allow_mutations);
+    if let Some(dir) = reports {
+        state = state.with_reports_dir(dir);
+    }
     let token = state.token.clone();
     let app = build_router(state);
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -152,7 +182,12 @@ pub fn build_router(state: UiState) -> Router {
         .route("/report/{name}", get(report))
         .route("/api/reports", get(reports_list))
         .route("/api/overview", get(overview))
-        .route("/api/experiments", get(experiments))
+        // Deriving experiments opens run forks and scans them; queue extra
+        // callers rather than letting a reload storm multiply that work.
+        .route(
+            "/api/experiments",
+            get(experiments).layer(ConcurrencyLimitLayer::new(EXPERIMENT_CONCURRENCY)),
+        )
         .route("/api/forks", get(forks))
         .route("/api/fork/{name}", get(fork_detail))
         .route("/api/events", get(events))
@@ -204,6 +239,12 @@ async fn list_reports(dir: &StdPath) -> Vec<String> {
     };
     let mut names = Vec::new();
     while let Ok(Some(entry)) = entries.next_entry().await {
+        // `file_type` does not follow the entry, so a symlink reads as a
+        // symlink here rather than as its target. The listing must agree with
+        // what `report` will actually serve, and `report` refuses symlinks.
+        if !entry.file_type().await.is_ok_and(|kind| kind.is_file()) {
+            continue;
+        }
         let name = entry.file_name().to_string_lossy().to_string();
         if safe_report_name(&name).is_some() {
             names.push(name);
@@ -221,43 +262,142 @@ async fn reports_list(State(st): State<UiState>) -> Response {
     Json(json!({ "reports": list_reports(&dir).await })).into_response()
 }
 
-async fn reports_index(State(st): State<UiState>) -> Response {
-    let names = match st.reports_dir.clone() {
-        Some(dir) => list_reports(&dir).await,
-        None => Vec::new(),
-    };
-    let body = if names.is_empty() {
-        "<p>No reports yet. Render one with <code>python -m h5i_db.quant \
-         tearsheet --db &lt;db&gt; --returns &lt;table&gt; --out \
-         &lt;db&gt;/reports/run.html</code>.</p>"
-            .to_string()
-    } else {
-        let items: String = names
-            .iter()
-            .map(|name| {
-                format!(
-                    "<li><a href=\"/report/{n}\">{n}</a></li>",
-                    n = html_escape(name)
-                )
-            })
-            .collect();
-        format!("<ul>{items}</ul>")
-    };
-    Html(format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
-         <title>Reports</title><style>body{{font:15px/1.6 system-ui,sans-serif;\
-         margin:40px auto;max-width:680px;padding:0 20px}}\
-         a{{color:#2a78d6}}li{{margin:4px 0}}</style></head><body>\
-         <h1>Reports</h1>{body}</body></html>"
-    ))
-    .into_response()
+/// The reports page is a shell, not a listing: it carries no report content
+/// and therefore needs no token, because everything it shows comes from the
+/// token-guarded `/api/reports` and `/report/{name}` routes.
+///
+/// That indirection is the point. A rendered report is attacker-influenceable
+/// HTML (vendor market names, strategy names and config JSON all reach it), so
+/// it is never a document on this origin: it is text pulled with `fetch` and
+/// dropped into a `sandbox`ed iframe, which runs it in an opaque origin with
+/// no reach into `sessionStorage` (where the access token lives) and no reach
+/// into this page. A plain `<a href>` could not carry the bearer header
+/// anyway, so the fetch is not an extra cost.
+const REPORTS_SHELL: &str = r#"<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Reports</title><style>
+body{font:15px/1.6 system-ui,sans-serif;margin:0;padding:24px;color:#1c1f24}
+h1{font-size:18px;margin:0 0 12px}
+a{color:#2a78d6;cursor:pointer}
+ul{margin:0;padding-left:18px}li{margin:4px 0}
+code{font-family:ui-monospace,monospace;font-size:13px}
+#frame{display:block;width:100%;height:78vh;border:1px solid #d6dae0;
+  border-radius:6px;margin-top:16px;background:#fff}
+#frame[hidden]{display:none}
+.err{color:#b3261e;font-family:ui-monospace,monospace;font-size:13px}
+</style></head><body>
+<h1>Reports</h1>
+<div id="list"></div>
+<iframe id="frame" hidden sandbox="allow-scripts" referrerpolicy="no-referrer"
+        title="rendered report"></iframe>
+<script>
+// The token arrives once on the startup URL and is shared with the main shell
+// through this origin's sessionStorage; strip it from the address bar so it
+// does not survive in history or in a copied link.
+const TOKEN = (() => {
+  const u = new URL(location.href);
+  const t = u.searchParams.get("token");
+  if (t) {
+    sessionStorage.setItem("h5i_token", t);
+    u.searchParams.delete("token");
+    history.replaceState(null, "", u.pathname + u.search + u.hash);
+  }
+  return sessionStorage.getItem("h5i_token") || "";
+})();
+const auth = { authorization: "Bearer " + TOKEN };
+const list = document.getElementById("list");
+const frame = document.getElementById("frame");
+function fail(message) {
+  const p = document.createElement("p");
+  p.className = "err";
+  p.textContent = message;
+  list.replaceChildren(p);
+}
+// srcdoc, not src: the frame is sandboxed without the same-origin escape
+// hatch, so the report runs in an opaque origin and cannot read this page, its
+// storage or its token even if a market name smuggled a script into the
+// rendered HTML.
+async function openReport(name) {
+  const res = await fetch("/report/" + encodeURIComponent(name), { headers: auth });
+  if (!res.ok) { fail("could not load " + name + " (HTTP " + res.status + ")"); return; }
+  frame.srcdoc = await res.text();
+  frame.hidden = false;
+  location.hash = encodeURIComponent(name);
+}
+(async () => {
+  let names = [];
+  try {
+    const res = await fetch("/api/reports", { headers: auth });
+    if (!res.ok) {
+      fail(res.status === 401
+        ? "no access token: open the UI through the exact URL printed at startup"
+        : "could not list reports (HTTP " + res.status + ")");
+      return;
+    }
+    names = (await res.json()).reports || [];
+  } catch (e) { fail(String(e)); return; }
+  if (!names.length) {
+    const p = document.createElement("p");
+    p.textContent = "No reports yet. Render one with: python -m h5i_db.quant "
+      + "tearsheet --db <db> --returns <table> --out <db>/reports/run.html";
+    list.replaceChildren(p);
+    return;
+  }
+  const ul = document.createElement("ul");
+  for (const name of names) {
+    // textContent, never innerHTML: a file name is data, not markup.
+    const a = document.createElement("a");
+    a.textContent = name;
+    a.addEventListener("click", () => openReport(name));
+    const li = document.createElement("li");
+    li.append(a);
+    ul.append(li);
+  }
+  list.replaceChildren(ul);
+  const wanted = decodeURIComponent(location.hash.slice(1));
+  if (names.includes(wanted)) openReport(wanted);
+})();
+</script></body></html>"#;
+
+async fn reports_index() -> Html<&'static str> {
+    Html(REPORTS_SHELL)
 }
 
-fn html_escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
+/// Content-Security-Policy sent with every rendered report.
+///
+/// `sandbox` without `allow-same-origin` drops the document into an opaque
+/// origin: even fetched straight from this port it cannot read
+/// `sessionStorage["h5i_token"]`, cannot touch a parent page, and cannot make
+/// a same-origin call to `/api/plan/{table}/{id}/apply`. `allow-scripts` stays
+/// because reports draw their own charts. Everything else is denied because a
+/// report is self-contained by construction (inline `<style>`, inline
+/// `<script>`, SVG built in the page), so nothing legitimate makes a network
+/// request and an injected script has nowhere to send what it stole.
+const REPORT_CSP: &str = "sandbox allow-scripts; default-src 'none'; \
+     script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; \
+     font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'";
+
+/// Read one report, refusing anything that is not a regular file sitting
+/// directly inside the reports directory.
+///
+/// `read_to_string` follows symlinks, so a link planted in the reports
+/// directory turned a name-only allowlist into "read any file this process can
+/// open". `symlink_metadata` does not follow the final component, so a symlink
+/// is seen as a symlink; canonicalising afterwards catches the rest (a
+/// symlinked component above the file, or a name that resolves elsewhere).
+async fn read_report(dir: &StdPath, safe: &str) -> Option<String> {
+    let path = dir.join(safe);
+    if !tokio::fs::symlink_metadata(&path)
+        .await
+        .is_ok_and(|meta| meta.is_file())
+    {
+        return None;
+    }
+    let root = tokio::fs::canonicalize(dir).await.ok()?;
+    let real = tokio::fs::canonicalize(&path).await.ok()?;
+    if real.parent() != Some(root.as_path()) {
+        return None;
+    }
+    tokio::fs::read_to_string(&real).await.ok()
 }
 
 async fn report(State(st): State<UiState>, AxPath(name): AxPath<String>) -> Response {
@@ -271,9 +411,18 @@ async fn report(State(st): State<UiState>, AxPath(name): AxPath<String>) -> Resp
         )
             .into_response();
     };
-    match tokio::fs::read_to_string(dir.join(safe)).await {
-        Ok(body) => Html(body).into_response(),
-        Err(_) => (StatusCode::NOT_FOUND, "no such report").into_response(),
+    match read_report(&dir, safe).await {
+        Some(body) => (
+            [
+                (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+                (header::CONTENT_SECURITY_POLICY, REPORT_CSP),
+                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+                (header::REFERRER_POLICY, "no-referrer"),
+            ],
+            body,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such report").into_response(),
     }
 }
 
@@ -298,7 +447,7 @@ async fn guard(State(st): State<UiState>, req: Request, next: Next) -> Response 
             "the review UI only answers to localhost / 127.0.0.1 / [::1]",
         );
     }
-    if req.uri().path().starts_with("/api/") {
+    if requires_token(req.uri().path()) {
         let authed = req
             .headers()
             .get(header::AUTHORIZATION)
@@ -323,6 +472,18 @@ async fn guard(State(st): State<UiState>, req: Request, next: Next) -> Response 
         }
     }
     next.run(req).await
+}
+
+/// Routes that may not be answered without the bearer token.
+///
+/// `/api/` is the JSON surface. `/report/` is here because a rendered report
+/// is not public data: it is the output of somebody's strategy, and it was
+/// readable by any other process on the machine that could guess a file name.
+/// Note the trailing slash, which keeps `/reports` out: that route is an empty
+/// shell, and giving it a token requirement would only break it, since a
+/// browser cannot put an `Authorization` header on a top-level navigation.
+fn requires_token(path: &str) -> bool {
+    path.starts_with("/api/") || path.starts_with("/report/")
 }
 
 fn guard_reject(status: StatusCode, code: &str, message: &str, hint: &str) -> Response {
@@ -488,18 +649,29 @@ async fn overview(State(st): State<UiState>) -> ApiResult {
 /// A score is never copied into a second UI-owned object: `bt_config` supplies
 /// experiment identity and `bt_run` supplies the recorded result. Forks which
 /// have started but do not yet contain `bt_run` remain visible as running (or
-/// failed when they have gone quiet), so attention routing does not depend on
-/// a successful run.
+/// stalled once they have been quiet a long time), so attention routing does
+/// not depend on a successful run.
+///
+/// Bounded on purpose. Every fork here costs an open, a table listing and up
+/// to four scans, so a study with hundreds of trials would make this endpoint
+/// take minutes. Only the most recently created `EXPERIMENT_FORK_LIMIT` forks
+/// are derived, and the payload says so: a truncated leaderboard that admits
+/// it is a triage surface, a silently short one is a lie.
 async fn experiments(State(st): State<UiState>) -> ApiResult {
     let mut grouped: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
     let now_ns = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
-    let summaries: Vec<_> = st
+    let mut summaries: Vec<_> = st
         .db
         .list_forks()
         .await?
         .into_iter()
         .filter(|fork| fork.name.starts_with("bt-"))
         .collect();
+    let forks_total = summaries.len();
+    // Newest first, because the runs a human is triaging are the recent ones.
+    summaries.sort_by_key(|summary| std::cmp::Reverse(summary.created_at_ns));
+    summaries.truncate(EXPERIMENT_FORK_LIMIT);
+    let forks_scanned = summaries.len();
     for summary in summaries {
         let fork = st.db.base().open_fork(&summary.name).await?;
         let tables: Vec<String> = fork
@@ -584,21 +756,28 @@ async fn experiments(State(st): State<UiState>) -> ApiResult {
             })
             .unwrap_or_default();
         let last_activity = summary.last_write_ns.unwrap_or(summary.created_at_ns);
-        let recently_active = now_ns.saturating_sub(last_activity) < 15_000_000_000;
+        let quiet_ns = now_ns.saturating_sub(last_activity);
+        // A fork that has not written is not a fork that died. A run can sit
+        // inside one long scan without committing anything, so short silence
+        // is `idle` (started, nothing recorded yet) and only a long silence
+        // becomes `stalled`. Neither claims a failure the server cannot see:
+        // it observes fork metadata, not processes.
         let status = if report.is_some() {
             if warnings.is_empty() {
                 "finished"
             } else {
                 "warned"
             }
-        } else if recently_active {
+        } else if quiet_ns < TRIAL_ACTIVE_WINDOW_NS {
             "running"
+        } else if quiet_ns < TRIAL_STALLED_AFTER_NS {
+            "idle"
         } else {
-            "failed"
+            "stalled"
         };
         let priority = if needs_decision {
             5
-        } else if status == "failed" || !warnings.is_empty() {
+        } else if status == "stalled" || !warnings.is_empty() {
             4
         } else if status == "finished" {
             3
@@ -617,6 +796,9 @@ async fn experiments(State(st): State<UiState>) -> ApiResult {
             "phase": phase,
             "parameters": parameters,
             "status": status,
+            // Ship the silence itself so the UI can say "nothing written for
+            // 3m" rather than leaving a reader to guess what `idle` measured.
+            "quiet_ns": quiet_ns,
             "warnings": warnings,
             "needs_decision": needs_decision,
             "priority": priority,
@@ -698,7 +880,13 @@ async fn experiments(State(st): State<UiState>) -> ApiResult {
             .cmp(&a["priority"].as_u64())
             .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
     });
-    Ok(Json(json!({ "experiments": experiments })))
+    Ok(Json(json!({
+        "experiments": experiments,
+        "forks_total": forks_total,
+        "forks_scanned": forks_scanned,
+        "truncated": forks_scanned < forks_total,
+        "scan_limit": EXPERIMENT_FORK_LIMIT,
+    })))
 }
 
 fn infer_study_trial(run_id: &str) -> Option<(String, u64, String)> {
@@ -774,38 +962,50 @@ fn row_count(batches: &[arrow::array::RecordBatch]) -> usize {
         .sum()
 }
 
-/// Every non-null `Float64` in a column, in row order.
+/// One entry per scanned row: the `Float64` value, or `None` where the row has
+/// no usable one.
+///
+/// Row-aligned by construction. Skipping a batch that lacks the column, or
+/// carries it as another type, would shorten this vector while its neighbour
+/// stayed long, and the two are read by index: `realized_pnl[i]` was paired
+/// with a *different instrument's* `settlement_pnl[i]` from the offset on.
+/// Padding keeps index `i` meaning row `i` in every column.
 fn float_column(batches: &[arrow::array::RecordBatch], name: &str) -> Vec<Option<f64>> {
     use arrow::array::{Array, Float64Array};
     let mut out = Vec::new();
     for batch in batches {
-        let Some(column) = batch.column_by_name(name) else {
-            continue;
-        };
-        let Some(values) = column.as_any().downcast_ref::<Float64Array>() else {
-            continue;
-        };
-        for index in 0..values.len() {
-            out.push((!values.is_null(index)).then(|| values.value(index)));
+        let values = batch
+            .column_by_name(name)
+            .and_then(|column| column.as_any().downcast_ref::<Float64Array>());
+        match values {
+            None => out.resize(out.len() + batch.num_rows(), None),
+            Some(values) => {
+                for index in 0..values.len() {
+                    out.push((!values.is_null(index)).then(|| values.value(index)));
+                }
+            }
         }
     }
     out
 }
 
-/// Every nanosecond timestamp in a column, in row order.
-fn timestamp_column(batches: &[arrow::array::RecordBatch], name: &str) -> Vec<i64> {
+/// One entry per scanned row: the nanosecond timestamp, or `None`. Row-aligned
+/// for the same reason [`float_column`] is, so a stamp can be read next to the
+/// value it belongs to instead of next to whichever value happens to sit at
+/// the same index in a separately-filtered list.
+fn timestamp_column(batches: &[arrow::array::RecordBatch], name: &str) -> Vec<Option<i64>> {
     use arrow::array::{Array, TimestampNanosecondArray};
     let mut out = Vec::new();
     for batch in batches {
-        let Some(column) = batch.column_by_name(name) else {
-            continue;
-        };
-        let Some(values) = column.as_any().downcast_ref::<TimestampNanosecondArray>() else {
-            continue;
-        };
-        for index in 0..values.len() {
-            if !values.is_null(index) {
-                out.push(values.value(index));
+        let values = batch
+            .column_by_name(name)
+            .and_then(|column| column.as_any().downcast_ref::<TimestampNanosecondArray>());
+        match values {
+            None => out.resize(out.len() + batch.num_rows(), None),
+            Some(values) => {
+                for index in 0..values.len() {
+                    out.push((!values.is_null(index)).then(|| values.value(index)));
+                }
             }
         }
     }
@@ -898,7 +1098,9 @@ async fn trial_analytics(
         let batches = scan_table(fork, "bt_positions", TRIAL_SCAN_LIMIT).await?;
         // A position's outcome is realised plus settled. `market_exit_pnl` is
         // the counterfactual "worth at market" and is an alternative to
-        // settlement, not an addend -- adding it would double-count.
+        // settlement, not an addend -- adding it would double-count. Both
+        // columns come back row-aligned to the scan, so index N is the same
+        // position in each and the pairing below is the position's own.
         let realized = float_column(&batches, "realized_pnl");
         let settled = float_column(&batches, "settlement_pnl");
         let mut won = 0usize;
@@ -920,12 +1122,22 @@ async fn trial_analytics(
     if has("bt_equity") {
         let batches = scan_table(fork, "bt_equity", TRIAL_SCAN_LIMIT).await?;
         truncated |= row_count(&batches) >= TRIAL_SCAN_LIMIT;
-        let curve: Vec<f64> = float_column(&batches, "equity")
-            .into_iter()
-            .flatten()
-            .filter(|value| value.is_finite())
-            .collect();
+        let equity = float_column(&batches, "equity");
         let stamps = timestamp_column(&batches, "ts");
+        // Shape statistics only need the values, so they keep every usable
+        // one. The Sharpe below needs a stamp *and* a value from the same
+        // row, which is a strictly smaller set: filtering the two columns
+        // independently is what let a curve of one row set be annualised by an
+        // interval measured over another.
+        let curve: Vec<f64> = equity
+            .iter()
+            .filter_map(|value| value.filter(|v| v.is_finite()))
+            .collect();
+        let samples: Vec<(i64, f64)> = stamps
+            .iter()
+            .zip(equity.iter())
+            .filter_map(|(stamp, value)| Some(((*stamp)?, (*value).filter(|v| v.is_finite())?)))
+            .collect();
         if !curve.is_empty() {
             out.insert("equity_points".into(), json!(curve.len()));
             out.insert("equity".into(), json!(downsample(&curve, SPARKLINE_POINTS)));
@@ -940,15 +1152,23 @@ async fn trial_analytics(
             }
         }
         // Per-sample simple returns, then an annualisation read off the
-        // samples' own median spacing rather than an assumed calendar.
-        let returns: Vec<f64> = curve
-            .windows(2)
-            .filter(|pair| pair[0] != 0.0 && pair[0].is_finite())
-            .map(|pair| pair[1] / pair[0] - 1.0)
-            .filter(|value| value.is_finite())
-            .collect();
-        let mut gaps: Vec<i64> = stamps.windows(2).map(|pair| pair[1] - pair[0]).collect();
-        gaps.retain(|gap| *gap > 0);
+        // samples' own median spacing rather than an assumed calendar. Return
+        // and gap are produced together from one pass over the paired samples,
+        // so the interval the ratio is scaled by is measured over exactly the
+        // steps the ratio was computed from.
+        let mut returns: Vec<f64> = Vec::new();
+        let mut gaps: Vec<i64> = Vec::new();
+        for pair in samples.windows(2) {
+            let (previous_ts, previous) = pair[0];
+            let (ts, value) = pair[1];
+            let step = value / previous - 1.0;
+            let gap = ts - previous_ts;
+            if previous == 0.0 || !step.is_finite() || gap <= 0 {
+                continue;
+            }
+            returns.push(step);
+            gaps.push(gap);
+        }
         gaps.sort_unstable();
         let interval = gaps.get(gaps.len() / 2).copied();
         if returns.len() >= 3 {

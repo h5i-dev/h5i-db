@@ -479,9 +479,13 @@ function markTrialSeen(t) {
 }
 function trialAttention(t) {
   if (t.needs_decision) return { state: "needs-decision", priority: 5 };
-  if (t.status === "running") return { state: "running", priority: 2 };
+  // "running" and "idle" are both "started, nothing recorded yet"; the server
+  // cannot see processes, so only a long silence ("stalled") is worth pulling
+  // a human in, and even that is not a proven failure.
+  if (t.status === "running" || t.status === "idle")
+    return { state: "running", priority: 2 };
   if (TRIAL_SEEN.has(trialKey(t))) return { state: "seen", priority: 1 };
-  if (t.status === "failed" || t.status === "warned" || trialWarnings(t).length)
+  if (t.status === "stalled" || t.status === "warned" || trialWarnings(t).length)
     return { state: "failed-warned", priority: 4 };
   return { state: "finished-unseen", priority: 3 };
 }
@@ -585,6 +589,7 @@ async function refresh() {
   ]);
   OV = overview;
   OV.experiments = experimentData.experiments || [];
+  OV.experiments_meta = experimentData;
   $("#dbpath").textContent = OV.db;
   const chip = $("#forkchip");
   if (OV.fork) { chip.style.display = ""; chip.textContent = "fork: " + OV.fork; }
@@ -781,6 +786,7 @@ function applyFrame(f) {
 async function updateExperiments() {
   const data = await api("/api/experiments");
   OV.experiments = data.experiments || [];
+  OV.experiments_meta = data;
   if (experimentSel && !OV.experiments.some(e => e.id === experimentSel)) {
     experimentSel = OV.experiments.length ? OV.experiments[0].id : null;
     trialSel = null;
@@ -1458,6 +1464,15 @@ function renderExperiments(main) {
   const experiments = [...(OV.experiments || [])].sort((a, b) =>
     experimentAttention(b).priority - experimentAttention(a).priority
       || a.id.localeCompare(b.id));
+  // The endpoint scans a bounded number of run forks. When it stopped short,
+  // say so where the leaderboard is read: an incomplete ranking that looks
+  // complete is worse than no ranking.
+  const meta = OV.experiments_meta || {};
+  const cut = meta.truncated
+    ? h("div", { class: "quiet" },
+      `showing the ${meta.forks_scanned} most recent run forks of ${meta.forks_total};`
+      + " older trials are not in this ranking (use the CLI for the full study)")
+    : null;
   if (!experiments.length) {
     main.className = "doc";
     main.append(h("div", { class: "wrap" }, h("div", { class: "quiet" },
@@ -1493,6 +1508,7 @@ function renderExperiments(main) {
     main.append(rhs);
   }
 
+  if (cut) rhs.append(cut);
   const e = experiments.find(item => item.id === experimentSel) || experiments[0];
   if (experimentSel !== e.id) experimentSel = e.id;
   const attn = experimentAttention(e);

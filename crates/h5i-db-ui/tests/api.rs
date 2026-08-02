@@ -666,9 +666,124 @@ async fn reports_are_listed_and_served() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("equity"));
 
-    let (status, index) = get_html(&router, "/reports").await;
+    // The listing page is a shell: it embeds no report content, fetches the
+    // names from the guarded API, and shows a report inside a frame that has
+    // no `allow-same-origin`, so an injected script in a report cannot reach
+    // this origin's sessionStorage (where the access token lives).
+    let (status, shell) = get_html(&router, "/reports").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(index.contains("/report/factor.html"));
+    assert!(
+        !shell.contains("factor.html"),
+        "the shell must not server-render the listing"
+    );
+    assert!(shell.contains("/api/reports"), "listing comes from the API");
+    assert!(shell.contains(r#"sandbox="allow-scripts""#), "{shell}");
+    assert!(
+        !shell.contains("allow-same-origin"),
+        "sandboxing a report and then handing back the origin is no sandbox"
+    );
+    assert!(
+        shell.contains("srcdoc"),
+        "report HTML is never a document here"
+    );
+}
+
+/// A report is the output of somebody's strategy and its content is shaped by
+/// vendor market names, strategy names and config JSON. It must not be
+/// readable by any other process on the box, and the copy that is served must
+/// not be able to script the origin that holds the access token.
+#[tokio::test]
+async fn the_report_route_requires_the_token_and_ships_a_sandboxing_csp() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(&db, dir.path(), &[("tearsheet.html", "<p>equity</p>")]);
+
+    let fetch_report = |token: Option<&str>| {
+        let mut req = Request::builder()
+            .uri("/report/tearsheet.html")
+            .header("host", "127.0.0.1:8000");
+        if let Some(token) = token {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+
+    for token in [None, Some("wrong")] {
+        let res = fetch_report(token).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "token {token:?}");
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&bytes).to_string();
+        assert!(!body.contains("equity"), "report leaked without a token");
+        assert!(body.contains("unauthorized"), "{body}");
+    }
+
+    let res = fetch_report(Some(TEST_TOKEN)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let csp = res
+        .headers()
+        .get("content-security-policy")
+        .expect("reports carry a CSP")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(csp.contains("sandbox allow-scripts"), "{csp}");
+    assert!(
+        !csp.contains("allow-same-origin"),
+        "an opaque origin is the whole point: {csp}"
+    );
+    assert!(csp.contains("default-src 'none'"), "{csp}");
+
+    // The shell itself stays reachable without a token: a browser cannot put
+    // an Authorization header on a top-level navigation, and the shell carries
+    // no data of its own.
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/reports")
+                .header("host", "127.0.0.1:8000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+/// `read_to_string` follows symlinks, so a name-only allowlist plus a link
+/// planted in the reports directory read as "any file this process can open".
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_report_is_refused_and_never_listed() {
+    let (dir, _router, db) = setup(false).await;
+    std::fs::write(dir.path().join("secret.html"), "<p>secret</p>").unwrap();
+    let router = router_with_reports(&db, dir.path(), &[("ok.html", "<p>ok</p>")]);
+    let reports = dir.path().join("reports");
+    // Both names pass `safe_report_name`; only refusing to follow the link
+    // keeps them from being served.
+    std::os::unix::fs::symlink(dir.path().join("secret.html"), reports.join("link.html")).unwrap();
+    std::os::unix::fs::symlink(dir.path(), reports.join("up.html")).unwrap();
+
+    for name in ["link.html", "up.html"] {
+        let (status, body) = get_html(&router, &format!("/report/{name}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{name} was served: {body}");
+        assert!(!body.contains("secret"), "{name} followed the link: {body}");
+    }
+
+    // The listing has to agree with what the route will actually serve, or it
+    // advertises reports that 404.
+    let (_status, json) = get_json(&router, "/api/reports").await;
+    let names: Vec<&str> = json["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["ok.html"]);
+
+    // The real file is still served.
+    let (status, body) = get_html(&router, "/report/ok.html").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("ok"));
 }
 
 #[tokio::test]
