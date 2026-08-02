@@ -200,7 +200,9 @@ async fn a_multi_date_load_is_sorted_before_it_becomes_a_plan() {
     plan.validate().expect("a sorted plan is replayable");
 
     // And it commits, which is what the caller actually asked for.
-    let db = Database::create(&dir.path().join("multi.db")).await.unwrap();
+    let db = Database::create(&dir.path().join("multi.db"))
+        .await
+        .unwrap();
     let load = load_archive(&db, &spec, &universe(), UnixNanos::new(0))
         .await
         .unwrap();

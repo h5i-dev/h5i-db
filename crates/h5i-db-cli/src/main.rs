@@ -1118,9 +1118,7 @@ async fn run(cli: Cli) -> Result<()> {
                 memory_limit: memory_limit_mb
                     .map(|mb| {
                         mb.checked_mul(1024 * 1024).ok_or_else(|| {
-                            Error::invalid(format!(
-                                "--memory-limit-mb {mb} overflows a byte count"
-                            ))
+                            Error::invalid(format!("--memory-limit-mb {mb} overflows a byte count"))
                         })
                     })
                     .transpose()?,

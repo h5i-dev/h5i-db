@@ -541,7 +541,7 @@ mod tests {
                 value: ScalarLit::Int(1_000_000),
             },
         );
-        match p.enforce(&[big.clone()]).unwrap_err() {
+        match p.enforce(std::slice::from_ref(&big)).unwrap_err() {
             Error::DataPolicyViolation { detail, .. } => {
                 assert!(detail.contains("2 row(s)"), "detail: {detail}");
             }

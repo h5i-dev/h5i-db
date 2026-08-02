@@ -419,7 +419,11 @@ impl OrderbookDecoder {
                     self.desynced = true;
                     return Ok(vec![self.gap(received_at)]);
                 }
-                let levels = if yes_side { &mut self.yes } else { &mut self.no };
+                let levels = if yes_side {
+                    &mut self.yes
+                } else {
+                    &mut self.no
+                };
                 let delta = if updated == 0 {
                     levels.remove(&price.raw());
                     BookDelta::delete(canonical_side, canonical_price)

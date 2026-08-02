@@ -822,10 +822,7 @@ mod tests {
     fn an_absurd_timestamp_saturates_rather_than_wrapping() {
         // Wrapping would land a far-future stamp somewhere in the past, where
         // it reads as ordinary data instead of as the nonsense it is.
-        let body = format!(
-            r#"{{"asset_id":"111","timestamp":{},"bids":[]}}"#,
-            i64::MAX
-        );
+        let body = format!(r#"{{"asset_id":"111","timestamp":{},"bids":[]}}"#, i64::MAX);
         let record = parse_book(&body, &tokens()).unwrap();
         assert_eq!(record.ts().get(), i64::MAX);
     }
