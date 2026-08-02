@@ -30,6 +30,7 @@ from typing import Any, Iterable, Optional, Sequence, Union
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from ..dataframe import quote_string
 from ._canonical import (
     BARS_SCHEMA,
     IngestReport,
@@ -540,7 +541,10 @@ def bars_from_trades(
 
     predicate = ""
     if instruments:
-        quoted = ", ".join("'" + str(name).replace("'", "''") + "'" for name in instruments)
+        # Through the package's own quoter rather than a local one: an
+        # instrument id is vendor data, and a second hand-rolled escape is how
+        # one of them ends up missing a case the other covers.
+        quoted = ", ".join(quote_string(str(name)) for name in instruments)
         predicate = f" WHERE instrument_id IN ({quoted})"
     trades = db.sql(
         "SELECT instrument_id, outcome, ts_event, price, size FROM trades"

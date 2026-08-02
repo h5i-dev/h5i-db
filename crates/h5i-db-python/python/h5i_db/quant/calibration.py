@@ -38,7 +38,10 @@ def _validate(
             "strategy, market and outcome series must be the same length; got "
             f"{len(strategy)}, {len(market)}, {len(outcomes)}"
         )
-    if not strategy:
+    # `len(...) == 0` rather than a truth test: a numpy array or a pandas
+    # Series raises on `not x`, and these three series routinely arrive as
+    # one of those.
+    if len(strategy) == 0:
         raise ValueError("nothing to score: the series are empty")
     kept_strategy: list[float] = []
     kept_market: list[float] = []
@@ -60,6 +63,40 @@ def _validate(
     if not kept_strategy:
         raise ValueError("every observation was missing; nothing to score")
     return kept_strategy, kept_market, kept_outcome
+
+
+def _validate_forecasts(
+    forecasts: Sequence[float], outcomes: Sequence[float]
+) -> tuple[list[float], list[float]]:
+    """The cleaning half of :func:`_validate`, for the one-series functions.
+
+    A decomposition scores a forecast against outcomes and has no market leg,
+    so the forecasts stand in for it in the shared validator. Spelling that
+    out here keeps `_validate(forecasts, forecasts, ...)`, which reads like a
+    copy-paste slip, out of the callers.
+    """
+    kept, _market, kept_outcomes = _validate(forecasts, forecasts, outcomes)
+    return kept, kept_outcomes
+
+
+def _bucket_of(value: float, bounds: Sequence[float]) -> int:
+    """Which bucket a forecast falls in, indexed by its upper edge.
+
+    Buckets are half-open, `(low, high]`, with the lowest closed at both ends
+    so a forecast sitting exactly on the bottom edge has a home. A value
+    outside the edges has no bucket at all, and that is an error rather than a
+    silent placement: filing it under the top bucket and dropping it are both
+    defensible, this module used to do one in each function, and the two then
+    reported different things about the same input.
+    """
+    for index in range(len(bounds) - 1):
+        low, high = bounds[index], bounds[index + 1]
+        if (value > low or (index == 0 and value >= low)) and value <= high:
+            return index
+    raise ValueError(
+        f"forecast {value} falls outside the bucket edges [{bounds[0]}, "
+        f"{bounds[-1]}]; pass edges= that cover the forecasts"
+    )
 
 
 @dataclass(frozen=True)
@@ -149,20 +186,13 @@ def brier_decomposition(
     bounds = sorted(float(edge) for edge in edges)
     if len(bounds) < 2:
         raise ValueError("edges must define at least one bucket")
-    kept_forecasts, _, kept_outcomes = _validate(forecasts, forecasts, outcomes)
+    kept_forecasts, kept_outcomes = _validate_forecasts(forecasts, outcomes)
     total = len(kept_forecasts)
     base = sum(kept_outcomes) / total
 
-    def bucket_of(value: float) -> int:
-        for index in range(len(bounds) - 1):
-            low, high = bounds[index], bounds[index + 1]
-            if (value > low or (index == 0 and value >= low)) and value <= high:
-                return index
-        return len(bounds) - 2
-
     groups: dict[int, list[tuple[float, float]]] = {}
     for forecast, outcome in zip(kept_forecasts, kept_outcomes):
-        groups.setdefault(bucket_of(forecast), []).append((forecast, outcome))
+        groups.setdefault(_bucket_of(forecast, bounds), []).append((forecast, outcome))
 
     reliability = 0.0
     resolution = 0.0
@@ -200,19 +230,23 @@ def reliability_curve(
 
     The signed gap is the tradeable part: a bucket whose realized frequency
     sits below its mean quote was overpriced.
+
+    Buckets are assigned by the same rule :func:`brier_decomposition` uses, so
+    the two agree observation for observation on any input they both accept.
     """
     if edges is None:
         edges = (0.0, 0.1, 0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 1.0)
     bounds = sorted(float(edge) for edge in edges)
-    kept_forecasts, _, kept_outcomes = _validate(forecasts, forecasts, outcomes)
+    if len(bounds) < 2:
+        raise ValueError("edges must define at least one bucket")
+    kept_forecasts, kept_outcomes = _validate_forecasts(forecasts, outcomes)
+    groups: dict[int, list[tuple[float, float]]] = {}
+    for forecast, outcome in zip(kept_forecasts, kept_outcomes):
+        groups.setdefault(_bucket_of(forecast, bounds), []).append((forecast, outcome))
     rows = []
     for index in range(len(bounds) - 1):
         low, high = bounds[index], bounds[index + 1]
-        members = [
-            (forecast, outcome)
-            for forecast, outcome in zip(kept_forecasts, kept_outcomes)
-            if (forecast > low or (index == 0 and forecast >= low)) and forecast <= high
-        ]
+        members = groups.get(index)
         if not members:
             continue
         count = len(members)

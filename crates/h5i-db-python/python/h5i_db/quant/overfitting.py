@@ -332,6 +332,14 @@ def probability_of_backtest_overfitting(
         if np.all(np.isnan(in_scores)) or np.all(np.isnan(out_scores)):
             continue
         winner = int(np.nanargmax(in_scores))
+        if np.isnan(out_scores[winner]):
+            # The winner was flat out of sample, so it has no Sharpe to rank.
+            # Every comparison against NaN is false, which would score it
+            # below every rival and count the split as overfit; that is a
+            # verdict about a missing number, not about the selection. The
+            # split carries no evidence either way, so it is dropped like the
+            # other degenerate ones above.
+            continue
         # Relative rank of the winner out of sample, in [0, 1].
         finite = out_scores[~np.isnan(out_scores)]
         if finite.size < 2:
@@ -365,6 +373,7 @@ def from_sweep(
     returns: Sequence[float],
     *,
     metric: str = "sharpe",
+    annualization: float = 1.0,
 ) -> DeflatedSharpe:
     """Deflate a Sharpe using the trial count a sweep actually ran.
 
@@ -372,21 +381,41 @@ def from_sweep(
     combination, so the number of trials is a fact about the run rather than
     a number someone remembered. The variance of the trials' own metric is
     used as the spread, which is what the benchmark is supposed to reflect.
+
+    A failed trial still consumed a draw from the search: it was tried, and it
+    could have been the one that won. Counting only the trials that finished
+    would let a sweep launder its trial count by crashing, so the failures are
+    counted too.
+
+    ``annualization`` is the factor the stored metric was annualized by (252
+    for daily bars, 1 when the trials stored a per-observation Sharpe, which
+    is what :func:`deflated_sharpe` works in). The spread is divided back down
+    by its square root before use: an annualized variance against a
+    per-observation statistic overstates the benchmark by the same factor and
+    fails every strategy in the sweep.
     """
     import numpy as np
 
-    trials = len(sweep_result)
+    if annualization <= 0:
+        raise ValueError(f"annualization must be positive, got {annualization}")
+    completed = len(sweep_result.trials)
+    failed = len(getattr(sweep_result, "failures", ()) or ())
+    trials = completed + failed
     if trials < 1:
         raise ValueError("the sweep ran no trials")
+    scale = math.sqrt(annualization)
     values = [
-        trial[metric]
+        float(trial[metric]) / scale
         for trial in sweep_result.trials
         if trial.get(metric) is not None
     ]
     variance = float(np.var(values, ddof=1)) if len(values) > 1 else None
+    source = f"sweep of {trials} trials"
+    if failed:
+        source += f" ({failed} failed)"
     return deflated_sharpe(
         returns,
         trials=trials,
         trial_sharpe_variance=variance,
-        trials_source=f"sweep of {trials} forks",
+        trials_source=source,
     )

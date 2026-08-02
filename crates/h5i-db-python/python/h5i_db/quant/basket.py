@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Union
 
+from ._common import quote_string
+
 __all__ = [
     "PANELS",
     "PORTFOLIO_PANELS",
@@ -84,6 +86,16 @@ class BasketReport:
         return document
 
 
+def _ts_ns(value: Any) -> int:
+    """Nanoseconds since the epoch, from a pandas ``Timestamp`` or a raw int.
+
+    Arrow hands a timestamp column back as ``Timestamp`` under pandas but as
+    int64 when the column was already integral, so reading ``.value``
+    unconditionally couples the report to one of the two.
+    """
+    return int(getattr(value, "value", value))
+
+
 def _equity_frame(result: Any) -> list[dict[str, float]]:
     """The equity curve as plain rows, in simulated-time order."""
     table = result.equity
@@ -92,7 +104,7 @@ def _equity_frame(result: Any) -> list[dict[str, float]]:
     frame = table.to_pandas().sort_values("ts")
     return [
         {
-            "ts_ns": int(row.ts.value),
+            "ts_ns": _ts_ns(row.ts),
             "equity": float(row.equity),
             "cash": float(row.cash),
             "position_value": float(row.position_value),
@@ -119,6 +131,11 @@ def _rolling_sharpe(returns: Sequence[float], window: int) -> list[Optional[floa
     chose, so there is no bars-per-year constant that is right for every
     caller. Scale it yourself if you know your sampling.
     """
+    if window < 2:
+        raise ValueError(
+            f"a rolling Sharpe needs a window of at least 2, got {window}; "
+            "one sample has no dispersion to divide by"
+        )
     out: list[Optional[float]] = []
     for index in range(len(returns)):
         if index + 1 < window:
@@ -184,7 +201,7 @@ def _fills(result: Any) -> list[dict[str, Any]]:
     frame = table.to_pandas()
     return [
         {
-            "ts_ns": int(row.ts.value),
+            "ts_ns": _ts_ns(row.ts),
             "instrument_id": str(row.instrument_id),
             "outcome": int(row.outcome),
             "side": str(row.side),
@@ -207,21 +224,44 @@ def _price_path(
 
     Reads at the same pin the runs used, so the line under a fill marker is the
     book the fill actually met rather than whatever the table holds now.
+
+    `book_deltas` carries one row per *level*, so the mid is the best bid
+    (highest live buy) against the best ask (lowest live sell), not the extreme
+    of each side. Rows whose action is `delete`, `clear` or `gap` describe
+    levels that are going away and are excluded: a deleted level is not a
+    price anyone can trade at.
+
+    The instants are the book events themselves, so a line point is the best
+    price quoted by that event rather than the resting best across the whole
+    book. Carrying untouched levels forward is a stateful replay, which is not
+    something a report query should be doing.
+
+    Every literal is routed through `quote_string`, like the rest of the
+    package: an instrument id is vendor data, and vendor data has no business
+    being spliced into SQL text unquoted.
     """
     if not instruments:
         return {}
     source = (
-        f"h5i('book_deltas', '{snapshot}')" if snapshot else "book_deltas"
+        f"h5i({quote_string('book_deltas')}, {quote_string(snapshot)})"
+        if snapshot
+        else "book_deltas"
     )
-    quoted = ", ".join(f"'{name}'" for name in instruments)
+    quoted = ", ".join(quote_string(str(name)) for name in instruments)
     rows = db.sql(
         f"""
-        SELECT instrument_id, ts_init,
-               (max(CASE WHEN side = 'buy'  THEN price END)
-              + max(CASE WHEN side = 'sell' THEN price END)) / 2 AS mid
-        FROM {source}
-        WHERE outcome = {int(outcome)} AND instrument_id IN ({quoted})
-        GROUP BY instrument_id, ts_init
+        SELECT instrument_id, ts_init, (best_bid + best_ask) / 2 AS mid
+        FROM (
+          SELECT instrument_id, ts_init,
+                 max(CASE WHEN side = 'buy'  THEN price END) AS best_bid,
+                 min(CASE WHEN side = 'sell' THEN price END) AS best_ask
+          FROM {source}
+          WHERE outcome = {int(outcome)}
+            AND instrument_id IN ({quoted})
+            AND action IN ({quote_string('snapshot')}, {quote_string('set')})
+            AND price IS NOT NULL
+          GROUP BY instrument_id, ts_init
+        ) AS levels
         ORDER BY instrument_id, ts_init
         """
     ).to_pandas()
@@ -230,7 +270,7 @@ def _price_path(
         ordered = group.sort_values("ts_init")
         step = max(1, len(ordered) // max_points)
         paths[str(name)] = [
-            {"ts_ns": int(row.ts_init.value), "mid": float(row.mid)}
+            {"ts_ns": _ts_ns(row.ts_init), "mid": float(row.mid)}
             for row in ordered.iloc[::step].itertuples()
             if row.mid is not None and not math.isnan(row.mid)
         ]
@@ -555,7 +595,8 @@ def _svg_line(
                 f"<circle cx='{mx:.1f}' cy='{my:.1f}' r='3' fill='{shape}' "
                 f"fill-opacity='0.85'><title>"
                 f"{html.escape(str(marker.get('side','')))} "
-                f"{marker.get('quantity','')} @ {marker.get('price','')}"
+                f"{html.escape(str(marker.get('quantity','')))} @ "
+                f"{html.escape(str(marker.get('price','')))}"
                 f"</title></circle>"
             )
     parts.append("</svg>")
@@ -600,6 +641,16 @@ _TITLES = {
 
 
 def _render(report: BasketReport) -> str:
+    # Inside a <script> element the HTML parser looks for the closing tag
+    # before JavaScript ever sees the string, so `<` must not survive; as a
+    # unicode escape it is inert to the parser and the same string to JSON.
+    # html.escape() would instead hand JSON.parse a document full of `&quot;`,
+    # which is not JSON. Same treatment as report.py's `render`.
+    payload = (
+        json.dumps(report.to_dict(), default=str)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+    )
     blocks = []
     for panel in report.drawn:
         payload = report.panels.get(panel, {})
@@ -717,7 +768,7 @@ def _render(report: BasketReport) -> str:
         f"panels: {html.escape(', '.join(report.drawn))}</p>"
         f"{totals}{''.join(blocks)}{skipped}"
         f"<script type='application/json' id='payload'>"
-        f"{html.escape(json.dumps(report.to_dict(), default=str))}</script>"
+        f"{payload}</script>"
     )
 
 

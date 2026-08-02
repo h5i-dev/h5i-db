@@ -22,6 +22,7 @@ import datetime as _dt
 import html as _html
 import json
 import math
+import re as _re
 from typing import Any, Optional, Sequence
 
 __all__ = [
@@ -122,7 +123,10 @@ def factor_payload(
         {"label": "Rows kept", "value": loss["after_binning"], "format": "integer"}
     )
     headline.append(
-        {"label": "Rows dropped", "value": loss["total"], "format": "percent"}
+        # A fraction of the input rows, so a percent format: "percent" is not
+        # one of the formats the document knows and fell through to a bare
+        # decimal, printing "0.123" next to a count of 84,120.
+        {"label": "Rows dropped", "value": loss["total"], "format": "percent1"}
     )
 
     # Turnover is per quantile per date; the chart shows the mean across
@@ -640,6 +644,23 @@ def backtest_payload(
                 ],
             }
         )
+        # Computed on the whole curve and thinned afterwards, not computed on
+        # the thinned curve: thinning first drops the samples that made the
+        # troughs, and the chart would draw a shallower worst drawdown than
+        # the "Max drawdown" tile prints beside it. The trough itself is put
+        # back if the even thinning happened to drop it, for the same reason.
+        underwater = [
+            {"ts": row["ts"], "drawdown": value}
+            for row, value in zip(
+                equity, _drawdown([row["equity"] for row in equity])
+            )
+        ]
+        drawdown_points, _thinned = _sample(underwater, _POINT_CAP)
+        trough = min(underwater, key=lambda row: row["drawdown"])
+        if not any(row is trough for row in drawdown_points):
+            drawdown_points = sorted(
+                drawdown_points + [trough], key=lambda row: row["ts"]
+            )
         charts.append(
             {
                 "kind": "area",
@@ -652,11 +673,8 @@ def backtest_payload(
                     {
                         "name": "Drawdown",
                         "points": [
-                            {"x": stamp, "y": value}
-                            for stamp, value in zip(
-                                stamps,
-                                _drawdown([row["equity"] for row in sampled]),
-                            )
+                            {"x": row["ts"], "y": row["drawdown"]}
+                            for row in drawdown_points
                         ],
                     }
                 ],
@@ -999,7 +1017,14 @@ def render(payload: dict, path: Optional[str] = None) -> str:
     # inert to the parser.
     data = data.replace("<", "\\u003c").replace(">", "\\u003e")
     title = _html.escape(str(payload.get("title", "Report")))
-    html = _TEMPLATE.replace("__TITLE__", title).replace("__DATA__", data)
+    # One pass over the template, not two: substituting the title first lets a
+    # title containing the other placeholder swallow the payload, and doing it
+    # the other way round lets the payload swallow the title. A single pass
+    # means neither substitution can see the other's output.
+    substitutions = {"__TITLE__": title, "__DATA__": data}
+    html = _re.sub(
+        "__TITLE__|__DATA__", lambda match: substitutions[match.group()], _TEMPLATE
+    )
     if path is not None:
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(html)

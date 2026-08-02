@@ -13,6 +13,7 @@ because they are properties of the store rather than of the statistics:
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 from dataclasses import dataclass, field
@@ -82,6 +83,10 @@ class SweepResult:
     trials: list
     results_table: str
     failures: list = field(default_factory=list)
+    #: Forks created for trials that raised. They hold no results row, so they
+    #: are kept out of `forks` (and out of `compare()`), but they exist and
+    #: :meth:`drop` has to clean them up or the sweep leaks them.
+    failed_forks: list = field(default_factory=list)
 
     def __len__(self) -> int:
         return len(self.trials)
@@ -112,8 +117,11 @@ class SweepResult:
         return (max if maximize else min)(rows, key=lambda t: t[metric])
 
     def drop(self) -> int:
-        """Delete the sweep's forks. The comparison table goes with them."""
-        return self.db.drop_forks(self.forks)
+        """Delete every fork the sweep made, failed trials included.
+
+        The comparison table goes with them.
+        """
+        return self.db.drop_forks(list(self.forks) + list(self.failed_forks))
 
 
 def sweep(
@@ -150,6 +158,7 @@ def sweep(
 
     trials = []
     failures = []
+    failed_forks = []
     for index, (name, combo) in enumerate(zip(names, combos)):
         fork = db.fork(name)
         try:
@@ -161,6 +170,7 @@ def sweep(
             if not keep_going:
                 raise
             failures.append({"trial": index, "fork": name, "error": repr(exc)})
+            failed_forks.append(name)
             continue
         row = {"_trial": index, "_fork": name, "_params": json.dumps(combo, default=str)}
         row.update(metrics)
@@ -173,6 +183,7 @@ def sweep(
         trials=trials,
         results_table=results_table,
         failures=failures,
+        failed_forks=failed_forks,
     )
 
 
@@ -195,6 +206,33 @@ def _write_row(fork_db: Any, table: str, row: dict) -> None:
     fork_db.append(table, pa.table({k: [v] for k, v in row.items()}, schema=schema))
 
 
+def _values_digest(subject: Any) -> Optional[str]:
+    """A content hash of the rows a computation produces, or None.
+
+    The digest in the provenance header covers the pin, the parameters and the
+    SQL, so it answers "is this the same computation" and not "does it still
+    produce the same numbers". An engine change moves the second without
+    touching the first, which is exactly the case verification exists for, so
+    the rows are read back and hashed too.
+
+    Chunking is normalised away before hashing: two runs of one query may
+    split their batches differently without disagreeing about a single value.
+    """
+    collect = getattr(subject, "collect", None)
+    if not callable(collect):
+        frame = getattr(subject, "frame", None)
+        collect = getattr(frame, "collect", None)
+    if not callable(collect):
+        return None
+    result = collect()
+    table = result.to_arrow() if hasattr(result, "to_arrow") else result
+    table = table.combine_chunks()
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return hashlib.sha256(sink.getvalue().to_pybytes()).hexdigest()
+
+
 def verify(
     subject: Any,
     *,
@@ -206,8 +244,11 @@ def verify(
     ``subject`` is anything carrying a :class:`~h5i_db.quant.Provenance`
     (a factor panel, a returns series). The check has two halves: the
     provenance digest must be unchanged, and the recomputed values must
-    match. An unpinned subject is reported as unverifiable rather than
-    passed, because reproducing it is not something the header can promise.
+    match. Checking the values means collecting both runs, which is the price
+    of the second half: a digest over the SQL cannot notice an engine that
+    computes the same query differently. An unpinned subject is reported as
+    unverifiable rather than passed, because reproducing it is not something
+    the header can promise.
     """
     provenance = getattr(subject, "provenance", None)
     if not isinstance(provenance, Provenance):
@@ -240,6 +281,7 @@ def verify(
         report["reason"] = "no recomputation supplied"
         return report
 
+    before = _values_digest(subject)
     again = rerun()
     other = getattr(again, "provenance", None)
     if isinstance(other, Provenance) and other.digest != provenance.digest:
@@ -247,6 +289,29 @@ def verify(
         if strict:
             raise VerificationError(
                 f"digest changed: {provenance.digest[:12]} -> {other.digest[:12]}"
+            )
+        return report
+
+    after = _values_digest(again)
+    report["values_compared"] = before is not None and after is not None
+    if not report["values_compared"]:
+        # Nothing to read back: the subject carries a header but no rows. Say
+        # so rather than reporting a values check that did not happen.
+        report["reason"] = "values not comparable"
+        if strict:
+            raise VerificationError(
+                "the subject cannot be collected, so only its header could be "
+                "checked; pass something that produces rows, or verify with "
+                "strict=False to accept a header-only check"
+            )
+        return report
+    report["values_digest"] = before
+    if before != after:
+        report["reason"] = "recomputed values differ"
+        if strict:
+            raise VerificationError(
+                f"the computation reproduces its header but not its numbers: "
+                f"values {before[:12]} -> {after[:12]}"
             )
         return report
     report["verified"] = True

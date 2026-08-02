@@ -9,11 +9,16 @@ straight line through a concave process.
 
 from __future__ import annotations
 
+import contextlib
+import datetime as dt
 import math
+import tempfile
 
 import numpy as np
+import pyarrow as pa
 import pytest
 
+import h5i_db
 from h5i_db import quant
 from h5i_db.quant import costs, overfitting, validation
 
@@ -113,6 +118,51 @@ def test_the_trial_source_is_recorded():
     assert result.to_dict()["trials_source"] == "declared"
 
 
+def _sweep_result(trials, failures=()):
+    """A SweepResult with no database behind it: from_sweep reads two lists."""
+    return quant.SweepResult(
+        db=None,
+        forks=[trial["_fork"] for trial in trials],
+        trials=list(trials),
+        results_table="quant_sweep",
+        failures=list(failures),
+    )
+
+
+def test_a_sweep_counts_the_trials_that_crashed_as_trials():
+    """A trial that raised still consumed a draw from the search."""
+    trials = [
+        {"_fork": f"s-{i}", "_trial": i, "sharpe": 0.05 + 0.01 * i} for i in range(4)
+    ]
+    failures = [{"trial": 4, "fork": "s-4", "error": "boom"}]
+    counted = overfitting.from_sweep(_sweep_result(trials, failures), _returns())
+    quiet = overfitting.from_sweep(_sweep_result(trials), _returns())
+    assert counted.trials == 5 and quiet.trials == 4
+    assert "1 failed" in counted.trials_source
+    # More trials is a higher bar, so a sweep cannot launder its count by
+    # crashing.
+    assert counted.benchmark > quiet.benchmark
+
+
+def test_an_annualized_sweep_metric_is_brought_back_to_the_scale_it_is_compared_on():
+    """Deflation works per observation; a stored Sharpe usually does not."""
+    daily = [
+        {"_fork": f"s-{i}", "_trial": i, "sharpe": value}
+        for i, value in enumerate((0.02, 0.04, 0.06, 0.08))
+    ]
+    annual = [
+        {**trial, "sharpe": trial["sharpe"] * math.sqrt(252)} for trial in daily
+    ]
+    per_observation = overfitting.from_sweep(_sweep_result(daily), _returns())
+    rescaled = overfitting.from_sweep(
+        _sweep_result(annual), _returns(), annualization=252
+    )
+    assert rescaled.benchmark == pytest.approx(per_observation.benchmark)
+    # Left unscaled, the same trials set a benchmark sqrt(252) times higher.
+    unscaled = overfitting.from_sweep(_sweep_result(annual), _returns())
+    assert unscaled.benchmark > per_observation.benchmark * 10
+
+
 # -- minimum track record ---------------------------------------------------
 
 
@@ -151,6 +201,26 @@ def test_a_genuinely_better_strategy_gives_a_low_pbo():
     result = quant.probability_of_backtest_overfitting(matrix, partitions=6)
     assert result.pbo < 0.25, result.pbo
     assert not result.is_overfit
+
+
+def test_a_flat_winner_is_dropped_rather_than_ranked_last():
+    """A strategy with no out-of-sample variance has no Sharpe to rank.
+
+    Comparing against its NaN is false in every direction, which used to
+    score it below every rival and count the split as overfit: a verdict
+    about a missing number rather than about the selection.
+    """
+    rng = np.random.default_rng(11)
+    matrix = rng.normal(0, 0.01, size=(240, 4))
+    # One column is flat over the whole second half, so any split that tests
+    # there has no Sharpe for it. It also wins in sample everywhere, by
+    # sitting well above the noise in the first half.
+    matrix[:120, 0] = 0.02 + rng.normal(0, 0.0001, size=120)
+    matrix[120:, 0] = 0.0
+    result = quant.probability_of_backtest_overfitting(matrix, partitions=4)
+    assert result.splits < 6, "splits with an unrankable winner must be dropped"
+    assert all(not math.isnan(rank) for rank in result.ranks)
+    assert 0.0 <= result.pbo <= 1.0
 
 
 def test_pbo_validates_its_inputs():
@@ -277,14 +347,40 @@ def test_walk_forward_moves_forward_and_can_expand():
     assert expanding[1].train_size > expanding[0].train_size
 
 
-def test_walk_forward_shares_the_embargo_with_the_cross_validators():
+def test_walk_forward_embargoes_the_training_data_next_to_the_test_block():
+    """Its training set is in the past, so the embargo has to look backwards.
+
+    Applied forwards, as the cross-validators apply it, it would land on
+    indices this splitter never trains on and remove nothing at all.
+    """
     plain = list(validation.walk_forward(300, train_size=100, test_size=50))
     embargoed = list(
         validation.walk_forward(300, train_size=100, test_size=50, embargo=0.05)
     )
-    # Training precedes the test block here, so an embargo after the test
-    # cannot remove anything: the semantics are shared, not copied.
-    assert [s.train_size for s in plain] == [s.train_size for s in embargoed]
+    width = validation.embargo_width(300, 0.05)
+    assert width == 15
+    for before, after in zip(plain, embargoed):
+        assert after.train_size == before.train_size - width
+        assert len(after.purged) == width
+        # The gap sits immediately before the test block, and nothing inside
+        # the test block or after it was touched.
+        assert set(after.purged) == set(range(min(after.test) - width, min(after.test)))
+        assert max(after.train) < min(after.test) - width
+
+
+def test_the_two_embargo_directions_are_the_same_width():
+    assert list(validation.embargo_gap(20, 1_000, 0.01)) == list(range(10, 20))
+    assert list(validation.embargo_gap(20, 1_000, 0.0)) == []
+    # It clips at the start of the sample rather than running before it.
+    assert list(validation.embargo_gap(4, 1_000, 0.01)) == list(range(0, 4))
+    with pytest.raises(ValueError):
+        validation.embargo_gap(50, 100, 1.5)
+
+
+def test_an_explicit_zero_step_is_refused_rather_than_reinterpreted():
+    """`step or test_size` turned a caller's 0 into a working default."""
+    with pytest.raises(ValueError, match="step must be positive"):
+        list(validation.walk_forward(300, train_size=100, test_size=50, step=0))
 
 
 def test_splitters_validate_their_shapes():
@@ -415,3 +511,142 @@ def test_cost_fitting_validates_its_inputs():
         )
     with pytest.raises(ValueError, match="no fills"):
         costs.effective_spread([])
+
+
+def test_a_fit_with_no_variance_to_explain_is_not_reported_as_explaining_none():
+    """Every fill slipped the same: the model captures all of it, not none."""
+    samples = [_sample(1, 100.5, 100.0, float(i + 1), 1.0) for i in range(6)]
+    fit = costs.fit_impact(samples)
+    assert fit.intercept == pytest.approx(0.5)
+    assert fit.coefficient == pytest.approx(0.0, abs=1e-9)
+    assert fit.r_squared == 1.0
+    assert fit.residual_std == pytest.approx(0.0, abs=1e-9)
+
+
+# -- calibrating from a run's own fills --------------------------------------
+
+# Mirrors crates/h5i-db-backtest/src/schema.rs::fills().
+BT_FILLS = pa.schema(
+    [
+        pa.field("ts", pa.timestamp("ns"), nullable=False),
+        pa.field("order_id", pa.int64(), nullable=False),
+        pa.field("instrument_id", pa.string(), nullable=False),
+        pa.field("outcome", pa.uint16(), nullable=False),
+        pa.field("side", pa.string(), nullable=False),
+        pa.field("price", pa.float64(), nullable=False),
+        pa.field("quantity", pa.float64(), nullable=False),
+        pa.field("commission", pa.float64(), nullable=False),
+        pa.field("is_taker", pa.bool_(), nullable=False),
+        pa.field("tag", pa.string()),
+    ]
+)
+# Mirrors crates/h5i-db-backtest/src/schema.rs::equity(): note that it holds no
+# price column at all, which is the whole reason fit_from_fills cannot quietly
+# measure fills against it.
+BT_EQUITY = pa.schema(
+    [
+        pa.field("ts", pa.timestamp("ns"), nullable=False),
+        pa.field("cash", pa.float64(), nullable=False),
+        pa.field("position_value", pa.float64(), nullable=False),
+        pa.field("equity", pa.float64(), nullable=False),
+        pa.field("realized_pnl", pa.float64(), nullable=False),
+        pa.field("unrealized_pnl", pa.float64(), nullable=False),
+    ]
+)
+MARKS = pa.schema(
+    [
+        pa.field("ts", pa.timestamp("ns"), nullable=False),
+        pa.field("mid", pa.float64(), nullable=False),
+    ]
+)
+
+
+@contextlib.contextmanager
+def _fills_db(fills, marks=None):
+    """A fork-shaped database: `bt_fills`, an empty-priced `bt_equity`, marks."""
+    base = dt.datetime(2026, 4, 1, 14, 0, 0)
+    with tempfile.TemporaryDirectory() as tmp:
+        db = h5i_db.Database(f"{tmp}/run.db", create=True)
+        db.create_table("bt_fills", BT_FILLS, time_column="ts")
+        db.append(
+            "bt_fills",
+            pa.table(
+                {
+                    "ts": [base + dt.timedelta(seconds=s) for s, *_ in fills],
+                    "order_id": [i for i, _ in enumerate(fills)],
+                    "instrument_id": ["EVENT-A"] * len(fills),
+                    "outcome": [0] * len(fills),
+                    "side": [side for _, side, *_ in fills],
+                    "price": [price for _, _, price, _ in fills],
+                    "quantity": [quantity for *_, quantity in fills],
+                    "commission": [0.0] * len(fills),
+                    "is_taker": [True] * len(fills),
+                    "tag": [None] * len(fills),
+                },
+                schema=BT_FILLS,
+            ),
+        )
+        db.create_table("bt_equity", BT_EQUITY, time_column="ts")
+        db.append(
+            "bt_equity",
+            pa.table(
+                {
+                    "ts": [base + dt.timedelta(seconds=s) for s in (0, 60)],
+                    "cash": [1_000.0, 1_000.0],
+                    "position_value": [0.0, 0.0],
+                    "equity": [1_000.0, 1_000.0],
+                    "realized_pnl": [0.0, 0.0],
+                    "unrealized_pnl": [0.0, 0.0],
+                },
+                schema=BT_EQUITY,
+            ),
+        )
+        if marks is not None:
+            db.create_table("marks", MARKS, time_column="ts")
+            db.append(
+                "marks",
+                pa.table(
+                    {
+                        "ts": [base + dt.timedelta(seconds=s) for s, _ in marks],
+                        "mid": [mid for _, mid in marks],
+                    },
+                    schema=MARKS,
+                ),
+            )
+        try:
+            yield db
+        finally:
+            db.close()
+
+
+def test_one_fill_per_instant_is_refused_instead_of_fitting_a_free_market():
+    """The reference was the other fills at the same instant; there were none.
+
+    Every slippage sample is then exactly zero, and the fit that follows is a
+    zero-cost model with a zero r-squared and no warning attached, which is
+    indistinguishable from a well-fitted free market.
+    """
+    fills = [(second, "buy", 100.0 + 0.01 * second, 5.0) for second in range(8)]
+    with _fills_db(fills) as db:
+        with pytest.raises(ValueError, match="identically-zero"):
+            costs.fit_from_fills(db, reference=None)
+
+
+def test_fills_are_measured_against_the_reference_standing_when_they_printed():
+    """The documented reference, actually read, and joined backwards in time."""
+    marks = [(0, 100.0), (5, 100.0)]
+    # Each buy pays 0.02 over the standing mid, on a range of sizes.
+    fills = [(second, "buy", 100.02, float(second + 1)) for second in range(1, 9)]
+    with _fills_db(fills, marks=marks) as db:
+        fit = costs.fit_from_fills(db, reference_table="marks", reference="mid")
+    assert fit.observations == 8
+    assert fit.intercept == pytest.approx(0.02, abs=1e-9)
+    assert fit.coefficient == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_reference_column_that_does_not_exist_is_named_rather_than_ignored():
+    """`bt_equity` carries no price, so the documented default cannot work."""
+    fills = [(second, "buy", 100.0, 5.0) for second in range(4)]
+    with _fills_db(fills) as db:
+        with pytest.raises(ValueError, match="no column 'mid'"):
+            costs.fit_from_fills(db)

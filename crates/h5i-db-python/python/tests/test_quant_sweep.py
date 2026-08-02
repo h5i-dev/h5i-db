@@ -181,6 +181,13 @@ def test_sweep_records_failures_without_aborting():
         assert len(result) == 2
         assert len(result.failures) == 1
         assert "trial 2 is broken" in result.failures[0]["error"]
+        # The failed trial's fork exists and is not in `forks` (it holds no
+        # results row), so dropping the sweep has to know about it separately
+        # or it leaks.
+        assert result.failed_forks == ["flaky-0001"]
+        assert set(result.failed_forks) <= set(db.fork_names())
+        result.drop()
+        assert not (set(result.failed_forks) & set(db.fork_names()))
 
         with pytest.raises(RuntimeError):
             quant.sweep(db, {"n": [1, 2]}, flaky, prefix="strict")
@@ -230,6 +237,53 @@ def test_verify_refuses_an_unpinned_computation():
         lenient = quant.verify(panel, strict=False)
         assert lenient["verified"] is False
         assert any("unpinned" in w for w in lenient["warnings"])
+
+
+class _Recomputable:
+    """A subject carrying a header and rows, which is all verify() reads.
+
+    Hand-built because the case that matters cannot be produced from the real
+    builders: the same SQL against the same pin, returning different numbers.
+    That is exactly what an engine change looks like, and it is the half of
+    verification a digest over the SQL cannot see.
+    """
+
+    def __init__(self, provenance, table):
+        self.provenance = provenance
+        self.table = table
+
+    def collect(self):
+        return self.table
+
+
+def test_verify_compares_the_numbers_and_not_only_the_header():
+    provenance = quant.Provenance(kind="fake", pin=quant.Pin(snapshot="v1"))
+    first = _Recomputable(provenance, pa.table({"ic": [0.1, 0.2, 0.3]}))
+    moved = _Recomputable(provenance, pa.table({"ic": [0.1, 0.2, 0.4]}))
+
+    same = quant.verify(first, rerun=lambda: _Recomputable(provenance, first.table))
+    assert same["verified"] is True
+    assert same["values_compared"] is True
+
+    with pytest.raises(quant.VerificationError, match="not its numbers"):
+        quant.verify(first, rerun=lambda: moved)
+    lenient = quant.verify(first, rerun=lambda: moved, strict=False)
+    assert lenient["verified"] is False
+    assert lenient["reason"] == "recomputed values differ"
+
+
+def test_verify_says_so_when_there_are_no_numbers_to_compare():
+    """A header-only check is not a verification, and must not report as one."""
+
+    class _HeaderOnly:
+        provenance = quant.Provenance(kind="fake", pin=quant.Pin(snapshot="v1"))
+
+    subject = _HeaderOnly()
+    with pytest.raises(quant.VerificationError, match="only its header"):
+        quant.verify(subject, rerun=lambda: _HeaderOnly())
+    lenient = quant.verify(subject, rerun=lambda: _HeaderOnly(), strict=False)
+    assert lenient["verified"] is False
+    assert lenient["values_compared"] is False
 
 
 def test_verify_detects_a_changed_computation():

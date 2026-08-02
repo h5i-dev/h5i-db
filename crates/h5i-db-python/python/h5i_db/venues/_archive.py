@@ -915,6 +915,11 @@ def ingest_archive(
     unknown_tokens: set[str] = set()
     unparseable = 0
     dropped_levels = 0
+    #: Arrival stamps that preceded their own event, aggregated per
+    #: instrument. A capture clock running systematically behind trips this on
+    #: every row, so one entry per row would grow the report to tens of
+    #: millions of dicts for a single afternoon of data.
+    arrival_clamps: dict[str, dict[str, Any]] = {}
     loaded_low: Optional[int] = None
     loaded_high: Optional[int] = None
 
@@ -1034,15 +1039,23 @@ def ingest_archive(
             ts_init = int(arrivals[row])
             if ts_init < ts_event:
                 # Replay orders by arrival, so an arrival before its own event
-                # would reorder the feed. Clamp forward and record it.
-                report.gaps.append(
-                    {
+                # would reorder the feed. Clamp forward and count it: the
+                # count and the span it covers are what a reader acts on, and
+                # a row-per-row list of a skewed clock is unbounded.
+                entry = arrival_clamps.get(who)
+                if entry is None:
+                    entry = {
+                        "reason": "arrival_before_event",
                         "instrument_id": who,
                         "outcome": outcome,
-                        "ts_ns": ts_event,
-                        "reason": "arrival_before_event",
+                        "rows": 0,
+                        "first_ts_ns": ts_event,
+                        "last_ts_ns": ts_event,
                     }
-                )
+                    arrival_clamps[who] = entry
+                entry["rows"] += 1
+                entry["first_ts_ns"] = min(entry["first_ts_ns"], ts_event)
+                entry["last_ts_ns"] = max(entry["last_ts_ns"], ts_event)
                 ts_init = ts_event
             return ts_event, ts_init
 
@@ -1182,14 +1195,17 @@ def ingest_archive(
                 continue
             spec, outcome = resolved
             ts_event, ts_init = stamps_for(row, spec.instrument_id, outcome)
-            loaded_low = ts_event if loaded_low is None else min(loaded_low, ts_event)
-            loaded_high = ts_event if loaded_high is None else max(loaded_high, ts_event)
 
             kind = _classify(layout, event_types[row] if event_types else None)
             if kind is None:
                 key = str(event_types[row])
                 unknown_events[key] = unknown_events.get(key, 0) + 1
                 continue
+            # Widened only once the row is known to be one this ingest keeps.
+            # The loaded window is a claim about what was written, and a row
+            # that was classified away and discarded did not widen anything.
+            loaded_low = ts_event if loaded_low is None else min(loaded_low, ts_event)
+            loaded_high = ts_event if loaded_high is None else max(loaded_high, ts_event)
 
             if kind == "gap":
                 accumulator.book_event(
@@ -1209,7 +1225,7 @@ def ingest_archive(
                     }
                 )
             elif kind == "snapshot":
-                levels: list[tuple[str, float, float]] = []
+                nested_levels: list[tuple[str, float, float]] = []
                 if event is not None:
                     sides = (
                         ("buy", event.get(layout.payload_bids_field)),
@@ -1230,14 +1246,14 @@ def ingest_archive(
                         dropped_levels += len(parsed) - layout.max_levels
                         parsed = parsed[: layout.max_levels]
                     for price, size in parsed:
-                        levels.append((side, price, size))
+                        nested_levels.append((side, price, size))
                 accumulator.book_event(
                     ts_event=ts_event,
                     ts_init=ts_init,
                     instrument_id=spec.instrument_id,
                     outcome=outcome,
                     action="snapshot",
-                    levels=levels,
+                    levels=nested_levels,
                 )
             elif kind == "delta":
                 if flat_price is None or flat_size is None or flat_side is None:
@@ -1245,6 +1261,13 @@ def ingest_archive(
                         f"{layout.name}: a delta row needs side, price and size "
                         f"columns; {path} has none"
                     )
+                if flat_price[row] is None:
+                    # A level with no price names nothing, not even for a
+                    # delete. The relative path counts the same row as
+                    # unparseable; taking float(None) here would abort a whole
+                    # ingest over one malformed row.
+                    unparseable += 1
+                    continue
                 size = float(flat_size[row] or 0.0)
                 # Size zero is how these venues spell "this level is gone".
                 # Writing it as a set would leave an untradeable level standing.
@@ -1300,6 +1323,8 @@ def ingest_archive(
                 "levels_dropped": dropped_levels,
             }
         )
+    for instrument in sorted(arrival_clamps):
+        report.gaps.append(arrival_clamps[instrument])
     report.unknown_instruments = sorted(unknown_tokens)
     if loaded_low is not None and loaded_high is not None:
         report.loaded_window = (loaded_low, loaded_high)

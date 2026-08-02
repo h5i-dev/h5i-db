@@ -173,6 +173,36 @@ def test_report_escapes_a_closing_script_tag():
     assert html.count("<script") == 1
 
 
+def test_a_title_cannot_swallow_the_payload():
+    """The two placeholders are filled in one pass, so neither sees the other."""
+    with report_db() as db:
+        payload = quant.report_payload(_panel(db, snapshot="v1"))
+        payload["title"] = "__DATA__"
+        html = quant.report.render(payload)
+    data = json.dumps(quant.report._clean(payload), allow_nan=False, default=str)
+    data = data.replace("<", "\\u003c").replace(">", "\\u003e")
+    assert html.count(data) == 1, "the payload was substituted into the title too"
+    assert "__DATA__" in html
+
+
+def test_every_tile_asks_for_a_format_the_document_knows():
+    """`fmt()` falls back to a bare decimal, so a typo prints 0.123 as 0.123."""
+    with report_db() as db:
+        payloads = [
+            quant.report_payload(_panel(db, snapshot="v1")),
+            quant.report_payload(quant.returns(db, "rets", snapshot="v1")),
+        ]
+        html = quant.report.render(payloads[0])
+    known = set(re.findall(r"\b(\w+): v =>", html))
+    assert "percent1" in known and "integer" in known
+    for payload in payloads:
+        for tile in payload["headline"]:
+            wanted = tile.get("format")
+            assert wanted is None or wanted in known, (
+                f"{tile['label']} wants {wanted!r}"
+            )
+
+
 def test_report_renders_both_themes():
     with report_db() as db:
         html = quant.tearsheet(quant.returns(db, "rets", snapshot="v1"))
