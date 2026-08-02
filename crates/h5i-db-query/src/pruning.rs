@@ -28,23 +28,58 @@ pub(crate) fn json_stat_to_scalar(
     data_type: &DataType,
 ) -> Option<ScalarValue> {
     use arrow::datatypes::TimeUnit;
+    // Narrowing conversions go through `try_from`, never `as`. A truncating
+    // `as` turns an out-of-range stat into a plausible in-range bound (i64
+    // 300 becomes i8 44), and a *wrong bound prunes*: the segment holding the
+    // matching rows is proved impossible and skipped, so the query silently
+    // returns fewer rows. Refusing the stat instead lands in the fail-open path
+    // above, which keeps the segment. A stat outside the column's own range is
+    // a manifest bug either way, but one of the two readings loses data.
     match data_type {
-        DataType::Int8 => v.as_i64().map(|x| ScalarValue::Int8(Some(x as i8))),
-        DataType::Int16 => v.as_i64().map(|x| ScalarValue::Int16(Some(x as i16))),
-        DataType::Int32 => v.as_i64().map(|x| ScalarValue::Int32(Some(x as i32))),
+        DataType::Int8 => v
+            .as_i64()
+            .and_then(|x| i8::try_from(x).ok())
+            .map(|x| ScalarValue::Int8(Some(x))),
+        DataType::Int16 => v
+            .as_i64()
+            .and_then(|x| i16::try_from(x).ok())
+            .map(|x| ScalarValue::Int16(Some(x))),
+        DataType::Int32 => v
+            .as_i64()
+            .and_then(|x| i32::try_from(x).ok())
+            .map(|x| ScalarValue::Int32(Some(x))),
         DataType::Int64 => v.as_i64().map(|x| ScalarValue::Int64(Some(x))),
-        DataType::UInt8 => v.as_u64().map(|x| ScalarValue::UInt8(Some(x as u8))),
-        DataType::UInt16 => v.as_u64().map(|x| ScalarValue::UInt16(Some(x as u16))),
-        DataType::UInt32 => v.as_u64().map(|x| ScalarValue::UInt32(Some(x as u32))),
+        DataType::UInt8 => v
+            .as_u64()
+            .and_then(|x| u8::try_from(x).ok())
+            .map(|x| ScalarValue::UInt8(Some(x))),
+        DataType::UInt16 => v
+            .as_u64()
+            .and_then(|x| u16::try_from(x).ok())
+            .map(|x| ScalarValue::UInt16(Some(x))),
+        DataType::UInt32 => v
+            .as_u64()
+            .and_then(|x| u32::try_from(x).ok())
+            .map(|x| ScalarValue::UInt32(Some(x))),
         DataType::UInt64 => v.as_u64().map(|x| ScalarValue::UInt64(Some(x))),
-        DataType::Float32 => v.as_f64().map(|x| ScalarValue::Float32(Some(x as f32))),
+        // f64 -> f32 is not a truncation but a rounding, and it can round a
+        // min *up* or a max *down*, which are the two directions that prune a
+        // live segment. Keep only values that survive the round trip; an
+        // f32-typed column's stats were written from f32 values, so they do.
+        DataType::Float32 => v
+            .as_f64()
+            .filter(|x| f64::from(*x as f32) == *x)
+            .map(|x| ScalarValue::Float32(Some(x as f32))),
         DataType::Float64 => v.as_f64().map(|x| ScalarValue::Float64(Some(x))),
         DataType::Boolean => v.as_bool().map(|x| ScalarValue::Boolean(Some(x))),
         DataType::Utf8 => v.as_str().map(|s| ScalarValue::Utf8(Some(s.to_string()))),
         DataType::LargeUtf8 => v
             .as_str()
             .map(|s| ScalarValue::LargeUtf8(Some(s.to_string()))),
-        DataType::Date32 => v.as_i64().map(|x| ScalarValue::Date32(Some(x as i32))),
+        DataType::Date32 => v
+            .as_i64()
+            .and_then(|x| i32::try_from(x).ok())
+            .map(|x| ScalarValue::Date32(Some(x))),
         DataType::Date64 => v.as_i64().map(|x| ScalarValue::Date64(Some(x))),
         DataType::Timestamp(unit, tz) => {
             let x = v.as_i64()?;
@@ -210,6 +245,32 @@ mod tests {
         assert_eq!(
             json_stat_to_scalar(&json!(7), &DataType::UInt64),
             Some(ScalarValue::UInt64(Some(7)))
+        );
+    }
+
+    /// A stat that does not fit the column's type is refused rather than
+    /// truncated: `300 as i8` is 44, and a bound of 44 on a column whose values
+    /// reach 300 proves the wrong segments impossible.
+    #[test]
+    fn out_of_range_integer_stats_are_refused_not_truncated() {
+        assert_eq!(json_stat_to_scalar(&json!(300), &DataType::Int8), None);
+        assert_eq!(json_stat_to_scalar(&json!(70_000), &DataType::Int16), None);
+        assert_eq!(
+            json_stat_to_scalar(&json!(i64::MAX), &DataType::Int32),
+            None
+        );
+        assert_eq!(json_stat_to_scalar(&json!(300), &DataType::UInt8), None);
+        // A value f32 cannot hold exactly is refused for the same reason:
+        // rounding a min up or a max down prunes live rows.
+        assert_eq!(json_stat_to_scalar(&json!(1e300), &DataType::Float32), None);
+        // In-range values are untouched.
+        assert_eq!(
+            json_stat_to_scalar(&json!(44), &DataType::Int8),
+            Some(ScalarValue::Int8(Some(44)))
+        );
+        assert_eq!(
+            json_stat_to_scalar(&json!(1.5), &DataType::Float32),
+            Some(ScalarValue::Float32(Some(1.5)))
         );
     }
 

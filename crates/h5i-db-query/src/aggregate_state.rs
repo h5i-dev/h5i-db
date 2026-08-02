@@ -12,7 +12,11 @@ use object_store::path::Path as ObjectPath;
 use serde::{Deserialize, Serialize};
 
 const FORMAT: u32 = 1;
-const SEMANTICS_VERSION: u32 = 1;
+/// Bumped to 2 when the open/close tie-break moved from the segment checksum to
+/// `created_by_sequence` (see [`PointKey`]). It is part of both the sidecar path
+/// and the sealed payload, so entries written under the old rule are never
+/// looked up and never mistaken for current ones.
+const SEMANTICS_VERSION: u32 = 2;
 const PREFIX: &str = "cache/aggregates/v1";
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -89,10 +93,22 @@ pub struct FinanceAggregateResult {
     pub metrics: AggregateStateMetrics,
 }
 
+/// Total order on rows, used to pick `open` and `close`.
+///
+/// The tie-break after `timestamp` is the **arrival order of the segment**, not
+/// its checksum. A checksum is a content hash: ordering by it means two rows
+/// with the same timestamp are ranked by the bytes of the files they happen to
+/// live in, so re-segmenting the same data (a compaction, a differently sized
+/// append) can swap which row is the bar's open or close without any of the
+/// data changing. `created_by_sequence` is the version that introduced the
+/// segment, which is stable under re-reading and meaningful under re-writing:
+/// later arrival is later. `row` breaks the remaining ties within a segment.
+///
+/// Field order **is** the sort order (derived `Ord`); do not reorder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 struct PointKey {
     timestamp: i64,
-    segment_checksum: String,
+    created_by_sequence: u64,
     row: u64,
 }
 
@@ -266,8 +282,8 @@ impl AggregateStateEntry {
         for group in &self.groups {
             let valid = group.rows > 0
                 && seen.insert(group.group.clone())
-                && group.open_key.segment_checksum == self.segment_checksum
-                && group.close_key.segment_checksum == self.segment_checksum
+                && group.open_key.created_by_sequence == segment.created_by_sequence
+                && group.close_key.created_by_sequence == segment.created_by_sequence
                 && group.open.is_finite()
                 && group.high.is_finite()
                 && group.low.is_finite()
@@ -453,7 +469,7 @@ impl AggregateStateStore {
                     .transpose()?;
                 let key = PointKey {
                     timestamp,
-                    segment_checksum: segment.checksum.clone(),
+                    created_by_sequence: segment.created_by_sequence,
                     row: row_offset + row as u64,
                 };
                 match groups.get_mut(&group) {
@@ -625,7 +641,7 @@ mod tests {
             let volume = (next() * 1e6).floor() + 1.0;
             let key = PointKey {
                 timestamp: 1_750_000_000_000_000_000 + index,
-                segment_checksum: "seg".into(),
+                created_by_sequence: 1,
                 row: index as u64,
             };
             groups.push(GroupState {
@@ -669,7 +685,7 @@ mod tests {
     fn key(timestamp: i64, row: u64) -> PointKey {
         PointKey {
             timestamp,
-            segment_checksum: "seg".into(),
+            created_by_sequence: 1,
             row,
         }
     }
@@ -709,7 +725,7 @@ mod tests {
     #[test]
     fn open_and_close_follow_key_order_not_insertion_order() {
         // Rows arrive out of time order; open/close must track the total
-        // (timestamp, checksum, row) key, not arrival.
+        // (timestamp, created_by_sequence, row) key, not arrival.
         let mut state = GroupState::new(Some("A".into()), key(20, 5), 200.0, 1.0);
         assert!(state.add(key(10, 0), 100.0, 1.0)); // earlier → becomes open
         assert!(state.add(key(30, 9), 300.0, 1.0)); // later → becomes close
@@ -719,6 +735,44 @@ mod tests {
         assert_eq!((done.first_timestamp, done.last_timestamp), (10, 30));
         assert_eq!(done.high, 300.0);
         assert_eq!(done.low, 100.0);
+    }
+
+    /// The tie-break after the timestamp must be a property of the data's
+    /// arrival, not of how it happens to be stored: ordering by a content hash
+    /// meant that recompacting the same rows could swap a bar's open or close.
+    #[test]
+    fn equal_timestamps_are_ordered_by_arrival_not_by_content() {
+        let earlier_version = PointKey {
+            timestamp: 10,
+            created_by_sequence: 1,
+            row: 7,
+        };
+        let later_version = PointKey {
+            timestamp: 10,
+            created_by_sequence: 2,
+            row: 0,
+        };
+        assert!(
+            earlier_version < later_version,
+            "older version opens the bar"
+        );
+        // Within one version, the row offset decides.
+        assert!(
+            later_version
+                < PointKey {
+                    timestamp: 10,
+                    created_by_sequence: 2,
+                    row: 1,
+                }
+        );
+        // And the timestamp still dominates both.
+        assert!(
+            PointKey {
+                timestamp: 9,
+                created_by_sequence: 99,
+                row: 99,
+            } < earlier_version
+        );
     }
 
     #[test]

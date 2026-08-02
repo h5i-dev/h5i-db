@@ -8,6 +8,30 @@
 //! `value` (`FILL(x)`) — a numeric constant applied to numeric columns (a
 //! missing bar's volume becomes 0, etc.), null elsewhere. First/last per bucket
 //! are DataFusion's `first_value`/`last_value` aggregates over `time_bucket`.
+//!
+//! # Semantics: point sampling, not aggregation
+//!
+//! The output grid is `min(time) + n·step` for `n` in `0..=(max-min)/step`, and
+//! each grid point carries **at most one** input row: the one whose timestamp
+//! equals it exactly. That has two consequences worth stating outright, because
+//! neither is what "resample" suggests:
+//!
+//! * **Off-grid rows are dropped.** A row at `t` where `(t - min) % step != 0`
+//!   contributes to nothing: it is not aggregated into the surrounding bar and
+//!   it is not emitted. On raw tick data with a one-minute step this discards
+//!   nearly every row.
+//! * **Duplicate timestamps collapse.** When several rows share a grid
+//!   timestamp, the last one in scan order wins and the rest disappear.
+//!
+//! Both are silent by construction (a row that is not emitted leaves no trace
+//! in the result), so the counts are published instead as schema metadata on
+//! the returned table, under `h5i.gapfill.rows_off_grid` and
+//! `h5i.gapfill.rows_collapsed`, and logged at WARN when non-zero. A caller
+//! that wants bar arithmetic over every row wants `time_bucket` plus an
+//! aggregate; `gapfill` fills holes in a grid that is already regular.
+//!
+//! The `resample` alias registered by [`crate::session`] is exactly this
+//! function, with exactly these semantics. It does not aggregate.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -22,6 +46,11 @@ use datafusion::scalar::ScalarValue;
 use h5i_db_core::{Database, ScanOptions};
 
 use crate::udtf::block_on;
+
+/// Schema-metadata keys carrying what the grid could not represent. Public
+/// spelling of a silent behaviour, so callers can assert on it.
+pub const ROWS_COLLAPSED_KEY: &str = "h5i.gapfill.rows_collapsed";
+pub const ROWS_OFF_GRID_KEY: &str = "h5i.gapfill.rows_off_grid";
 
 #[derive(Debug, Clone)]
 enum FillMode {
@@ -121,6 +150,23 @@ fn interpolate(a: &ScalarValue, b: &ScalarValue, ratio: f64) -> Option<ScalarVal
     }
 }
 
+/// How much of the input the grid could not represent. See the module docs:
+/// point sampling is the contract, but it must be observable, not inferred
+/// from a row count that came back smaller than expected.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct GapFillLosses {
+    /// Input rows sharing a timestamp with another row; only one survives.
+    rows_collapsed: usize,
+    /// Distinct timestamps that are not grid points, so are not emitted at all.
+    rows_off_grid: usize,
+}
+
+impl GapFillLosses {
+    fn is_lossless(&self) -> bool {
+        self.rows_collapsed == 0 && self.rows_off_grid == 0
+    }
+}
+
 fn build_gapfilled(
     schema: SchemaRef,
     batches: &[RecordBatch],
@@ -137,6 +183,8 @@ fn build_gapfilled(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let mut rows_by_time = BTreeMap::new();
     for (row, time) in times.iter().copied().enumerate() {
+        // Last row wins, deterministically: scan order is manifest order, so
+        // the newest arrival for a timestamp is the one that survives.
         rows_by_time.insert(time, row);
     }
     let start = *rows_by_time.first_key_value().unwrap().0;
@@ -146,6 +194,25 @@ fn build_gapfilled(
         return Err(DataFusionError::ResourcesExhausted(format!(
             "gapfill would generate {count} rows (limit 1000000)"
         )));
+    }
+    // `time - start` is non-negative for every key (`start` is the minimum), so
+    // the remainder needs no euclidean correction.
+    let losses = GapFillLosses {
+        rows_collapsed: times.len() - rows_by_time.len(),
+        rows_off_grid: rows_by_time
+            .keys()
+            .filter(|time| (**time - start) % step != 0)
+            .count(),
+    };
+    if !losses.is_lossless() {
+        tracing::warn!(
+            rows_collapsed = losses.rows_collapsed,
+            rows_off_grid = losses.rows_off_grid,
+            step,
+            "gapfill point-samples the grid: rows sharing a timestamp collapse and off-grid rows \
+             are dropped (see h5i.gapfill.* schema metadata); use time_bucket with an aggregate to \
+             keep every row"
+        );
     }
 
     let mut columns: Vec<Vec<ScalarValue>> = schema
@@ -183,6 +250,12 @@ fn build_gapfilled(
                     .map(|r| ScalarValue::try_from_array(combined.column(col), r))
                     .transpose()?
                     .unwrap_or_else(|| null_scalar(field.data_type())),
+                // Only the two-sided arm is reachable: the grid runs from the
+                // first to the last observed timestamp, and this branch is
+                // taken only for a *missing* grid point, which therefore has an
+                // observation on both sides. The other arms are the fallbacks
+                // that keep a future change to the grid bounds (a caller-given
+                // start/end, say) from being a panic.
                 FillMode::Interpolate => match (prev, next) {
                     (Some(p), Some(q)) => {
                         let a = ScalarValue::try_from_array(combined.column(col), p)?;
@@ -201,7 +274,21 @@ fn build_gapfilled(
         .into_iter()
         .map(ScalarValue::iter_to_array)
         .collect::<DfResult<Vec<_>>>()?;
-    RecordBatch::try_new(schema, arrays).map_err(DataFusionError::from)
+    // Publish the losses on the result itself. A count that only exists in a
+    // log line is not something a notebook or a test can assert on, and "did
+    // this silently drop half my ticks" is exactly the question a caller needs
+    // to be able to answer after the fact.
+    let mut metadata = schema.metadata().clone();
+    metadata.insert(
+        ROWS_COLLAPSED_KEY.to_string(),
+        losses.rows_collapsed.to_string(),
+    );
+    metadata.insert(
+        ROWS_OFF_GRID_KEY.to_string(),
+        losses.rows_off_grid.to_string(),
+    );
+    let annotated = Arc::new(Schema::new_with_metadata(schema.fields().clone(), metadata));
+    RecordBatch::try_new(annotated, arrays).map_err(DataFusionError::from)
 }
 
 impl TableFunctionImpl for GapFillFunc {
@@ -291,17 +378,98 @@ impl TableFunctionImpl for GapFillFunc {
                 .collect::<Vec<_>>(),
             resolved.schema.metadata().clone(),
         ));
-        let batch = build_gapfilled(output_schema.clone(), &batches, &time_col, step, mode)?;
-        Ok(Arc::new(MemTable::try_new(
-            output_schema,
-            vec![vec![batch]],
-        )?))
+        let batch = build_gapfilled(output_schema, &batches, &time_col, step, mode)?;
+        // The batch's schema, not the one built above: `build_gapfilled` adds
+        // the `h5i.gapfill.*` metadata, and `MemTable` requires the provider
+        // schema and the batch schema to be the same.
+        let schema = batch.schema();
+        Ok(Arc::new(MemTable::try_new(schema, vec![vec![batch]])?))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use arrow::array::{Array, Float64Array, Int64Array};
+
+    fn losses_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("ts", DataType::Int64, false),
+            // Nullable: the grid can produce rows the source never had.
+            Field::new("price", DataType::Float64, true),
+        ]))
+    }
+
+    /// Point sampling is the contract, but it must not be silent: an off-grid
+    /// row and a duplicate timestamp both vanish from the output, and the only
+    /// way a caller can tell is the count this publishes.
+    #[test]
+    fn dropped_and_collapsed_rows_are_counted_on_the_output_schema() {
+        let schema = losses_schema();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                // 5 is off-grid; the second 10 collapses into the first.
+                Arc::new(Int64Array::from(vec![0_i64, 5, 10, 10, 30])),
+                Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0, 4.0, 5.0])),
+            ],
+        )
+        .unwrap();
+        let out = build_gapfilled(schema, &[batch], "ts", 10, FillMode::Null).unwrap();
+
+        // Grid points 0, 10, 20, 30: four rows out of five inputs, and not
+        // because four of the inputs were on the grid.
+        assert_eq!(out.num_rows(), 4);
+        let price = out
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert_eq!(price.value(0), 1.0);
+        // Last row wins among rows sharing a timestamp.
+        assert_eq!(price.value(1), 4.0);
+        assert!(price.is_null(2), "20 has no source row and is filled");
+        assert_eq!(price.value(3), 5.0);
+        // The row stamped 5 contributed to nothing at all.
+        assert!((0..out.num_rows()).all(|i| price.value(i) != 2.0));
+
+        let schema = out.schema();
+        let metadata = schema.metadata();
+        assert_eq!(
+            metadata.get(ROWS_COLLAPSED_KEY).map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            metadata.get(ROWS_OFF_GRID_KEY).map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn a_grid_that_represents_every_row_reports_no_losses() {
+        let schema = losses_schema();
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(Int64Array::from(vec![0_i64, 10, 30])),
+                Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0])),
+            ],
+        )
+        .unwrap();
+        let out = build_gapfilled(schema, &[batch], "ts", 10, FillMode::Null).unwrap();
+        assert_eq!(out.num_rows(), 4);
+        let schema = out.schema();
+        let metadata = schema.metadata();
+        assert_eq!(
+            metadata.get(ROWS_COLLAPSED_KEY).map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            metadata.get(ROWS_OFF_GRID_KEY).map(String::as_str),
+            Some("0")
+        );
+    }
 
     #[test]
     fn interpolate_float64_is_linear() {

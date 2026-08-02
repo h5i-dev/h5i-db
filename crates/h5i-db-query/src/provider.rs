@@ -173,17 +173,41 @@ impl H5iTableProvider {
         }
     }
 
-    /// Declared output ordering: each file is sorted by the sort key and (for
-    /// append-only histories) files don't interleave, but DataFusion's
-    /// per-partition ordering claim only needs within-file order, which
-    /// `sorted` segments guarantee.
+    /// Declared output ordering, which the planner takes as licence to skip a
+    /// sort. Two conditions must hold together, and neither implies the other:
+    ///
+    /// * every segment is internally `sorted` by the sort key, and
+    /// * the segments do not interleave, i.e. their `time_range`s are
+    ///   non-overlapping and ascending **in manifest order**, which is the
+    ///   order the files are handed to the scan below.
+    ///
+    /// `sorted` alone was the old test, and it is not enough: a backfill
+    /// appended after a later batch, a range replacement, or simply a manifest
+    /// written before segment lists were kept ordered all produce sorted
+    /// segments whose concatenation is not sorted. Claiming an ordering there
+    /// makes the planner drop a sort it still needs, and the query silently
+    /// returns rows out of order (worse, window functions and ASOF joins read
+    /// the wrong neighbours). Old manifests exist, so this stays defensive
+    /// even once writers guarantee the ordering.
+    ///
+    /// A segment with no recorded `time_range` declines the claim: absence of
+    /// bounds is not proof of disjointness.
     fn output_ordering(&self) -> Option<LexOrdering> {
         let spec = &self.resolved.spec;
         let tc = spec.time_column.as_ref()?;
-        let all_sorted = !self.resolved.manifest.segments.is_empty()
-            && self.resolved.manifest.segments.iter().all(|s| s.sorted);
-        if !all_sorted {
+        let segments = &self.resolved.manifest.segments;
+        if segments.is_empty() || !segments.iter().all(|s| s.sorted) {
             return None;
+        }
+        let mut previous_max: Option<i64> = None;
+        for segment in segments {
+            let (min, max) = segment.time_range?;
+            // Touching bounds (`previous_max == min`) are fine: equal keys next
+            // to each other are still non-decreasing.
+            if min > max || previous_max.is_some_and(|previous| previous > min) {
+                return None;
+            }
+            previous_max = Some(max);
         }
         let idx = self.schema().index_of(tc).ok()?;
         LexOrdering::new(vec![PhysicalSortExpr::new_default(Arc::new(

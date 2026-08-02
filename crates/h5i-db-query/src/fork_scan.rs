@@ -95,6 +95,10 @@ fn literal_str(expr: &datafusion::logical_expr::Expr) -> Option<&str> {
 /// Split a comma-separated fork list, rejecting empty entries rather than
 /// silently ignoring them: `'a,,b'` is a typo, and treating it as `'a,b'`
 /// would hide a fork name the caller meant to type.
+///
+/// A repeated name is *not* an error, though, and the asymmetry is deliberate:
+/// `'a,a'` has one obvious reading (scan `a`), and scanning it twice would
+/// double every row of the comparison. An empty entry has no such reading.
 fn parse_fork_list(raw: &str) -> DfResult<Vec<String>> {
     let mut out = Vec::new();
     for part in raw.split(',') {

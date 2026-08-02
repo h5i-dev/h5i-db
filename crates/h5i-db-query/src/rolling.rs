@@ -204,19 +204,25 @@ struct RollingEvaluator {
     kind: RollingKind,
     /// Cast-once cache: `evaluate` is called per row with the same input
     /// array, so casting on every call would make a partition scan O(n²).
-    /// Keyed on the input `ArrayRef`'s data pointer.
-    cached: Option<(usize, Float64Array)>,
+    ///
+    /// The cache **holds the input `ArrayRef`** rather than remembering its
+    /// address. Identity by raw pointer alone is unsound here: once the
+    /// original array is dropped the allocator is free to hand the same address
+    /// to a different array, and the cache would then answer with the previous
+    /// column's values, silently. Keeping the `Arc` alive makes the address
+    /// unrecyclable for as long as it is used as the key, which is what turns
+    /// `Arc::ptr_eq` into a real identity test.
+    cached: Option<(ArrayRef, Float64Array)>,
 }
 
 impl RollingEvaluator {
     fn values(&mut self, input: &ArrayRef) -> DfResult<&Float64Array> {
-        let key = Arc::as_ptr(input) as *const () as usize;
         let stale = match &self.cached {
-            Some((cached_key, _)) => *cached_key != key,
+            Some((cached_input, _)) => !Arc::ptr_eq(cached_input, input),
             None => true,
         };
         if stale {
-            self.cached = Some((key, to_f64_array(input)?));
+            self.cached = Some((input.clone(), to_f64_array(input)?));
         }
         Ok(&self.cached.as_ref().expect("just populated").1)
     }
@@ -483,21 +489,20 @@ impl WindowUDFImpl for PairRollingUdwf {
 #[derive(Debug)]
 struct PairRollingEvaluator {
     kind: PairRollingKind,
-    /// Cast-once cache for both inputs, keyed on their data pointers; see
-    /// [`RollingEvaluator::values`] for why this matters.
-    cached: Option<(usize, usize, Float64Array, Float64Array)>,
+    /// Cast-once cache for both inputs, holding them alive as their own keys;
+    /// see [`RollingEvaluator::values`] for why the arrays and not their
+    /// addresses.
+    cached: Option<(ArrayRef, ArrayRef, Float64Array, Float64Array)>,
 }
 
 impl PairRollingEvaluator {
     fn values(&mut self, x: &ArrayRef, y: &ArrayRef) -> DfResult<(&Float64Array, &Float64Array)> {
-        let kx = Arc::as_ptr(x) as *const () as usize;
-        let ky = Arc::as_ptr(y) as *const () as usize;
         let stale = match &self.cached {
-            Some((cx, cy, _, _)) => *cx != kx || *cy != ky,
+            Some((cx, cy, _, _)) => !Arc::ptr_eq(cx, x) || !Arc::ptr_eq(cy, y),
             None => true,
         };
         if stale {
-            self.cached = Some((kx, ky, to_f64_array(x)?, to_f64_array(y)?));
+            self.cached = Some((x.clone(), y.clone(), to_f64_array(x)?, to_f64_array(y)?));
         }
         let (_, _, xa, ya) = self.cached.as_ref().expect("just populated");
         Ok((xa, ya))
@@ -571,7 +576,12 @@ fn evaluate_pair_frame(
                 None
             } else {
                 // Equivalent to cov/(sd_x·sd_y); the (n-1) factors cancel, so
-                // this form avoids two divisions and a possible overflow.
+                // this form saves two divisions and a square root. It is the
+                // *wider* intermediate, not the narrower one: `sxx · syy` can
+                // reach infinity where `sqrt(sxx) · sqrt(syy)` would not, and
+                // the result would then be 0 rather than the true correlation.
+                // That needs |sxx·syy| > 1e308, i.e. sums of squares around
+                // 1e154, which no price or return series reaches.
                 Some(sxy / (sxx * syy).sqrt())
             }
         }

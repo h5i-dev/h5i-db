@@ -44,18 +44,31 @@ pub struct ScanMetricsCollector {
 }
 
 impl ScanMetricsCollector {
+    /// Lock the record buffer, ignoring poisoning.
+    ///
+    /// The mutex guards a plain `Vec` with no invariant a panic can break, and
+    /// this collector is shared by every provider in a session. `unwrap()`
+    /// would let one panicking query poison it and turn every later query's
+    /// *metrics recording* into a panic, so a single bad query would take the
+    /// session with it. Losing telemetry is not worth that.
+    fn records(&self) -> std::sync::MutexGuard<'_, Vec<ScanMetrics>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn record(&self, mut metrics: ScanMetrics) {
         metrics.query_id = metrics.query_id.or_else(active_query_id);
-        self.inner.lock().unwrap().push(metrics);
+        self.records().push(metrics);
     }
 
     /// Legacy session-wide drain retained for compatibility.
     pub fn take(&self) -> Vec<ScanMetrics> {
-        std::mem::take(&mut *self.inner.lock().unwrap())
+        std::mem::take(&mut *self.records())
     }
 
     pub(crate) fn take_for(&self, query_id: Uuid) -> Vec<ScanMetrics> {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.records();
         let mut selected = Vec::new();
         let mut retained = Vec::with_capacity(guard.len());
         for metric in guard.drain(..) {
@@ -212,6 +225,12 @@ impl ReportedQueryStream {
             .sum();
         let spill_count = operators.iter().map(|m| m.spill_count).sum();
         let spilled_bytes = operators.iter().map(|m| m.spilled_bytes).sum();
+        // Substring, not equality: the number this reports is "how many sorts
+        // did the planner insert", and DataFusion spells them `SortExec`,
+        // `PartialSortExec`, and `SortPreservingMergeExec`. Matching the family
+        // by name is what keeps a new sort operator from going uncounted; the
+        // cost is that an unrelated operator with "Sort" in its name would be
+        // counted too, which is a wrong statistic and not a wrong answer.
         let sort_operators = operators.iter().filter(|m| m.name.contains("Sort")).count();
         let predicate_cache_lookups = scans.iter().map(|m| m.predicate_cache_lookups).sum();
         let predicate_cache_hits = scans.iter().map(|m| m.predicate_cache_hits).sum();
@@ -306,6 +325,10 @@ fn collect_operator_metrics(
         spill_count: metric_from_set(metrics.as_ref(), "spill_count"),
         spilled_bytes: metric_from_set(metrics.as_ref(), "spilled_bytes"),
     };
+    // Operators that reported no metrics carry no information and are dropped,
+    // with sorts as the exception: `sort_operators` above counts rows of this
+    // vector, so a sort that produced no metrics still has to appear or the
+    // count silently under-reports.
     if metrics.is_some() || operator.name.contains("Sort") {
         output.push(operator);
     }

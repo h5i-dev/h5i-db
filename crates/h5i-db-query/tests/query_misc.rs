@@ -1693,3 +1693,308 @@ async fn decimal_literals_are_float64_and_lose_the_range() {
         0,
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regressions for the 2026-08 review sweep (#49-#53)
+// ---------------------------------------------------------------------------
+
+/// Resolve `trades` and replace its segment list with one doctored segment per
+/// `(min, max)` range.
+///
+/// Only the manifest is rewritten: the ordering claim is derived from `sorted`
+/// and `time_range` alone, and planning a scan opens no file, so every doctored
+/// segment can point at the same real object. The overlap cannot be built
+/// through the write path on purpose (`append` refuses out-of-order input), but
+/// `replace_range` and manifests written by older versions do produce it, which
+/// is exactly why the provider has to check rather than assume.
+async fn provider_with_ranges(
+    db: &Arc<Database>,
+    s: &H5iSession,
+    ranges: &[(i64, i64)],
+    sorted: bool,
+) -> h5i_db_query::H5iTableProvider {
+    use h5i_db_core::ReadAt;
+    let mut resolved = db.resolve("trades", ReadAt::Latest).await.unwrap();
+    let template = resolved.manifest.segments[0].clone();
+    resolved.manifest.segments = ranges
+        .iter()
+        .map(|(min, max)| {
+            let mut segment = template.clone();
+            segment.time_range = Some((*min, *max));
+            segment.sorted = sorted;
+            segment
+        })
+        .collect();
+    h5i_db_query::H5iTableProvider::new(
+        resolved,
+        s.object_store_url().clone(),
+        h5i_db_query::ScanMetricsCollector::default(),
+    )
+}
+
+async fn declares_time_ordering(s: &H5iSession, provider: &h5i_db_query::H5iTableProvider) -> bool {
+    use datafusion::datasource::TableProvider;
+    let state = s.context().state();
+    let plan = provider.scan(&state, None, &[], None).await.unwrap();
+    plan.properties().output_ordering().is_some()
+}
+
+/// #49: a declared output ordering is a licence for the planner to drop a sort,
+/// so it may only be given when the segments really do arrive in time order.
+/// Per-segment `sorted` says nothing about how the segments sit relative to
+/// each other.
+#[tokio::test(flavor = "multi_thread")]
+async fn scan_declares_time_ordering_only_when_segments_do_not_interleave() {
+    use h5i_db_core::ReadAt;
+
+    let (_dir, db) = setup_trades().await;
+    let s = session(&db).await;
+
+    // Ascending and disjoint: the claim is true and worth making.
+    let provider = provider_with_ranges(&db, &s, &[(0, 10), (20, 30)], true).await;
+    assert!(declares_time_ordering(&s, &provider).await);
+    // Touching bounds are still non-decreasing across the join point.
+    let provider = provider_with_ranges(&db, &s, &[(0, 10), (10, 20)], true).await;
+    assert!(declares_time_ordering(&s, &provider).await);
+
+    // Overlapping: both segments are internally sorted, their concatenation is
+    // not. This is the case that used to be claimed as ordered.
+    let provider = provider_with_ranges(&db, &s, &[(0, 30), (20, 40)], true).await;
+    assert!(
+        !declares_time_ordering(&s, &provider).await,
+        "overlapping segments must not be declared time-sorted"
+    );
+    // Disjoint but descending in manifest order: no overlap, still not sorted.
+    let provider = provider_with_ranges(&db, &s, &[(20, 30), (0, 10)], true).await;
+    assert!(
+        !declares_time_ordering(&s, &provider).await,
+        "descending segments must not be declared time-sorted"
+    );
+
+    // A segment with no recorded range proves nothing about disjointness.
+    let mut resolved = db.resolve("trades", ReadAt::Latest).await.unwrap();
+    for segment in &mut resolved.manifest.segments {
+        segment.sorted = true;
+        segment.time_range = None;
+    }
+    let provider = h5i_db_query::H5iTableProvider::new(
+        resolved,
+        s.object_store_url().clone(),
+        h5i_db_query::ScanMetricsCollector::default(),
+    );
+    assert!(!declares_time_ordering(&s, &provider).await);
+
+    // Unsorted segments were refused before and still are.
+    let provider = provider_with_ranges(&db, &s, &[(0, 10), (20, 30)], false).await;
+    assert!(!declares_time_ordering(&s, &provider).await);
+}
+
+/// #50: `refresh()` re-registers every table, and used to do it at
+/// `ReadAt::Latest` behind a bare provider, releasing the arrival pin and
+/// dropping the embargo view in one call.
+#[tokio::test(flavor = "multi_thread")]
+async fn refresh_re_applies_both_axes_of_the_research_pin() {
+    use h5i_db_core::ReadAt;
+    use h5i_db_query::ResearchPin;
+
+    let (_dir, db) = setup_trades().await; // 4 rows, ts 1000..4000
+    let head = db
+        .resolve("trades", ReadAt::Latest)
+        .await
+        .unwrap()
+        .manifest
+        .sequence;
+
+    // Event-time axis: only the rows stamped at or before 2500.
+    let embargoed = H5iSession::new_pinned(
+        db.clone(),
+        SessionOptions::default(),
+        ResearchPin::default().with_event_time_cutoff_ns(2_500),
+    )
+    .await
+    .unwrap();
+    assert_eq!(count_trades(&embargoed).await, 2);
+
+    // Arrival axis: only the commits up to `head`.
+    let arrival = H5iSession::new_at(db.clone(), SessionOptions::default(), ReadAt::Version(head))
+        .await
+        .unwrap();
+    assert_eq!(count_trades(&arrival).await, 4);
+
+    db.append(
+        "trades",
+        vec![trades_batch(&[5_000], &["C"], &[30.0], &[5])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    embargoed.refresh().await.unwrap();
+    assert_eq!(
+        count_trades(&embargoed).await,
+        2,
+        "refresh must re-apply the event-time cutoff"
+    );
+
+    arrival.refresh().await.unwrap();
+    assert_eq!(
+        count_trades(&arrival).await,
+        4,
+        "refresh must re-resolve at the pinned version, not at the head"
+    );
+
+    // An unpinned session still picks the new rows up, which is what refresh
+    // is for.
+    let plain = session(&db).await;
+    plain.refresh().await.unwrap();
+    assert_eq!(count_trades(&plain).await, 5);
+}
+
+async fn frame_rows(frame: datafusion::dataframe::DataFrame) -> usize {
+    frame
+        .collect()
+        .await
+        .unwrap()
+        .iter()
+        .map(|b| b.num_rows())
+        .sum()
+}
+
+/// #51: the DataFrame entry point is subject to the same pin as SQL. It used to
+/// build a raw provider at a caller-chosen read point with no embargo, which is
+/// precisely what `h5i()` refuses.
+#[tokio::test(flavor = "multi_thread")]
+async fn read_table_is_bound_by_the_session_pin() {
+    use h5i_db_core::ReadAt;
+    use h5i_db_query::ResearchPin;
+
+    let (_dir, db) = setup_trades().await;
+    let head = db
+        .resolve("trades", ReadAt::Latest)
+        .await
+        .unwrap()
+        .manifest
+        .sequence;
+
+    let embargoed = H5iSession::new_pinned(
+        db.clone(),
+        SessionOptions::default(),
+        ResearchPin::default().with_event_time_cutoff_ns(2_500),
+    )
+    .await
+    .unwrap();
+
+    // `Latest` means "the pinned version", and the cutoff applies.
+    let frame = embargoed
+        .read_table("trades", ReadAt::Latest)
+        .await
+        .unwrap();
+    assert_eq!(frame_rows(frame).await, 2);
+
+    // Choosing another read point is refused, in the UDTF's words.
+    let err = embargoed
+        .read_table("trades", ReadAt::Version(head))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("pinned to a read point"),
+        "unexpected error: {err}"
+    );
+
+    // An unpinned session is unchanged: any read point, no cutoff.
+    let plain = session(&db).await;
+    let frame = plain
+        .read_table("trades", ReadAt::Version(head))
+        .await
+        .unwrap();
+    assert_eq!(frame_rows(frame).await, 4);
+}
+
+/// #52: without a partition column the sugar's window spans every row, so on a
+/// multi-symbol table it averaged across symbols and said nothing about it.
+#[tokio::test(flavor = "multi_thread")]
+async fn rolling_sugar_accepts_a_partition_column() {
+    let (_dir, db) = setup_trades().await; // A: 10, 12 · B: 20, 22
+    let s = session(&db).await;
+
+    let batches = s
+        .sql(
+            "SELECT symbol, rolling_avg(price, ts, 2, symbol) AS value \
+             FROM trades ORDER BY symbol, ts",
+        )
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let value = batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    // Per symbol. The same query without the 4th argument returns
+    // 10, 15, 16, 17: the cross-series average nobody asked for.
+    assert_eq!(value.values(), &[10.0, 11.0, 20.0, 21.0]);
+
+    // Arity is still checked, and an empty partition column is a typo rather
+    // than a request for no partitioning.
+    let err = s
+        .sql("SELECT rolling_avg(price, ts, 2, symbol, 1) FROM trades")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("3 or 4 arguments"),
+        "unexpected error: {err}"
+    );
+    let err = s
+        .sql("SELECT rolling_avg(price, ts, 2, ) FROM trades")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("must name a partition column"),
+        "unexpected error: {err}"
+    );
+}
+
+/// #53: `gapfill`/`resample` point-sample the grid. Rows that are not on it do
+/// not survive, and neither do all but one of a set sharing a timestamp. The
+/// behaviour is kept (irregular input is the only input these can be given),
+/// but it is documented, counted on the output schema, and pinned here.
+#[tokio::test(flavor = "multi_thread")]
+async fn gapfill_point_samples_and_drops_off_grid_and_duplicate_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    // 5 is off the 10ns grid; the two rows at 10 collapse to the later one.
+    db.append(
+        "trades",
+        vec![trades_batch(
+            &[0, 5, 10, 10],
+            &["A", "A", "A", "B"],
+            &[1.0, 2.0, 3.0, 4.0],
+            &[1, 1, 1, 1],
+        )],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let s = session(&db).await;
+
+    let batches = s
+        .sql("SELECT price FROM gapfill('trades', 'ts', 10) ORDER BY ts")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let price = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Float64Array>()
+        .unwrap();
+    // Two grid points from four input rows: 2.0 was off-grid and 3.0 lost the
+    // tie at t=10.
+    assert_eq!(price.values(), &[1.0, 4.0]);
+}
