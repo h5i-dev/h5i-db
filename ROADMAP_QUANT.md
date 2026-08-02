@@ -1,6 +1,6 @@
 # Quant Workflow Layer — Product Roadmap
 
-Status: v2.2, 2026-08-02. v1 (2026-07-29) scoped the layer to
+Status: v2.3, 2026-08-02. v1 (2026-07-29) scoped the layer to
 analytics only and listed backtesting as a non-goal; v2 (same date,
 branch `qpian`) added Part B, a production-grade backtest program, and
 superseded that non-goal (revised boundary in §11); v2.1 adds Part D
@@ -9,7 +9,10 @@ stack, written after the prediction-market cookbook work exercised the
 whole surface; v2.2 (branch `survey-prediction-market`) adds Part E
 (§13), a survey of what no backtesting engine models for prediction
 markets and the mathematical models worth adopting, with item IDs
-E1-E12. The engine-side scope rule in `ROADMAP.md` Part VII is
+E1-E12; v2.3 (same day, same branch) adds Part F (§14), the
+venue-general companion survey (latency, impact, session mechanics,
+short-side realism, universes, multiple testing, reactive simulation),
+with item IDs F1-F7. The engine-side scope rule in `ROADMAP.md` Part VII is
 narrowed, not violated: the *engine crates* still borrow no backtester
 mechanisms; the backtester is a separate layer crate that consumes the
 engine (P6).
@@ -1358,3 +1361,51 @@ Das (2005) for adverse selection; practitioner writeups on the depth
 data problem, overfitting controls, and liquidity-rewards mechanics
 (zenhodl.net, turbinefi.com, Polymarket docs); the Iowa Electronic
 Markets volatility literature for E9's stylized facts.
+
+---
+
+## 14. Part F — Venue-general engine improvements (survey 2026-08-02)
+
+The companion survey to Part E, run the same day on the same branch:
+what the strongest general-asset backtesters and the microstructure
+literature have that this engine lacks, independent of prediction
+markets. The reference bar is `hftbacktest` (the most serious
+realism-focused OSS engine: pluggable feed- and order-latency models,
+queue-position models, L2/L3 reconstruction, multi-exchange), plus the
+equities-pitfall canon (survivorship, delisting, borrow costs, session
+mechanics) and the simulation-realism literature. Items carry IDs F1-F7.
+Several are cheap because they reuse infrastructure that already exists
+(dual timestamps, typed replay records, the four model traits, the trial
+ledger); the cross-references say which.
+
+| Item | Description | Depends on |
+|---|---|---|
+| F1 Empirical latency models | `hftbacktest` treats feed and order latency as first-class pluggable models sampled from data; this engine has only `NoLatency` and `ConstantLatency`. The feed-latency distribution is already sitting in the archives as the `ts_init - ts_event` gap on every record, so an `EmpiricalLatency` model (sample from the observed distribution, optionally conditioned on message rate, since latency spikes when markets are busy) is a contained addition to the existing latency seam. Matters for every maker strategy on every venue; the cheapest item in this Part. | `LatencyModel` trait (`models.rs`), dual stamps (§8.6) |
+| F2 Market impact and TCA | The square-root law (cost ~ σ√(Q/V)) holds across equities, FX, options, and crypto; propagator models (per-trade price response with exponential decay) reproduce it while keeping prices diffusive. Two features: `SqrtImpact` / `PropagatorImpact` cost models in the fill-model family (the venue-general sibling of E3, sharing E8's replenishment machinery), and a TCA report panel decomposing implementation shortfall per order (spread, impact, timing, fees) from `bt_fills` against arrival mid. `quant.costs.fit_impact` already estimates the curve post hoc; feeding the fitted curve back in as a forward cost model closes a loop no OSS engine closes. | `FillModel` seam, E3/E8, `quant.costs` |
+| F3 Session structure: auctions, halts, calendars | The credibility gate for an equities venue, all mechanics: open/close auctions with MOO/MOC/LOC order types matched at the official auction price (closing-cross volume is a large share of modern equity flow, and a daily-rebalance backtest filling at continuous 4pm prices misstates both price and capacity; nautilus has this only as an open feature request, #2194); halts and LULD bands (5-10% bands, 5-minute pauses) as session-state records, with orders during a halt queued or rejected and resumption reopening via auction; exchange calendars with session open/close as first-class events (today only expiration and windows exist). The typed-record replay with explicit priorities absorbs auction phase transitions as one more record kind. Overnight-vs-intraday return attribution in reports falls out for free. | schema (§8.6), matching (§8.2), venue roadmap (§8.5) |
+| F4 Short-side realism | Long-short equity backtests without borrow costs are systematically inflated (hard-to-borrow fees, locate availability, recall risk are the standard cited omission). The prediction-market side already does the honest thing (no naked shorts, complementary-trade rejection); the equities analog is a PIT borrow-schedule table (rate and availability per security) charged like funding events, with locate failure as a first-class rejection reason in `RunMetrics`. | `funding`-style schema, VII-A1 equities data |
+| F5 PIT universes and delisting returns | E6 generalized. Backtesting on current index constituents inflates equity returns by 1-2%/yr; the fix is point-in-time constituents including later-delisted names. §8.1 already records that PIT universe selection is absent from nautilus and vectorbt and is precisely a versioned-store feature (VII-A3 spans). The one missing mechanical piece: a delisting event in `corporate_actions` that closes positions at the delisting price instead of silently freezing them. | VII-A3, E6, `corporate_actions` |
+| F6 Multiple testing on the ledger | Beyond Q3.4's deflated Sharpe: White's Reality Check, Hansen's SPA test (less conservative), and Romano-Wolf stepdown / FDR control for identifying which strategies in a study genuinely outperform, not just whether the best one does. These tests require the full universe of strategies tried, which is exactly what the trial ledger records honestly and competitors do not record at all. "SPA wired to the ledger" is a one-module `quant` addition with a defensible claim behind it. | Q3.4, trial ledger (§8a.2), `backtest.study` |
+| F7 Reactive venue (counterfactual simulation) | Pure replay cannot answer "what would the market have done in response to my orders" (the canonical argument is Balch et al. 2019; ABIDES and newer generative / queue-reactive hybrids are the machinery). Scope deliberately narrow: an optional reactive venue behind the same venue traits, with calibrated queue-reactive intensities responding to the strategy's own flow, not an agent-based modeling platform. This is the venue-general face of E3+E8; likewise E9's synthetic generator generalizes to GBM / rough-vol equity paths under the same canonical-tables interface. | E3, E8, E9, venue traits (§8.2) |
+
+Sequencing: F1 first (small, pure parity-plus); F2 second, shared
+machinery with Part E's execution-honesty milestone; F3 in one block as
+the equities-venue gate, and it is the largest mechanical surface here;
+F6 any time, it is cheap and independently marketable; F4 and F5 land
+with the equities venue since they gate on VII-A1/A3 data anyway; F7
+last, research-grade.
+
+A note against §11 (non-goals): live-trading parity is the other
+selling point of `hftbacktest` and nautilus, and it stays out; nothing
+above requires reopening that boundary. F7 stays a simulation feature
+behind the venue traits, not an ML-platform or agent-framework
+commitment.
+
+Survey sources: `hftbacktest` (nkaz001); nautilus issue #2194
+(auction/fill simulation); arXiv 2402.17359 (LOB simulations review),
+1906.12010 (replay vs interactive simulation), 2501.08822 (deep
+queue-reactive), 2311.18283 and 2603.29086 (square-root law and impact
+models in backtest environments); White (2000), Hansen (2005),
+Romano-Wolf (2005) for multiple testing; the survivorship / delisting /
+borrow-cost pitfall canon (e.g. the "Seven Sins of Quantitative
+Investing" chapter) for F4/F5.
