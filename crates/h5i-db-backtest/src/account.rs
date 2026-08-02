@@ -413,16 +413,22 @@ impl MarginState {
 
 /// Evaluate an account against its open positions.
 ///
-/// `unrealized` is the marked profit already computed by the portfolio, in
-/// the reporting currency. Liquidation is *not* declared when anything was
-/// unconvertible or unmarked: closing someone's book on the strength of a
-/// number known to be incomplete is worse than continuing.
+/// `marked` is what the open positions add to equity, in the reporting
+/// currency, and it is **not** simply the unrealised profit: a funded
+/// position (spot, a prediction-market contract) was paid for out of cash,
+/// so what the account holds is the asset at its marked exposure, while an
+/// unfunded one (a perpetual) moved no cash and has only accrued profit.
+/// Passing profit for both understates a funded book by its whole notional.
+///
+/// Liquidation is *not* declared when anything was unconvertible or
+/// unmarked: closing someone's book on the strength of a number known to be
+/// incomplete is worse than continuing.
 pub fn margin_state(
     collateral: &Valuation,
-    unrealized: Money,
+    marked: Money,
     requirement: &MarginRequirement,
 ) -> Result<MarginState> {
-    let equity = collateral.total.checked_add(unrealized)?;
+    let equity = collateral.total.checked_add(marked)?;
     let incomplete = !collateral.is_complete() || !requirement.unmarked.is_empty();
     Ok(MarginState {
         equity,

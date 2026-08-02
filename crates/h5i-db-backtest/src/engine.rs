@@ -1919,6 +1919,17 @@ impl Engine {
 
     /// The account's margin position right now, or `None` when no margin
     /// model is in force (a cash account cannot be called).
+    ///
+    /// Equity here means what it means on the equity curve: cash, plus a
+    /// funded position's marked exposure, plus an unfunded one's unrealised
+    /// profit. Valuing every position at its profit instead -- which this
+    /// did -- is right for a perpetual and wrong for anything bought
+    /// outright, and the error is not cosmetic. On a mixed book (a perp
+    /// under `LinearMargin` plus prediction-market longs) `available()`
+    /// treated the prepaid contracts as if their cash were still gone *and*
+    /// charged an initial requirement for them, refusing roughly half the
+    /// capital; a large enough funded book dragged equity under maintenance
+    /// and cross-liquidated a perp that was never in trouble.
     pub fn margin_state(&self) -> Result<Option<MarginState>> {
         let Some(model) = self.margin.as_deref() else {
             return Ok(None);
@@ -1939,23 +1950,29 @@ impl Engine {
         // closing a book on a number known to be partial is worse than
         // waiting for the rate.
         let mut unconvertible = Vec::new();
-        let mut unrealized = Money::ZERO;
+        let mut marked = Money::ZERO;
         for position in self.cross_positions() {
             let key = self.slots.key(&position.instrument, position.outcome);
             let Some(mark) = self.marks.get(&key) else {
                 continue;
             };
-            let pnl = position.unrealized_pnl(*mark)?;
-            let settlement = &self
-                .instruments
-                .get(&position.instrument)?
-                .settlement_currency;
-            if settlement == &self.reporting_currency {
-                unrealized = unrealized.checked_add(pnl)?;
+            let instrument = self.instruments.get(&position.instrument)?;
+            // The same split `push_equity` makes, and for the same reason: a
+            // funded position was paid for out of `cash`, so counting only
+            // its profit charges the account for money it spent and never
+            // credits it the asset it bought.
+            let value = if instrument.kind.is_funded() {
+                position.exposure(*mark)?
             } else {
-                match self.fx.convert(pnl, settlement, &self.reporting_currency) {
-                    Ok(converted) => unrealized = unrealized.checked_add(converted)?,
-                    Err(_) => unconvertible.push((settlement.clone(), pnl)),
+                position.unrealized_pnl(*mark)?
+            };
+            let settlement = &instrument.settlement_currency;
+            if settlement == &self.reporting_currency {
+                marked = marked.checked_add(value)?;
+            } else {
+                match self.fx.convert(value, settlement, &self.reporting_currency) {
+                    Ok(converted) => marked = marked.checked_add(converted)?,
+                    Err(_) => unconvertible.push((settlement.clone(), value)),
                 }
             }
         }
@@ -1964,7 +1981,7 @@ impl Engine {
             currency: self.reporting_currency.clone(),
             unconvertible,
         };
-        Ok(Some(margin_state(&collateral, unrealized, &requirement)?))
+        Ok(Some(margin_state(&collateral, marked, &requirement)?))
     }
 
     /// Close what the account can no longer support.

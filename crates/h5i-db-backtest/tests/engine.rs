@@ -2824,3 +2824,54 @@ fn a_split_reprices_an_order_still_in_flight() {
     assert_eq!(order.limit_price(), Some(price(13.0)));
     assert_eq!(order.quantity, qty(200.0));
 }
+
+/// One engine, one definition of equity (issue #78).
+///
+/// `margin_state` computed `cash + unrealized`, which is right for a
+/// perpetual and wrong for anything bought outright: a spot or
+/// prediction-market position already paid its notional out of cash, and
+/// counting only its profit never credits back the asset. The equity curve
+/// had it right, so the two disagreed by the whole funded notional --
+/// enough for `available()` to refuse roughly half the account's capital.
+#[test]
+fn the_margin_engine_and_the_equity_curve_agree_on_equity() {
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                equity_snapshot(1_000, 50.0),
+                equity_snapshot(2_000, 50.0),
+                equity_snapshot(3_000, 50.0),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(equity_instruments())
+        .starting_cash(money(10_000.0))
+        .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+        .build();
+    let mut strategy = BuyEquity {
+        quantity: qty(100.0),
+        submitted: false,
+    };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    let curve = result.equity.last().expect("an equity point");
+    let state = engine
+        .margin_state()
+        .unwrap()
+        .expect("a margin model is set");
+    // Nothing is isolated here, so the curve's `open_positions` and the
+    // margin engine's `cross_positions` are the same set.
+    assert_eq!(
+        state.equity, curve.equity,
+        "two numbers called equity, computed differently, in one engine"
+    );
+    // ~5,000 of cash and ~5,000 of stock, not 5,000 of cash and nothing.
+    assert!(
+        (state.equity.to_f64() - 10_000.0).abs() < 20.0,
+        "the funded notional went missing: equity is {}",
+        state.equity
+    );
+}
