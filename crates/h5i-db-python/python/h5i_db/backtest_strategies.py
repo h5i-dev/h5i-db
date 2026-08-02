@@ -90,6 +90,16 @@ def quote_panel(
     `until_expiry` stops at `instruments.expiration_ns`. A panel that keeps
     quoting after resolution has a jump to 0 or 1 in it, and every momentum or
     volatility rule would read that jump as a signal.
+
+    `book_deltas` holds one row per *level*, so the top of book is the highest
+    live buy against the **lowest** live sell. Taking the maximum on both sides
+    quoted the worst ask in the book, which is not a price anyone can trade at:
+    every mid, spread and signal derived from this panel inherited that, and
+    the report drew a different book than the signals saw. Levels that are
+    going away are excluded two ways, because the feed encodes the same thing
+    twice: `action` names a `delete`, `clear` or `gap`, and the kernel also
+    reads a `set` of size zero as a delete (see
+    `crates/h5i-db-backtest/src/book.rs`).
     """
     # Snapshot and instrument names reach here from callers, config files and
     # vendor archives, so they are quoted rather than interpolated: an
@@ -98,7 +108,11 @@ def quote_panel(
     source = (
         f"h5i('book_deltas', {quote_string(snapshot)})" if snapshot else "book_deltas"
     )
-    filters = [f"outcome = {int(outcome)}"]
+    filters = [
+        f"outcome = {int(outcome)}",
+        f"action IN ({quote_string('snapshot')}, {quote_string('set')})",
+        "size > 0",
+    ]
     if instruments:
         listed = ", ".join(quote_string(str(name)) for name in instruments)
         filters.append(f"instrument_id IN ({listed})")
@@ -113,7 +127,7 @@ def quote_panel(
         f"""
         SELECT instrument_id, ts_init AS ts,
                max(CASE WHEN side = 'buy'  THEN price END) AS bid,
-               max(CASE WHEN side = 'sell' THEN price END) AS ask,
+               min(CASE WHEN side = 'sell' THEN price END) AS ask,
                max(CASE WHEN side = 'buy'  THEN size  END) AS bid_size,
                max(CASE WHEN side = 'sell' THEN size  END) AS ask_size
         FROM {source}
@@ -681,6 +695,12 @@ def pair_arbitrage(
 
     Reads both outcomes itself rather than taking a panel, because a pair trade
     is the one rule here that is not a function of one side's quotes.
+
+    The cost of a leg is the *best* ask, the lowest live sell: the maximum that
+    used to stand here priced the pair off the worst offer in the book and so
+    reported an edge nobody could have taken. Dead levels are filtered the same
+    two ways as `quote_panel`, since a `set` of size zero is how the feed
+    spells a delete.
     """
     if not 0.0 <= fee_rate < 1.0:
         raise ValueError("fee_rate must be in [0, 1)")
@@ -694,9 +714,11 @@ def pair_arbitrage(
         f"""
         WITH tops AS (
             SELECT instrument_id, ts_init AS ts, outcome,
-                   max(CASE WHEN side = 'sell' THEN price END) AS ask
+                   min(CASE WHEN side = 'sell' THEN price END) AS ask
             FROM {source}
             WHERE outcome IN ({int(first)}, {int(second)})
+              AND action IN ({quote_string('snapshot')}, {quote_string('set')})
+              AND size > 0
             GROUP BY instrument_id, ts_init, outcome
         )
         SELECT a.instrument_id, a.ts, a.ask AS ask_a, b.ask AS ask_b

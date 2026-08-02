@@ -16,7 +16,7 @@ import h5i_db
 import pyarrow as pa
 import pytest
 from h5i_db import backtest, quant
-from h5i_db.backtest_result import VERIFY_OF, _CONFIG_SCHEMA
+from h5i_db.backtest_result import VERIFY_OF, _CONFIG_SCHEMA, _persist_config
 
 SECOND = 1_000_000_000
 MARKET = "will-x-happen"
@@ -1343,4 +1343,316 @@ def test_a_callback_signature_the_engine_cannot_call_is_refused():
                 starting_cash=500.0,
                 data=backtest.DataConfig(snapshot="seed"),
             )
+        db.close()
+
+
+def test_a_config_table_from_before_the_role_column_still_takes_a_write():
+    """A column added to `_CONFIG_SCHEMA` must not strand the forks that predate it.
+
+    `write` validates the batch against the table's *stored* spec, so a
+    seven-column row into a six-column `bt_config` is a `SchemaMismatch` --
+    raised after the kernel has already written the result tables, which
+    leaves the fork holding fresh results beside a stale config: the exact
+    state writing the config unconditionally exists to prevent. Core's
+    `validate_evolution` also refuses to append a non-nullable column, so
+    there was no migration out of it either.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(db, [])
+        # Nullable, so a row that predates the column is still a legal row.
+        assert _CONFIG_SCHEMA.field("role").nullable
+        legacy = pa.schema(
+            [field for field in _CONFIG_SCHEMA if field.name != "role"]
+        )
+        config = backtest.BacktestConfig(
+            run_id="legacy",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+        inspection = backtest.inspect(db, config)
+
+        db.create_fork("bt-legacy")
+        fork = db.fork("bt-legacy")
+        try:
+            fork.create_table("bt_config", legacy)
+            fork.write(
+                "bt_config",
+                pa.table(
+                    {name: ["stale"] for name in legacy.names}, schema=legacy
+                ),
+            )
+        finally:
+            fork.close()
+
+        _persist_config(db, "bt-legacy", config, inspection)
+
+        fork = db.fork("bt-legacy")
+        try:
+            names = fork.schema("bt_config").names
+            stored = fork.read("bt_config").to_pylist()
+        finally:
+            fork.close()
+        # The table is neither dropped nor recreated, so the config that was
+        # already there cannot be lost on the way.
+        assert names == legacy.names
+        assert len(stored) == 1
+        assert stored[0]["config_digest"] == config.digest
+        assert "role" not in stored[0]
+        db.close()
+
+
+def test_a_fresh_config_table_records_the_role_and_a_missing_one_reads_as_run():
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(db, [])
+        config = backtest.BacktestConfig(
+            run_id="fresh",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+        inspection = backtest.inspect(db, config)
+        db.create_fork("bt-fresh")
+        _persist_config(db, "bt-fresh", config, inspection)
+        fork = db.fork("bt-fresh")
+        try:
+            row = fork.read("bt_config").to_pylist()[0]
+        finally:
+            fork.close()
+        assert row["role"] == "run"
+
+        verifying = backtest.BacktestConfig.from_dict(
+            {**config.to_dict(), "metadata": {VERIFY_OF: "fresh"}}
+        )
+        db.create_fork("bt-verifying")
+        _persist_config(db, "bt-verifying", verifying, inspection)
+        fork = db.fork("bt-verifying")
+        try:
+            assert fork.read("bt_config").to_pylist()[0]["role"] == "verify"
+        finally:
+            fork.close()
+        db.close()
+
+
+def _rewrite_config_json(db, fork_name: str, config_json: str) -> None:
+    """Replace the stored `config_json` of a run, keeping everything else."""
+    fork = db.fork(fork_name)
+    try:
+        row = fork.read("bt_config").to_pylist()[0]
+        row["config_json"] = config_json
+        fork.write(
+            "bt_config",
+            pa.table(
+                {name: [row[name]] for name in _CONFIG_SCHEMA.names},
+                schema=_CONFIG_SCHEMA,
+            ),
+        )
+    finally:
+        fork.close()
+
+
+def test_a_run_persisted_under_older_execution_rules_still_opens_and_lists():
+    """A rule added to `ExecutionConfig` cannot retroactively delete evidence.
+
+    `open_result` rebuilds the config through `from_json`, so a combination
+    that was legal when the run executed raised `ValueError` on *read* once
+    the rule arrived: `report` and `verify` failed outright, and `list_runs`
+    swallowed the error and dropped the row. The runs that vanished were
+    precisely the ones the new rule calls suspect.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        result = backtest.run(db, "old-rules", starting_cash=500.0, snapshot="seed")
+        payload = result.config.to_dict()
+        # Neither rule existed when this ran, so this is what a real fork from
+        # before them holds.
+        payload["execution"]["fee_kind"] = "kalshi"
+        _rewrite_config_json(db, result.fork_name, json.dumps(payload, sort_keys=True))
+
+        with pytest.warns(backtest.ConfigCompatibilityWarning, match="fee_rate"):
+            reopened = backtest.open_result(db, "old-rules")
+        assert reopened.config.execution.fee_kind == "kalshi"
+        # Visible as a flag, not only as a warning somebody may have filtered.
+        assert any("fee_rate" in item for item in reopened.config.violations)
+        assert "old-rules" in {row["run_id"] for row in backtest.list_runs(db)}
+
+        # Constructing one *now* is still refused: only the read side is lenient.
+        with pytest.raises(ValueError, match="needs fee_rate"):
+            backtest.ExecutionConfig(fee_kind="kalshi")
+        db.close()
+
+
+def test_a_config_that_cannot_be_parsed_at_all_is_listed_as_degraded():
+    """An unreadable run is a row that says so, not a row that is missing.
+
+    Dropping it made `backtest list` disagree with `fork_names()` with nothing
+    anywhere to say why.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(db, [])
+        backtest.run(db, "readable", starting_cash=500.0, snapshot="seed")
+        broken = backtest.run(db, "broken", starting_cash=500.0, snapshot="seed")
+        _rewrite_config_json(db, broken.fork_name, "{}")
+
+        listed = {row["run_id"]: row for row in backtest.list_runs(db)}
+        assert "readable" in listed
+        assert listed["broken"]["degraded"] is True
+        assert "KeyError" in listed["broken"]["error"]
+        db.close()
+
+
+def test_the_typed_config_refuses_the_fill_model_pair_the_kernel_refuses():
+    """Zero is a slippage model too, and the kernel says so.
+
+    Python guarded with `(slippage_ticks or 0) != 0` and accepted the pair at
+    zero; the kernel matches `Some(_)` before `Some(0)` and refuses it. The
+    config then constructed, passed preflight and died in the replay, which is
+    the failure the typed layer exists to move forward in time. Python is the
+    side that changed: only one fill model can be installed, and reading a
+    zero as "so the queue model wins" is the silent override the kernel arm
+    was added to stop.
+    """
+    for ticks in (0, 1):
+        with pytest.raises(ValueError, match="separate scenarios"):
+            backtest.ExecutionConfig(queue_position=True, slippage_ticks=ticks)
+    # Neither one alone is a conflict.
+    assert backtest.ExecutionConfig(slippage_ticks=0).slippage_ticks == 0
+    assert backtest.ExecutionConfig(queue_position=True).slippage_ticks is None
+
+
+def test_a_callback_the_engine_would_over_call_is_refused_at_construction():
+    """Too many arguments is as unbindable as too few, and was not checked.
+
+    `on_event(self, ctx)` names the context, so the engine hands it one *and*
+    the event. Only the under-arity side was checked, so this bound fine and
+    raised `TypeError` on the first market event -- after the fork existed and
+    the replay had started.
+    """
+
+    class Overbound(backtest.EventStrategy):
+        def on_event(self, ctx):
+            return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        with pytest.raises(h5i_db.InvalidInputError, match="accepts"):
+            backtest.run_strategy(
+                db,
+                "over-called",
+                Overbound(),
+                strategy_id="tests.Overbound:v1",
+                starting_cash=500.0,
+                data=backtest.DataConfig(snapshot="seed"),
+            )
+        # Refused before anything was created, which is the whole point.
+        assert "bt-over-called" not in db.fork_names()
+        db.close()
+
+
+def test_a_callback_with_no_code_object_is_bound_by_probing_its_signature():
+    """A `__call__` object has no `__code__`, and was handed a context anyway.
+
+    The call is positional, so guessing wrong there is a `TypeError` on the
+    first event, not "a wasted argument". `inspect.signature().bind()` settles
+    it at construction without running the callback.
+    """
+
+    class Counter:
+        def __init__(self):
+            self.seen = 0
+
+        def __call__(self, event):
+            self.seen += 1
+            return None
+
+    class Wrapped(backtest.EventStrategy):
+        def __init__(self):
+            self.on_event = Counter()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        strategy = Wrapped()
+        result = backtest.run_strategy(
+            db,
+            "probed",
+            strategy,
+            strategy_id="tests.Wrapped:v1",
+            starting_cash=500.0,
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+        assert result["records_processed"] > 0
+        assert strategy.on_event.seen > 0
+        db.close()
+
+
+def test_two_different_strategies_are_two_different_trials():
+    """The run digest has to see the strategy, and `RunSpec` cannot.
+
+    `RunSpec` carries no strategy identity, so the execution fingerprint is
+    the only channel into its digest. Without the strategy in it, two runs of
+    entirely different strategies over the same window, cash, pin and
+    execution config hashed identically, and `trial_count` -- the denominator
+    of every multiple-testing correction -- deduped a whole sweep into one
+    trial.
+    """
+    order = {
+        "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+        "instrument_id": MARKET,
+        "side": "buy",
+        "quantity": 10.0,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(db, [order])
+        backtest.create_signal_table(db, "signals_b")
+        db.append("signals_b", backtest.signal_table([order]))
+
+        first = backtest.run(db, "sig-a", starting_cash=500.0, snapshot="seed")
+        second = backtest.run(
+            db, "sig-b", starting_cash=500.0, snapshot="seed", signals="signals_b"
+        )
+        again = backtest.run(db, "sig-a-again", starting_cash=500.0, snapshot="seed")
+
+        assert first["digest"] != second["digest"]
+        assert "signals_b" in second["execution_fingerprint"]
+        # The run id is still outside the identity: one strategy under two
+        # names is one computation.
+        assert first["digest"] == again["digest"]
+        assert backtest.trial_count(db) == 2
+
+        class Noop(backtest.EventStrategy):
+            def on_event(self, event):
+                return None
+
+        alpha = backtest.run_strategy(
+            db,
+            "cb-alpha",
+            Noop(),
+            strategy_id="tests.Alpha:v1",
+            starting_cash=500.0,
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+        beta = backtest.run_strategy(
+            db,
+            "cb-beta",
+            Noop(),
+            strategy_id="tests.Beta:v1",
+            starting_cash=500.0,
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+        # Same class, same window, same everything the spec can see: only the
+        # identity the caller declared tells them apart.
+        assert alpha["digest"] != beta["digest"]
         db.close()

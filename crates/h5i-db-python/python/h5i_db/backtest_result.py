@@ -41,7 +41,13 @@ _CONFIG_SCHEMA = pa.schema(
         # without this column `find_trial` could hand a concurrent
         # `execute(reuse=True)` the verify fork, which its own `finally` then
         # deletes underneath the caller.
-        pa.field("role", pa.string(), nullable=False),
+        #
+        # Nullable, because the column arrived after databases existed. A
+        # missing value reads as "run" everywhere below, which is what every
+        # row written before it was one; and non-nullable is also the one
+        # shape core's `validate_evolution` refuses to append to a live table,
+        # so declaring it that way closed the only migration path there is.
+        pa.field("role", pa.string()),
     ]
 )
 
@@ -65,27 +71,46 @@ def _persist_config(
     results no longer came from. `write` also replaces the table in a single
     version, so a reader sees the old row or the new one, never the empty
     table a create-then-append leaves behind when the append fails.
+
+    The batch is projected onto whatever schema the table already declares.
+    `write` validates column names and count against the stored spec, so a
+    fork created before `role` existed rejected the seven-column batch --
+    *after* the kernel had already written the result tables, leaving fresh
+    results beside a stale config, which is the exact state writing
+    unconditionally exists to prevent. Projecting keeps the write a single
+    atomic replace: nothing is dropped, recreated, or read-then-rewritten, so
+    no crash window can lose a config that is already there. Only a `run`
+    role can land in an old-shaped table anyway, and that is what a missing
+    `role` already means: a verification always runs under a fresh `run_id`,
+    so its fork is new and carries the current schema.
     """
     fork = db.fork(fork_name)
     try:
+        columns = {
+            "run_id": [config.run_id],
+            "config_digest": [config.digest],
+            "trial_digest": [config.trial_digest],
+            "config_json": [config.to_json(indent=None)],
+            "fidelity": [inspection.fidelity.value],
+            "inspection_json": [
+                json.dumps(inspection.to_dict(), sort_keys=True, default=str)
+            ],
+            "role": ["verify" if config.metadata.get(VERIFY_OF) else "run"],
+        }
+        schema = _CONFIG_SCHEMA
         if "bt_config" not in fork.tables():
-            fork.create_table("bt_config", _CONFIG_SCHEMA)
+            fork.create_table("bt_config", schema)
+        else:
+            stored = fork.schema("bt_config")
+            # Only a shape this function itself can fill. Anything else is a
+            # `bt_config` this code did not write, and `write` refusing it
+            # with a schema error says more than a `KeyError` here would.
+            if stored.names != schema.names and set(stored.names) <= set(columns):
+                schema = stored
+                columns = {name: columns[name] for name in stored.names}
         fork.write(
             "bt_config",
-            pa.table(
-                {
-                    "run_id": [config.run_id],
-                    "config_digest": [config.digest],
-                    "trial_digest": [config.trial_digest],
-                    "config_json": [config.to_json(indent=None)],
-                    "fidelity": [inspection.fidelity.value],
-                    "inspection_json": [
-                        json.dumps(inspection.to_dict(), sort_keys=True, default=str)
-                    ],
-                    "role": ["verify" if config.metadata.get(VERIFY_OF) else "run"],
-                },
-                schema=_CONFIG_SCHEMA,
-            ),
+            pa.table(columns, schema=schema),
             note="typed backtest configuration and preflight evidence",
         )
     finally:
@@ -456,13 +481,28 @@ def open_result(db: Any, run_id: str) -> BacktestResult:
 
 
 def list_runs(db: Any) -> list[dict[str, Any]]:
+    """Every backtest fork in the database, including the ones that no longer read.
+
+    A fork this cannot open is listed as a degraded entry rather than dropped.
+    Omitting it made the listing quietly disagree with `fork_names()`, and the
+    runs that stop opening are not a random sample: a rule added to
+    `ExecutionConfig` after they ran makes exactly the configurations that
+    rule calls suspect the ones that disappear from `backtest list`, which is
+    where somebody would go looking for them.
+    """
     runs = []
     for fork_name in sorted(name for name in db.fork_names() if name.startswith("bt-")):
         try:
             result = open_result(db, fork_name)
-        except (ValueError, KeyError, IndexError):
-            # One unreadable fork is a listing that omits it, never a listing
-            # that fails.
+        except (ValueError, KeyError, IndexError) as exc:
+            runs.append(
+                {
+                    "run_id": fork_name.removeprefix("bt-"),
+                    "fork": fork_name,
+                    "degraded": True,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
             continue
         runs.append(result.summary())
     return runs
@@ -529,11 +569,16 @@ def trial_count(db: Any) -> int:
             elif "bt_run" in tables:
                 # Native/Rust-created runs may not carry the Python typed
                 # config table. They are still ledger trials and must never
-                # disappear from the search budget.
+                # disappear from the search budget -- a run with no digest
+                # column at all used to contribute nothing, which understates
+                # the denominator in the one direction that flatters a result.
+                # The fallback is prefixed so a run counted by name can never
+                # collide with one counted by digest.
                 for row in fork.read("bt_run").to_pylist():
                     digest = row.get("config_digest") or row.get("digest")
-                    if digest is not None:
-                        digests.add(str(digest))
+                    if digest is None:
+                        digest = f"run:{row.get('run_id') or fork_name}"
+                    digests.add(str(digest))
         finally:
             fork.close()
     return len(digests)

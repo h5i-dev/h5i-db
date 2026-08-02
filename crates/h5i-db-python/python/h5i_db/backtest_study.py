@@ -31,7 +31,7 @@ import math
 import random
 import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Union
@@ -625,10 +625,29 @@ class BacktestStudy:
             # deflated by runs that produced nothing. Only forks this stage
             # created are dropped: a cached result names another trial's fork,
             # and dropping that would delete a run still in use.
+            #
+            # "Created" is not "owned", though. `execute` releases the digest
+            # lock when the run returns, so a concurrent trial hashing to the
+            # same `trial_digest` can be handed this very fork by `find_trial`
+            # and hold it as a cache hit. The drop therefore happens under the
+            # same lock and only after asking: with the lock held no lookup
+            # can be in flight, so the fork is either already shared (skip it,
+            # the other holder's result names it) or still unreachable by the
+            # lookup that would share it.
+            from .backtest import _trial_ledger_lock, fork_is_shared
+
             for created in outputs:
                 if created.get("cached"):
                     continue
-                with suppress(Exception):
+                digest = created.get("trial_digest")
+                guard = (
+                    _trial_ledger_lock(db, digest)
+                    if isinstance(digest, str) and digest
+                    else nullcontext()
+                )
+                with suppress(Exception), guard:
+                    if fork_is_shared(created.fork_name):
+                        continue
                     db.drop_fork(created.fork_name)
             raise
         if walk is not None and folds > 1:

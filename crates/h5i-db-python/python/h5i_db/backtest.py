@@ -49,6 +49,7 @@ from .backtest_attention import (
 )
 from .backtest_config import (
     BacktestConfig,
+    ConfigCompatibilityWarning,
     DataConfig,
     ExecutionConfig,
     OutputConfig,
@@ -87,6 +88,7 @@ __all__ = [
     "BacktestResult",
     "BacktestStudy",
     "AttentionState",
+    "ConfigCompatibilityWarning",
     "EventStrategy",
     "DataConfig",
     "ExecutionConfig",
@@ -215,6 +217,36 @@ def _trial_ledger_lock(db: Any, trial_digest: str):
         finally:
             _unlock_file(handle)
             handle.close()
+
+
+#: Forks `execute` has handed to somebody as a cache hit.
+#:
+#: "This trial created the fork" stopped meaning "this trial owns the fork"
+#: once `find_trial` existed: the digest lock is released when `run()` returns,
+#: and a concurrent trial hashing to the same `trial_digest` is then handed the
+#: same fork and keeps a result object naming it. Entries are never removed --
+#: "someone else is holding this" does not become false again, and the other
+#: holder's `StudyResult` still cites the fork long after its own call
+#: returned.
+_SHARED_FORKS: set[str] = set()
+_SHARED_FORKS_GUARD = threading.Lock()
+
+
+def _share_fork(fork_name: str) -> None:
+    with _SHARED_FORKS_GUARD:
+        _SHARED_FORKS.add(fork_name)
+
+
+def fork_is_shared(fork_name: str) -> bool:
+    """Whether a trial other than the one that created this fork holds it.
+
+    Cleanup paths ask before dropping. Asking under the same trial-ledger lock
+    `execute` holds across lookup and run is what makes the answer usable: the
+    lookup that would share the fork cannot be running concurrently, so the
+    fork is either already shared (and must survive) or still invisible to it.
+    """
+    with _SHARED_FORKS_GUARD:
+        return fork_name in _SHARED_FORKS
 
 #: Mirrors `crates/h5i-db-backtest/src/schema.rs::signals()`.
 SIGNAL_SCHEMA = pa.schema(
@@ -558,6 +590,12 @@ def run(
         max_open_orders=max_open_orders,
         commands_table=commands,
         python_strategy=_python_strategy,
+        # Not a table name and not read as one: it is how the run digest tells
+        # one callback strategy from another. Without it every callback run
+        # over the same window and execution config hashed identically, and
+        # `trial_count` -- the denominator of the multiple-testing corrections
+        # -- deduped a whole sweep down to one trial.
+        strategy_id=strategy_id,
         margin_kind=margin_kind,
         leverage=leverage,
         maintenance_margin_rate=maintenance_margin_rate,
@@ -655,6 +693,10 @@ def execute(
         if deduplicable:
             cached = find_trial(db, config.trial_digest)
             if cached is not None:
+                # Recorded while the digest lock is still held: from here the
+                # fork has two holders, and the one that created it must not
+                # delete it when its own stage fails later.
+                _share_fork(cached.fork_name)
                 # The same keys as the fresh path below. A caller reading
                 # `result["trial_digest"]` should not have to know which path
                 # produced the result it is holding.

@@ -6,13 +6,17 @@ import datetime as _dt
 import hashlib
 import json
 import re
+import threading
+import warnings
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Iterator, Mapping, Optional, Sequence, Union
 
 __all__ = [
     "BacktestConfig",
+    "ConfigCompatibilityWarning",
     "DataConfig",
     "ExecutionConfig",
     "InspectionIssue",
@@ -100,6 +104,57 @@ def _canonical_number(value: Any, cast: Any) -> Any:
     for the same replay.
     """
     return value if value is None else cast(value)
+
+
+class ConfigCompatibilityWarning(UserWarning):
+    """A stored configuration breaks a rule that did not exist when it ran."""
+
+
+#: Set only while an already-persisted configuration is being reconstructed.
+#: Thread-local because a study loads results from several worker threads and
+#: one of them must not turn another's `ExecutionConfig(...)` call lenient.
+_LOADING = threading.local()
+
+
+@contextmanager
+def _loading_persisted() -> Iterator[None]:
+    """Reconstruct a stored configuration instead of declaring a new one.
+
+    Construction and deserialisation ask different questions. Construction
+    asks "may this run?", so a combination this layer has learned is wrong
+    must be refused. Deserialisation asks "what *did* run?", and a run that
+    was legal when it executed does not become unreadable because the rule
+    arrived afterwards: raising there took `report`, `verify` and
+    `open_result` down with it, and `list_runs` dropped the row entirely, so
+    the runs a new rule declares suspect were exactly the ones that vanished.
+    """
+    previous = getattr(_LOADING, "active", False)
+    _LOADING.active = True
+    try:
+        yield
+    finally:
+        _LOADING.active = previous
+
+
+def _check_late_rules(config: Any, violations: Sequence[str]) -> None:
+    """Refuse a new configuration; flag a stored one.
+
+    The violations are recorded on the instance rather than in a field, so
+    they stay out of `asdict` and therefore out of `digest` and
+    `trial_digest`: a run's identity is what it ran, not what a later version
+    of this module thinks of it.
+    """
+    object.__setattr__(config, "violations", tuple(violations))
+    if not violations:
+        return
+    detail = "; ".join(violations)
+    if not getattr(_LOADING, "active", False):
+        raise ValueError(detail)
+    warnings.warn(
+        f"this stored execution config breaks a rule added after it ran: {detail}",
+        ConfigCompatibilityWarning,
+        stacklevel=3,
+    )
 
 
 @dataclass(frozen=True)
@@ -196,7 +251,13 @@ class DataConfig:
 
 @dataclass(frozen=True)
 class ExecutionConfig:
-    """Execution assumptions. No venue fee or latency is guessed."""
+    """Execution assumptions. No venue fee or latency is guessed.
+
+    Carries a `violations` tuple, empty for anything constructed directly:
+    only a configuration reconstructed from storage can hold one, and it names
+    the rules this layer would refuse today. It is an attribute rather than a
+    field on purpose, so it cannot reach `digest` or `trial_digest`.
+    """
 
     fee_kind: Optional[str] = None
     fee_rate: Optional[float] = None
@@ -236,25 +297,10 @@ class ExecutionConfig:
             raise ValueError("maker_fee_rate is only meaningful for fee_kind='kalshi'")
         if self.optimistic_queue and not self.queue_position:
             raise ValueError("optimistic_queue requires queue_position=True")
-        if self.queue_position and (self.slippage_ticks or 0) != 0:
-            raise ValueError(
-                "queue_position and slippage_ticks model different fill assumptions; "
-                "run them as separate scenarios"
-            )
         if self.latency_nanos is not None and self.latency_nanos < 0:
             raise ValueError("latency_nanos must be non-negative")
         if self.slippage_ticks is not None and self.slippage_ticks < 0:
             raise ValueError("slippage_ticks must be non-negative")
-        if self.fee_kind is not None and self.fee_rate is None:
-            # The kind alone prices nothing, and the native layer used to
-            # install no fee model at all for it: the run then reported
-            # success with zero commissions on a venue the caller had named.
-            raise ValueError(f"fee_kind={self.fee_kind!r} needs fee_rate")
-        if self.maker_rebate is not None and self.fee_kind == "kalshi":
-            raise ValueError(
-                "maker_rebate does not apply to fee_kind='kalshi': the venue charges "
-                "makers a rate rather than paying them a rebate; use maker_fee_rate"
-            )
         if self.margin_kind not in (None, "cash", "linear"):
             raise ValueError("margin_kind must be cash, linear, or None")
         if self.margin_kind == "linear" and self.leverage is None:
@@ -271,6 +317,31 @@ class ExecutionConfig:
             0 <= self.maintenance_margin_rate <= 1
         ):
             raise ValueError("maintenance_margin_rate must be between zero and one")
+        # Rules this layer learned after configurations were already on disk.
+        # Each one refuses a *new* config and only flags a *stored* one; see
+        # `_check_late_rules`.
+        late: list[str] = []
+        if self.fee_kind is not None and self.fee_rate is None:
+            # The kind alone prices nothing, and the native layer used to
+            # install no fee model at all for it: the run then reported
+            # success with zero commissions on a venue the caller had named.
+            late.append(f"fee_kind={self.fee_kind!r} needs fee_rate")
+        if self.maker_rebate is not None and self.fee_kind == "kalshi":
+            late.append(
+                "maker_rebate does not apply to fee_kind='kalshi': the venue charges "
+                "makers a rate rather than paying them a rebate; use maker_fee_rate"
+            )
+        if self.queue_position and self.slippage_ticks is not None:
+            # Any `slippage_ticks`, including zero. The kernel installs one
+            # fill model, and it refuses the pair outright rather than reading
+            # a zero as "so the queue model wins"; a config that constructs
+            # here and dies there is the failure this typed layer exists to
+            # move forward in time.
+            late.append(
+                "queue_position and slippage_ticks model different fill assumptions; "
+                "run them as separate scenarios"
+            )
+        _check_late_rules(self, late)
         for name, cast in (
             ("fee_rate", float),
             ("maker_rebate", float),
@@ -387,6 +458,17 @@ class BacktestConfig:
         return _json_value(asdict(self))
 
     @property
+    def violations(self) -> tuple[str, ...]:
+        """Rules this configuration breaks that post-date the run it describes.
+
+        Non-empty only for a config read back from storage: a caller building
+        one now cannot get past `__post_init__`. Readers that want to refuse
+        such a run rather than merely show it can check this instead of
+        catching a `ValueError` they cannot tell from a corrupt file.
+        """
+        return tuple(getattr(self.execution, "violations", ()))
+
+    @property
     def digest(self) -> str:
         payload = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -415,6 +497,13 @@ class BacktestConfig:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "BacktestConfig":
+        """Rebuild a configuration that already exists somewhere.
+
+        This is the read side, so it loads a stored config whose execution
+        settings a later rule would now refuse, and warns instead of raising:
+        see `_loading_persisted`. Everything structural still raises here --
+        an unknown field or a window that is not a pair was never valid.
+        """
         known = {
             "run_id",
             "portfolio",
@@ -430,16 +519,17 @@ class BacktestConfig:
             raise ValueError(f"unknown backtest config fields: {sorted(unknown)}")
         data_payload = dict(payload.get("data", {}))
         data_payload["window"] = _coerce_window(data_payload.get("window"))
-        return cls(
-            run_id=payload["run_id"],
-            portfolio=PortfolioConfig(**dict(payload["portfolio"])),
-            data=DataConfig(**data_payload),
-            execution=ExecutionConfig(**dict(payload.get("execution", {}))),
-            risk=RiskConfig(**dict(payload.get("risk", {}))),
-            output=OutputConfig(**dict(payload.get("output", {}))),
-            schema_version=int(payload.get("schema_version", _SCHEMA_VERSION)),
-            metadata=dict(payload.get("metadata", {})),
-        )
+        with _loading_persisted():
+            return cls(
+                run_id=payload["run_id"],
+                portfolio=PortfolioConfig(**dict(payload["portfolio"])),
+                data=DataConfig(**data_payload),
+                execution=ExecutionConfig(**dict(payload.get("execution", {}))),
+                risk=RiskConfig(**dict(payload.get("risk", {}))),
+                output=OutputConfig(**dict(payload.get("output", {}))),
+                schema_version=int(payload.get("schema_version", _SCHEMA_VERSION)),
+                metadata=dict(payload.get("metadata", {})),
+            )
 
     @classmethod
     def from_json(cls, value: Union[str, Path]) -> "BacktestConfig":

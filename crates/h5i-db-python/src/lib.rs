@@ -323,10 +323,67 @@ fn check_timeout(timeout: Option<f64>) -> PyResult<()> {
 }
 
 fn backtest_err(error: h5i_db_backtest::BacktestError) -> PyErr {
+    // A `Ctrl-C` inside a Python callback is not one of the problems below.
+    // The backtest error model has no interrupt case, so it arrives here as
+    // `Invalid` like everything else, and an `InvalidInputError` is an
+    // ordinary `Exception`: a sweep driver catching `Exception` per trial
+    // swallowed the interrupt and launched the next one. The callback parked
+    // the original, so it leaves as the `BaseException` the user raised and
+    // unwinds the whole search.
+    if let Some(interrupt) = python_strategy::take_pending_base_exception() {
+        return interrupt;
+    }
     // Backtest failures are input problems -- a bad window, an unsorted
     // signal table, a book gap -- so they surface as the same
     // invalid-input error the rest of this module raises.
     invalid(error.to_string())
+}
+
+/// How the run digest learns which strategy produced it.
+///
+/// `RunSpec` carries no strategy identity and holds its strategy as a boxed
+/// trait object it cannot inspect, so the execution fingerprint is the only
+/// channel into `RunSpec::digest`. Without this, two runs of entirely
+/// different strategies over the same window, cash, pin and execution config
+/// hashed to one digest -- and `trial_count`, the denominator of every
+/// multiple-testing correction, dedupes on that digest, so a whole sweep
+/// collapsed into a single trial and every correction computed from it was
+/// understated in the direction that flatters the result.
+fn strategy_fingerprint(
+    py: Python<'_>,
+    strategy: Option<&Py<PyAny>>,
+    strategy_id: Option<&str>,
+    commands_table: Option<&str>,
+    signals_table: &str,
+) -> String {
+    let Some(object) = strategy else {
+        return match commands_table {
+            Some(table) => format!("strategy=commands:{table}"),
+            None => format!("strategy=signals:{signals_table}"),
+        };
+    };
+    // A callback's identity is not a table name. `strategy_id` is the
+    // caller's own, and the typed layer builds it from the class's source, so
+    // an edited strategy is a different trial. The class name is what is left
+    // when a direct native caller passes none: weaker, but it still tells two
+    // different strategies apart.
+    if let Some(id) = strategy_id {
+        return format!("strategy=callback:{id}");
+    }
+    let class = object.bind(py).get_type();
+    let read = |attribute: &str| {
+        class
+            .getattr(attribute)
+            .and_then(|value| value.extract::<String>())
+            .unwrap_or_else(|_| "?".to_string())
+    };
+    // The same `module.qualname` the typed layer builds its identity from, so
+    // a native caller and a Python one name the same class the same way.
+    format!(
+        "strategy=callback:{}.{}",
+        read("__module__"),
+        read("__qualname__")
+    )
 }
 
 /// Live handle state. All handles share one bounded multi-thread runtime;
@@ -594,6 +651,9 @@ impl NativeDatabase {
     /// venue this layer leads with. That default is not silent: the report
     /// carries `execution_fingerprint`, which names the curve that priced
     /// the run, and the same string is folded into the run digest.
+    ///
+    /// The fingerprint opens with the strategy, because `RunSpec` carries no
+    /// identity for one; see [`strategy_fingerprint`].
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         run_id,
@@ -621,6 +681,7 @@ impl NativeDatabase {
         margin_kind = None,
         leverage = None,
         maintenance_margin_rate = None,
+        strategy_id = None,
     ))]
     fn run_backtest(
         &self,
@@ -650,6 +711,7 @@ impl NativeDatabase {
         margin_kind: Option<String>,
         leverage: Option<f64>,
         maintenance_margin_rate: Option<f64>,
+        strategy_id: Option<String>,
     ) -> PyResult<String> {
         use h5i_db_backtest::RiskLimits;
         use h5i_db_backtest::account::{CashMargin, LinearMargin, MarginModel};
@@ -664,6 +726,18 @@ impl NativeDatabase {
 
         let inner = self.inner()?;
         let run_id = run_id.to_string();
+        // Read while the GIL is still held, before the strategy is moved into
+        // the runtime.
+        let strategy_fingerprint = strategy_fingerprint(
+            py,
+            python_strategy.as_ref(),
+            strategy_id.as_deref(),
+            commands_table.as_deref(),
+            &signals_table,
+        );
+        // Nothing from an earlier run may be re-raised by this one; see
+        // `PENDING_BASE_EXCEPTION`.
+        python_strategy::clear_pending_base_exception();
         py.detach(move || -> PyResult<String> {
             inner.runtime.block_on(async move {
                 let read_at = parse_read_at(version, as_of.as_deref(), snapshot.as_deref())?;
@@ -979,8 +1053,9 @@ impl NativeDatabase {
                     };
 
                 let execution_fingerprint = format!(
-                    "{fee_fingerprint};{fill_fingerprint};{latency_fingerprint};\
-                     {margin_fingerprint};risk=order={max_order_quantity:?}:\
+                    "{strategy_fingerprint};{fee_fingerprint};{fill_fingerprint};\
+                     {latency_fingerprint};{margin_fingerprint};\
+                     risk=order={max_order_quantity:?}:\
                      position={max_abs_position:?}:open={max_open_orders:?}"
                 );
                 spec = spec.execution_fingerprint(execution_fingerprint.clone());

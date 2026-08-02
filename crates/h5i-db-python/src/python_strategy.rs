@@ -22,6 +22,7 @@
 //! keeps a valid snapshot, which is what a plain dict gave it before.
 
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use h5i_db_backtest::clock::TimeEvent;
 use h5i_db_backtest::engine::{Context, OrderRequest, Strategy, TwapRequest};
@@ -383,17 +384,21 @@ fn resolve(
 /// `on_event(self, portfolio, event)`, where the context was asked for under
 /// a name nothing recognises -- construction fails and says so.
 ///
-/// Anything with no readable signature -- a C function, a `*args` wrapper, a
-/// decorator that dropped `__code__` -- is given the context, which is what
-/// `EventStrategy`'s docstring promises. The cost of guessing wrong that way
-/// is a wasted argument.
+/// Anything with no readable `__code__` -- a `functools.partial`, an object
+/// with `__call__`, a C function -- is probed with `inspect.signature` and
+/// `bind` instead of guessed at. Guessing "give it the context" was not free:
+/// the engine calls positionally, so a callable that takes only the event
+/// raised `TypeError` on the first market event, after the fork existed and
+/// the replay had started. `bind` answers exactly the question being asked --
+/// can this be called the way the engine is about to call it -- without
+/// running the callback.
 fn wants_context(bound: &Bound<'_, PyAny>, carries_event: bool, name: &str) -> Result<bool> {
     // A bound method carries `self` in its code object; a function assigned
     // onto the instance is called without one, and both reach here.
     let implicit_self = bound.getattr("__func__").is_ok();
     let function = bound.getattr("__func__").unwrap_or_else(|_| bound.clone());
     let Ok(code) = function.getattr("__code__") else {
-        return Ok(true);
+        return probe_signature(bound, carries_event, name);
     };
     // CO_VARARGS: the callback takes `*args`, so it names nothing and accepts
     // everything.
@@ -423,7 +428,8 @@ fn wants_context(bound: &Bound<'_, PyAny>, carries_event: bool, name: &str) -> R
         .and_then(|values| values.len().ok())
         .unwrap_or(0);
     // Both sides count `self`, however it arrives.
-    let required = (argcount + 1 - skip).saturating_sub(defaults);
+    let accepts = argcount + 1 - skip;
+    let required = accepts.saturating_sub(defaults);
     let passed = 1 + usize::from(wants) + usize::from(carries_event);
     if required > passed {
         return Err(BacktestError::invalid(format!(
@@ -434,7 +440,67 @@ fn wants_context(bound: &Bound<'_, PyAny>, carries_event: bool, name: &str) -> R
             passed - 1
         )));
     }
+    // Too *many* arguments is just as unbindable as too few, and only this
+    // side was checked: `on_event(self, ctx)` names its first parameter
+    // `context`'s alias, so it is handed one *and* the event, and the extra
+    // argument raised `TypeError` on the first market event -- past
+    // construction, past the fork, partway into the replay. A default cannot
+    // absorb it and neither can `**kwargs`, because the call is positional;
+    // `*args` can, and returned above.
+    if passed > accepts {
+        return Err(BacktestError::invalid(format!(
+            "{name} accepts {} parameter(s), but the engine calls it with {}. A \
+             callback named `context` or `ctx` is handed the context as well as \
+             the event; drop that parameter, or accept both.",
+            accepts.saturating_sub(1),
+            passed - 1
+        )));
+    }
     Ok(wants)
+}
+
+/// Whether a callable with no `__code__` wants the context, decided by
+/// binding rather than by hope.
+///
+/// `inspect.signature` reads a `functools.partial`, an instance with
+/// `__call__` and most C functions; `Signature.bind` then says whether the
+/// engine's own call shape fits, with no callback body executed. Both shapes
+/// are tried, context first, because that is what `EventStrategy` documents.
+/// A callable `signature` cannot describe at all keeps that documented
+/// default -- there is nothing left to decide from -- and the arguments it is
+/// handed are the ones the docstring promises.
+fn probe_signature(bound: &Bound<'_, PyAny>, carries_event: bool, name: &str) -> Result<bool> {
+    let py = bound.py();
+    let Ok(inspect) = py.import("inspect") else {
+        return Ok(true);
+    };
+    let Ok(signature) = inspect.call_method1("signature", (bound,)) else {
+        return Ok(true);
+    };
+    // `None` in every slot: `bind` checks arity and names, never values.
+    let two = || {
+        signature
+            .call_method1("bind", (py.None(), py.None()))
+            .is_ok()
+    };
+    let one = || signature.call_method1("bind", (py.None(),)).is_ok();
+    let none = || signature.call_method0("bind").is_ok();
+    let (with_context, without_context) = if carries_event {
+        (two(), one())
+    } else {
+        (one(), none())
+    };
+    if with_context {
+        return Ok(true);
+    }
+    if without_context {
+        return Ok(false);
+    }
+    Err(BacktestError::invalid(format!(
+        "{name} cannot be called the way the engine calls it: with a context and \
+         an event, or with an event alone. Give it a signature that accepts one \
+         of those, or wrap it in a function that does."
+    )))
 }
 
 impl Strategy for PythonStrategy {
@@ -770,6 +836,39 @@ where
     }
 }
 
+/// A `BaseException` a callback raised, parked on its way out.
+///
+/// `BacktestError` has no interrupt variant and this crate does not own that
+/// enum, so a `Ctrl-C` could only travel out of a callback as `Invalid`. At the
+/// Python boundary that becomes an ordinary `Exception`, which is exactly what
+/// every sweep driver's `except Exception: continue` swallows: the interrupt
+/// cancelled one trial and the search went on launching the rest. Parking the
+/// original here lets [`take_pending_base_exception`] re-raise it unchanged, so
+/// it reaches the caller as the `BaseException` it was and unwinds the loop.
+///
+/// A `static` rather than a thread-local: the callback runs on a runtime worker
+/// and the error is translated on whichever thread the future finished on.
+/// [`clear_pending_base_exception`] runs at the start of every backtest, so a
+/// parked exception that nothing consumed cannot outlive the run that raised it.
+static PENDING_BASE_EXCEPTION: Mutex<Option<PyErr>> = Mutex::new(None);
+
+fn park_base_exception(py: Python<'_>, error: &PyErr) {
+    if let Ok(mut slot) = PENDING_BASE_EXCEPTION.lock() {
+        *slot = Some(error.clone_ref(py));
+    }
+}
+
+pub(crate) fn take_pending_base_exception() -> Option<PyErr> {
+    PENDING_BASE_EXCEPTION
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take())
+}
+
+pub(crate) fn clear_pending_base_exception() {
+    let _ = take_pending_base_exception();
+}
+
 /// Carry a Python exception out of a callback as a backtest error.
 ///
 /// Two things the plain `{error}` spelling lost. The **traceback** is where
@@ -779,12 +878,18 @@ where
 /// exhausted heap arriving mid-callback surfaced as an `InvalidInputError`,
 /// which reads as "your signals table is malformed" and sends the reader
 /// looking in the wrong place. The variant is still `Invalid` -- the backtest
-/// error model has no interrupt case -- so the message has to say it.
+/// error model has no interrupt case -- so the message has to say it, and the
+/// exception itself is parked in [`PENDING_BASE_EXCEPTION`] so the Python
+/// boundary can raise the real one rather than a description of it.
 fn py_error(error: PyErr) -> BacktestError {
     Python::attach(|py| {
         let kind = if error.is_instance_of::<pyo3::exceptions::PyKeyboardInterrupt>(py)
             || error.is_instance_of::<pyo3::exceptions::PySystemExit>(py)
         {
+            // Kept whole as well as described. The message below is what the
+            // engine's logs get; the parked exception is what Python gets, and
+            // only the second one still stops a sweep.
+            park_base_exception(py, &error);
             "the Python strategy callback was interrupted"
         } else if error.is_instance_of::<pyo3::exceptions::PyMemoryError>(py) {
             "the Python strategy callback ran out of memory"

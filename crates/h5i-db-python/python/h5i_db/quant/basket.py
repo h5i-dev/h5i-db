@@ -229,7 +229,10 @@ def _price_path(
     (highest live buy) against the best ask (lowest live sell), not the extreme
     of each side. Rows whose action is `delete`, `clear` or `gap` describe
     levels that are going away and are excluded: a deleted level is not a
-    price anyone can trade at.
+    price anyone can trade at. So is a `set` of size zero, which is the other
+    spelling of the same thing -- the kernel's book applies it as a delete
+    (`crates/h5i-db-backtest/src/book.rs`) and the action filter alone misses
+    it.
 
     The instants are the book events themselves, so a line point is the best
     price quoted by that event rather than the resting best across the whole
@@ -259,6 +262,7 @@ def _price_path(
           WHERE outcome = {int(outcome)}
             AND instrument_id IN ({quoted})
             AND action IN ({quote_string('snapshot')}, {quote_string('set')})
+            AND size > 0
             AND price IS NOT NULL
           GROUP BY instrument_id, ts_init
         ) AS levels
@@ -646,6 +650,12 @@ def _render(report: BasketReport) -> str:
     # unicode escape it is inert to the parser and the same string to JSON.
     # html.escape() would instead hand JSON.parse a document full of `&quot;`,
     # which is not JSON. Same treatment as report.py's `render`.
+    #
+    # The loop below binds its own name. It used to reuse this one, so the
+    # escaped JSON never reached the <script> block: what was emitted was the
+    # last panel's Python dict repr, which is not JSON at all and carries
+    # every `<` an instrument or strategy name contains straight into the
+    # parser.
     payload = (
         json.dumps(report.to_dict(), default=str)
         .replace("<", "\\u003c")
@@ -653,24 +663,24 @@ def _render(report: BasketReport) -> str:
     )
     blocks = []
     for panel in report.drawn:
-        payload = report.panels.get(panel, {})
+        drawn = report.panels.get(panel, {})
         title = html.escape(_TITLES.get(panel, panel))
         if panel == "total_equity":
-            body = _svg_line({"basket": payload["series"]}, x_key="ts_ns", y_key="equity")
+            body = _svg_line({"basket": drawn["series"]}, x_key="ts_ns", y_key="equity")
         elif panel == "total_drawdown":
             body = _svg_line(
-                {"basket": payload["series"]}, x_key="ts_ns", y_key="drawdown", zero_line=True
+                {"basket": drawn["series"]}, x_key="ts_ns", y_key="drawdown", zero_line=True
             )
         elif panel == "total_cash_equity":
             body = _svg_line(
                 {
                     "cash": [
                         {"ts_ns": row["ts_ns"], "value": row["cash"]}
-                        for row in payload["series"]
+                        for row in drawn["series"]
                     ],
                     "equity": [
                         {"ts_ns": row["ts_ns"], "value": row["equity"]}
-                        for row in payload["series"]
+                        for row in drawn["series"]
                     ],
                 },
                 x_key="ts_ns",
@@ -678,15 +688,15 @@ def _render(report: BasketReport) -> str:
             )
         elif panel == "total_rolling_sharpe":
             body = _svg_line(
-                {"sharpe": payload["series"]},
+                {"sharpe": drawn["series"]},
                 x_key="ts_ns",
                 y_key="sharpe",
                 zero_line=True,
             )
         elif panel in ("periodic_pnl",):
-            body = _table(payload["series"])
+            body = _table(drawn["series"])
         elif panel == "leaderboard":
-            body = _table(payload["rows"])
+            body = _table(drawn["rows"])
         elif panel in ("equity", "drawdown", "run_pnl", "allocation"):
             key = {
                 "equity": "equity",
@@ -695,7 +705,7 @@ def _render(report: BasketReport) -> str:
                 "allocation": "invested",
             }[panel]
             body = _svg_line(
-                payload["series"],
+                drawn["series"],
                 x_key="ts_ns",
                 y_key=key,
                 zero_line=panel in ("drawdown", "run_pnl"),
@@ -704,14 +714,14 @@ def _render(report: BasketReport) -> str:
             markers = {
                 instrument: [
                     fill
-                    for rows in payload["fills"].values()
+                    for rows in drawn["fills"].values()
                     for fill in rows
                     if fill["instrument_id"] == instrument
                 ]
-                for instrument in payload["paths"]
+                for instrument in drawn["paths"]
             }
             body = _svg_line(
-                payload["paths"], x_key="ts_ns", y_key="mid", markers=markers
+                drawn["paths"], x_key="ts_ns", y_key="mid", markers=markers
             )
         elif panel == "brier_advantage":
             body = _svg_line(
@@ -720,7 +730,7 @@ def _render(report: BasketReport) -> str:
                         {"index": position, "cumulative": value}
                         for position, value in enumerate(scored["cumulative"])
                     ]
-                    for label, scored in payload["runs"].items()
+                    for label, scored in drawn["runs"].items()
                 },
                 x_key="index",
                 y_key="cumulative",
@@ -728,7 +738,7 @@ def _render(report: BasketReport) -> str:
             ) + _table(
                 [
                     {"run": label, **{k: v for k, v in scored.items() if k != "cumulative"}}
-                    for label, scored in payload["runs"].items()
+                    for label, scored in drawn["runs"].items()
                 ]
             )
         else:  # pragma: no cover - guarded by the panel whitelist
