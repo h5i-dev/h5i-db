@@ -71,10 +71,16 @@ class Split:
 def embargo_width(total: int, embargo: float) -> int:
     """How many observations an embargo covers.
 
-    ``embargo`` is a fraction of the whole sample, following the usual
-    convention: 0.01 on 1,000 observations embargoes 10. The single owner of
-    this arithmetic, so a splitter and a walk-forward planner cannot disagree
+    ``embargo`` is a fraction of ``total``, following the usual convention:
+    0.01 on 1,000 observations embargoes 10. The single owner of this
+    arithmetic, so a splitter and a walk-forward planner cannot disagree
     about how wide a fold's embargo is.
+
+    ``total`` is the span the embargo is *measured against*, which is the
+    span the split covers rather than the dataset as such. For the
+    cross-validators the two coincide, because every fold's training data
+    reaches across the whole sample. A walk-forward's does not, so it passes
+    its own window; see :func:`walk_forward`.
     """
     if not 0.0 <= embargo < 1.0:
         raise ValueError(f"embargo must be in [0, 1), got {embargo}")
@@ -226,6 +232,14 @@ def walk_forward(
     the embargo drops the last observations of the training window rather than
     the first ones after the test. Forward, as the cross-validators apply it,
     it would remove nothing.
+
+    The width is measured against one window, ``train_size + test_size``, not
+    against ``n``. A k-fold's training data spans the whole sample, so there
+    the two are the same thing; a walk-forward's spans one window, and
+    charging it a fraction of the whole sample embargoes a multiple of what
+    it actually has. At ``n=10_000``, ``train_size=400`` and
+    ``embargo=0.05`` that was 500 observations against a 400-observation
+    window, which purged every fold's training set outright.
     """
     if train_size < 1 or test_size < 1:
         raise ValueError("train and test sizes must be positive")
@@ -238,8 +252,16 @@ def walk_forward(
         train_start = 0 if expanding else start
         train_end = start + train_size
         test = tuple(range(train_end, train_end + test_size))
-        embargoed = set(embargo_gap(test[0], n, embargo))
+        embargoed = set(embargo_gap(test[0], train_size + test_size, embargo))
         candidate = list(range(train_start, train_end))
         train, purged = _purge(candidate, test, horizons, embargoed)
+        if not train:
+            raise ValueError(
+                f"the fold testing on [{test[0]}, {test[-1]}] has no training "
+                f"data left: all {len(candidate)} observations in its window "
+                f"were purged or embargoed. Widen train_size (currently "
+                f"{train_size}), shorten the label horizon, or lower the "
+                f"embargo (currently {embargo})"
+            )
         yield Split(train=train, test=test, purged=purged)
         start += step

@@ -357,8 +357,11 @@ def test_walk_forward_embargoes_the_training_data_next_to_the_test_block():
     embargoed = list(
         validation.walk_forward(300, train_size=100, test_size=50, embargo=0.05)
     )
-    width = validation.embargo_width(300, 0.05)
-    assert width == 15
+    # Measured against one window, not the whole sample: this splitter only
+    # ever trains on `train_size` observations, so a fraction of `n` is a
+    # fraction of data the fold does not have.
+    width = validation.embargo_width(100 + 50, 0.05)
+    assert width == 8
     for before, after in zip(plain, embargoed):
         assert after.train_size == before.train_size - width
         assert len(after.purged) == width
@@ -366,6 +369,29 @@ def test_walk_forward_embargoes_the_training_data_next_to_the_test_block():
         # the test block or after it was touched.
         assert set(after.purged) == set(range(min(after.test) - width, min(after.test)))
         assert max(after.train) < min(after.test) - width
+
+
+def test_a_long_sample_does_not_embargo_the_whole_training_window():
+    """A width scaled to `n` outran the window it was charged against.
+
+    At these parameters the old arithmetic asked for 500 embargoed
+    observations from a 400-observation training window, so every one of the
+    96 folds came back with `train=()` and fitted on nothing.
+    """
+    splits = list(
+        validation.walk_forward(10_000, train_size=400, test_size=100, embargo=0.05)
+    )
+    assert len(splits) == 96
+    assert all(s.train_size > 0 for s in splits)
+    # 5% of one 500-observation window, not of the sample.
+    assert splits[0].train_size == 400 - 25
+    assert len(splits[0].purged) == 25
+
+
+def test_an_entirely_purged_training_set_is_refused_not_returned():
+    """`train=()` is a silently meaningless fit, so it raises instead."""
+    with pytest.raises(ValueError, match="no training data left"):
+        list(validation.walk_forward(1_000, train_size=10, test_size=100, embargo=0.9))
 
 
 def test_the_two_embargo_directions_are_the_same_width():
