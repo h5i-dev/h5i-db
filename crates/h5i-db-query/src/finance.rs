@@ -307,11 +307,28 @@ impl PartitionEvaluator for EwmaEvaluator {
         if alpha_arr.is_empty() {
             return Ok(Arc::new(Float64Array::from(Vec::<f64>::new())));
         }
+        // `alpha` is read once, from row 0, so it must genuinely be there and
+        // must genuinely be constant. `value(0)` on a null slot returns
+        // whatever the values buffer holds (in practice 0.0), which passes the
+        // range check below and makes `ewma(x, NULL)` carry the first value
+        // forward; a per-row alpha was silently reduced to its first row. Both
+        // return a series that looks like an EWMA and is not one. Compare
+        // `cross_section::scalar_pct`, which refuses the same input loudly.
+        if !alpha_arr.is_valid(0) {
+            return Err(DataFusionError::Execution(
+                "ewma: alpha must be a non-NULL constant".into(),
+            ));
+        }
         let alpha = alpha_arr.value(0);
         if !(0.0..=1.0).contains(&alpha) {
             return Err(DataFusionError::Execution(format!(
                 "ewma: alpha must be in [0, 1], got {alpha}"
             )));
+        }
+        if (1..alpha_arr.len()).any(|i| !alpha_arr.is_valid(i) || alpha_arr.value(i) != alpha) {
+            return Err(DataFusionError::Execution(
+                "ewma: alpha must be constant across the partition".into(),
+            ));
         }
         let mut out = Vec::with_capacity(num_rows);
         let mut prev: Option<f64> = None;

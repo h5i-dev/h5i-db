@@ -25,7 +25,7 @@ use crate::asof::{AsOfJoinFunc, AsOfQueryPlanner};
 use crate::finance::{ewma_udwf, vwap_udaf, wavg_udaf};
 use crate::functions::time_bucket_udf;
 use crate::gapfill::GapFillFunc;
-use crate::latest::LatestByFunc;
+use crate::latest::{LatestByFunc, LatestByMode};
 use crate::metrics::{
     QueryPerformanceReport, ReportedDataFrame, ScanMetrics, ScanMetricsCollector,
     WorkloadTelemetryEnvelope,
@@ -60,6 +60,11 @@ pub struct H5iSession {
     session_id: Uuid,
     telemetry: WorkloadTelemetryBuffer,
     predicate_cache_mode: PredicateCacheMode,
+    /// The pin this session was opened with, on both axes. Kept because every
+    /// later table registration ([`Self::refresh`], [`Self::read_table`]) has
+    /// to reproduce it: a pin that only holds for the tables registered at
+    /// construction is not a pin, it is a default.
+    pin: ResearchPin,
     /// Catalog table names currently registered (kept for [`Self::refresh`]).
     registered: Mutex<HashSet<String>>,
 }
@@ -146,10 +151,13 @@ impl H5iSession {
         runtime: Arc<RuntimeEnv>,
         pin: ResearchPin,
     ) -> DfResult<Self> {
+        // Kept whole as well as destructured: `refresh`/`read_table` have to
+        // re-apply both axes long after this function returns.
+        let research_pin = pin;
         let ResearchPin {
             at,
             event_time_cutoff_ns,
-        } = pin;
+        } = research_pin.clone();
         let telemetry = WorkloadTelemetryBuffer::new(options.telemetry_capacity);
         let predicate_cache_mode = options.predicate_cache;
         let mut config = SessionConfig::new().with_information_schema(true);
@@ -201,33 +209,15 @@ impl H5iSession {
         // session startup).
         let mut registered = HashSet::new();
         for resolved in resolve_all_at(&db, at.clone()).await? {
-            let name = resolved.entry.name.clone();
-            let time_column = resolved.spec.time_column.clone();
-            let schema = resolved.schema.clone();
-            let provider = Arc::new(
-                H5iTableProvider::new(resolved, url.clone(), metrics.clone())
-                    .with_predicate_cache(db.backend().clone(), predicate_cache_mode),
-            );
-            match event_time_cutoff_ns {
-                // Register the table behind a view carrying the cutoff, so the
-                // predicate is part of every plan that names it rather than
-                // something a query could forget. It optimizes like any other
-                // filter, which means it prunes segments too.
-                Some(cutoff_ns) => {
-                    let view = embargoed_view(
-                        &name,
-                        provider,
-                        &schema,
-                        time_column.as_deref(),
-                        cutoff_ns,
-                    )?;
-                    ctx.register_table(&name, view)?;
-                }
-                None => {
-                    ctx.register_table(&name, provider)?;
-                }
-            }
-            registered.insert(name);
+            registered.insert(register_resolved_table(
+                &ctx,
+                &url,
+                &metrics,
+                db.backend(),
+                predicate_cache_mode,
+                event_time_cutoff_ns,
+                resolved,
+            )?);
         }
 
         // Time travel + time-series functions. These resolve their tables
@@ -257,6 +247,13 @@ impl H5iSession {
             "gapfill",
             Arc::new(GapFillFunc::pinned(db.clone(), pin.clone())),
         );
+        // `resample` is a pure alias of `gapfill`, *not* an aggregating
+        // resampler: it point-samples the stored rows onto the grid (rows whose
+        // timestamp is not a grid point are not carried into a bar, they are
+        // dropped) and fills the empty grid points. The name is kept for
+        // familiarity, and `crate::gapfill`'s module docs spell the divergence
+        // out; use `time_bucket` plus an aggregate when bar arithmetic is what
+        // is wanted.
         ctx.register_udtf(
             "resample",
             Arc::new(GapFillFunc::pinned(db.clone(), pin.clone())),
@@ -274,7 +271,18 @@ impl H5iSession {
             )),
         );
         ctx.register_udtf("tail", Arc::new(TailFunc::pinned(db.clone(), pin.clone())));
-        ctx.register_udtf("latest_on", Arc::new(LatestByFunc::pinned(db.clone(), pin)));
+        // `latest_on()`'s per-segment sidecars follow the session's sidecar
+        // policy rather than a hardcoded read-write: with `predicate_cache`
+        // left at its default (disabled), a query must not write cache objects,
+        // and must not run the cache budget sweep, which deletes.
+        ctx.register_udtf(
+            "latest_on",
+            Arc::new(LatestByFunc::pinned(
+                db.clone(),
+                pin,
+                latest_by_mode(predicate_cache_mode),
+            )),
+        );
         ctx.register_udf(time_bucket_udf());
         ctx.register_udaf(vwap_udaf());
         ctx.register_udaf(wavg_udaf());
@@ -298,37 +306,72 @@ impl H5iSession {
             session_id: Uuid::new_v4(),
             telemetry,
             predicate_cache_mode,
+            pin: research_pin,
             registered: Mutex::new(registered),
         })
     }
 
-    /// Re-point every catalog table at its latest version without rebuilding
-    /// the session: caches, UDFs, and the runtime survive. New tables appear,
-    /// dropped tables disappear. `h5i('t')` never needs this — it re-resolves
-    /// at planning time — this is for the plain `SELECT … FROM t` names that
-    /// are otherwise snapshot-bound to session creation.
+    /// Re-point every catalog table at the session's read point without
+    /// rebuilding the session: caches, UDFs, and the runtime survive. New
+    /// tables appear, dropped tables disappear, and a table with no version at
+    /// the read point is left unregistered (see [`resolve_all_at`]). `h5i('t')`
+    /// never needs this — it re-resolves at planning time — this is for the
+    /// plain `SELECT … FROM t` names that are otherwise snapshot-bound to
+    /// session creation.
+    ///
+    /// All-or-nothing: either every table is re-registered or the catalog is
+    /// left exactly as it was.
+    ///
+    /// Both axes of the session's [`ResearchPin`] are re-applied, through the
+    /// same registration path construction uses. Re-registering bare providers
+    /// at `ReadAt::Latest` (what this used to do) released the arrival pin
+    /// *and* dropped the embargo view, so one `refresh()` quietly turned a
+    /// look-ahead-free session into an ordinary one: the exact failure the pin
+    /// exists to make impossible. On a pinned session the re-resolution is a
+    /// no-op for existing tables, which is the intended meaning.
     pub async fn refresh(&self) -> DfResult<()> {
-        let resolved = resolve_all_at(&self.db, ReadAt::Latest).await?;
-        let fresh: HashSet<String> = resolved.iter().map(|r| r.entry.name.clone()).collect();
-        let mut registered = self.registered.lock().unwrap();
+        let resolved = resolve_all_at(&self.db, self.pin.at.clone()).await?;
+        // Build every provider *before* touching the catalog, so the swap
+        // itself cannot fail partway. Preparation is fallible per table
+        // (`embargoed_view` refuses a table with no time column, `cutoff_scalar`
+        // a non-timestamp one), and doing it inside the registration loop left
+        // the deregistrations applied, an arbitrary prefix re-registered and
+        // `registered` unswapped: catalog and bookkeeping disagreed, and since
+        // tables come back name-sorted, one un-embargoable table blocked every
+        // alphabetically later one on this and on every later call.
+        // Construction fails closed by refusing the whole session; refresh now
+        // does the same rather than failing half-open.
+        let prepared = resolved
+            .into_iter()
+            .map(|r| {
+                prepare_resolved_table(
+                    &self.url,
+                    &self.metrics,
+                    self.db.backend(),
+                    self.predicate_cache_mode,
+                    self.pin.event_time_cutoff_ns,
+                    r,
+                )
+            })
+            .collect::<DfResult<Vec<_>>>()?;
+        let fresh: HashSet<String> = prepared.iter().map(|(name, _)| name.clone()).collect();
+        let mut registered = lock_ignoring_poison(&self.registered);
         for stale in registered.difference(&fresh) {
             self.ctx.deregister_table(stale)?;
         }
-        for r in resolved {
-            let name = r.entry.name.clone();
+        for (name, provider) in prepared {
             if registered.contains(&name) {
                 self.ctx.deregister_table(&name)?;
             }
-            self.ctx.register_table(
-                &name,
-                Arc::new(
-                    H5iTableProvider::new(r, self.url.clone(), self.metrics.clone())
-                        .with_predicate_cache(self.db.backend().clone(), self.predicate_cache_mode),
-                ),
-            )?;
+            self.ctx.register_table(&name, provider)?;
         }
         *registered = fresh;
         Ok(())
+    }
+
+    /// This session's pin, as the table functions see it.
+    fn pin_context(&self) -> crate::pin::PinContext {
+        crate::pin::PinContext::new(self.pin.at.clone(), self.pin.event_time_cutoff_ns)
     }
 
     /// The session's runtime environment — pass to [`Self::new_with_runtime`]
@@ -376,17 +419,45 @@ impl H5iSession {
     }
 
     /// DataFrame over a table at a given read point (DataFrame-API entry).
+    ///
+    /// Bound by the session's [`ResearchPin`] exactly as `FROM t` and `h5i()`
+    /// are, and for the same reason: an entry point that reads around the pin
+    /// is not a slower path to the same answer, it is a hole in the jail.
+    /// `ReadAt::Latest` means "whatever this session is pinned at" (it is the
+    /// DataFrame spelling of omitting `h5i()`'s second argument); any other
+    /// read point is refused on a pinned session rather than silently honoured;
+    /// and an event-time cutoff is applied to the returned frame through the
+    /// same embargo view the catalog uses.
     pub async fn read_table(&self, name: &str, at: ReadAt) -> DfResult<DataFrame> {
+        let pin = self.pin_context();
+        let at = match at {
+            ReadAt::Latest => pin.read_at(),
+            explicit => {
+                pin.check_no_explicit_read_point("read_table")?;
+                explicit
+            }
+        };
         let resolved = self
             .db
             .resolve(name, at)
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let time_column = resolved.spec.time_column.clone();
+        let schema = resolved.schema.clone();
         let provider = Arc::new(
             H5iTableProvider::new(resolved, self.url.clone(), self.metrics.clone())
                 .with_predicate_cache(self.db.backend().clone(), self.predicate_cache_mode),
         );
-        self.ctx.read_table(provider)
+        match self.pin.event_time_cutoff_ns {
+            Some(cutoff_ns) => self.ctx.read_table(embargoed_view(
+                name,
+                provider,
+                &schema,
+                time_column.as_deref(),
+                cutoff_ns,
+            )?),
+            None => self.ctx.read_table(provider),
+        }
     }
 
     /// Drain per-scan pruning metrics recorded since the last call.
@@ -428,9 +499,19 @@ impl H5iSession {
     }
 }
 
-/// Expand `rolling_avg(value, order_by, rows)` (and sum/min/max variants)
-/// into a standard SQL window frame. This keeps the convenience spelling in
-/// the h5i layer while leaving execution and optimization to DataFusion.
+/// Expand `rolling_avg(value, order_by, rows [, partition_by])` (and
+/// sum/min/max variants) into a standard SQL window frame. This keeps the
+/// convenience spelling in the h5i layer while leaving execution and
+/// optimization to DataFusion.
+///
+/// The optional 4th argument becomes the window's `PARTITION BY`. It is
+/// optional only for compatibility, and on any table holding more than one
+/// series it is the argument that decides whether the answer means anything:
+/// **without it the frame spans every row of the input**, so
+/// `rolling_avg(price, ts, 20)` over a multi-symbol trades table averages the
+/// last 20 rows regardless of symbol, mixing series into a number that looks
+/// like a per-symbol moving average and is not one. Prefer
+/// `rolling_avg(price, ts, 20, symbol)`.
 fn rewrite_rolling_sugar(query: &str) -> DfResult<String> {
     const FUNCTIONS: [(&str, &str); 4] = [
         ("rolling_avg", "AVG"),
@@ -453,9 +534,11 @@ fn rewrite_rolling_sugar(query: &str) -> DfResult<String> {
         let close = matching_paren(&rewritten, open)
             .ok_or_else(|| DataFusionError::Plan(format!("{name}: missing closing parenthesis")))?;
         let args = split_function_args(&rewritten[open + 1..close]);
-        if args.len() != 3 {
+        if !(3..=4).contains(&args.len()) {
             return Err(DataFusionError::Plan(format!(
-                "{name}(value, order_by, rows) takes exactly 3 arguments"
+                "{name}(value, order_by, rows [, partition_by]) takes 3 or 4 arguments; without \
+                 partition_by the window spans every row of the input, which mixes series on a \
+                 multi-symbol table"
             )));
         }
         let rows = args[2].trim().parse::<u64>().map_err(|_| {
@@ -466,8 +549,23 @@ fn rewrite_rolling_sugar(query: &str) -> DfResult<String> {
                 "{name}: rows must be between 1 and 1000000"
             )));
         }
+        // Emitted before ORDER BY, which is the order SQL requires inside an
+        // OVER clause. An empty 4th argument is a typo, not "no partition":
+        // silently accepting it would give back the cross-series bug the
+        // argument exists to prevent.
+        let partition_by = match args.get(3).map(|arg| arg.trim()) {
+            None => String::new(),
+            Some("") => {
+                return Err(DataFusionError::Plan(format!(
+                    "{name}: the 4th argument must name a partition column, e.g. \
+                     {name}(value, order_by, rows, symbol)"
+                )));
+            }
+            Some(column) => format!("PARTITION BY {column} "),
+        };
         let replacement = format!(
-            "{aggregate}({}) OVER (ORDER BY {} ROWS BETWEEN {} PRECEDING AND CURRENT ROW)",
+            "{aggregate}({}) OVER ({partition_by}ORDER BY {} ROWS BETWEEN {} PRECEDING AND \
+             CURRENT ROW)",
             args[0].trim(),
             args[1].trim(),
             rows - 1
@@ -476,12 +574,36 @@ fn rewrite_rolling_sugar(query: &str) -> DfResult<String> {
     }
 }
 
+/// Locate a call to `name` in raw SQL, skipping string literals, quoted
+/// identifiers, and comments.
+///
+/// The rewriter runs before the parser, so it has to do the lexer's job for
+/// every construct that may contain an arbitrary `rolling_avg(` or an
+/// unbalanced quote. Comments are the sharp edge: the apostrophe in
+/// `-- don't rewrite` used to open a string literal that never closed, which
+/// hid every later call from the rewriter and left `rolling_avg(` in the query
+/// for DataFusion to reject as an unknown function.
+///
+/// Only the search is comment-aware. The argument list between the matched
+/// parentheses is still read as plain text, so a comment *inside* a
+/// `rolling_avg(...)` call is not supported.
 fn find_function_call(haystack: &str, name: &str) -> Option<usize> {
     let bytes = haystack.as_bytes();
     let mut quote = None;
     let mut i = 0;
     while i + name.len() < bytes.len() {
         match bytes[i] {
+            // `-- …` to end of line. An unterminated line comment runs to the
+            // end of the query, so there is nothing left to find.
+            b'-' if quote.is_none() && bytes.get(i + 1) == Some(&b'-') => {
+                i += haystack[i..].find('\n')? + 1;
+                continue;
+            }
+            // `/* … */`, not nested (matching sqlparser's default dialects).
+            b'/' if quote.is_none() && bytes.get(i + 1) == Some(&b'*') => {
+                i += 2 + haystack[i + 2..].find("*/")? + 2;
+                continue;
+            }
             b'\'' | b'"' => {
                 let current = bytes[i];
                 if quote == Some(current) {
@@ -826,7 +948,113 @@ fn embargoed_view(
     Ok(Arc::new(datafusion::datasource::ViewTable::new(plan, None)))
 }
 
+/// One disposable-sidecar policy governs them all: the session's
+/// `predicate_cache` setting also decides whether `latest_on()` may **write**
+/// its own sidecars. They are the same kind of object (recomputable, deletable,
+/// written by a read) and splitting the knob would mean a session that says "no
+/// hidden writes" still performs some.
+///
+/// It governs writes only. `Disabled` maps to `ReadOnly`, not to
+/// `LatestByMode::Disabled`, because refusing to *read* an existing sidecar
+/// buys no guarantee and costs the accelerator: `predicate_cache` defaults to
+/// disabled, so every default session and every CLI run without
+/// `--predicate-cache` fell back to rebuilding each segment's mini-batch, the
+/// O(rows) scan `crate::latest` exists to avoid, while ignoring the sidecars an
+/// earlier read-write run had already paid to create. A read of an object that
+/// is already there is not a hidden write.
+fn latest_by_mode(mode: PredicateCacheMode) -> LatestByMode {
+    match mode {
+        PredicateCacheMode::Disabled => LatestByMode::ReadOnly,
+        PredicateCacheMode::ReadOnly => LatestByMode::ReadOnly,
+        PredicateCacheMode::ReadWrite => LatestByMode::ReadWrite,
+    }
+}
+
+/// Lock a session-internal mutex, ignoring poisoning.
+///
+/// These mutexes guard plain bookkeeping (a name set, a metrics vector) with no
+/// invariant that a panic mid-update can break. `unwrap()` would let one
+/// panicking query poison the lock and make every later query on the session
+/// panic too, turning a single bad query into a dead session.
+fn lock_ignoring_poison<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Register one resolved table under its own name, applying the session's
+/// event-time cutoff when there is one; returns the registered name.
+///
+/// Shared by session construction and [`H5iSession::refresh`]. The two used to
+/// be separate copies, and the copy in `refresh` had quietly lost the embargo.
+fn register_resolved_table(
+    ctx: &SessionContext,
+    url: &ObjectStoreUrl,
+    metrics: &ScanMetricsCollector,
+    backend: &h5i_db_core::Backend,
+    predicate_cache_mode: PredicateCacheMode,
+    event_time_cutoff_ns: Option<i64>,
+    resolved: ResolvedTable,
+) -> DfResult<String> {
+    let (name, provider) = prepare_resolved_table(
+        url,
+        metrics,
+        backend,
+        predicate_cache_mode,
+        event_time_cutoff_ns,
+        resolved,
+    )?;
+    ctx.register_table(&name, provider)?;
+    Ok(name)
+}
+
+/// Build one table's provider without registering it, returning the name it
+/// should be registered under.
+///
+/// Split out of [`register_resolved_table`] because this is the fallible half:
+/// [`H5iSession::refresh`] needs every provider in hand before it changes the
+/// catalog, so a table it cannot build refuses the refresh rather than leaving
+/// it half applied.
+fn prepare_resolved_table(
+    url: &ObjectStoreUrl,
+    metrics: &ScanMetricsCollector,
+    backend: &h5i_db_core::Backend,
+    predicate_cache_mode: PredicateCacheMode,
+    event_time_cutoff_ns: Option<i64>,
+    resolved: ResolvedTable,
+) -> DfResult<(String, Arc<dyn datafusion::datasource::TableProvider>)> {
+    let name = resolved.entry.name.clone();
+    let time_column = resolved.spec.time_column.clone();
+    let schema = resolved.schema.clone();
+    let provider = Arc::new(
+        H5iTableProvider::new(resolved, url.clone(), metrics.clone())
+            .with_predicate_cache(backend.clone(), predicate_cache_mode),
+    );
+    let provider: Arc<dyn datafusion::datasource::TableProvider> = match event_time_cutoff_ns {
+        // Put the table behind a view carrying the cutoff, so the predicate is
+        // part of every plan that names it rather than something a query could
+        // forget. It optimizes like any other filter, which means it prunes
+        // segments too.
+        Some(cutoff_ns) => {
+            embargoed_view(&name, provider, &schema, time_column.as_deref(), cutoff_ns)?
+        }
+        None => provider,
+    };
+    Ok((name, provider))
+}
+
 /// Resolve every catalog table at read point `at`, concurrently.
+///
+/// Tables with no version at `at` are **skipped**, not fatal. The catalog is
+/// listed at head, so at any pin other than `Latest` it names tables the pin
+/// cannot see: a table created after a session pinned to `Version(v)` has fewer
+/// than `v` commits of its own, one created after an `AsOf(ts)` has none at or
+/// before `ts`, and a `Snapshot` pins only the tables that existed when it was
+/// cut. Failing the whole call on any of those made a pinned session unable to
+/// refresh — or even to open — because of a table it was never going to read,
+/// where h5i-db-core's own `ReadAt` contract is that a table with no version at
+/// the pin reads as empty. Leaving it unregistered is what "the data did not
+/// exist yet" looks like from the past.
 async fn resolve_all_at(db: &Arc<Database>, at: ReadAt) -> DfResult<Vec<ResolvedTable>> {
     let tables = db
         .list_tables()
@@ -834,11 +1062,121 @@ async fn resolve_all_at(db: &Arc<Database>, at: ReadAt) -> DfResult<Vec<Resolved
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     // `resolve_entry`, not `resolve`: the listing above already produced these
     // catalog entries, and resolving by name would re-read every one of them.
-    futures::future::try_join_all(
-        tables
-            .into_iter()
-            .map(|entry| db.resolve_entry(entry, at.clone())),
-    )
+    let listed = tables.len();
+    // Keep the first skipped-table error. A pin that predates *one* table is
+    // that table reading empty, but a pin that predates *every* table is a pin
+    // pointing nowhere, which is a user naming a version or an instant the
+    // database never had. Reporting the first as the second would make a
+    // legitimate research pin fail; reporting the second as the first would
+    // hand back a silently empty session, and the CLI's contract is that a bad
+    // decision point is a named user error.
+    let mut skipped: Option<h5i_db_core::Error> = None;
+    let resolved = futures::future::try_join_all(tables.into_iter().map(|entry| {
+        let at = at.clone();
+        let db = db.clone();
+        async move {
+            match db.resolve_entry(entry, at.clone()).await {
+                Ok(table) => Ok(Ok(table)),
+                Err(e) if absent_at_pin(&at, &e) => Ok(Err(e)),
+                Err(e) => Err(e),
+            }
+        }
+    }))
     .await
-    .map_err(|e| DataFusionError::External(Box::new(e)))
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut kept = Vec::with_capacity(resolved.len());
+    for outcome in resolved {
+        match outcome {
+            Ok(table) => kept.push(table),
+            Err(e) => skipped = skipped.or(Some(e)),
+        }
+    }
+    if kept.is_empty()
+        && listed > 0
+        && let Some(e) = skipped
+    {
+        return Err(DataFusionError::External(Box::new(e)));
+    }
+    Ok(kept)
+}
+
+/// Whether `err` means "this table has no version at the pin" rather than a
+/// failure worth reporting.
+fn absent_at_pin(at: &ReadAt, err: &h5i_db_core::Error) -> bool {
+    match err {
+        // `Version`/`AsOf` below the table's own history, which is how core
+        // already reads it: `fork.rs` skips the same error when deciding which
+        // tables a fork pins.
+        h5i_db_core::Error::VersionNotFound { .. } => true,
+        // A snapshot pins tables by id, and core reports one that is not in the
+        // set as invalid input rather than as its own variant. Match on the pin
+        // kind as well so that every other invalid-input failure stays fatal.
+        h5i_db_core::Error::InvalidInput { detail } => {
+            matches!(at, ReadAt::Snapshot(_)) && detail.contains("does not pin table")
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sidecar knob governs writes. A session that leaves `predicate_cache`
+    /// at its default (disabled) must still *read* `latest_on()`'s sidecars:
+    /// mapping the default to `LatestByMode::Disabled` silently took the
+    /// O(rows) rebuild path on every default session and every CLI run without
+    /// `--predicate-cache`, and threw away sidecars an earlier run had written.
+    #[test]
+    fn a_disabled_sidecar_policy_still_reads_existing_latest_sidecars() {
+        assert_eq!(
+            latest_by_mode(PredicateCacheMode::Disabled),
+            LatestByMode::ReadOnly,
+            "disabled means no writes, not no reads"
+        );
+        assert_eq!(
+            latest_by_mode(PredicateCacheMode::ReadOnly),
+            LatestByMode::ReadOnly
+        );
+        assert_eq!(
+            latest_by_mode(PredicateCacheMode::ReadWrite),
+            LatestByMode::ReadWrite
+        );
+    }
+
+    /// Only "this table has no version at the pin" is skippable. Anything else
+    /// a resolve can fail with is a real failure and must still be reported.
+    #[test]
+    fn only_a_missing_version_at_the_pin_is_skippable() {
+        use h5i_db_core::Error;
+
+        let missing = Error::VersionNotFound {
+            table: "late".into(),
+            requested: "3".into(),
+            hint: "retained versions are 0..=1".into(),
+        };
+        assert!(absent_at_pin(&ReadAt::Version(3), &missing));
+        assert!(absent_at_pin(&ReadAt::AsOf(0), &missing));
+        assert!(absent_at_pin(&ReadAt::Latest, &missing));
+
+        // A snapshot that does not pin the table is the same situation, but
+        // core spells it as invalid input, so the pin kind has to agree.
+        let unpinned = Error::invalid("snapshot \"s\" does not pin table \"late\"");
+        assert!(absent_at_pin(&ReadAt::Snapshot("s".into()), &unpinned));
+        assert!(!absent_at_pin(&ReadAt::Latest, &unpinned));
+
+        // Everything else stays fatal, including other invalid-input failures
+        // under a snapshot pin.
+        assert!(!absent_at_pin(
+            &ReadAt::Snapshot("s".into()),
+            &Error::invalid("unsupported time column type")
+        ));
+        assert!(!absent_at_pin(
+            &ReadAt::Version(3),
+            &Error::TableNotFound {
+                name: "typo".into(),
+                did_you_mean: None,
+            }
+        ));
+    }
 }

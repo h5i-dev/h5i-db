@@ -55,6 +55,31 @@ REPO = Path(__file__).resolve().parent.parent
 SECOND_NS = 1_000_000_000
 TICK = 0.01
 
+
+def clear_db_path(path: Path, *, chosen: bool, force: bool) -> None:
+    """Delete a previous run's database, asking first when it is not ours.
+
+    The demo owns its default path under `target/` and wipes it without
+    ceremony. A `--db` the caller named might be a real database, and a demo
+    does not get to delete one of those silently: it needs `--force` or a yes
+    at the prompt, and a non-interactive run without `--force` stops instead
+    of guessing.
+    """
+    if not path.exists():
+        return
+    if not chosen or force:
+        shutil.rmtree(path)
+        return
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            f"{path} already exists and the demo would delete it. Pass --force "
+            "to allow that, or point --db at a path that does not exist yet."
+        )
+    answer = input(f"delete {path} and everything under it? [y/N] ").strip().lower()
+    if answer not in ("y", "yes"):
+        raise SystemExit("left alone; point --db somewhere else")
+    shutil.rmtree(path)
+
 BOOK_SCHEMA = pa.schema(
     [
         pa.field("ts_init", pa.timestamp("ns"), nullable=False),
@@ -103,8 +128,14 @@ def build_market(markets: int, steps: int, seed: int) -> dict[str, pa.Table]:
     step = dt.timedelta(minutes=5)
     expiry = base + step * (steps - 1)
 
+    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+
     def nanos(moment: dt.datetime) -> int:
-        return int(moment.replace(tzinfo=dt.timezone.utc).timestamp() * SECOND_NS)
+        # Through timedelta rather than `timestamp() * SECOND_NS`: a float
+        # holding seconds since 1970 has no room left for nanoseconds, so the
+        # multiplication rounds the stamps it is meant to preserve.
+        delta = moment.replace(tzinfo=dt.timezone.utc) - epoch
+        return (delta.days * 86_400 + delta.seconds) * SECOND_NS + delta.microseconds * 1_000
 
     questions = [
         "Fed holds rates at the March meeting",
@@ -249,6 +280,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--out", default=None, help="where to write the report")
     parser.add_argument("--db", default=None, help="where to build the database")
     parser.add_argument("--keep", action="store_true", help="do not delete on exit")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="delete an existing --db path without asking",
+    )
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument(
         "--verify",
@@ -259,8 +295,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     db_path = Path(args.db or (REPO / "target" / "backtest-report-demo.db"))
     out = Path(args.out or (REPO / "target" / "backtest-report-demo.html"))
-    if db_path.exists():
-        shutil.rmtree(db_path)
+    clear_db_path(db_path, chosen=args.db is not None, force=args.force)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     out.parent.mkdir(parents=True, exist_ok=True)
 

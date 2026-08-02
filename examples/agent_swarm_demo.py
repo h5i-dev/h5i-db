@@ -57,6 +57,32 @@ from h5i_db import backtest
 REPO = Path(__file__).resolve().parent.parent
 SECOND_NS = 1_000_000_000
 
+
+def clear_db_path(path: Path, *, chosen: bool, force: bool) -> None:
+    """Delete a previous run's database, asking first when it is not ours.
+
+    The demo owns its default path under `target/` and wipes it without
+    ceremony. A `--db` the caller named might be a real database, and a demo
+    does not get to delete one of those silently: it needs `--force` or a yes
+    at the prompt, and a non-interactive run without `--force` stops instead
+    of guessing.
+    """
+    if not path.exists():
+        return
+    if not chosen or force:
+        shutil.rmtree(path)
+        return
+    if not sys.stdin.isatty():
+        raise SystemExit(
+            f"{path} already exists and the demo would delete it. Pass --force "
+            "to allow that, or point --db at a path that does not exist yet."
+        )
+    answer = input(f"delete {path} and everything under it? [y/N] ").strip().lower()
+    if answer not in ("y", "yes"):
+        raise SystemExit("left alone; point --db somewhere else")
+    shutil.rmtree(path)
+
+
 # ---------------------------------------------------------------- the market
 
 BOOK_SCHEMA = pa.schema(
@@ -118,8 +144,14 @@ def build_panel(markets: int, steps: int, seed: int) -> dict[str, pa.Table]:
     expiry = base + step * (steps - 1)
     observable = expiry + step * 2
 
+    epoch = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+
     def nanos(moment: dt.datetime) -> int:
-        return int(moment.replace(tzinfo=dt.timezone.utc).timestamp() * SECOND_NS)
+        # Through timedelta rather than `timestamp() * SECOND_NS`: a float
+        # holding seconds since 1970 has no room left for nanoseconds, so the
+        # multiplication rounds the stamps it is meant to preserve.
+        delta = moment.replace(tzinfo=dt.timezone.utc) - epoch
+        return (delta.days * 86_400 + delta.seconds) * SECOND_NS + delta.microseconds * 1_000
 
     questions = [
         "Fed holds rates at the March meeting",
@@ -261,7 +293,11 @@ class Outcome:
     cached: bool = False
     warnings: int = 0
     settled: int = 0
-    refused: int = 0
+    #: Positions the run left without a settlement result. A position can
+    #: be unsettled because the engine refused to settle it, and equally
+    #: because it was closed out before settlement, so the two are not the
+    #: same fact and this counter only claims the weaker one.
+    unsettled: int = 0
     error: str = ""
     seconds: float = 0.0
 
@@ -341,7 +377,7 @@ def run_trial(db_path: str, trial: Trial, console: Console) -> Outcome:
             cached=bool(result.get("cached", False)),
             warnings=len(result.get("warnings", []) or []),
             settled=settled,
-            refused=len(positions) - settled,
+            unsettled=len(positions) - settled,
             seconds=time.monotonic() - started,
         )
         flag = " [CACHED]" if outcome.cached else ""
@@ -496,9 +532,12 @@ def wait_for_url(process: "subprocess.Popen[str]", port: int,
         seen.append(line.rstrip())
         match = re.search(r"(http://\S+token=\w+)", line)
         if match:
-            threading.Thread(
-                target=lambda: [None for _ in process.stderr], daemon=True
-            ).start()
+            def drain() -> None:
+                """Keep reading stderr so the child never blocks on a full pipe."""
+                for _line in process.stderr:
+                    pass
+
+            threading.Thread(target=drain, daemon=True).start()
             return match.group(1)
     # No URL: whatever it did say is the useful thing to show.
     for line in seen[-4:]:
@@ -516,6 +555,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--port", type=int, default=7351)
     parser.add_argument("--db", default=None, help="where to build it")
     parser.add_argument("--keep", action="store_true", help="do not delete on exit")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="delete an existing --db path without asking",
+    )
     parser.add_argument("--no-ui", action="store_true")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--no-colour", action="store_true")
@@ -530,8 +574,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     colour = not args.no_colour and sys.stdout.isatty()
     console = Console(colour)
     db_path = Path(args.db or (REPO / "target" / "agent-swarm-demo.db"))
-    if db_path.exists():
-        shutil.rmtree(db_path)
+    clear_db_path(db_path, chosen=args.db is not None, force=args.force)
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     console.rule("1. One pinned dataset, shared by every agent")
@@ -567,13 +610,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cached = [o for o in ok if o.cached]
     warned = [o for o in ok if o.warnings]
     flagged = [o for o in ok if o.trial.needs_decision]
-    refused = sum(o.refused for o in ok)
+    unsettled = sum(o.unsettled for o in ok)
     print(f"  {len(outcomes)} trials in {elapsed:.1f}s across "
           f"{len({t.agent for t in trials})} agents")
     print(f"  {len(ok) - len(cached)} executed, {len(cached)} served from the "
           f"trial ledger without recomputing")
-    print(f"  {len(warned)} carry engine warnings, {refused} positions the engine "
-          f"refused to settle")
+    print(f"  {len(warned)} carry engine warnings, {unsettled} positions ended "
+          f"without a settlement result")
     print(f"  {len(flagged)} waiting on a human decision")
     forks = [name for name in db.fork_names() if name.startswith("bt-")]
     print(f"  {len(forks)} result forks, each holding its own bt_* tables")

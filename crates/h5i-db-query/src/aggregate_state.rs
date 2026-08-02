@@ -10,9 +10,16 @@ use arrow::datatypes::{DataType, TimeUnit};
 use h5i_db_core::{Database, ReadAt, ResolvedTable, SegmentMeta};
 use object_store::path::Path as ObjectPath;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 const FORMAT: u32 = 1;
-const SEMANTICS_VERSION: u32 = 1;
+/// Bumped to 2 when the open/close tie-break moved from the segment checksum to
+/// `created_by_sequence`, and to 3 when the segment id joined it to make that
+/// tie-break a total order (see [`PointKey`]) and the segment's identity joined
+/// the sidecar path (see [`state_path`]). It is part of both the path and the
+/// sealed payload, so entries written under an older rule are never looked up
+/// and never mistaken for current ones.
+const SEMANTICS_VERSION: u32 = 3;
 const PREFIX: &str = "cache/aggregates/v1";
 const MAX_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -89,10 +96,43 @@ pub struct FinanceAggregateResult {
     pub metrics: AggregateStateMetrics,
 }
 
+/// Total order on rows, used to pick `open` and `close`.
+///
+/// The tie-break after `timestamp` is the **arrival order of the segment**, not
+/// its checksum. A checksum is a content hash: ordering by it means two rows
+/// with the same timestamp are ranked by the bytes of the files they happen to
+/// live in, so re-segmenting the same data (a compaction, a differently sized
+/// append) can swap which row is the bar's open or close without any of the
+/// data changing. `created_by_sequence` is the version that introduced the
+/// segment, which is stable under re-reading and meaningful under re-writing:
+/// later arrival is later.
+///
+/// `created_by_sequence` alone is *not* unique per segment, so it cannot be the
+/// last discriminator between segments: one commit that overruns
+/// `target_segment_bytes` stamps every segment it cuts with the same sequence,
+/// and a fork's inherited segments keep the base's. `row` does not separate
+/// those either, because it is a segment-local offset that restarts at 0 in
+/// each segment. Two rows from two segments could therefore compare fully
+/// equal, and `GroupState::add`/`merge` use strict `<`/`>`, so the winner was
+/// whichever segment the merge loop happened to reach first, i.e. manifest
+/// order, which h5i-db-core sorts by `time_range.min` and so may change under
+/// recompaction: exactly the swapped open/close the checksum tie-break was
+/// removed to prevent.
+///
+/// The segment id closes that gap. It is globally unique and it is a property
+/// of the segment rather than of its bytes or its position, so the order is:
+/// timestamp, then arrival (`created_by_sequence`), then which segment
+/// (`segment`), then position inside it (`row`). The guarantee is a **total**
+/// order that is stable across re-reads, re-sorted manifests and rebuilds, and
+/// whose leading tie-break is arrival-meaningful; ties between two segments of
+/// the *same* commit are broken arbitrarily but deterministically.
+///
+/// Field order **is** the sort order (derived `Ord`); do not reorder.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 struct PointKey {
     timestamp: i64,
-    segment_checksum: String,
+    created_by_sequence: u64,
+    segment: Uuid,
     row: u64,
 }
 
@@ -266,8 +306,10 @@ impl AggregateStateEntry {
         for group in &self.groups {
             let valid = group.rows > 0
                 && seen.insert(group.group.clone())
-                && group.open_key.segment_checksum == self.segment_checksum
-                && group.close_key.segment_checksum == self.segment_checksum
+                && group.open_key.created_by_sequence == segment.created_by_sequence
+                && group.close_key.created_by_sequence == segment.created_by_sequence
+                && group.open_key.segment == segment.id
+                && group.close_key.segment == segment.id
                 && group.open.is_finite()
                 && group.high.is_finite()
                 && group.low.is_finite()
@@ -453,7 +495,8 @@ impl AggregateStateStore {
                     .transpose()?;
                 let key = PointKey {
                     timestamp,
-                    segment_checksum: segment.checksum.clone(),
+                    created_by_sequence: segment.created_by_sequence,
+                    segment: segment.id,
                     row: row_offset + row as u64,
                 };
                 match groups.get_mut(&group) {
@@ -538,10 +581,36 @@ fn validate_and_hash(
     Ok(blake3::hash(&canonical).to_hex().to_string())
 }
 
+/// Where one segment's sidecar lives.
+///
+/// The key carries the segment's *identity* (`id` and `created_by_sequence`) as
+/// well as its content, because the payload does: [`PointKey`] embeds both, and
+/// [`AggregateStateEntry::verify`] rejects an entry whose keys disagree with the
+/// manifest. A purely content-derived path contradicted that. `promote`
+/// re-stamps `created_by_sequence` without touching the bytes, so the checksum
+/// and therefore the path stayed put while every entry under it began failing
+/// `verify`: a read-only store then missed on that segment forever (it may
+/// neither delete the entry nor write a new one, and `put_if_absent` would not
+/// overwrite it anyway), and a read-write one paid a delete plus a rewrite,
+/// both of them counting a `corrupt_entries` that describes nothing wrong with
+/// the data. Inherited fork segments have the same shape.
+///
+/// Dropping the check instead would have kept the hits and lost the point of
+/// them: the sidecar's job is to reproduce what a cold rollup computes, and a
+/// payload whose keys carry the pre-promote sequence merges against freshly
+/// built neighbours carrying the new one, which is precisely the open/close
+/// ordering being cached. Putting identity in the path costs one rebuild per
+/// re-stamped segment and then hits forever, and the orphaned object is reclaimed
+/// by the cache budget sweep like any other.
 fn state_path(segment: &SegmentMeta, plan_hash: &str) -> ObjectPath {
     let key = format!(
-        "{}:{}:{}:{}",
-        segment.checksum, segment.schema_revision, plan_hash, SEMANTICS_VERSION
+        "{}:{}:{}:{}:{}:{}",
+        segment.id,
+        segment.created_by_sequence,
+        segment.checksum,
+        segment.schema_revision,
+        plan_hash,
+        SEMANTICS_VERSION
     );
     let digest = blake3::hash(key.as_bytes()).to_hex().to_string();
     ObjectPath::from(format!("{PREFIX}/{}/{digest}.json", &digest[..2]))
@@ -625,7 +694,8 @@ mod tests {
             let volume = (next() * 1e6).floor() + 1.0;
             let key = PointKey {
                 timestamp: 1_750_000_000_000_000_000 + index,
-                segment_checksum: "seg".into(),
+                created_by_sequence: 1,
+                segment: Uuid::nil(),
                 row: index as u64,
             };
             groups.push(GroupState {
@@ -669,14 +739,15 @@ mod tests {
     fn key(timestamp: i64, row: u64) -> PointKey {
         PointKey {
             timestamp,
-            segment_checksum: "seg".into(),
+            created_by_sequence: 1,
+            segment: Uuid::nil(),
             row,
         }
     }
 
     fn segment_meta(rows: u64) -> SegmentMeta {
         SegmentMeta {
-            id: uuid::Uuid::nil(),
+            id: Uuid::nil(),
             path: "tables/t/segments/s.parquet".into(),
             rows,
             bytes: 1,
@@ -709,7 +780,7 @@ mod tests {
     #[test]
     fn open_and_close_follow_key_order_not_insertion_order() {
         // Rows arrive out of time order; open/close must track the total
-        // (timestamp, checksum, row) key, not arrival.
+        // (timestamp, created_by_sequence, row) key, not arrival.
         let mut state = GroupState::new(Some("A".into()), key(20, 5), 200.0, 1.0);
         assert!(state.add(key(10, 0), 100.0, 1.0)); // earlier → becomes open
         assert!(state.add(key(30, 9), 300.0, 1.0)); // later → becomes close
@@ -719,6 +790,117 @@ mod tests {
         assert_eq!((done.first_timestamp, done.last_timestamp), (10, 30));
         assert_eq!(done.high, 300.0);
         assert_eq!(done.low, 100.0);
+    }
+
+    /// The tie-break after the timestamp must be a property of the data's
+    /// arrival, not of how it happens to be stored: ordering by a content hash
+    /// meant that recompacting the same rows could swap a bar's open or close.
+    #[test]
+    fn equal_timestamps_are_ordered_by_arrival_not_by_content() {
+        let earlier_version = PointKey {
+            timestamp: 10,
+            created_by_sequence: 1,
+            segment: Uuid::nil(),
+            row: 7,
+        };
+        let later_version = PointKey {
+            timestamp: 10,
+            created_by_sequence: 2,
+            segment: Uuid::nil(),
+            row: 0,
+        };
+        assert!(
+            earlier_version < later_version,
+            "older version opens the bar"
+        );
+        // Within one version and one segment, the row offset decides.
+        assert!(
+            later_version
+                < PointKey {
+                    timestamp: 10,
+                    created_by_sequence: 2,
+                    segment: Uuid::nil(),
+                    row: 1,
+                }
+        );
+        // And the timestamp still dominates both.
+        assert!(
+            PointKey {
+                timestamp: 9,
+                created_by_sequence: 99,
+                segment: Uuid::nil(),
+                row: 99,
+            } < earlier_version
+        );
+    }
+
+    /// Two segments can share a `created_by_sequence`: one commit that overruns
+    /// `target_segment_bytes` cuts several and stamps them all alike, and a
+    /// fork's inherited segments keep the base's. Their `row` offsets both
+    /// restart at 0, so without a per-segment discriminator two rows compared
+    /// fully equal and `add`/`merge`'s strict `<`/`>` handed the bar to
+    /// whichever segment the merge loop reached first, i.e. manifest order.
+    #[test]
+    fn segments_of_one_commit_still_compare_unequal() {
+        let first = Uuid::from_u128(1);
+        let second = Uuid::from_u128(2);
+        let left = PointKey {
+            timestamp: 10,
+            created_by_sequence: 7,
+            segment: first,
+            row: 0,
+        };
+        let right = PointKey {
+            timestamp: 10,
+            created_by_sequence: 7,
+            segment: second,
+            row: 0,
+        };
+        assert_ne!(left, right, "same commit, same offset, different segments");
+        assert!(left < right);
+
+        // Which one wins is therefore a property of the keys, not of the order
+        // the manifest happens to list the segments in. Merging in both
+        // directions must agree, or a recompaction that re-sorts the manifest
+        // silently rewrites the bar.
+        let mut forward = GroupState::new(None, left.clone(), 100.0, 1.0);
+        assert!(forward.merge(GroupState::new(None, right.clone(), 200.0, 1.0)));
+        let mut backward = GroupState::new(None, right, 200.0, 1.0);
+        assert!(backward.merge(GroupState::new(None, left, 100.0, 1.0)));
+        let forward = forward.finish();
+        let backward = backward.finish();
+        assert_eq!((forward.open, forward.close), (100.0, 200.0));
+        assert_eq!((backward.open, backward.close), (100.0, 200.0));
+    }
+
+    /// A `promote` re-stamps `created_by_sequence` on segments whose bytes, and
+    /// therefore whose checksum, do not change. The sidecar path has to move
+    /// with the stamp: it used to stay put, so every entry under it failed
+    /// `verify` from then on, and a read-only store could neither drop it nor
+    /// write past it.
+    #[test]
+    fn re_stamping_a_segment_moves_its_sidecar_path() {
+        let before = segment_meta(2);
+        let mut after = segment_meta(2);
+        after.created_by_sequence = before.created_by_sequence + 1;
+        assert_eq!(before.checksum, after.checksum, "promote copies the bytes");
+        assert_ne!(
+            state_path(&before, "plan"),
+            state_path(&after, "plan"),
+            "a re-stamped segment must not land on the entry it can no longer verify"
+        );
+
+        // Two distinct segments with identical bytes are distinct entries too,
+        // because the payload's keys name the segment.
+        let mut sibling = segment_meta(2);
+        sibling.id = Uuid::from_u128(9);
+        assert_ne!(state_path(&before, "plan"), state_path(&sibling, "plan"));
+
+        // The entry written before the promote is the one `verify` rejects, so
+        // moving the path is what turns a permanent miss into one rebuild.
+        let entry = sealed_entry();
+        entry.verify(&before, "plan").expect("valid before promote");
+        assert!(entry.verify(&after, "plan").is_err());
     }
 
     #[test]

@@ -206,6 +206,35 @@ impl Instrument {
         Self::prediction_market(id, venue, vec!["YES".into(), "NO".into()])
     }
 
+    /// A cash instrument: a share, a token, anything bought outright.
+    ///
+    /// The distinction from `perpetual` is not cosmetic. Spot is *funded*, so
+    /// cash leaves the account for the whole notional on entry and the marked
+    /// value belongs in equity. It is also the only kind a corporate action
+    /// means anything on: shares split and pay dividends, a swap does not.
+    pub fn spot(id: impl Into<String>, venue: impl Into<String>) -> Result<Self> {
+        Ok(Self {
+            id: InstrumentId::new(id)?,
+            venue: venue.into(),
+            kind: InstrumentKind::Spot,
+            outcomes: vec!["-".into()],
+            tick_size: Price::from_raw(SCALE / 100),
+            lot_size: Qty::from_raw(SCALE / 1_000),
+            // The same currency every other constructor and the engine's own
+            // default reporting currency use. A settlement currency nothing
+            // has an FX rate for is not a harmless default: `margin_state`
+            // reports the position as unconvertible, which suppresses the
+            // liquidation call and makes `can_fund` accept everything, so a
+            // one-word difference here silently disables margin for the run.
+            // Say so explicitly with `with_settlement_currency` instead.
+            settlement_currency: crate::currency::Currency::new("USDC")?,
+            expiration: None,
+            settlement_observable: None,
+            neg_risk: false,
+            price_rule: PriceRule::Tick,
+        })
+    }
+
     pub fn perpetual(id: impl Into<String>, venue: impl Into<String>) -> Result<Self> {
         Ok(Self {
             id: InstrumentId::new(id)?,
@@ -460,9 +489,16 @@ fn truncate_to_significant_figures(raw: Raw, figures: u8) -> Raw {
 /// Split one unit across `outcomes` as evenly as fixed point allows.
 ///
 /// Three outcomes cannot each take exactly a third of 1e9 raw units, so the
-/// remainder goes to the first outcome rather than being dropped. Losing it
-/// would leave a set worth 0.999999999, and a set that is not worth exactly
-/// one is a slow leak through every mint, redeem and void settlement.
+/// remainder is handed out rather than dropped. Losing it would leave a set
+/// worth 0.999999999, and a set that is not worth exactly one is a slow leak
+/// through every mint, redeem and void settlement.
+///
+/// The remainder goes out one raw unit at a time, to the lowest outcome ids,
+/// rather than all of it to outcome 0. Both divisions sum to exactly one;
+/// this one keeps the gap between any two outcomes at a single raw unit
+/// (1e-9), so a void refund pays every outcome the same to nine decimals. The
+/// asymmetric version paid outcome 0 up to `outcomes - 1` raw units more,
+/// which is small but is a bias with an index rather than a rounding error.
 pub fn uniform_prices(outcomes: u16) -> Result<Vec<Price>> {
     if outcomes == 0 {
         return Err(BacktestError::invalid(
@@ -471,9 +507,12 @@ pub fn uniform_prices(outcomes: u16) -> Result<Vec<Price>> {
     }
     let count = outcomes as Raw;
     let base = SCALE / count;
+    // Strictly below `count`, so this never runs past the end.
     let remainder = SCALE % count;
     let mut prices = vec![Price::from_raw(base); outcomes as usize];
-    prices[0] = Price::from_raw(base + remainder);
+    for price in prices.iter_mut().take(remainder as usize) {
+        *price = Price::from_raw(base + 1);
+    }
     Ok(prices)
 }
 

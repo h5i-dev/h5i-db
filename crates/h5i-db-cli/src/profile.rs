@@ -69,6 +69,53 @@ fn result_dir() -> PathBuf {
     }
 }
 
+/// The directory this process writes its spills into, created so that only
+/// this user can read them.
+///
+/// A spill holds query results, which is the same data the database holds and
+/// no less sensitive. Writing it straight into a fixed, world-readable
+/// `/tmp/h5i-db-results` published it to every other user on the host, and let
+/// any of them pre-create that path and read whatever landed there. So each
+/// run gets its own unguessable subdirectory: `create_dir` fails outright if
+/// the name already exists, which is what makes squatting on it impossible
+/// rather than merely unlikely.
+fn private_result_dir() -> Result<PathBuf> {
+    let base = result_dir();
+    std::fs::create_dir_all(&base).map_err(|e| Error::io(base.display().to_string(), e))?;
+    restrict_to_owner(&base);
+    let dir = base.join(format!("run-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).map_err(|e| Error::io(dir.display().to_string(), e))?;
+    restrict_to_owner(&dir);
+    Ok(dir)
+}
+
+/// Best effort `0700`. A failure here is not worth failing the query over:
+/// the unguessable directory name is the load-bearing part, and on platforms
+/// without Unix modes there is nothing to set.
+fn restrict_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+/// Create the spill file readable and writable by its owner only.
+fn create_private_file(path: &Path) -> Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .map_err(|e| Error::io(path.display().to_string(), e))
+}
+
 /// A Parquet file holding the rows that did not fit in the rendered output.
 ///
 /// Created lazily: a result that fits the budget writes no file at all, so the
@@ -155,11 +202,9 @@ impl ResultSpill {
     }
 
     fn open(&mut self) -> Result<()> {
-        let dir = result_dir();
-        std::fs::create_dir_all(&dir).map_err(|e| Error::io(dir.display().to_string(), e))?;
+        let dir = private_result_dir()?;
         let path = dir.join(format!("result-{}.parquet", uuid::Uuid::new_v4()));
-        let file =
-            std::fs::File::create(&path).map_err(|e| Error::io(path.display().to_string(), e))?;
+        let file = create_private_file(&path)?;
         let mut writer = parquet::arrow::ArrowWriter::try_new(file, self.schema.clone(), None)
             .map_err(Error::Parquet)?;
         for batch in std::mem::take(&mut self.pending) {

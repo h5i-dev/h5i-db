@@ -384,7 +384,13 @@ fn bucket_in_timezone(
     // occurrence when ambiguous and advance to the first valid instant for a
     // gap, matching common resampling behavior.
     let mut candidate = bucket_local;
-    for _ in 0..=180 {
+    // The search advances a minute at a time over a gap. Three hours bounds
+    // every DST gap in the tz database (the largest is Lord Howe's 30 minutes;
+    // political jumps of a full day change the *offset*, not the local
+    // wall-clock gap), so exhausting it means the zone has no valid instant
+    // anywhere near the bucket and NULL is the honest answer.
+    const GAP_SEARCH_MINUTES: u32 = 180;
+    for _ in 0..=GAP_SEARCH_MINUTES {
         if let Some(bucket) = timezone.from_local_datetime(&candidate).earliest() {
             return bucket.timestamp_nanos_opt()?.checked_div(unit_ns);
         }

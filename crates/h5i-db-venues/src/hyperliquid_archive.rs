@@ -36,7 +36,7 @@
 //! # Hours are not what they look like
 //!
 //! The venue buckets a file by when its *archiver* received a message, so
-//! the `00` file opens with a message the venue stamped just before
+//! the `0` file opens with a message the venue stamped just before
 //! midnight the previous day. [`ArchiveLoad::window`] reports the span
 //! actually loaded rather than the span requested, and a caller wanting a
 //! clean day should sync an hour of slack on each side.
@@ -262,6 +262,20 @@ pub fn plan_from_archive(spec: &ArchiveSpec, universe: &[AssetMeta]) -> Result<A
             load.missing.push(format!("no files for coin {coin}"));
         }
     }
+
+    // The walk above is per file: one coin's hour, then the next coin's same
+    // hour, then the next date. Each file is internally ordered, but the
+    // concatenation of several is not, so a load of two coins -- or of two
+    // dates -- hands the plan records that step backwards in time and is
+    // rejected as out of order before a single row is written. Sorting here
+    // is what makes a multi-coin, multi-date load work at all.
+    //
+    // Stable, so records sharing a timestamp keep the order their file gave
+    // them: a snapshot and the delta that follows it within the same
+    // millisecond must not swap.
+    books.sort_by_key(|record| record.ts().get());
+    trades.sort_by_key(|record| record.ts().get());
+    references.sort_by_key(|record| record.ts().get());
 
     load.book_records = books.len();
     load.trade_records = trades.len();

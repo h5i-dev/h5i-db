@@ -400,14 +400,25 @@ fn a_post_only_order_needs_a_price_to_rest_at() {
             Ok(())
         }
     }
+    // Refused as an order, not as a run. The venue's answer to one badly
+    // shaped order is a rejection with a reason; ending the run would have
+    // discarded every other order the strategy sent that day (issue #68).
+    let result = run(
+        &mut MarketPostOnly,
+        vec![book(1, 99.0, 100.0, 10.0)],
+        10_000.0,
+        |builder| builder,
+    )
+    .unwrap();
+    assert!(result.fills.is_empty());
+    assert_eq!(result.metrics.orders_rejected_invalid, 1);
+    assert_eq!(result.orders[0].status, OrderStatus::Rejected);
     assert!(
-        run(
-            &mut MarketPostOnly,
-            vec![book(1, 99.0, 100.0, 10.0)],
-            10_000.0,
-            |builder| builder
-        )
-        .is_err()
+        result.orders[0]
+            .reject_reason
+            .as_deref()
+            .unwrap()
+            .contains("must carry a limit price")
     );
 }
 
@@ -961,4 +972,300 @@ fn a_twap_that_cannot_be_scheduled_is_refused() {
             .is_err()
     );
     assert_eq!(base.interval_nanos(SECOND / 4).slices().unwrap(), 4);
+}
+
+/// Equity must not count a perpetual's notional.
+///
+/// Nothing left the account to open a perp: margin is posted, not spent. An
+/// equity curve that adds `mark * quantity` to cash therefore reports the
+/// entry value twice, and every return, drawdown and Sharpe derived from the
+/// curve inherits the error (issue #44).
+#[test]
+fn a_perpetual_position_does_not_inflate_equity() {
+    let mut strategy = BuyOnce::new(qty(1.0));
+    let result = run(
+        &mut strategy,
+        vec![
+            book(1, 100.0, 100.0, 10.0),
+            book(2, 101.0, 101.0, 10.0),
+            reference(2, Some(101.0), Some(101.0)),
+        ],
+        10_000.0,
+        |builder| builder,
+    )
+    .unwrap();
+
+    let last = result.equity.last().unwrap();
+    assert_eq!(
+        last.equity,
+        last.cash.checked_add(last.unrealized_pnl).unwrap(),
+        "a collateralised position contributes its profit, not its notional"
+    );
+    assert!(
+        last.equity < money(10_100.0),
+        "equity {} still carries the entry notional",
+        last.equity
+    );
+}
+
+/// A cross margin call must not reach a position margined on its own
+/// collateral.
+///
+/// `margin_state` already excludes isolated positions -- their collateral is
+/// a bucket outside `cash` -- but the list of what to close was built from
+/// every open position, so a cross book blowing up took the isolated trade
+/// with it. That is the contagion `isolate` exists to prevent, arriving from
+/// the healthy direction (issue #68).
+#[test]
+fn a_cross_margin_call_leaves_an_isolated_position_alone() {
+    const ISO: &str = "ETH-PERP";
+
+    fn iso_id() -> InstrumentId {
+        InstrumentId::new(ISO).unwrap()
+    }
+
+    fn both() -> InstrumentSet {
+        let mut set = InstrumentSet::new();
+        set.insert(Instrument::perpetual(PERP, "hyperliquid").unwrap())
+            .unwrap();
+        set.insert(Instrument::perpetual(ISO, "hyperliquid").unwrap())
+            .unwrap();
+        set
+    }
+
+    fn quote(id: InstrumentId, at: i64, mid: f64) -> Record {
+        Record::new(
+            Stamps::immediate(ts(at)),
+            id,
+            OutcomeId::FIRST,
+            MarketEvent::BookSnapshot {
+                bids: vec![(price(mid), qty(100.0))],
+                asks: vec![(price(mid), qty(100.0))],
+            },
+        )
+    }
+
+    struct BuyBoth {
+        step: u32,
+    }
+    impl Strategy for BuyBoth {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            match self.step {
+                1 => ctx.submit(OrderRequest::market(
+                    iso_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    qty(1.0),
+                )),
+                2 => ctx.submit(OrderRequest::market(
+                    perp_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    qty(10.0),
+                )),
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                quote(iso_id(), 1, 100.0),
+                quote(perp_id(), 1, 100.0),
+                quote(iso_id(), 2, 100.0),
+                // Only the cross book collapses. Ten of notional against a
+                // hundred and ninety of cash: equity 40 against a
+                // maintenance requirement of 42.50.
+                quote(perp_id(), 3, 85.0),
+                quote(perp_id(), 4, 85.0),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(both())
+        .starting_cash(money(200.0))
+        .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+        .isolate(iso_id())
+        .build();
+    let mut strategy = BuyBoth { step: 0 };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert!(
+        !result.liquidations.is_empty(),
+        "the cross book was called; if it was not, the test proves nothing"
+    );
+    assert!(
+        result
+            .liquidations
+            .iter()
+            .all(|call| call.instrument == perp_id()),
+        "an isolated position contributed nothing to this call and must not \
+         be closed by it: {:?}",
+        result.liquidations
+    );
+    let portfolio = h5i_db_backtest::position::Portfolio::replay(&result.fills).unwrap();
+    assert_eq!(
+        portfolio
+            .position(&iso_id(), OutcomeId::FIRST)
+            .map(|position| position.quantity),
+        Some(qty(1.0)),
+        "and it is still open on its own collateral"
+    );
+}
+
+/// A rolling fee window is a sum of many notionals, not a quantity anything
+/// holds, so it must not inherit `Raw`'s ceiling.
+///
+/// Clamping it froze the account in whatever tier it had reached and priced
+/// every later fill from a total that had stopped counting. Refusing instead
+/// (the first attempt at this) killed runs that had nothing else wrong with
+/// them: at 1e-9 scale the ceiling is about 9.2e9 of window notional, which
+/// a busy month genuinely crosses. Comparing at the accumulator's own width
+/// is neither.
+#[test]
+#[cfg(not(feature = "wide"))]
+fn a_rolling_fee_volume_past_the_raw_ceiling_still_prices() {
+    let instrument = Instrument::perpetual(PERP, "hyperliquid").unwrap();
+    let tiers = TieredFees::new(hyperliquid_shaped_tiers(), SECOND).unwrap();
+    // Five billion of notional a fill, inside the same window: the third
+    // fill has to price against a total `Raw` cannot hold.
+    let fill = FeeContext {
+        order_id: OrderId(1),
+        instrument: &instrument,
+        side: Side::Buy,
+        price: price(1.0),
+        quantity: qty(5_000_000_000.0),
+        is_taker: true,
+        ts: ts(1),
+    };
+    tiers.commission(fill).unwrap();
+    tiers.commission(FeeContext { ts: ts(2), ..fill }).unwrap();
+    let charged = tiers
+        .commission(FeeContext { ts: ts(3), ..fill })
+        .expect("a window past Raw::MAX still prices the fill");
+    // Ten billion of window volume is far into the top tier, and the tier
+    // is the one the total actually implies rather than the one it froze at.
+    let top = hyperliquid_shaped_tiers().pop().unwrap();
+    assert_eq!(
+        charged,
+        h5i_db_backtest::types::notional(top.taker, qty(5_000_000_000.0)).unwrap(),
+        "the third fill is priced at the top tier, not a stalled one"
+    );
+}
+
+/// Isolated collateral is still the account's money.
+///
+/// Posting it moves cash into a bucket, so an equity curve that counts only
+/// `cash` plus unrealized PnL reads low by the whole bucket for the life of
+/// the position, then steps up by it on the close: a fake single-bar gain
+/// that every drawdown and Sharpe drawn from the curve inherits.
+#[test]
+fn isolated_collateral_stays_in_equity() {
+    let mut strategy = BuyOnce::new(qty(1.0));
+    let result = run(
+        &mut strategy,
+        vec![
+            book(1, 100.0, 100.0, 10.0),
+            book(2, 100.0, 100.0, 10.0),
+            book(3, 100.0, 100.0, 10.0),
+        ],
+        10_000.0,
+        |builder| {
+            builder
+                .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+                .isolate(perp_id())
+        },
+    )
+    .unwrap();
+
+    let last = result.equity.last().unwrap();
+    assert!(
+        last.cash < money(10_000.0),
+        "the bucket really did leave cash, or this test proves nothing"
+    );
+    assert!(
+        (last.equity.to_f64() - 10_000.0).abs() < 1.0,
+        "a flat position at its entry mark is worth what it started with, \
+         got equity {} against cash {}",
+        last.equity,
+        last.cash
+    );
+}
+
+/// `position_value` answers "how invested", so it stays marked exposure for
+/// every kind. Only `equity` cares whether opening the position moved cash.
+#[test]
+fn position_value_is_exposure_even_when_equity_is_not() {
+    let mut strategy = BuyOnce::new(qty(1.0));
+    let result = run(
+        &mut strategy,
+        vec![book(1, 100.0, 100.0, 10.0), book(2, 101.0, 101.0, 10.0)],
+        10_000.0,
+        |builder| builder,
+    )
+    .unwrap();
+
+    let last = result.equity.last().unwrap();
+    assert!(
+        last.position_value.to_f64() > 90.0,
+        "a one-lot perp marked near 101 is ~101 of exposure, got {}",
+        last.position_value
+    );
+    assert!(
+        last.equity < money(10_100.0),
+        "but equity must not carry the notional: got {}",
+        last.equity
+    );
+}
+
+/// A market that has stopped trading cannot be liquidated into.
+///
+/// `try_fill` refuses a close on an expired instrument, so a position left
+/// under maintenance when the market expires stays doomed for the rest of
+/// the run. Without a guard the margin call re-fires on every remaining
+/// record, each time minting an order that cannot fill and recording a
+/// `Liquidation` that never happened: the report shows thousands of closes
+/// on a position that is still open, and both vectors grow with the tail.
+#[test]
+fn an_expired_market_does_not_liquidate_forever() {
+    let mut set = InstrumentSet::new();
+    set.insert(
+        Instrument::perpetual(PERP, "hyperliquid")
+            .unwrap()
+            .with_expiration(ts(3)),
+    )
+    .unwrap();
+
+    // Enter at 100, collapse to 60 (a 10x book is far under maintenance),
+    // then let the market expire with a long tail of records behind it.
+    let mut records = vec![book(1, 100.0, 100.0, 10.0), book(2, 60.0, 60.0, 10.0)];
+    for at in 4..40 {
+        records.push(book(at, 60.0, 60.0, 10.0));
+    }
+    let mut replay = Replay::builder()
+        .stream("book", priority::SNAPSHOT, records)
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(set)
+        .starting_cash(money(1_000.0))
+        .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+        .build();
+    let mut strategy = BuyOnce::new(qty(1.0));
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert!(
+        result.liquidations.len() <= 1,
+        "a position can be liquidated once, not once per record: got {}",
+        result.liquidations.len()
+    );
+    assert!(
+        result.orders.len() <= 3,
+        "and a refused close must not mint an order per record: got {}",
+        result.orders.len()
+    );
 }

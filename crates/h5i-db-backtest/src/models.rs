@@ -307,11 +307,22 @@ impl TieredFees {
 
     /// The tier an account with this much rolling volume is in.
     pub fn tier_for(&self, volume: Money) -> FeeTier {
+        self.tier_for_raw(volume.raw() as i128)
+    }
+
+    /// The tier a rolling volume falls in, compared at the accumulator's own
+    /// width.
+    ///
+    /// The rolling window is summed in `i128` because it is a sum of many
+    /// notionals, not a quantity anything holds. The tier boundaries are
+    /// `Money`, so they lift into that width losslessly and the comparison
+    /// is the same one, minus a ceiling the window could actually reach.
+    pub fn tier_for_raw(&self, volume: i128) -> FeeTier {
         *self
             .tiers
             .iter()
             .rev()
-            .find(|tier| volume >= tier.volume_from)
+            .find(|tier| volume >= tier.volume_from.raw() as i128)
             .unwrap_or(&self.tiers[0])
     }
 }
@@ -328,11 +339,17 @@ impl FeeModel for TieredFees {
             let (_, amount) = traded.entries.pop_front().expect("peeked");
             traded.total -= amount as i128;
         }
-        let rolling = Money::from_raw(crate::types::narrow(
-            traded.total.clamp(0, Raw::MAX as i128),
-            "TieredFees rolling volume",
-        )?);
-        let tier = self.tier_for(rolling);
+        // Compared in `i128`, the width the total is already accumulated in.
+        // Narrowing it to `Raw` first put a ceiling on the *window volume*
+        // rather than on any real quantity: at 1e-9 scale that is about
+        // 9.2e9 of rolling notional, which a busy month genuinely crosses,
+        // and crossing it killed a run that had nothing else wrong with it.
+        // Clamping instead would freeze the account in whatever tier it had
+        // reached, which is the silent-wrong answer. Widening the comparison
+        // is neither: the tier boundaries are `Money`, so lifting them to
+        // `i128` compares the same numbers without a range to fall off.
+        let rolling = traded.total;
+        let tier = self.tier_for_raw(rolling);
         // Priced at the tier reached *before* this fill, then the fill
         // counts towards the next one.
         traded.entries.push_back((ctx.ts.get(), gross.raw()));
@@ -414,6 +431,13 @@ pub trait FillModel: std::fmt::Debug {
     /// Whether a resting order at the touch fills when a trade prints
     /// through its price. Conservative by default: a print at your price
     /// does not prove your order was ahead in the queue.
+    ///
+    /// **Not yet consulted by the engine.** Passive fills on prints are
+    /// decided by [`FillModel::uses_queue_position`] instead, which is the
+    /// stricter question: it walks the displayed size ahead of the order
+    /// rather than answering yes or no per print. This hook is the coarse
+    /// alternative for feeds with no usable depth, and nothing reads it until
+    /// such a model exists.
     fn passive_fills_on_trade_at_price(&self) -> bool {
         false
     }
@@ -491,13 +515,19 @@ impl FillModel for TickSlippage {
             .map(|(p, q)| (Price::from_raw(p.raw() + ask_shift), q))
             .collect();
         let mut synthetic = OrderBook::new();
+        // `book_for_fill` has nowhere to report an error, and swallowing one
+        // with `.ok()?` spells a refused snapshot as "no slippage applied" --
+        // silence in the direction that flatters the taker. Stating the
+        // invariant instead: `apply_snapshot` has no failure path, and a
+        // shift that moves one side away from the other cannot cross the
+        // book, so there is nothing here for a future check to reject.
         synthetic
             .apply_snapshot(
                 &bids,
                 &asks,
                 book.last_update().unwrap_or(UnixNanos::new(0)),
             )
-            .ok()?;
+            .expect("shifting one side of a book away cannot make it invalid");
         Some(synthetic)
     }
 }
@@ -546,6 +576,13 @@ impl FillModel for QueuePositionFills {
 /// A periodic venue process: funding, fee waivers, liquidation checks.
 ///
 /// Returns cash adjustments to apply to the account.
+///
+/// **Not yet wired into the engine.** [`crate::engine::Engine`] holds no
+/// module list and runs its periodic work directly off the record stream:
+/// funding on a `Funding` record, liquidation after every mark change. This
+/// trait is the seam for a process that fires on the *clock* rather than on
+/// data (a daily fee waiver, an hourly settlement on a market that went
+/// quiet), and implementing it today does not make anything run.
 pub trait VenueModule: std::fmt::Debug {
     fn name(&self) -> &str;
     /// Interval between runs, in nanoseconds.

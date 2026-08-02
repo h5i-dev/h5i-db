@@ -9,7 +9,9 @@ expressed as data can be reproduced from its own table.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
+import re
 import tempfile
 from pathlib import Path
 
@@ -423,6 +425,38 @@ def test_brier_decomposition_satisfies_its_identity():
     assert all(-1.0 <= row["gap"] <= 1.0 for row in curve)
 
 
+def test_the_two_bucketed_views_agree_about_the_same_forecasts():
+    """A forecast outside the edges belongs to neither view, so both say so.
+
+    It used to land in the top bucket in the decomposition and be dropped
+    from the curve, so the same input produced two different accounts of it.
+    """
+    forecasts = [0.05, 0.3, 0.62, 0.91]
+    outcomes = [0.0, 1.0, 1.0, 1.0]
+    narrow = (0.1, 0.5, 0.9)
+    with pytest.raises(ValueError, match="outside the bucket edges"):
+        quant.brier_decomposition(forecasts, outcomes, edges=narrow)
+    with pytest.raises(ValueError, match="outside the bucket edges"):
+        quant.reliability_curve(forecasts, outcomes, edges=narrow)
+    # Edges that cover them: every observation lands in exactly one bucket,
+    # and the two views count the same ones.
+    wide = (0.0, 0.5, 1.0)
+    parts = quant.brier_decomposition(forecasts, outcomes, edges=wide)
+    curve = quant.reliability_curve(forecasts, outcomes, edges=wide)
+    assert sum(row["observations"] for row in curve) == parts["observations"]
+
+
+def test_probability_series_can_arrive_as_arrays():
+    """`if not strategy:` raises on anything numpy-shaped; len() does not."""
+    np = pytest.importorskip("numpy")
+    scored = quant.brier_advantage(
+        np.array([0.9, 0.1]), np.array([0.6, 0.4]), np.array([1.0, 0.0])
+    )
+    assert scored.observations == 2
+    with pytest.raises(ValueError, match="empty"):
+        quant.brier_advantage(np.array([]), np.array([]), np.array([]))
+
+
 def test_basket_report_renders_from_stored_tables_only():
     with tempfile.TemporaryDirectory() as tmp:
         db = _panel(tmp)
@@ -509,6 +543,122 @@ def test_per_run_panels_are_dropped_loudly_when_the_basket_is_large():
         dropped = [item for item in report.skipped if item["panel"] == "equity"]
         assert dropped and dropped[0]["reason"] == "too_many_runs"
         db.close()
+
+
+def test_the_basket_payload_is_json_inside_the_script_tag_it_travels_in():
+    """`JSON.parse(textContent)` has to see JSON, not HTML entities.
+
+    Escaped with `html.escape`, every quote in the payload arrives as
+    `&quot;` and the parse throws; escaping only the angle brackets keeps the
+    parser out of the string while leaving it valid JSON.
+    """
+    report = quant.BasketReport(
+        basket_id="tags <b>&</b>",
+        runs=[{"label": "r0 <script>"}],
+        totals={"runs": 1},
+    )
+    document = report.to_html()
+    payload = re.search(
+        r"<script type='application/json' id='payload'>(.*)</script>",
+        document,
+        re.DOTALL,
+    )
+    assert payload is not None
+    parsed = json.loads(payload.group(1))
+    assert parsed["basket_id"] == "tags <b>&</b>"
+    # The parser must never see a tag inside the script element.
+    assert "<" not in payload.group(1)
+
+
+# -- the price panel under the fill markers ---------------------------------
+
+
+def _depth_book(tmp: str, instrument: str = "EVENT-A") -> h5i_db.Database:
+    """A book with real depth, a deleted level, and a clear, written by hand.
+
+    `book_deltas` is one row per level, so a panel that reduces a side with
+    the wrong aggregate reads a price nobody quoted. Every number here is
+    chosen so the right answer differs from the wrong ones: the best bid is
+    not the only bid, the best ask is not the widest ask, and the deleted ask
+    is the cheapest row in the table.
+    """
+    base = dt.datetime(2026, 6, 1, 9, 0, 0)
+    rows: list[tuple] = [
+        # (offset, action, side, price)
+        (0, "snapshot", "buy", 0.52),
+        (0, "snapshot", "buy", 0.45),
+        (0, "snapshot", "sell", 0.54),
+        (0, "snapshot", "sell", 0.70),
+        (1, "set", "buy", 0.53),
+        (1, "set", "sell", 0.56),
+        # Cheaper than every live ask, and gone: a panel that ignores `action`
+        # prices the book off a level that no longer exists.
+        (1, "delete", "sell", 0.50),
+        (1, "clear", None, None),
+    ]
+    book: dict[str, list] = {name: [] for name in venues.BOOK_DELTAS_SCHEMA.names}
+    for index, (offset, action, side, price) in enumerate(rows):
+        at = base + dt.timedelta(minutes=offset)
+        book["ts_init"].append(at)
+        book["ts_event"].append(at)
+        book["instrument_id"].append(instrument)
+        book["outcome"].append(0)
+        book["action"].append(action)
+        book["side"].append(side)
+        book["price"].append(price)
+        book["size"].append(None if price is None else 100.0)
+        book["event_index"].append(index)
+        book["is_last"].append(True)
+        book["source_vendor"].append("test")
+
+    db = h5i_db.Database(str(Path(tmp) / "depth.db"), create=True)
+    venues.ensure_tables(db, ["book_deltas"])
+    db.append(
+        "book_deltas",
+        pa.table(
+            {
+                name: pa.array(values, type=venues.BOOK_DELTAS_SCHEMA.field(name).type)
+                for name, values in book.items()
+            },
+            schema=venues.BOOK_DELTAS_SCHEMA,
+        ).sort_by([("ts_init", "ascending"), ("event_index", "ascending")]),
+    )
+    db.snapshot("depth", tables=["book_deltas"])
+    return db
+
+
+def test_the_price_panel_mids_the_best_bid_against_the_best_ask():
+    """The worst ask is not a price; neither is a level that was deleted."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _depth_book(tmp)
+        paths = quant.basket._price_path(
+            db, ["EVENT-A"], snapshot="depth", outcome=0, max_points=100
+        )
+        db.close()
+    mids = [point["mid"] for point in paths["EVENT-A"]]
+    assert len(mids) == 2
+    # (0.52 + 0.54) / 2, not (0.52 + 0.70) / 2: max() over the sell side is the
+    # widest quote in the book, not the top of it.
+    assert mids[0] == pytest.approx(0.53)
+    # (0.53 + 0.56) / 2, not (0.53 + 0.50) / 2: the 0.50 ask was deleted.
+    assert mids[1] == pytest.approx(0.545)
+
+
+def test_the_price_panel_quotes_the_instruments_it_is_given():
+    """An instrument id is vendor data, so it goes through the quoter."""
+    hostile = "EVT-A'; DROP TABLE book_deltas; --"
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _depth_book(tmp, instrument=hostile)
+        paths = quant.basket._price_path(
+            db, [hostile], snapshot="depth", outcome=0, max_points=100
+        )
+        still_there = db.sql("SELECT count(*) AS n FROM book_deltas").to_pandas()["n"][0]
+        db.close()
+    assert [point["mid"] for point in paths[hostile]] == [
+        pytest.approx(0.53),
+        pytest.approx(0.545),
+    ]
+    assert still_there == 8
 
 
 # -- D2: account ledger replay ----------------------------------------------
@@ -673,3 +823,97 @@ def test_basket_net_counts_closed_round_trips_not_just_settlement():
         if abs(realized + commissions) > 1e-9:
             assert reported != pytest.approx(settled - commissions)
         db.close()
+
+
+def test_the_quote_panel_tops_the_book_the_way_the_report_does():
+    """The panel and the report chart have to describe the same book.
+
+    `quote_panel` reduced the sell side with `max`, so it quoted the *worst*
+    ask in the market and fed that to `_mid` and therefore to every built-in
+    signal generator, while `basket._price_path` had already been corrected to
+    the lowest live sell. The report chart and the signals then disagreed
+    about the same instant.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _depth_book(tmp)
+        panel = backtest.quote_panel(db, snapshot="depth")
+        db.close()
+    assert len(panel) == 2
+    # 0.54, not 0.70: the widest quote in the book is not the top of it.
+    assert list(panel["ask"]) == [pytest.approx(0.54), pytest.approx(0.56)]
+    # 0.53 at the second instant, and the deleted 0.50 ask is not an ask.
+    assert list(panel["bid"]) == [pytest.approx(0.52), pytest.approx(0.53)]
+
+
+def test_a_zero_size_set_is_a_delete_to_the_panel_too():
+    """The feed spells a delete two ways and the action filter sees only one.
+
+    A `set` of size zero is applied as a delete by the kernel's book
+    (`crates/h5i-db-backtest/src/book.rs`), so a panel filtering on `action`
+    alone still prices the market off a level that is not there.
+    """
+    at = dt.datetime(2026, 6, 1, 9, 1, 0)
+    row = {
+        "ts_init": at,
+        "ts_event": at,
+        "instrument_id": "EVENT-A",
+        "outcome": 0,
+        "action": "set",
+        "side": "sell",
+        "price": 0.30,
+        "size": 0.0,
+        "event_index": 8,
+        "is_last": True,
+        "source_vendor": "test",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _depth_book(tmp)
+        db.append(
+            "book_deltas",
+            pa.table(
+                {
+                    name: pa.array(
+                        [row[name]], type=venues.BOOK_DELTAS_SCHEMA.field(name).type
+                    )
+                    for name in venues.BOOK_DELTAS_SCHEMA.names
+                },
+                schema=venues.BOOK_DELTAS_SCHEMA,
+            ),
+        )
+        panel = backtest.quote_panel(db)
+        paths = quant.basket._price_path(
+            db, ["EVENT-A"], snapshot=None, outcome=0, max_points=100
+        )
+        db.close()
+    # 0.56 is the cheapest ask anyone can actually lift; 0.30 was withdrawn.
+    assert list(panel["ask"])[-1] == pytest.approx(0.56)
+    assert [point["mid"] for point in paths["EVENT-A"]][-1] == pytest.approx(0.545)
+
+
+def test_the_basket_payload_survives_the_panels_it_is_rendered_beside():
+    """The escaped JSON has to reach the script tag, not be shadowed on the way.
+
+    The panel loop bound the same name as the payload, so what the block
+    emitted was the last drawn panel's Python dict repr: not JSON at all, and
+    with every `<` in an instrument or strategy name unescaped, which is a
+    live injection into the document.
+    """
+    report = quant.BasketReport(
+        basket_id="basket",
+        runs=[{"label": "r0"}],
+        totals={"runs": 1},
+        panels={"leaderboard": {"rows": [{"run": "<img src=x onerror=alert(1)>"}]}},
+        drawn=("leaderboard",),
+    )
+    document = report.to_html()
+    block = re.search(
+        r"<script type='application/json' id='payload'>(.*)</script>",
+        document,
+        re.DOTALL,
+    )
+    assert block is not None
+    parsed = json.loads(block.group(1))
+    assert parsed["basket_id"] == "basket"
+    assert parsed["panels"]["leaderboard"]["rows"][0]["run"].startswith("<img")
+    # Nothing the HTML parser could read as a tag survives inside the element.
+    assert "<" not in block.group(1)

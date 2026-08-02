@@ -154,6 +154,14 @@ fn last_row_per_group(
     if batch.num_rows() == 0 {
         return Ok(RecordBatch::new_empty(out_schema.clone()));
     }
+    // `time_column_i64` is shared with the ASOF join and names *it* in this
+    // error, which is bewildering coming out of a query with no join in it.
+    // Reject the same input here, under this function's own name.
+    if batch.column(time_idx).null_count() > 0 {
+        return Err(DataFusionError::Execution(
+            "latest_on: time column contains nulls".into(),
+        ));
+    }
     let times = time_column_i64(batch, time_idx)?;
     let group = arrow::compute::cast(batch.column(group_idx), &DataType::Utf8)?;
     let group = group
@@ -354,15 +362,27 @@ fn latest_path(segment: &SegmentMeta, by_column: &str) -> ObjectPath {
 pub struct LatestByFunc {
     db: Arc<Database>,
     pin: crate::pin::PinContext,
+    /// Sidecar policy, supplied by the session. Not a constant: read-write
+    /// sidecars write objects and run a budget sweep that deletes them, which a
+    /// session that disabled disposable sidecars must not do.
+    mode: LatestByMode,
 }
 
 impl LatestByFunc {
     pub fn new(db: Arc<Database>) -> Self {
-        Self::pinned(db, crate::pin::PinContext::default())
+        Self::with_mode(db, LatestByMode::default())
     }
 
-    pub(crate) fn pinned(db: Arc<Database>, pin: crate::pin::PinContext) -> Self {
-        Self { db, pin }
+    pub fn with_mode(db: Arc<Database>, mode: LatestByMode) -> Self {
+        Self::pinned(db, crate::pin::PinContext::default(), mode)
+    }
+
+    pub(crate) fn pinned(
+        db: Arc<Database>,
+        pin: crate::pin::PinContext,
+        mode: LatestByMode,
+    ) -> Self {
+        Self { db, pin, mode }
     }
 }
 
@@ -387,7 +407,7 @@ impl TableFunctionImpl for LatestByFunc {
         }
         let table = string_arg(args, 0, "the table name")?;
         let by_column = string_arg(args, 1, "the group column")?;
-        let store = LatestByStore::new(self.db.clone(), LatestByMode::ReadWrite);
+        let store = LatestByStore::new(self.db.clone(), self.mode);
         self.pin.check_usable("latest_on")?;
         let (batch, _metrics) = block_on(store.latest_by(&table, self.pin.read_at(), &by_column))
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

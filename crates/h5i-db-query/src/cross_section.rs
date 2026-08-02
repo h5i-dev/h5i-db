@@ -307,6 +307,13 @@ fn scalar_pct(array: &ArrayRef, what: &str) -> DfResult<f64> {
 /// below it. Counting rather than interpolating is what makes the result a
 /// genuine member of the original cross-section, which matters when the output
 /// feeds a rank or a trade size.
+///
+/// One deliberate divergence: at `upper_pct == 0` zipline's `max(cutoff-1, 0)`
+/// makes the whole cross-section collapse to its minimum, because "winsorize
+/// everything above the 0th percentile" is read as "clamp to the smallest
+/// value". Here that degenerate cutoff clamps nothing and the values pass
+/// through. Returning the input unchanged is the safer reading of an argument
+/// that asks for no winsorization.
 fn cs_winsorize_values(
     x: &Float64Array,
     num_rows: usize,

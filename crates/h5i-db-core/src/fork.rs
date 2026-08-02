@@ -30,11 +30,17 @@
 //!
 //! Those cross-directory references are the one genuinely delicate part, since
 //! vacuum reclaims per table. They are safe because of a single invariant,
-//! enforced at commit time and re-checked by `verify`:
+//! checked at the two points where a cross-table path can enter a manifest
+//! (shadow materialization and promote) and re-checked by `verify`:
 //!
 //! > A shadow manifest may reference only (a) segments under its own table
 //! > prefix, or (b) segments listed in the base manifest at the pinned
 //! > sequence.
+//!
+//! Ordinary commits are not checked, and do not need to be: each derives its
+//! segment list from a manifest that already satisfied the invariant and adds
+//! only segments it wrote under its own prefix, so the property holds
+//! inductively for the whole history.
 //!
 //! (b) is safe because the fork's pin holds the base's retention floor at or
 //! below the pinned sequence, and base vacuum treats every segment in
@@ -320,6 +326,11 @@ pub async fn create_many(backend: &Backend, forks: &[Fork]) -> Result<()> {
 /// Overwrite an existing fork object (metadata edits). Callers must hold the
 /// database metadata lock.
 ///
+/// **No in-tree caller.** Fork objects are created once and deleted whole
+/// today, so nothing in this crate edits one in place; this is kept as the
+/// supported way for an out-of-tree caller to do so, because the index
+/// invalidation below is not optional and is easy to forget.
+///
 /// Drops the fork index first. The index reuses an entry when the object is
 /// still there at the same size, which an in-place edit can defeat — and the
 /// failure mode is a pin the index no longer reports, which is the one that
@@ -422,6 +433,11 @@ pub(crate) async fn create_entry_unsynced(
 /// Overwrite a fork catalog entry (spec-revision bumps). Callers must hold the
 /// database metadata lock.
 ///
+/// **No in-tree caller**, for the same reason [`store`] has none: a fork
+/// catalog entry is created once and removed whole. Kept for the same reason
+/// too, since the index invalidation is the part a hand-rolled overwrite would
+/// miss.
+///
 /// Invalidates the fork index for the same reason [`store`] does.
 pub async fn store_entry(backend: &Backend, fork_name: &str, entry: &ForkTableEntry) -> Result<()> {
     crate::fork_index::invalidate(backend).await?;
@@ -499,6 +515,79 @@ pub fn check_refinement(
 /// directory's lifecycle governs the file.
 pub fn is_own_segment(prefix: &str, segment_path: &str) -> bool {
     segment_path.starts_with(prefix)
+}
+
+/// Whether two specs claiming the same revision number actually describe the
+/// same revision, and if not, what differs (for the error message).
+///
+/// Only the fields a stored segment is *read through* count: the schema its
+/// rows are labelled with and the ordering they are trusted to be in. The
+/// identity fields (`table_id`, `name`, `checksum`) differ by construction
+/// after a re-key, and `created_at_ns` records when each object was written,
+/// not what it means. Storage options and the segment cap are excluded on
+/// purpose: they steer how *new* segments are written and never change how an
+/// existing one is interpreted, so a fork that retuned its codec must still be
+/// promotable.
+fn spec_revision_conflict(
+    existing: &crate::spec::TableSpec,
+    incoming: &crate::spec::TableSpec,
+) -> Option<String> {
+    if existing.schema_ipc_b64 != incoming.schema_ipc_b64 {
+        // Report the column names rather than the base64 blobs: the blobs are
+        // unreadable, and the answer an operator needs is which schema won.
+        let names = |spec: &crate::spec::TableSpec| match spec.schema() {
+            Ok(schema) => schema
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect::<Vec<_>>()
+                .join(", "),
+            // The spec parsed and checksummed; an unreadable IPC blob inside it
+            // is itself worth surfacing, but not worth failing this check for.
+            Err(e) => format!("<unreadable schema: {e}>"),
+        };
+        return Some(format!(
+            "existing schema [{}] vs promoted schema [{}]",
+            names(existing),
+            names(incoming)
+        ));
+    }
+    if existing.time_column != incoming.time_column {
+        return Some(format!(
+            "existing time column {:?} vs promoted {:?}",
+            existing.time_column, incoming.time_column
+        ));
+    }
+    if existing.sort_key != incoming.sort_key {
+        return Some(format!(
+            "existing sort key {:?} vs promoted {:?}",
+            existing.sort_key, incoming.sort_key
+        ));
+    }
+    None
+}
+
+/// The name of the base table a shadow was cut from, per the fork's pins.
+///
+/// Indexing the pin map directly would panic, and a miss is reachable from
+/// public API (`fork_diff`, `promote`) whenever the fork object and the fork
+/// catalog entry disagree about which base table a shadow came from. That is a
+/// damaged database rather than a caller mistake, so it has to surface as
+/// corruption naming both objects, not as an abort.
+fn pinned_base_name<'a>(fork: &'a Fork, base_table_id: Uuid, table: &str) -> Result<&'a str> {
+    fork.pins
+        .get(&base_table_id)
+        .map(|pin| pin.table_name.as_str())
+        .ok_or_else(|| {
+            Error::corruption(
+                layout::fork_path(&fork.name).as_ref(),
+                format!(
+                    "shadow {table:?} records base table {base_table_id}, which fork {:?} \
+                     does not pin",
+                    fork.name
+                ),
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,11 +1213,9 @@ impl crate::database::Database {
         let segments_shared = fork_paths.intersection(&base_paths).count();
         let segments_removed = base_paths.difference(&fork_paths).count();
 
+        let base_name = pinned_base_name(fork, origin.base_table_id, &fe.name)?;
         let base_head = self
-            .head(
-                &fork.pins[&origin.base_table_id].table_name,
-                origin.base_table_id,
-            )
+            .head(base_name, origin.base_table_id)
             .await?
             .head
             .sequence;
@@ -1224,7 +1311,7 @@ impl crate::database::Database {
         };
 
         // --- compare and swap against the base -------------------------
-        let base_name = fork.pins[&origin.base_table_id].table_name.clone();
+        let base_name = pinned_base_name(&fork, origin.base_table_id, &fe.name)?.to_string();
         let base_head_state = self.head(&base_name, origin.base_table_id).await?;
         let base_head = base_head_state.head.sequence;
         let own_prefix = format!("{}/", layout::table_prefix(fe.table_id));
@@ -1346,6 +1433,19 @@ impl crate::database::Database {
             segments.push(moved);
         }
 
+        // --- carry the shadow's schema revisions into the base table ---
+        //
+        // The promoted manifest keeps the fork's `schema_revision`, and specs
+        // are stored per table id. A fork that ran `evolve_schema` on its
+        // shadow wrote `tables/<shadow>/spec/<rev>.json`, and the base table
+        // has no object at that revision, so committing the manifest as-is
+        // publishes a base version whose spec cannot be loaded. That does not
+        // fail only the promoted version: resolution reads the spec at the
+        // manifest's revision, so the *table* stops being readable. Copy
+        // first, and let a failure here abort before HEAD moves.
+        self.copy_spec_revisions(fe.table_id, origin.base_table_id, &base_name)
+            .await?;
+
         let mut manifest = fork_manifest.clone();
         manifest.table_id = origin.base_table_id;
         manifest.sequence = new_sequence;
@@ -1400,6 +1500,110 @@ impl crate::database::Database {
             bytes_copied,
             rebased_from,
         })
+    }
+
+    /// Copy every spec revision `from_table_id` holds that `to_table_id` is
+    /// missing, re-keyed to the target table.
+    ///
+    /// Only revisions *above* the pinned one can be missing: a shadow is born
+    /// with a copy of the base's spec at the revision it forked from, and only
+    /// `evolve_schema` adds more.
+    ///
+    /// A revision the destination already holds is **not** assumed to be the
+    /// same revision. Revision numbers are reusable in this format: `restore`
+    /// rolls `manifest.schema_revision` back to the restored version's, and
+    /// `evolve_schema` derives the next number from the *head manifest's*
+    /// revision rather than from a per-table counter. So base rev 2 can already
+    /// mean `{ts, a}` while the shadow, forked after a restore to rev 1,
+    /// evolved its own rev 2 meaning `{ts, b}`. Skipping the copy there would
+    /// publish a base manifest at revision 2 whose segments were written under
+    /// the fork's revision 2: the read path adapts only when
+    /// `seg.schema_revision != target_revision`, so the fork's rows would come
+    /// back raw under a schema that names other columns. Silent column
+    /// mislabelling is the one outcome worse than a failed promote, so the two
+    /// specs are compared and a disagreement aborts.
+    ///
+    /// **Pre-existing hazard this inherits, deliberately not fixed here.** The
+    /// same reuse bites outside forks entirely: a second `evolve_schema` after
+    /// a `restore` writes `tables/<base>/spec/<N>.json` with an unconditional
+    /// `put`, overwriting the spec that the *older* version at revision N is
+    /// still read through. No promote is involved, and nothing detects it: an
+    /// `as_of`/`version` read of that older version silently starts resolving
+    /// to the newer schema. Fixing it needs a table-level monotonic revision
+    /// counter (persisted next to HEAD, never rewound by `restore`) so that
+    /// every `evolve_schema` mints a fresh number and specs become genuinely
+    /// write-once; that is a format change with a migration, not something this
+    /// function can do. The check below at least stops a fork from laundering
+    /// the collision into the base.
+    ///
+    /// Safe to run before the commit, and safe to have run when the commit
+    /// then fails: an unreferenced spec object is inert, and a retry finds it
+    /// already there with identical content, which the comparison accepts. The
+    /// reverse order is not safe, which is why this is not deferred.
+    async fn copy_spec_revisions(
+        &self,
+        from_table_id: Uuid,
+        to_table_id: Uuid,
+        to_table_name: &str,
+    ) -> Result<()> {
+        let metas = self
+            .backend()
+            .list(&layout::spec_prefix(from_table_id))
+            .await?;
+        let mut paths = Vec::new();
+        for meta in metas {
+            // A listing is the only way to enumerate revisions; anything whose
+            // name is not a revision is not ours to copy.
+            let Some(revision) = layout::spec_revision_from_path(&meta.location) else {
+                continue;
+            };
+            let to = layout::spec_path(to_table_id, revision);
+            // Read through `spec` so the source is checksum-verified before it
+            // is re-keyed: this is the moment a corrupt shadow spec would
+            // otherwise be laundered into the base table.
+            let mut spec = self.spec(from_table_id, revision).await?;
+            if self.backend().get_opt(&to).await?.is_some() {
+                // Both sides are checksum-verified, so a difference here is not
+                // damage to either object; it is two objects that cannot both be
+                // revision N of one table. `Corruption` is still the right
+                // variant: like `pinned_base_name` above, this reports metadata
+                // that contradicts itself rather than a caller mistake. An
+                // invalid-input refusal would name the promote's arguments, and
+                // no argument the caller can change makes this promote safe, so
+                // it would send them looking in the wrong place. `Corruption`
+                // is non-retryable and routes to inspection, which is exactly
+                // the situation.
+                let existing = self.spec(to_table_id, revision).await?;
+                if let Some(difference) = spec_revision_conflict(&existing, &spec) {
+                    return Err(Error::corruption(
+                        to.as_ref(),
+                        format!(
+                            "table {to_table_name:?} already has a schema revision \
+                             {revision}, and it describes a different schema from the \
+                             revision {revision} this promote carries ({difference}); \
+                             completing it would hand the fork's rows back labelled with \
+                             the base's schema. Revision numbers get reused after a \
+                             `restore`, so this is reachable without either object being \
+                             damaged: re-fork from the current head and redo the schema \
+                             change there"
+                        ),
+                    ));
+                }
+                continue;
+            }
+            spec.table_id = to_table_id;
+            spec.name = to_table_name.to_string();
+            spec.checksum = String::new();
+            spec.checksum = spec.compute_checksum()?;
+            self.backend()
+                .put(&to, serde_json::to_vec_pretty(&spec)?.into())
+                .await?;
+            paths.push(to);
+        }
+        if !paths.is_empty() {
+            self.backend().sync_objects(&paths).await?;
+        }
+        Ok(())
     }
 
     /// Promote a table the fork created: it has no base counterpart and every

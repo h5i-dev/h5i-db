@@ -219,7 +219,14 @@ class ReturnSeries:
             (
                 "_n",
                 f"SELECT *, row_number() OVER (ORDER BY {quote_ident(TS)}) AS _i,\n"
-                f"       ln(1 + {quote_ident(RET)}) AS _lr\n"
+                # A bar at or below -100% wipes the account out. Its growth
+                # factor is zero or negative, and ln() of that is -inf or NaN;
+                # unclamped, the NaN spreads through every running sum and
+                # every headline statistic, so one bad bar erases the whole
+                # tearsheet including the bars before it. Flooring the factor
+                # at zero says the one thing that is certainly true, that
+                # nothing was left, and keeps the rest of the report readable.
+                f"       ln(greatest(1 + {quote_ident(RET)}, 0)) AS _lr\n"
                 f"FROM _o",
             )
         )
@@ -286,12 +293,21 @@ class ReturnSeries:
             f"{quote_ident(RET)} END), 0) / "
             f"NULLIF(-coalesce(sum(CASE WHEN {quote_ident(RET)} < 0 THEN "
             f"{quote_ident(RET)} END), 0), 0) AS omega_ratio",
-            "power(corr(_clr, _i), 2) AS stability",
+            # Measured over the bars that still had capital: after a total
+            # loss the cumulative log return is minus infinity, and a
+            # correlation against it is NaN for the whole column rather than
+            # for the part of the run that has no capital left to trend.
+            "power(corr(CASE WHEN _cum > 0 THEN _clr END,\n"
+            "            CASE WHEN _cum > 0 THEN _i END), 2) AS stability",
             f"avg(power({quote_ident(RET)} - _mu, 3)) / "
             f"NULLIF(power(avg(power({quote_ident(RET)} - _mu, 2)), 1.5), 0) AS skew",
             f"avg(power({quote_ident(RET)} - _mu, 4)) / "
             f"NULLIF(power(avg(power({quote_ident(RET)} - _mu, 2)), 2), 0) - 3 "
             f"AS kurtosis",
+            # Parametric VaR at two standard deviations, which is what
+            # pyfolio prints in `perf_stats`. Not empyrical's
+            # `value_at_risk`, which is the historical percentile of the
+            # returns and gives a different number on any non-normal series.
             f"avg({quote_ident(RET)}) - 2.0 * stddev({quote_ident(RET)}) "
             f"AS daily_value_at_risk",
         ]
@@ -358,7 +374,6 @@ class ReturnSeries:
             return []
 
         episodes = []
-        remaining = [(i, r) for i, r in enumerate(rows)]
         # pyfolio removes each worst episode and re-searches what is left, so
         # the episodes it reports never overlap.
         alive = [True] * len(rows)

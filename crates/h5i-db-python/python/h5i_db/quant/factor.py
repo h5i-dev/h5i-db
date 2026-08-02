@@ -394,7 +394,7 @@ def _panel_sql(
     )
     ctes.append(("_panel", panel_body))
 
-    panel_sql = _with(ctes, f"SELECT * FROM _panel")
+    panel_sql = _with(ctes, "SELECT * FROM _panel")
     return {
         "panel": panel_sql,
         "stages": ctes,
@@ -1088,7 +1088,12 @@ class FactorPanel:
     # -- helpers ------------------------------------------------------------
 
     def quantile_count(self) -> int:
-        """The highest quantile label present in the panel."""
+        """The highest quantile label present in the panel.
+
+        An empty panel has no highest label, and `max()` over no rows is NULL;
+        that is a state the caller has to handle rather than an integer, so it
+        is named rather than turned into `int(None)` three frames down.
+        """
         row = (
             self._run(
                 _with(
@@ -1099,6 +1104,11 @@ class FactorPanel:
             .to_arrow()
             .to_pylist()[0]
         )
+        if row["q"] is None:
+            raise ValueError(
+                "this panel has no binned rows, so it has no quantiles; check "
+                "loss_report() for where they went"
+            )
         return int(row["q"])
 
     def _require_group(self, needed: bool) -> None:

@@ -271,7 +271,11 @@ python examples/backtest_report_demo.py
 ## 开发
 
 ```bash
-cargo test --workspace          # 约 290 个测试，含崩溃安全性的故障注入
+# 每次只跑一个包，并限制线程数：有几个测试套件会启动 DataFusion 会话和
+# tokio 运行时，一次跑完整个 workspace 可能会耗尽小机器的内存。
+for pkg in h5i-db-core h5i-db-query h5i-db-backtest h5i-db-cli h5i-db-ui; do
+  cargo test -p $pkg -- --test-threads=2
+done
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
 cargo run -p h5i-db-bench --profile bench-fast --bin h5i-db-fork-bench
 python3 benchmarks/backtest_compare/run.py \

@@ -58,6 +58,10 @@ impl TableFunctionImpl for TailFunc {
             ));
         };
         let requested_after = args.get(1).map(literal_u64).transpose()?;
+        // 250 ms is a compromise: fast enough that a `tail()` in a terminal
+        // feels live, slow enough that an idle table costs ~4 manifest HEADs a
+        // second. The floor stops a caller turning the poll into a hot loop
+        // against the object store.
         let poll_ms = args
             .get(2)
             .map(literal_u64)
@@ -65,6 +69,17 @@ impl TableFunctionImpl for TailFunc {
             .unwrap_or(250)
             .max(10);
         self.pin.check_usable("tail")?;
+        // An explicit `after_version` is a read point like any other: a pinned
+        // session chooses where reading starts, and nothing inside it may pick
+        // a different one. Without this, `tail('t', 0)` replayed the whole
+        // history *and* kept streaming commits made after the pin.
+        if requested_after.is_some() {
+            self.pin.check_no_explicit_read_point("tail")?;
+        }
+        // Residual, deliberately left: with no explicit version, `tail()` in an
+        // arrival-pinned session still follows the head, so commits made after
+        // the pin do reach the stream. Closing that means refusing `tail()`
+        // outright under a pin, which is a policy change rather than a bug fix.
         let resolved = block_on(self.db.resolve(table, self.pin.read_at()))
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let after = requested_after.unwrap_or(resolved.manifest.sequence);

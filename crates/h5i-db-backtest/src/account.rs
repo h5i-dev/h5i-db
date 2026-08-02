@@ -217,6 +217,13 @@ impl Valuation {
 }
 
 /// Cash balances in one or more currencies, plus the margin rules.
+///
+/// **Not yet wired into the engine.** [`crate::engine::Engine`] holds a single
+/// `cash: Money` in one reporting currency and converts through
+/// [`crate::currency::FxBook`] where a position settles elsewhere. This is the
+/// multi-currency model that would replace it: several balances, each
+/// haircut, margined together. Constructing one today values nothing the
+/// engine reads.
 #[derive(Debug)]
 pub struct Account {
     balances: BTreeMap<Currency, Money>,
@@ -440,6 +447,12 @@ pub struct Liquidation {
 }
 
 /// Scale a price by a fraction, for margin arithmetic.
+///
+/// **Not called from the engine.** The margin models here compute through
+/// [`crate::types::notional`], which rounds half away from zero; this one
+/// truncates. Exported because a caller writing a `MarginModel` of their own
+/// needs the same primitive, but the two round differently, so mixing them
+/// inside one requirement would make it depend on which was reached for.
 pub fn scaled(price: Price, fraction: Price) -> Result<Price> {
     let product = (price.raw() as i128 * fraction.raw() as i128) / SCALE as i128;
     crate::types::narrow(product, "scaled").map(Price::from_raw)

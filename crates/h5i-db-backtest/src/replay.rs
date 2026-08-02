@@ -132,6 +132,13 @@ impl StreamState {
 pub struct Replay {
     streams: Vec<StreamState>,
     heap: BinaryHeap<Reverse<Key>>,
+    /// The last instant handed out.
+    ///
+    /// **Written, never read.** Kept because it is the merge's own record of
+    /// where it is, which the per-stream ordering check cannot give: each
+    /// `StreamState` refuses a record before its own predecessor, and nothing
+    /// yet asserts the merged output is monotone *across* streams. That
+    /// assertion belongs here when it is added.
     last_emitted: Option<UnixNanos>,
     emitted: u64,
 }

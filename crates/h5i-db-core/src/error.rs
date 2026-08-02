@@ -172,7 +172,7 @@ pub enum Error {
     ReadOnly { op: String },
 
     #[error(
-        "mutation policy forbids direct {op}; create a reviewed plan and apply it          (CLI: --plan, then `plan apply`)"
+        "mutation policy forbids direct {op}; create a reviewed plan and apply it (CLI: --plan, then `plan apply`)"
     )]
     PolicyViolation { op: String },
 
@@ -256,16 +256,51 @@ impl Error {
     ///
     /// A supervising agent uses this to decide between retrying and
     /// replanning: conflicts and lock/timeout races are retryable, schema and
-    /// input errors are not.
+    /// input errors are not, and storage errors are split by whether the
+    /// condition can change on its own.
     pub fn retryable(&self) -> bool {
-        matches!(
-            self,
-            Error::VersionConflict { .. }
-                | Error::LockTimeout { .. }
-                | Error::Timeout { .. }
-                | Error::ObjectStore(_)
-                | Error::Io { .. }
-        )
+        match self {
+            Error::VersionConflict { .. } | Error::LockTimeout { .. } | Error::Timeout { .. } => {
+                true
+            }
+            // Storage failures split in two, and the split matters more here
+            // than anywhere else: a supervising agent loops on this answer.
+            // Throttling, a reset connection, a 5xx are worth another attempt;
+            // a missing object, a denied permission, or a failed precondition
+            // will fail identically forever, and retrying them buries the real
+            // cause under N copies of itself. Unknown variants stay retryable,
+            // because the transient ones are the open-ended set.
+            Error::ObjectStore(e) => !matches!(
+                e,
+                object_store::Error::NotFound { .. }
+                    | object_store::Error::InvalidPath { .. }
+                    | object_store::Error::NotSupported { .. }
+                    | object_store::Error::AlreadyExists { .. }
+                    | object_store::Error::Precondition { .. }
+                    | object_store::Error::NotModified { .. }
+                    | object_store::Error::NotImplemented { .. }
+                    | object_store::Error::PermissionDenied { .. }
+                    | object_store::Error::Unauthenticated { .. }
+                    | object_store::Error::UnknownConfigurationKey { .. }
+            ),
+            Error::Io { source, .. } => {
+                // ENOSPC is the one that matters and the one `ErrorKind` cannot
+                // express on stable Rust, so it is matched by errno: a full
+                // disk retried in a loop writes nothing and hides why.
+                const ENOSPC: i32 = 28;
+                source.raw_os_error() != Some(ENOSPC)
+                    && !matches!(
+                        source.kind(),
+                        std::io::ErrorKind::NotFound
+                            | std::io::ErrorKind::PermissionDenied
+                            | std::io::ErrorKind::AlreadyExists
+                            | std::io::ErrorKind::InvalidInput
+                            | std::io::ErrorKind::InvalidData
+                            | std::io::ErrorKind::Unsupported
+                    )
+            }
+            _ => false,
+        }
         // PromoteConflict is deliberately NOT retryable: the losing fork's work
         // was computed against a base that no longer exists, so re-running the
         // same promote can only fail again. The recovery is to re-fork and
@@ -423,8 +458,12 @@ impl Error {
                 "list the versions that are still retained",
             )],
             Error::PolicyViolation { op } => vec![
+                // The op arrives in the manifest's spelling (`replace_range`);
+                // the CLI subcommand is the kebab-case one, and an action an
+                // agent cannot paste is worse than none. `<args>` is a
+                // placeholder like `<db>`, not an elision.
                 NextAction::new(
-                    format!("h5i-db {op} <db> <table> … --plan"),
+                    format!("h5i-db {} <db> <table> <args> --plan", op.replace('_', "-")),
                     "policy requires a reviewed plan; prepare one instead of committing directly",
                 ),
                 NextAction::new(
@@ -440,10 +479,12 @@ impl Error {
                 "h5i-db schema <db> <table>",
                 "compare the input's columns and types against the table's",
             )],
-            Error::ReadOnly { .. } => vec![NextAction::new(
-                "h5i-db policy show <db>",
-                "this handle is read-only; re-open for writing to mutate",
-            )],
+            // ReadOnly deliberately offers none. It is a property of how the
+            // handle was opened, not of the database, so no command run
+            // against the database changes it; the previous suggestion here
+            // (`policy show`) named the *mutation policy*, an unrelated
+            // mechanism, and would have sent an agent chasing the wrong knob.
+            // The hint carries the real fix: re-open without read-only.
             Error::LockTimeout { table, .. } => vec![NextAction::new(
                 format!("h5i-db versions <db> {table}"),
                 "another writer holds the lock; check whether it committed, then retry",
@@ -663,6 +704,40 @@ mod tests {
         );
         assert!(Error::Timeout { seconds: 1 }.retryable());
         assert!(Error::io("/p", std::io::Error::other("x")).retryable());
+        assert!(
+            Error::ObjectStore(object_store::Error::Generic {
+                store: "s3",
+                source: "throttled".into(),
+            })
+            .retryable()
+        );
+
+        // Permanent storage failures are not, however "storage" they look: a
+        // retry loop on a missing object, a denied permission, or a full disk
+        // makes no progress and hides the cause behind N identical failures.
+        assert!(
+            !Error::ObjectStore(object_store::Error::NotFound {
+                path: "p".into(),
+                source: "gone".into(),
+            })
+            .retryable()
+        );
+        assert!(
+            !Error::ObjectStore(object_store::Error::PermissionDenied {
+                path: "p".into(),
+                source: "denied".into(),
+            })
+            .retryable()
+        );
+        // ENOSPC, matched by errno because `ErrorKind` cannot name it.
+        assert!(!Error::io("/p", std::io::Error::from_raw_os_error(28)).retryable());
+        assert!(
+            !Error::io(
+                "/p",
+                std::io::Error::from(std::io::ErrorKind::PermissionDenied)
+            )
+            .retryable()
+        );
 
         // Deterministic user/logic errors are not.
         assert!(!Error::invalid("x").retryable());

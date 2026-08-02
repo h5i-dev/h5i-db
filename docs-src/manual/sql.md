@@ -232,18 +232,21 @@ FROM trades;
 
 ```sql
 rolling_avg(value, order_by, rows)
+rolling_avg(value, order_by, rows, partition_by)
 ```
 
 Convenience sugar, expanded before parsing into the standard window frame
-`AVG(value) OVER (ORDER BY order_by ROWS BETWEEN rows−1 PRECEDING AND
-CURRENT ROW)`. `rows` must be an integer literal in 1…1,000,000.
+`AVG(value) OVER (PARTITION BY partition_by ORDER BY order_by ROWS BETWEEN
+rows−1 PRECEDING AND CURRENT ROW)`. `rows` must be an integer literal in
+1…1,000,000. The `PARTITION BY` is emitted only when the fourth argument is
+given.
 
-!!! warning "Not partitioned"
-    The sugar has **no `PARTITION BY`**: it is a trailing n-row window in
-    global order and will mix symbols on a multi-symbol table. Use it on
-    single-key subsets, or write the explicit window:
-    `AVG(x) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN n−1 PRECEDING
-    AND CURRENT ROW)`. It also cannot take its own `OVER` clause.
+!!! warning "The three-argument form is not partitioned"
+    Without a fourth argument the window is a trailing n-row window in
+    **global** order, so on a multi-symbol table it averages across symbols
+    and returns a plausible, wrong number. Pass the partition column, use the
+    sugar on single-key subsets, or write the window out in full. Either form
+    still cannot take its own `OVER` clause.
 
 ### `first_value` / `last_value`
 

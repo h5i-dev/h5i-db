@@ -11,10 +11,15 @@ Two corrections, both here:
 * **Purging** removes training observations whose *label horizon* overlaps
   the test set. It is the horizon that matters, not the observation time,
   which is why every splitter here takes one.
-* **An embargo** additionally drops training observations immediately after
-  the test set, covering serial correlation that outlives the label itself.
+* **An embargo** additionally drops the training observations adjacent to the
+  test set, covering serial correlation that outlives the label itself. Which
+  side is adjacent depends on the splitter: a k-fold has training data after
+  the test block, so the embargo runs forward (``embargo_span``); a
+  walk-forward trains only on the past, so the observations at risk are the
+  ones just before the test block and the embargo runs backward
+  (``embargo_gap``).
 
-The embargo arithmetic lives in [`embargo_span`] and nothing re-derives it.
+The embargo width lives in ``embargo_width`` and nothing re-derives it.
 Duplicating it is how a splitter and a walk-forward planner drift apart and
 disagree about which spans a fold may see.
 """
@@ -31,6 +36,8 @@ __all__ = [
     "combinatorial_purged",
     "walk_forward",
     "embargo_span",
+    "embargo_gap",
+    "embargo_width",
 ]
 
 
@@ -61,20 +68,45 @@ class Split:
         return len(self.test)
 
 
-def embargo_span(test_end: int, total: int, embargo: float) -> range:
-    """Indices embargoed after a test block ends.
+def embargo_width(total: int, embargo: float) -> int:
+    """How many observations an embargo covers.
 
     ``embargo`` is a fraction of the whole sample, following the usual
     convention: 0.01 on 1,000 observations embargoes 10. The single owner of
     this arithmetic, so a splitter and a walk-forward planner cannot disagree
-    about which observations a fold may see.
+    about how wide a fold's embargo is.
     """
     if not 0.0 <= embargo < 1.0:
         raise ValueError(f"embargo must be in [0, 1), got {embargo}")
-    width = int(round(total * embargo))
+    return max(0, int(round(total * embargo)))
+
+
+def embargo_span(test_end: int, total: int, embargo: float) -> range:
+    """Indices embargoed after a test block ends.
+
+    For splitters whose training set extends past the test block, which is
+    every cross-validator here. A walk-forward wants
+    :func:`embargo_gap` instead.
+    """
+    width = embargo_width(total, embargo)
     if width <= 0:
         return range(0)
     return range(test_end + 1, min(total, test_end + 1 + width))
+
+
+def embargo_gap(test_start: int, total: int, embargo: float) -> range:
+    """Indices embargoed immediately before a test block begins.
+
+    The mirror image of :func:`embargo_span`, for a walk-forward: its training
+    set lies entirely in the past, so the observations whose serial
+    correlation reaches into the test block are the ones just before it. An
+    embargo applied forward there removes nothing at all, which looks like an
+    embargo and is not one.
+    """
+    width = embargo_width(total, embargo)
+    if width <= 0:
+        return range(0)
+    return range(max(0, test_start - width), test_start)
 
 
 def _purge(
@@ -188,13 +220,16 @@ def walk_forward(
 ) -> Iterator[Split]:
     """Rolling or expanding walk-forward, purged and embargoed.
 
-    Shares its embargo arithmetic with the cross-validators above rather
-    than reimplementing it, which is the whole reason it lives in this
-    module.
+    Shares its embargo width with the cross-validators above rather than
+    reimplementing it, which is the whole reason it lives in this module, but
+    applies it backwards: training here is entirely before the test block, so
+    the embargo drops the last observations of the training window rather than
+    the first ones after the test. Forward, as the cross-validators apply it,
+    it would remove nothing.
     """
     if train_size < 1 or test_size < 1:
         raise ValueError("train and test sizes must be positive")
-    step = step or test_size
+    step = test_size if step is None else step
     if step < 1:
         raise ValueError("step must be positive")
 
@@ -203,7 +238,7 @@ def walk_forward(
         train_start = 0 if expanding else start
         train_end = start + train_size
         test = tuple(range(train_end, train_end + test_size))
-        embargoed = set(embargo_span(test[-1], n, embargo))
+        embargoed = set(embargo_gap(test[0], n, embargo))
         candidate = list(range(train_start, train_end))
         train, purged = _purge(candidate, test, horizons, embargoed)
         yield Split(train=train, test=test, purged=purged)

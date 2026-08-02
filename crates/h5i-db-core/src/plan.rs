@@ -274,6 +274,11 @@ impl Database {
 
         let mut segments = kept.clone();
         segments.extend(rewritten.clone());
+        // …including the time sort, which is the part the apply path cannot
+        // add later: `commit_planned` writes `plan.segments` verbatim, so an
+        // unsorted plan lands an unsorted manifest and breaks the ordering a
+        // scan advertises from the per-segment `sorted` flags.
+        segments.sort_by_key(|s| s.time_range.map(|(min, _)| min).unwrap_or(i64::MAX));
         let rows_after: u64 = segments.iter().map(|s| s.rows).sum();
         let added_bytes: u64 = rewritten
             .iter()

@@ -363,8 +363,12 @@ fn sort_by_time(input: Arc<dyn ExecutionPlan>, time_col: &str) -> DfResult<Arc<d
         SortOptions::default(),
     )])
     .expect("non-empty ordering");
-    // TODO(perf): hash-repartition both sides on the `by` keys and run a
-    // partitioned join instead of collapsing to a single partition.
+    // Known cost, not an oversight: both sides collapse to a single partition
+    // here. Hash-repartitioning on the `by` keys and running the join per
+    // partition would parallelize it, but it is a different operator (the
+    // merge path below is what keeps the single-partition form cheap on
+    // already-sorted input), so it is a change to make deliberately rather
+    // than a loose end in a shipped path.
     let single: Arc<dyn ExecutionPlan> = if input.output_partitioning().partition_count() > 1 {
         // When every partition is already time-sorted (our providers declare
         // this on sorted segments), merge instead of concatenating so the

@@ -6,7 +6,15 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Hash normalized SQL so telemetry never stores query text or literals.
+/// A stable, opaque identity for a query, so telemetry can group runs of the
+/// same statement without carrying the statement.
+///
+/// The whole SQL string is hashed after whitespace is collapsed, so two
+/// spellings of one query share a fingerprint. Note what that does and does
+/// not give you: literals are *inside* the hash, not stripped from the query,
+/// so two runs differing only in a `WHERE symbol = …` value fingerprint
+/// differently. The digest is one-way and the text never leaves this
+/// function, but it is not a normalized-parameters fingerprint.
 pub fn query_fingerprint(sql: &str) -> String {
     let normalized = sql.split_whitespace().collect::<Vec<_>>().join(" ");
     blake3::hash(normalized.as_bytes()).to_hex().to_string()
@@ -114,11 +122,24 @@ impl WorkloadTelemetryBuffer {
         }
     }
 
+    /// The buffer, whether or not a previous holder of the lock panicked.
+    ///
+    /// This is a ring of observations about queries. A panic elsewhere in the
+    /// process cannot corrupt it into anything worse than a report that is
+    /// half-pushed, and killing every later measurement over that -- which is
+    /// what `.unwrap()` on a poisoned mutex does -- turns one panic into a
+    /// permanently blind session.
+    fn buffer(&self) -> std::sync::MutexGuard<'_, VecDeque<QueryPerformanceReport>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn record(&self, report: QueryPerformanceReport) {
         if self.capacity == 0 {
             return;
         }
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self.buffer();
         while guard.len() >= self.capacity {
             guard.pop_front();
         }
@@ -126,11 +147,11 @@ impl WorkloadTelemetryBuffer {
     }
 
     pub fn snapshot(&self) -> Vec<QueryPerformanceReport> {
-        self.inner.lock().unwrap().iter().cloned().collect()
+        self.buffer().iter().cloned().collect()
     }
 
     pub fn clear(&self) {
-        self.inner.lock().unwrap().clear();
+        self.buffer().clear();
     }
 }
 
@@ -227,6 +248,27 @@ mod tests {
             query_fingerprint("SELECT * FROM a"),
             query_fingerprint("SELECT * FROM b")
         );
+    }
+
+    #[test]
+    fn a_panic_elsewhere_does_not_end_telemetry_for_good() {
+        // A poisoned mutex used to take every later measurement with it, so
+        // one unrelated panic left the session permanently blind.
+        let buffer = WorkloadTelemetryBuffer::new(4);
+        let poisoner = buffer.clone();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.inner.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        std::panic::set_hook(previous);
+
+        buffer.record(report(Uuid::new_v4(), "SELECT 1"));
+        assert_eq!(buffer.snapshot().len(), 1);
+        buffer.clear();
+        assert!(buffer.snapshot().is_empty());
     }
 
     #[test]

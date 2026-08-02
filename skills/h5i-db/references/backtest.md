@@ -50,7 +50,7 @@ constructor rejects.
 | section | fields |
 |---|---|
 | `DataConfig` | `signals` `commands` `strategy_id` `snapshot` `version` `as_of` `window` `minimum_coverage` |
-| `ExecutionConfig` | `fee_kind` `fee_rate` `maker_rebate` `maker_fee_rate` `queue_position` `optimistic_queue` `latency_nanos` `slippage_ticks` |
+| `ExecutionConfig` | `fee_kind` `fee_rate` `maker_rebate` `maker_fee_rate` `queue_position` `optimistic_queue` `latency_nanos` `slippage_ticks` `margin_kind` `leverage` `maintenance_margin_rate` |
 | `PortfolioConfig` | `starting_cash` |
 | `RiskConfig` | `max_order_quantity` `max_abs_position` `max_open_orders` |
 | `OutputConfig` | `equity_interval_nanos` |
@@ -61,6 +61,12 @@ it peaks at even odds and vanishes at certainty, and it is usually the largest
 cost component. Combinations that describe no real venue are refused at
 construction, so `queue_position=True` with `slippage_ticks=1` raises rather than
 silently letting one win.
+
+`margin_kind` is `"cash"`, `"linear"` or `None`. Leaving it `None` means no
+margin model at all: leverage is unbounded and nothing can be liquidated, so
+the run's `liquidations` and `rejected_for_margin` counts are zero because
+nothing was measuring, not because the account was never at risk. The report
+says which of the two it was.
 
 ## Stamp a signal *after* the quote it came from
 

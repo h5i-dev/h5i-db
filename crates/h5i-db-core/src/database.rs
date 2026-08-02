@@ -824,6 +824,26 @@ impl Database {
                     ),
                 });
             };
+            // The same pin guard the base branch applies below, on the
+            // fork-owned table id. A shadow is an ordinary table, so it can be
+            // a GC root's target like any other: a nested fork pins its
+            // parent's tables exactly the way a fork pins the base's. Deleting
+            // everything under a pinned shadow would strand the child's reads
+            // on segments that no longer exist, which is the one failure this
+            // whole area exists to prevent.
+            for snap in snapshot::list(&self.backend).await? {
+                if snap.entries.contains_key(&fe.table_id) {
+                    return Err(Error::invalid(format!(
+                        "table {name:?} is pinned by snapshot {:?}; delete the snapshot first",
+                        snap.name
+                    )));
+                }
+            }
+            if let Some((pinned_by, _)) = self.fork_index().await?.first_pin(fe.table_id) {
+                return Err(Error::invalid(format!(
+                    "table {name:?} is pinned by fork {pinned_by:?}; drop the fork first"
+                )));
+            }
             crate::fork::remove_entry(&self.backend, &fork.name, name).await?;
             self.backend.heads.remove(fe.table_id).await?;
             let objects = self
@@ -868,6 +888,14 @@ impl Database {
     /// Rename = catalog edit only; no data moves.
     pub async fn rename_table(&self, from: &str, to: &str) -> Result<()> {
         self.ensure_writable("rename_table")?;
+        // Name resolution below is fork-aware, but the catalog writes are not:
+        // they create and remove entries in the *global* catalog. From a fork
+        // that combination renames a base table out from under main, which no
+        // caller asked for and no fork can undo. Renaming inside a fork would
+        // need the fork catalog to carry an alias for a table it does not own,
+        // which buys nothing an agent asked for either: say so instead of
+        // corrupting the base.
+        self.ensure_base("rename_table")?;
         validate_table_name(to)?;
         let _meta = self.backend.meta_lock().await?;
         let mut entry = self.entry(from).await?;
@@ -1812,6 +1840,19 @@ impl Database {
     /// Commit a metadata-only schema revision. Existing immutable segments
     /// remain in place and are adapted on read (nullable trailing columns are
     /// null-filled; supported numeric widenings are cast).
+    ///
+    /// **Known hazard: revision numbers are not monotonic per table.** The next
+    /// revision is derived from the *head manifest's* revision (below), and
+    /// [`Self::restore`] rolls that number backwards to the restored version's.
+    /// So `evolve → restore → evolve` writes `spec/2.json` a second time with an
+    /// unconditional `put`, and the first version at revision 2 silently starts
+    /// resolving to the second schema: an `as_of`/`version` read of it returns
+    /// its old segments labelled with columns they never had. The real fix is a
+    /// table-level monotonic revision counter persisted next to HEAD and never
+    /// rewound by `restore`, which makes spec objects genuinely write-once; that
+    /// is a format change with a migration and is not done here.
+    /// [`crate::fork`]'s promote path refuses the fork-shaped instance of this
+    /// collision rather than letting it reach the base table.
     pub async fn evolve_schema(
         &self,
         name: &str,
@@ -2423,6 +2464,18 @@ impl Database {
         manifest.segments = kept;
         let added = rewritten.len() - deduped;
         manifest.segments.extend(rewritten);
+        // Restore time order the way `compact` does. The rewritten boundary
+        // segments and the replacement rows are appended after every kept
+        // segment, so a range mutation in the middle of a table would otherwise
+        // leave a list whose last entries sit earliest in time. That is not
+        // cosmetic: a scan advertises `output_ordering` on the time column when
+        // every segment carries the `sorted` flag, and it reads the segments in
+        // manifest order, so an out-of-order list makes that promise false and
+        // a consumer relying on it (a merge join, a sort-elision) silently
+        // wrong.
+        manifest
+            .segments
+            .sort_by_key(|s| s.time_range.map(|(min, _)| min).unwrap_or(i64::MAX));
         let mut res = self
             .commit_manifest(
                 name,
@@ -2740,6 +2793,14 @@ impl Database {
 
     pub async fn delete_snapshot(&self, name: &str) -> Result<()> {
         self.ensure_writable("delete_snapshot")?;
+        // Symmetric with `create_snapshot`, and for the same two reasons.
+        // Deleting a snapshot *releases* a database-global GC root, so a fork
+        // handle would be lowering a retention floor over tables it cannot
+        // see; and the release is a catalog-level mutation, so it is
+        // serialized against the reads (drop_table, vacuum) that decide what is
+        // still pinned by looking at exactly this object.
+        self.ensure_base("delete_snapshot")?;
+        let _meta = self.backend.meta_lock().await?;
         snapshot::delete(&self.backend, name).await
     }
 

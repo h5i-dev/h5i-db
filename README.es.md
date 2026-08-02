@@ -306,7 +306,12 @@ cronometrada directamente; método en
 ## Desarrollo
 
 ```bash
-cargo test --workspace          # ~290 pruebas, incl. inyección de fallos de seguridad ante caídas
+# Un paquete a la vez y con hilos limitados: varias suites levantan sesiones
+# de DataFusion y runtimes de tokio, así que ejecutar todo el workspace a la
+# vez puede agotar la memoria en una máquina pequeña.
+for pkg in h5i-db-core h5i-db-query h5i-db-backtest h5i-db-cli h5i-db-ui; do
+  cargo test -p $pkg -- --test-threads=2
+done
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
 cargo run -p h5i-db-bench --profile bench-fast --bin h5i-db-fork-bench
 python3 benchmarks/backtest_compare/run.py \

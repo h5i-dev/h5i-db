@@ -87,18 +87,23 @@ pub trait HeadStore: Send + Sync + std::fmt::Debug {
 
     /// Swap several HEADs under one durability barrier.
     ///
-    /// Every critical section is entered, every expectation revalidated, then
-    /// `publish` runs *once*, then the swaps happen. That is the ordering
-    /// [`commit`] gives one table, shared across a batch instead of repeated
-    /// per table: with N tables it turns N manifest barriers into one, and
-    /// lets the HEAD flushes themselves be issued together.
+    /// An implementation with fsyncs to share should enter every critical
+    /// section, revalidate every expectation, run `publish` *once*, then swap.
+    /// That is the ordering [`HeadStore::commit`] gives one table, shared
+    /// across a batch instead of repeated per table: with N tables it turns N
+    /// manifest barriers into one, and lets the HEAD flushes themselves be
+    /// issued together.
     ///
     /// Callers must already hold the database metadata lock, which is what
     /// makes taking N writer locks at once safe from deadlock.
     ///
-    /// The default is the loop it replaces, so a store with no fsyncs to
-    /// share (an object store, where durability is the PUT) inherits the
-    /// existing behaviour and nothing to review.
+    /// **The default does not give that ordering**, and is only the default
+    /// for stores that gain nothing from it. It runs `publish` up front and
+    /// then the per-table loop it replaces, so unlike [`HeadStore::commit`] a
+    /// batch that loses a race has already published. On a store where
+    /// durability is the PUT (an object store) that costs only unreferenced
+    /// manifest objects, which vacuum collects; nothing about the swap or the
+    /// conflict it reports changes.
     async fn commit_batch(
         &self,
         swaps: &[HeadSwap],

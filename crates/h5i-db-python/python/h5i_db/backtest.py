@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import errno
 import hashlib
 import inspect as _inspect
 import json
@@ -36,6 +37,10 @@ from typing import Any, Mapping, Optional, Sequence, Union
 
 import pyarrow as pa
 
+# The package defines this before it imports this module, so the import is not
+# circular; it is here rather than inside `_to_nanos` because that runs once
+# per signal row.
+from . import _datetime_to_ns
 from .backtest_attention import (
     AttentionState,
     TrialAttention,
@@ -44,6 +49,7 @@ from .backtest_attention import (
 )
 from .backtest_config import (
     BacktestConfig,
+    ConfigCompatibilityWarning,
     DataConfig,
     ExecutionConfig,
     OutputConfig,
@@ -82,6 +88,7 @@ __all__ = [
     "BacktestResult",
     "BacktestStudy",
     "AttentionState",
+    "ConfigCompatibilityWarning",
     "EventStrategy",
     "DataConfig",
     "ExecutionConfig",
@@ -127,32 +134,119 @@ __all__ = [
     "RESULT_TABLES",
 ]
 
-_LEDGER_LOCKS: dict[str, threading.RLock] = {}
+try:  # POSIX: whole-file advisory locks, released with the file description.
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover - exercised on Windows only
+    _fcntl = None
+try:  # Windows: byte-range locks on the same file.
+    import msvcrt as _msvcrt
+except ImportError:  # pragma: no cover - exercised on Windows only
+    _msvcrt = None
+
+#: How many lock files the trial ledger uses. A trial waits only on trials
+#: whose digest lands in the same slot, so a study runs its candidates
+#: concurrently while two attempts at the *same* trial still serialise (which
+#: is what turns the second one into a cache hit instead of a duplicate run).
+#: Fixed, so a long study cannot leave one lock file per trial behind; a
+#: collision costs two unrelated trials some waiting, never correctness.
+_LEDGER_LOCK_SLOTS = 16
+_LEDGER_LOCKS: dict[tuple[str, int], threading.Lock] = {}
 _LEDGER_LOCKS_GUARD = threading.Lock()
 
 
-@contextmanager
-def _trial_ledger_lock(db: Any):
-    """Serialize digest lookup plus run creation for one local database."""
-    database_path = os.path.abspath(os.fspath(db.path))
-    with _LEDGER_LOCKS_GUARD:
-        process_lock = _LEDGER_LOCKS.setdefault(database_path, threading.RLock())
-    with process_lock:
-        handle = (Path(database_path) / ".trial-ledger.lock").open("a+b")
-        fcntl = None
-        try:
+def _lock_file(handle: Any) -> None:
+    """Take an exclusive advisory lock on an open file, blocking until it is
+    ours.
+
+    Windows has no `flock`, and leaving it unlocked meant the comment named a
+    fallback that did not exist: `msvcrt.locking` is that fallback. `LK_LOCK`
+    gives up after roughly ten seconds, so the wait is a retry loop rather
+    than one call.
+    """
+    if _fcntl is not None:
+        _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+        return
+    if _msvcrt is not None:  # pragma: no cover - Windows only
+        handle.seek(0)
+        while True:
             try:
-                import fcntl as _fcntl
-            except ImportError:  # pragma: no cover - Windows process fallback
-                pass
-            else:
-                fcntl = _fcntl
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                _msvcrt.locking(handle.fileno(), _msvcrt.LK_LOCK, 1)
+                return
+            except OSError as exc:
+                # "Still held by someone else" is the one case worth waiting
+                # through; anything else is a real failure and must surface.
+                if exc.errno != errno.EDEADLOCK:
+                    raise
+
+
+def _unlock_file(handle: Any) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+    elif _msvcrt is not None:  # pragma: no cover - Windows only
+        handle.seek(0)
+        _msvcrt.locking(handle.fileno(), _msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def _trial_ledger_lock(db: Any, trial_digest: str):
+    """Serialize ledger lookup and creation for one trial of one database.
+
+    Scoped by digest rather than by database. The lock is held across the
+    kernel run, because the run is what creates the fork the next lookup has
+    to find; holding one database-wide lock for that long collapsed a
+    `max_workers=8` study to one trial at a time, which is the opposite of
+    what a study is for.
+
+    A plain `Lock`, not an `RLock`: the file lock underneath is per open file
+    description and cannot be re-entered, so advertising reentrancy would only
+    promise something this cannot keep. Two spellings of one database path key
+    two in-process locks (a `chdir` is enough to produce them), and the file
+    lock is what still makes those two agree.
+    """
+    database_path = os.path.abspath(os.fspath(db.path))
+    slot = int(trial_digest[:8], 16) % _LEDGER_LOCK_SLOTS
+    with _LEDGER_LOCKS_GUARD:
+        process_lock = _LEDGER_LOCKS.setdefault(
+            (database_path, slot), threading.Lock()
+        )
+    with process_lock:
+        handle = (Path(database_path) / f".trial-ledger-{slot:02d}.lock").open("a+b")
+        try:
+            _lock_file(handle)
             yield
         finally:
-            if fcntl is not None:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _unlock_file(handle)
             handle.close()
+
+
+#: Forks `execute` has handed to somebody as a cache hit.
+#:
+#: "This trial created the fork" stopped meaning "this trial owns the fork"
+#: once `find_trial` existed: the digest lock is released when `run()` returns,
+#: and a concurrent trial hashing to the same `trial_digest` is then handed the
+#: same fork and keeps a result object naming it. Entries are never removed --
+#: "someone else is holding this" does not become false again, and the other
+#: holder's `StudyResult` still cites the fork long after its own call
+#: returned.
+_SHARED_FORKS: set[str] = set()
+_SHARED_FORKS_GUARD = threading.Lock()
+
+
+def _share_fork(fork_name: str) -> None:
+    with _SHARED_FORKS_GUARD:
+        _SHARED_FORKS.add(fork_name)
+
+
+def fork_is_shared(fork_name: str) -> bool:
+    """Whether a trial other than the one that created this fork holds it.
+
+    Cleanup paths ask before dropping. Asking under the same trial-ledger lock
+    `execute` holds across lookup and run is what makes the answer usable: the
+    lookup that would share the fork cannot be running concurrently, so the
+    fork is either already shared (and must survive) or still invisible to it.
+    """
+    with _SHARED_FORKS_GUARD:
+        return fork_name in _SHARED_FORKS
 
 #: Mirrors `crates/h5i-db-backtest/src/schema.rs::signals()`.
 SIGNAL_SCHEMA = pa.schema(
@@ -212,7 +306,11 @@ def _to_nanos(value: Union[int, str, _dt.datetime]) -> int:
     if isinstance(value, _dt.datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=_dt.timezone.utc)
-        return int(value.timestamp() * 1_000_000_000)
+        # Integer arithmetic, via the one implementation that gets it right:
+        # `timestamp() * 1_000_000_000` rounds by hundreds of nanoseconds at
+        # present-day instants, which is enough to move a window boundary
+        # across an event and change what a run replays.
+        return _datetime_to_ns(value)
     if isinstance(value, str):
         return _to_nanos(_dt.datetime.fromisoformat(value.replace("Z", "+00:00")))
     raise TypeError(f"cannot read {value!r} as a timestamp")
@@ -337,20 +435,25 @@ class EventStrategy:
 
     Callbacks receive mappings and return one command mapping, an iterable of
     command mappings, or ``None``. Supported actions are ``submit``,
-    ``amend``, ``cancel``, and ``timer``. Declarative signals or command
-    tables remain preferable when callbacks are unnecessary because they
-    avoid crossing the Python boundary for every event.
+    ``amend``, ``cancel``, ``timer``, ``mint``, ``redeem``, ``convert``,
+    ``twap``, and ``forecast``. Declarative signals or command tables remain
+    preferable when callbacks are unnecessary because they avoid crossing the
+    Python boundary for every event.
 
-    ``context`` is optional. Declare a callback without it and it is not
-    built, which for ``on_event`` saves an object and a snapshot of every
-    open position on every event::
+    ``context`` is optional, and it is the parameter's **name** (``context``
+    or ``ctx``) that asks for it. Declare a callback without one and it is not
+    built, which for ``on_event`` saves an object and a snapshot of every open
+    position on every event::
 
         def on_event(self, event): ...           # context is not built
         def on_event(self, context, event): ...  # context is built
 
     Both forms are supported everywhere; the shorter one is simply not
-    charged for what it does not ask for. Callbacks left at this class's
-    do-nothing versions are not called at all.
+    charged for what it does not ask for. Any further parameter needs a
+    default, since the engine fills only these; a signature the engine cannot
+    call is refused when the run starts rather than misbound during it. A
+    ``*args`` callback names nothing, so it is handed the context. Callbacks
+    left at this class's do-nothing versions are not called at all.
     """
 
     def on_start(self, context: dict) -> Any:
@@ -412,7 +515,11 @@ def run(
     max_order_quantity: Optional[float] = None,
     max_abs_position: Optional[float] = None,
     max_open_orders: Optional[int] = None,
+    margin_kind: Optional[str] = None,
+    leverage: Optional[float] = None,
+    maintenance_margin_rate: Optional[float] = None,
     metadata: Optional[Mapping[str, Any]] = None,
+    _inspection: Optional[PreflightInspection] = None,
 ) -> BacktestResult:
     """Replay ``signals`` against stored market data and record the run.
 
@@ -428,6 +535,13 @@ def run(
     when the series charges makers, set ``maker_fee_rate`` as well.
     ``minimum_coverage`` refuses to run at all when the data covers less of
     the requested window than that.
+
+    ``margin_kind`` installs a margin model: ``"cash"`` for fully funded
+    positions, ``"linear"`` with ``leverage`` for a fixed fraction of
+    notional. Without one, leverage is infinite and the run's ``liquidations``
+    and ``rejected_for_margin`` counts are zero because nothing was measuring
+    them, not because the strategy was never at risk. The report says which
+    model priced it in ``margin_model`` and ``execution_fingerprint``.
     """
     if (strategy_id is None) != (_python_strategy is None):
         raise ValueError(
@@ -447,52 +561,45 @@ def run(
         window=window,
         minimum_coverage=minimum_coverage,
     )
-    native_args = (
+    # One keyword call. The three positional call sites this replaces had to
+    # stay in lock-step across twenty-two arguments, and they were branching
+    # on an ABI that cannot differ: the extension ships inside this wheel.
+    payload = db._native.run_backtest(
         run_id,
         float(starting_cash),
-        (
-            data_config.strategy_id
-            if data_config.strategy_kind == "callback"
-            else data_config.strategy_table
-        ),
-        fee_kind,
-        fee_rate,
-        maker_rebate,
-        queue_position,
-        optimistic_queue,
-        latency_nanos,
-        slippage_ticks,
-        window,
-        version,
-        as_of,
-        snapshot,
-        equity_interval_nanos,
-        minimum_coverage,
+        # Read only when neither a callback nor a command table was given. A
+        # callback's identity is not a table name, and passing it here as one
+        # only worked because nothing looked at it.
+        signals_table=data_config.signals or "signals",
+        fee_kind=fee_kind,
+        fee_rate=fee_rate,
+        maker_rebate=maker_rebate,
+        queue_position=queue_position,
+        optimistic_queue=optimistic_queue,
+        latency_nanos=latency_nanos,
+        slippage_ticks=slippage_ticks,
+        window=window,
+        version=version,
+        as_of=as_of,
+        snapshot=snapshot,
+        equity_interval_nanos=equity_interval_nanos,
+        minimum_coverage=minimum_coverage,
+        maker_fee_rate=maker_fee_rate,
+        max_order_quantity=max_order_quantity,
+        max_abs_position=max_abs_position,
+        max_open_orders=max_open_orders,
+        commands_table=commands,
+        python_strategy=_python_strategy,
+        # Not a table name and not read as one: it is how the run digest tells
+        # one callback strategy from another. Without it every callback run
+        # over the same window and execution config hashed identically, and
+        # `trial_count` -- the denominator of the multiple-testing corrections
+        # -- deduped a whole sweep down to one trial.
+        strategy_id=strategy_id,
+        margin_kind=margin_kind,
+        leverage=leverage,
+        maintenance_margin_rate=maintenance_margin_rate,
     )
-    # `maker_fee_rate` was appended to the native ABI. Omitting it preserves
-    # compatibility with an older installed extension for non-Kalshi runs.
-    risk_args = (max_order_quantity, max_abs_position, max_open_orders)
-    if (
-        maker_fee_rate is None
-        and all(value is None for value in risk_args)
-        and commands is None
-        and _python_strategy is None
-    ):
-        payload = db._native.run_backtest(*native_args)
-    elif (
-        all(value is None for value in risk_args)
-        and commands is None
-        and _python_strategy is None
-    ):
-        payload = db._native.run_backtest(*native_args, maker_fee_rate)
-    else:
-        payload = db._native.run_backtest(
-            *native_args,
-            maker_fee_rate,
-            *risk_args,
-            commands,
-            _python_strategy,
-        )
     config = BacktestConfig(
         run_id=run_id,
         portfolio=PortfolioConfig(starting_cash=starting_cash),
@@ -506,6 +613,9 @@ def run(
             optimistic_queue=optimistic_queue,
             latency_nanos=latency_nanos,
             slippage_ticks=slippage_ticks,
+            margin_kind=margin_kind,
+            leverage=leverage,
+            maintenance_margin_rate=maintenance_margin_rate,
         ),
         risk=RiskConfig(
             max_order_quantity=max_order_quantity,
@@ -519,7 +629,11 @@ def run(
         # silently collapsed every trial into one unnamed experiment.
         metadata=dict(metadata or {}),
     )
-    inspection = inspect(db, config)
+    # The preflight `execute` already ran over this configuration, when one
+    # was run. Repeating it here means inspecting the data *after* the kernel
+    # read it, and for an unpinned run the two answers can disagree with
+    # nothing to say which one the run actually saw.
+    inspection = _inspection if _inspection is not None else inspect(db, config)
     result = BacktestResult(
         json.loads(payload),
         db=db,
@@ -572,13 +686,23 @@ def execute(
         )
         and data.strategy_kind != "callback"
     )
-    lock = _trial_ledger_lock(db) if deduplicable else nullcontext()
+    lock = (
+        _trial_ledger_lock(db, config.trial_digest) if deduplicable else nullcontext()
+    )
     with lock:
         if deduplicable:
             cached = find_trial(db, config.trial_digest)
             if cached is not None:
+                # Recorded while the digest lock is still held: from here the
+                # fork has two holders, and the one that created it must not
+                # delete it when its own stage fails later.
+                _share_fork(cached.fork_name)
+                # The same keys as the fresh path below. A caller reading
+                # `result["trial_digest"]` should not have to know which path
+                # produced the result it is holding.
                 cached["cached"] = True
                 cached["requested_run_id"] = config.run_id
+                cached["trial_digest"] = config.trial_digest
                 return cached
         result = run(
             db,
@@ -596,6 +720,9 @@ def execute(
             optimistic_queue=execution.optimistic_queue,
             latency_nanos=execution.latency_nanos,
             slippage_ticks=execution.slippage_ticks,
+            margin_kind=execution.margin_kind,
+            leverage=execution.leverage,
+            maintenance_margin_rate=execution.maintenance_margin_rate,
             window=data.window,
             version=data.version,
             as_of=data.as_of,
@@ -606,9 +733,10 @@ def execute(
             max_abs_position=config.risk.max_abs_position,
             max_open_orders=config.risk.max_open_orders,
             metadata=config.metadata,
+            _inspection=inspection,
         )
-        result.inspection = inspection
         result["cached"] = False
+        result["requested_run_id"] = config.run_id
         result["trial_digest"] = config.trial_digest
         return result
 

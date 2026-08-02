@@ -1883,7 +1883,10 @@ const EQUITY: &str = "ACME";
 fn equity_instruments() -> InstrumentSet {
     let mut set = InstrumentSet::new();
     set.insert(
-        Inst::perpetual(EQUITY, "xnas")
+        // Spot, not a perpetual: an instrument that splits and pays dividends
+        // is one you own outright, and only a funded position carries its
+        // notional into equity.
+        Inst::spot(EQUITY, "xnas")
             .unwrap()
             .with_tick_size(price(0.01)),
     )
@@ -2199,5 +2202,482 @@ fn corporate_actions_land_before_anything_is_priced_against_them() {
         (last.position_value.to_f64() - 5_000.0).abs() < 20.0,
         "position value drifted to {}",
         last.position_value
+    );
+}
+
+/// A cancel issued while the order is still in the latency queue has to win.
+///
+/// The in-flight heap carries a clone taken at submit time; the order map is
+/// where the cancel lands. Releasing the clone without consulting the map
+/// resurrects the cancelled order and fills it (issue #43).
+#[test]
+fn a_cancel_beats_an_order_still_in_flight() {
+    struct SubmitThenCancel {
+        step: u32,
+    }
+    impl Strategy for SubmitThenCancel {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            match self.step {
+                1 => ctx.submit(OrderRequest::market(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    qty(10.0),
+                )),
+                2 => ctx.cancel(h5i_db_backtest::order::OrderId(1)),
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                deep_snapshot(1_000_000),
+                deep_snapshot(1_500_000),
+                // Long after the 5 ms insert latency has elapsed.
+                deep_snapshot(9_000_000),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(1_000.0))
+        .latency_model(Box::new(ConstantLatency::millis(5, 5)))
+        .build();
+    let mut strategy = SubmitThenCancel { step: 0 };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert!(
+        result.fills.is_empty(),
+        "an order cancelled before it reached the venue must not fill"
+    );
+    assert_eq!(result.orders[0].status, OrderStatus::Cancelled);
+}
+
+/// The same seam for amendments: the venue must see the amended order, not
+/// the one originally submitted (issue #43).
+#[test]
+fn an_amend_survives_the_latency_queue() {
+    struct SubmitThenAmend {
+        step: u32,
+    }
+    impl Strategy for SubmitThenAmend {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            match self.step {
+                // Rests below the 0.42 ask, so it cannot fill as submitted.
+                1 => ctx.submit(OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.41),
+                    qty(10.0),
+                )),
+                // Repriced through the ask while still in flight.
+                2 => ctx.amend(h5i_db_backtest::order::OrderId(1), None, Some(price(0.43))),
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                deep_snapshot(1_000_000),
+                deep_snapshot(1_500_000),
+                deep_snapshot(9_000_000),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(1_000.0))
+        .latency_model(Box::new(ConstantLatency::millis(5, 5)))
+        .build();
+    let mut strategy = SubmitThenAmend { step: 0 };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert_eq!(
+        result.fills.len(),
+        1,
+        "the amended price crosses the book, so the order fills"
+    );
+    assert_eq!(result.fills[0].price, price(0.42));
+}
+
+/// A resting order far behind the displayed depth is not what a market order
+/// trades against, so it must not block one (issue #45).
+#[test]
+fn a_deep_resting_bid_does_not_block_a_market_exit() {
+    struct BuyRestThenExit {
+        step: u32,
+    }
+    impl Strategy for BuyRestThenExit {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            match self.step {
+                1 => ctx.submit(OrderRequest::market(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    qty(10.0),
+                )),
+                // Eleven cents below the best bid: behind every displayed lot.
+                2 => ctx.submit(OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.29),
+                    qty(10.0),
+                )),
+                3 => ctx.submit(OrderRequest::market(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Sell,
+                    qty(10.0),
+                )),
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                deep_snapshot(1_000),
+                deep_snapshot(2_000),
+                deep_snapshot(3_000),
+                deep_snapshot(4_000),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(instruments())
+        .starting_cash(money(1_000.0))
+        .build();
+    let mut strategy = BuyRestThenExit { step: 0 };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert_eq!(
+        result.metrics.orders_rejected_self_trade, 0,
+        "the resting bid is behind the book, so it cannot be self-traded"
+    );
+    assert_eq!(
+        result.fills.len(),
+        2,
+        "the entry and the market exit both fill"
+    );
+}
+
+/// A split reprices the resting orders. If it does not also requote the book,
+/// the two sides of the same market disagree by the ratio for the rest of the
+/// record -- and `match_resting` trades across that disagreement on the very
+/// same record (issue #68).
+#[test]
+fn a_split_requotes_the_book_so_a_repriced_order_cannot_fill_across_it() {
+    struct RestAbove {
+        submitted: bool,
+    }
+    impl Strategy for RestAbove {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            if !self.submitted {
+                self.submitted = true;
+                // A cent above the bid: not marketable, and a 2-for-1 must
+                // not make it so.
+                ctx.submit(OrderRequest::limit(
+                    InstrumentId::new(EQUITY).unwrap(),
+                    OutcomeId::FIRST,
+                    Side::Sell,
+                    price(50.0),
+                    qty(100.0),
+                ));
+            }
+            Ok(())
+        }
+    }
+    let mut strategy = RestAbove { submitted: false };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(3_000, CorporateAction::Split { ratio: price(2.0) }),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+
+    assert!(
+        result.fills.is_empty(),
+        "200 at 25 must not sell into a pre-split bid of 49.99: {:?}",
+        result.fills
+    );
+    let order = &result.orders[0];
+    assert_eq!(order.limit_price(), Some(price(25.0)));
+    assert_eq!(order.quantity, qty(200.0));
+    assert_eq!(
+        order.status,
+        OrderStatus::Accepted,
+        "and it is still resting, on the post-split book"
+    );
+}
+
+/// The split's mark adjustment used to be overwritten, for the very outcome
+/// the corporate record named, by the mid recomputed from the unadjusted
+/// book; and `book_marks` was never adjusted at all, so the next
+/// `refresh_mark` put the pre-split number back (issue #68).
+#[test]
+fn a_split_moves_every_price_series_the_mark_can_be_rebuilt_from() {
+    let mut strategy = BuyEquity {
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(3_000, CorporateAction::Split { ratio: price(2.0) }),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.marks[&(InstrumentId::new(EQUITY).unwrap(), OutcomeId::FIRST)],
+        price(25.0),
+        "the quote is post-split; a mark of 50 says the outcome set \
+         disagrees with itself"
+    );
+}
+
+/// `Engine::delisted` was written and never read, so the comment claiming a
+/// delisted instrument is untradeable was a comment rather than a rule
+/// (issue #68).
+#[test]
+fn a_delisted_instrument_cannot_be_traded_again() {
+    struct BuyBeforeAndAfter {
+        step: u32,
+    }
+    impl Strategy for BuyBeforeAndAfter {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            if self.step == 1 || self.step == 4 {
+                ctx.submit(OrderRequest::market(
+                    InstrumentId::new(EQUITY).unwrap(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    qty(10.0),
+                ));
+            }
+            Ok(())
+        }
+    }
+    let mut strategy = BuyBeforeAndAfter { step: 0 };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(
+                3_000,
+                CorporateAction::Delist {
+                    final_price: price(60.0),
+                },
+            ),
+            equity_snapshot(4_000, 50.0),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(result.metrics.orders_rejected_expired, 1);
+    let refused = result
+        .orders
+        .iter()
+        .find(|order| order.status == OrderStatus::Rejected)
+        .expect("the post-delisting order is refused");
+    assert!(
+        refused
+            .reject_reason
+            .as_deref()
+            .unwrap()
+            .contains("delisted"),
+        "{:?}",
+        refused.reject_reason
+    );
+    assert_eq!(
+        result
+            .fills
+            .iter()
+            .filter(|fill| fill.ts > ts(3_000))
+            .count(),
+        0,
+        "nothing trades after the board is cleared"
+    );
+}
+
+/// Intents stamped after the last record cannot be submitted -- there is no
+/// data left to fill them against -- but losing them silently reads as a
+/// strategy that simply stopped trading (issue #68).
+#[test]
+fn a_signal_replay_reports_the_intents_the_data_never_reached() {
+    let mut strategy = SignalReplay::new(vec![
+        (
+            ts(1_000),
+            OrderRequest::market(instrument_id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
+        ),
+        (
+            ts(9_000_000),
+            OrderRequest::market(instrument_id(), OutcomeId::FIRST, Side::Buy, qty(10.0)),
+        ),
+    ])
+    .unwrap();
+    let result = run_with(
+        &mut strategy,
+        vec![deep_snapshot(1_000), deep_snapshot(2_000)],
+        1_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.metrics.orders_submitted, 1,
+        "only the intent inside the data was submitted"
+    );
+    assert_eq!(
+        strategy.undelivered(),
+        1,
+        "and the one past the end is reported rather than dropped"
+    );
+}
+
+/// The same for commands, where the loss is worse: a cancel that falls past
+/// the last record leaves its order resting to the end of the run.
+#[test]
+fn a_command_replay_reports_the_commands_the_data_never_reached() {
+    let mut strategy = CommandReplay::new(vec![
+        (
+            ts(1_000),
+            ReplayCommand::Submit {
+                client_order_id: "quote".to_string(),
+                request: OrderRequest::limit(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(0.30),
+                    qty(4.0),
+                ),
+            },
+        ),
+        (
+            ts(9_000_000),
+            ReplayCommand::Cancel {
+                client_order_id: "quote".to_string(),
+            },
+        ),
+    ])
+    .unwrap();
+    let result = run_with(
+        &mut strategy,
+        vec![deep_snapshot(1_000), deep_snapshot(2_000)],
+        1_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(strategy.undelivered(), 1);
+    assert_eq!(
+        result.orders[0].status,
+        OrderStatus::Accepted,
+        "the order the lost cancel was meant to close is still open, which is \
+         exactly why the loss has to be visible"
+    );
+}
+
+/// An order-level fault is the venue's answer to that order, not the end of
+/// the run. These four used to return `Err` and take every later order with
+/// them (issue #68).
+#[test]
+fn an_unusable_order_is_refused_rather_than_ending_the_run() {
+    struct FourBadThenOneGood {
+        step: u32,
+    }
+    impl Strategy for FourBadThenOneGood {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            self.step += 1;
+            match self.step {
+                1 => {
+                    // An instrument this run does not carry.
+                    ctx.submit(OrderRequest::market(
+                        InstrumentId::new("not-in-this-run").unwrap(),
+                        OutcomeId::FIRST,
+                        Side::Buy,
+                        qty(1.0),
+                    ));
+                    // An outcome the instrument does not have.
+                    ctx.submit(OrderRequest::market(
+                        instrument_id(),
+                        OutcomeId(9),
+                        Side::Buy,
+                        qty(1.0),
+                    ));
+                    // A limit off the venue's 0.0001 tick grid.
+                    ctx.submit(OrderRequest::limit(
+                        instrument_id(),
+                        OutcomeId::FIRST,
+                        Side::Buy,
+                        price(0.400_005),
+                        qty(1.0),
+                    ));
+                    // Post-only with nothing to rest at.
+                    ctx.submit(
+                        OrderRequest::market(
+                            instrument_id(),
+                            OutcomeId::FIRST,
+                            Side::Buy,
+                            qty(1.0),
+                        )
+                        .post_only(),
+                    );
+                }
+                2 => ctx.submit(OrderRequest::market(
+                    instrument_id(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    qty(10.0),
+                )),
+                _ => {}
+            }
+            Ok(())
+        }
+    }
+    let mut strategy = FourBadThenOneGood { step: 0 };
+    let result = run_with(
+        &mut strategy,
+        vec![deep_snapshot(1_000), deep_snapshot(2_000)],
+        1_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(result.metrics.orders_rejected_invalid, 4);
+    assert_eq!(
+        result.fills.len(),
+        1,
+        "the order that was fine still traded, which is the whole point"
+    );
+    assert!(
+        result
+            .orders
+            .iter()
+            .filter(|order| order.status == OrderStatus::Rejected)
+            .all(|order| order.reject_reason.is_some()),
+        "every rejection says why"
     );
 }

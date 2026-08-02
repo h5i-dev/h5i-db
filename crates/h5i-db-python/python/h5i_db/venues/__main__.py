@@ -19,6 +19,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from ..dataframe import quote_ident
 from ._archive import (
     KAGGLE_POLYMARKET_LAYOUT,
     KAGGLE_POLYMARKET_TRADES_LAYOUT,
@@ -248,7 +249,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             for name in CANONICAL_SCHEMAS:
                 if name not in present:
                     continue
-                rows = db.sql(f"SELECT count(*) AS n FROM {name}").to_pandas()["n"][0]
+                rows = db.sql(
+                    f"SELECT count(*) AS n FROM {quote_ident(name)}"
+                ).to_pandas()["n"][0]
                 versions = db.versions(name)
                 summary[name] = {
                     "rows": int(rows),

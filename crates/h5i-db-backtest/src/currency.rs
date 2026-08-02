@@ -172,6 +172,12 @@ impl FxBook {
 /// separately from the rate because it is a *credit* decision, not a market
 /// one, and conflating the two hides which is which when a position is
 /// close to liquidation.
+///
+/// **Not yet wired into the engine.** Only [`crate::account::Account`] holds
+/// one, and the engine does not hold an `Account`: it carries a single cash
+/// balance in the reporting currency, which has no haircut to apply. Setting
+/// factors here changes nothing about a run until the engine values several
+/// balances at once.
 #[derive(Clone, Default, Debug)]
 pub struct Haircuts {
     factors: BTreeMap<Currency, Price>,

@@ -108,6 +108,21 @@ impl OrderBook {
     }
 
     /// Replace the whole book. This is what clears a stale state.
+    ///
+    /// Infallible today: levels are taken as recorded and a non-positive size
+    /// is dropped rather than refused. The `Result` stays because this is
+    /// where snapshot validation belongs if it is ever added, and widening a
+    /// return type later is a breaking change for every caller. Callers must
+    /// not read the `Result` as "validated": [`crate::models::TickSlippage`]
+    /// once turned it into `.ok()?`, which would have spelled a refused
+    /// snapshot as "no slippage applied", the flattering direction.
+    ///
+    /// One thing it deliberately does not refuse: a **crossed** snapshot,
+    /// where the best bid is at or above the best ask. Venues publish crossed
+    /// and locked books, and aborting a run on a transient would discard real
+    /// data. It is worth knowing what such a book means while it stands --
+    /// both sides are marketable at once, so a round trip through it prints a
+    /// profit nobody could have taken.
     pub fn apply_snapshot(
         &mut self,
         bids: &[(Price, Qty)],
@@ -187,6 +202,46 @@ impl OrderBook {
         Ok(())
     }
 
+    /// Requote every level in post-split terms.
+    ///
+    /// A split changes none of a book's value and all of its numbers, and the
+    /// venue requotes at the instant the action lands. Leaving the book alone
+    /// is what lets a resting order that *was* repriced meet a book that was
+    /// not: a resting sell of 100 at 50 becomes 200 at 25 and then trades
+    /// against a pre-split bid of 49.99, which is a fill from the other side
+    /// of the split.
+    ///
+    /// Two pre-split levels can round onto one post-split price, so sizes are
+    /// added rather than replaced: keeping only the last would delete depth
+    /// the venue still displays. A level whose size rounds away entirely is
+    /// dropped, which is what a zero size means to `apply_snapshot` too.
+    ///
+    /// The status is untouched. A split is not a feed gap: these are still
+    /// the levels the last snapshot established, said in new units.
+    pub fn apply_split(&mut self, ratio: Price, ts: UnixNanos) -> Result<()> {
+        self.bids = Self::split_side(&self.bids, ratio)?;
+        self.asks = Self::split_side(&self.asks, ratio)?;
+        self.last_update = Some(ts);
+        Ok(())
+    }
+
+    fn split_side(levels: &BTreeMap<Raw, Qty>, ratio: Price) -> Result<BTreeMap<Raw, Qty>> {
+        let mut out: BTreeMap<Raw, Qty> = BTreeMap::new();
+        for (price, size) in levels {
+            let (size, price) = crate::corporate::CorporateAction::split_position(
+                ratio,
+                *size,
+                Price::from_raw(*price),
+            )?;
+            if !size.is_positive() {
+                continue;
+            }
+            let level = out.entry(price.raw()).or_insert(Qty::ZERO);
+            *level = level.checked_add(size)?;
+        }
+        Ok(out)
+    }
+
     /// Best bid: highest price anyone will buy at.
     pub fn best_bid(&self) -> Option<(Price, Qty)> {
         self.bids
@@ -211,9 +266,19 @@ impl OrderBook {
     }
 
     /// Mid price, or `None` when either side is empty.
+    ///
+    /// Rounded half away from zero, like every other conversion in the crate.
+    /// Integer division truncates toward zero, which on an odd-raw spread
+    /// made the mid disagree with `Price::from_f64` of the same two numbers
+    /// by one raw unit, and biased it downward on every book instead of
+    /// splitting the difference.
     pub fn mid(&self) -> Option<Price> {
         match (self.best_bid(), self.best_ask()) {
-            (Some((bid, _)), Some((ask, _))) => Some(Price::from_raw((bid.raw() + ask.raw()) / 2)),
+            (Some((bid, _)), Some((ask, _))) => {
+                let sum = bid.raw() + ask.raw();
+                let away = if sum >= 0 { sum + 1 } else { sum - 1 };
+                Some(Price::from_raw(away / 2))
+            }
             _ => None,
         }
     }
@@ -329,8 +394,19 @@ impl BookWalk {
     }
 
     /// Size-weighted average fill price, or `None` if nothing filled.
+    ///
+    /// Rounded half away from zero rather than truncated, so a walk over
+    /// several levels reports the price the fills actually average to. The
+    /// overflow tag used to name `OrderBook::weighted_mid`, a function that
+    /// has never existed, which sent anyone chasing the error to the wrong
+    /// file.
+    ///
+    /// A narrowing failure reports `None`, which reads the same as "nothing
+    /// filled". The signature has nowhere to put an error, and the only way
+    /// to reach it is a walk whose weighted notional exceeds `Raw`, which
+    /// the fills themselves would already have refused.
     pub fn average_price(&self) -> Option<Price> {
-        let total = self.filled().raw();
+        let total = self.filled().raw() as i128;
         if total == 0 {
             return None;
         }
@@ -339,7 +415,12 @@ impl BookWalk {
             .iter()
             .map(|(p, q)| p.raw() as i128 * q.raw() as i128)
             .sum();
-        crate::types::narrow(weighted / total as i128, "OrderBook::weighted_mid")
+        let rounded = if weighted >= 0 {
+            (weighted + total / 2) / total
+        } else {
+            (weighted - total / 2) / total
+        };
+        crate::types::narrow(rounded, "BookWalk::average_price")
             .ok()
             .map(Price::from_raw)
     }

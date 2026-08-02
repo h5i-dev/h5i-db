@@ -36,8 +36,25 @@ _CONFIG_SCHEMA = pa.schema(
         pa.field("config_json", pa.string(), nullable=False),
         pa.field("fidelity", pa.string(), nullable=False),
         pa.field("inspection_json", pa.string(), nullable=False),
+        # "run" or "verify". A verification re-executes a config the ledger
+        # already holds, so it necessarily carries that config's trial digest;
+        # without this column `find_trial` could hand a concurrent
+        # `execute(reuse=True)` the verify fork, which its own `finally` then
+        # deletes underneath the caller.
+        #
+        # Nullable, because the column arrived after databases existed. A
+        # missing value reads as "run" everywhere below, which is what every
+        # row written before it was one; and non-nullable is also the one
+        # shape core's `validate_evolution` refuses to append to a live table,
+        # so declaring it that way closed the only migration path there is.
+        pa.field("role", pa.string()),
     ]
 )
+
+#: Metadata key naming the run a verification re-executes. Metadata is
+#: excluded from `trial_digest`, so marking a verify run this way cannot
+#: change the identity it is verifying.
+VERIFY_OF = "h5i_verify_of"
 
 
 def _persist_config(
@@ -46,29 +63,56 @@ def _persist_config(
     config: BacktestConfig,
     inspection: PreflightInspection,
 ) -> None:
+    """Record the typed config and preflight evidence beside the run.
+
+    Written unconditionally with `write`, not appended once. A re-used
+    `run_id` re-uses its fork, and skipping the write there left the *first*
+    run's config in place: `find_trial` then matched a digest the fork's
+    results no longer came from. `write` also replaces the table in a single
+    version, so a reader sees the old row or the new one, never the empty
+    table a create-then-append leaves behind when the append fails.
+
+    The batch is projected onto whatever schema the table already declares.
+    `write` validates column names and count against the stored spec, so a
+    fork created before `role` existed rejected the seven-column batch --
+    *after* the kernel had already written the result tables, leaving fresh
+    results beside a stale config, which is the exact state writing
+    unconditionally exists to prevent. Projecting keeps the write a single
+    atomic replace: nothing is dropped, recreated, or read-then-rewritten, so
+    no crash window can lose a config that is already there. Only a `run`
+    role can land in an old-shaped table anyway, and that is what a missing
+    `role` already means: a verification always runs under a fresh `run_id`,
+    so its fork is new and carries the current schema.
+    """
     fork = db.fork(fork_name)
     try:
+        columns = {
+            "run_id": [config.run_id],
+            "config_digest": [config.digest],
+            "trial_digest": [config.trial_digest],
+            "config_json": [config.to_json(indent=None)],
+            "fidelity": [inspection.fidelity.value],
+            "inspection_json": [
+                json.dumps(inspection.to_dict(), sort_keys=True, default=str)
+            ],
+            "role": ["verify" if config.metadata.get(VERIFY_OF) else "run"],
+        }
+        schema = _CONFIG_SCHEMA
         if "bt_config" not in fork.tables():
-            fork.create_table("bt_config", _CONFIG_SCHEMA)
-            fork.append(
-                "bt_config",
-                pa.table(
-                    {
-                        "run_id": [config.run_id],
-                        "config_digest": [config.digest],
-                        "trial_digest": [config.trial_digest],
-                        "config_json": [config.to_json(indent=None)],
-                        "fidelity": [inspection.fidelity.value],
-                        "inspection_json": [
-                            json.dumps(
-                                inspection.to_dict(), sort_keys=True, default=str
-                            )
-                        ],
-                    },
-                    schema=_CONFIG_SCHEMA,
-                ),
-                note="typed backtest configuration and preflight evidence",
-            )
+            fork.create_table("bt_config", schema)
+        else:
+            stored = fork.schema("bt_config")
+            # Only a shape this function itself can fill. Anything else is a
+            # `bt_config` this code did not write, and `write` refusing it
+            # with a schema error says more than a `KeyError` here would.
+            if stored.names != schema.names and set(stored.names) <= set(columns):
+                schema = stored
+                columns = {name: columns[name] for name in stored.names}
+        fork.write(
+            "bt_config",
+            pa.table(columns, schema=schema),
+            note="typed backtest configuration and preflight evidence",
+        )
     finally:
         fork.close()
 
@@ -102,6 +146,23 @@ class BacktestResult(dict):
         if self.config is not None:
             return self.config.run_id
         return self.fork_name.removeprefix("bt-")
+
+    def has_table(self, name: str) -> bool:
+        """Whether the run's fork actually holds this result table.
+
+        `table` returns an empty table for one that is absent, which keeps
+        rendering a partial run cheap but cannot be read as "the run produced
+        nothing": that is what this answers.
+        """
+        if name not in _RESULT_TABLES:
+            raise ValueError(
+                f"unknown result table {name!r}; expected one of {_RESULT_TABLES}"
+            )
+        fork = self._db.fork(self.fork_name)
+        try:
+            return name in fork.tables()
+        finally:
+            fork.close()
 
     def table(self, name: str) -> pa.Table:
         if name not in _RESULT_TABLES:
@@ -290,8 +351,18 @@ class BacktestResult(dict):
         from .backtest import execute
 
         suffix = secrets.token_hex(6)
+        payload = self.config.to_dict()
         verify_config = BacktestConfig.from_dict(
-            {**self.config.to_dict(), "run_id": f"verify-{self.run_id}-{suffix}"}
+            {
+                **payload,
+                "run_id": f"verify-{self.run_id}-{suffix}",
+                # Marks the fork as a verification so `find_trial` cannot hand
+                # it to a concurrent `execute(reuse=True)` as a cache hit: it
+                # carries this run's trial digest by construction, and the
+                # `finally` below deletes it. Metadata is outside the trial
+                # digest, so the identity being verified is unchanged.
+                "metadata": {**payload.get("metadata", {}), VERIFY_OF: self.run_id},
+            }
         )
         candidate: Optional[BacktestResult] = None
         try:
@@ -303,8 +374,15 @@ class BacktestResult(dict):
                 self._db, verify_config, strategy=strategy, reuse=False
             )
             compared = self.compare(candidate)
+            # A table missing on either side is not evidence of agreement. It
+            # used to read back as an empty table on both sides, so two runs
+            # that had written nothing at all verified against each other.
             compared["tables_equal"] = {
-                name: self.table(name).equals(candidate.table(name))
+                name: (
+                    self.has_table(name)
+                    and candidate.has_table(name)
+                    and self.table(name).equals(candidate.table(name))
+                )
                 for name in ("bt_orders", "bt_fills", "bt_positions", "bt_equity")
             }
             compared["verified"] = all(
@@ -377,8 +455,15 @@ def open_result(db: Any, run_id: str) -> BacktestResult:
         report["fork"] = fork_name
         config = None
         inspection = None
-        if "bt_config" in fork.tables():
-            metadata = fork.read("bt_config").to_pylist()[0]
+        # An empty `bt_config` is a run whose config write did not land. The
+        # run itself is still readable, and raising here took every other run
+        # in the database down with it: `list_runs` iterates forks and an
+        # `IndexError` is not one of the failures it expects.
+        config_rows = (
+            fork.read("bt_config").to_pylist() if "bt_config" in fork.tables() else []
+        )
+        if config_rows:
+            metadata = config_rows[0]
             config = BacktestConfig.from_json(metadata["config_json"])
             from .backtest_config import InspectionIssue, ReplayFidelity
 
@@ -396,18 +481,41 @@ def open_result(db: Any, run_id: str) -> BacktestResult:
 
 
 def list_runs(db: Any) -> list[dict[str, Any]]:
+    """Every backtest fork in the database, including the ones that no longer read.
+
+    A fork this cannot open is listed as a degraded entry rather than dropped.
+    Omitting it made the listing quietly disagree with `fork_names()`, and the
+    runs that stop opening are not a random sample: a rule added to
+    `ExecutionConfig` after they ran makes exactly the configurations that
+    rule calls suspect the ones that disappear from `backtest list`, which is
+    where somebody would go looking for them.
+    """
     runs = []
     for fork_name in sorted(name for name in db.fork_names() if name.startswith("bt-")):
         try:
             result = open_result(db, fork_name)
-        except (ValueError, KeyError):
+        except (ValueError, KeyError, IndexError) as exc:
+            runs.append(
+                {
+                    "run_id": fork_name.removeprefix("bt-"),
+                    "fork": fork_name,
+                    "degraded": True,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
             continue
         runs.append(result.summary())
     return runs
 
 
 def find_trial(db: Any, trial_digest: str) -> Optional[BacktestResult]:
-    """Return the recorded trial for a semantic config digest, if any."""
+    """Return the recorded trial for a semantic config digest, if any.
+
+    Verification forks are skipped. One carries the digest of the run it is
+    checking (that is what makes it a verification) and is deleted as soon as
+    the comparison is done, so handing it back as a cache hit gives the caller
+    a result that disappears underneath it.
+    """
     match = None
     for fork_name in sorted(
         name for name in db.fork_names() if name.startswith("bt-")
@@ -420,6 +528,9 @@ def find_trial(db: Any, trial_digest: str) -> Optional[BacktestResult]:
             if len(rows) != 1:
                 continue
             row = rows[0]
+            # Forks written before the column existed are ordinary runs.
+            if row.get("role", "run") == "verify":
+                continue
             recorded = row.get("trial_digest")
             if recorded is None:
                 recorded = BacktestConfig.from_json(row["config_json"]).trial_digest
@@ -432,7 +543,12 @@ def find_trial(db: Any, trial_digest: str) -> Optional[BacktestResult]:
 
 
 def trial_count(db: Any) -> int:
-    """Count distinct score-producing configurations in the trial ledger."""
+    """Count distinct score-producing configurations in the trial ledger.
+
+    A verification is not a trial: it re-runs a configuration already counted
+    here, so counting it again would inflate the denominator of every
+    multiple-testing correction computed from this number.
+    """
     digests: set[str] = set()
     for fork_name in sorted(
         name for name in db.fork_names() if name.startswith("bt-")
@@ -442,6 +558,8 @@ def trial_count(db: Any) -> int:
             tables = fork.tables()
             if "bt_config" in tables:
                 for row in fork.read("bt_config").to_pylist():
+                    if row.get("role", "run") == "verify":
+                        continue
                     digest = row.get("trial_digest")
                     if digest is None:
                         digest = BacktestConfig.from_json(
@@ -451,11 +569,16 @@ def trial_count(db: Any) -> int:
             elif "bt_run" in tables:
                 # Native/Rust-created runs may not carry the Python typed
                 # config table. They are still ledger trials and must never
-                # disappear from the search budget.
+                # disappear from the search budget -- a run with no digest
+                # column at all used to contribute nothing, which understates
+                # the denominator in the one direction that flatters a result.
+                # The fallback is prefixed so a run counted by name can never
+                # collide with one counted by digest.
                 for row in fork.read("bt_run").to_pylist():
                     digest = row.get("config_digest") or row.get("digest")
-                    if digest is not None:
-                        digests.add(str(digest))
+                    if digest is None:
+                        digest = f"run:{row.get('run_id') or fork_name}"
+                    digests.add(str(digest))
         finally:
             fork.close()
     return len(digests)

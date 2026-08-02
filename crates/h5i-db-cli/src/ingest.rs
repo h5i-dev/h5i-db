@@ -89,7 +89,11 @@ pub fn open_input(
         }
         InputFormat::Csv => {
             let schema = match schema_hint {
-                Some(s) => s,
+                Some(table) => {
+                    // Header pass streams the file; reopen for the reader.
+                    let file = File::open(path).map_err(|e| Error::io(path, e))?;
+                    csv_schema_from_header(BufReader::new(file), &table)?
+                }
                 None => {
                     // Inference pass streams the file; reopen for the reader.
                     let file = File::open(path).map_err(|e| Error::io(path, e))?;
@@ -145,7 +149,7 @@ fn open_buffered(
         InputFormat::Csv => {
             let cursor = std::io::Cursor::new(bytes);
             let schema = match schema_hint {
-                Some(s) => s,
+                Some(table) => csv_schema_from_header(cursor.clone(), &table)?,
                 None => {
                     let (inferred, _) = arrow::csv::reader::Format::default()
                         .with_header(true)
@@ -210,10 +214,66 @@ fn sniff_format(bytes: &[u8]) -> Result<InputFormat> {
     ))
 }
 
+/// The reader schema for a CSV that is being ingested into a known table.
+///
+/// The arrow CSV reader applies a supplied schema **positionally** and skips
+/// the header row, so handing it the table schema reads `price,size` into a
+/// file written `size,price` without a word. Nothing downstream can catch it
+/// either: the batch already carries the table's schema, so core's name check
+/// compares that schema with itself and passes.
+///
+/// So the header decides the *order* and the table decides the *types*: each
+/// header name is looked up in the table and the table's own field is used,
+/// which keeps CSV parsing byte-identical to before for a file whose columns
+/// are already in table order. A header naming a column the table does not
+/// have is refused here rather than guessed at.
+fn csv_schema_from_header(reader: impl Read, table: &SchemaRef) -> Result<SchemaRef> {
+    let (header, _) = arrow::csv::reader::Format::default()
+        .with_header(true)
+        .infer_schema(reader, Some(1))
+        .map_err(Error::Arrow)?;
+    if header
+        .fields()
+        .iter()
+        .map(|f| f.name())
+        .eq(table.fields().iter().map(|f| f.name()))
+    {
+        return Ok(table.clone());
+    }
+    let mut fields = Vec::with_capacity(header.fields().len());
+    for field in header.fields() {
+        let Some((index, _)) = table.column_with_name(field.name()) else {
+            return Err(Error::invalid(format!(
+                "CSV column {:?} is not a column of the table; the table has [{}]",
+                field.name(),
+                column_names(table)
+            )));
+        };
+        fields.push(table.field(index).clone());
+    }
+    Ok(Arc::new(arrow::datatypes::Schema::new(fields)))
+}
+
+fn column_names(schema: &SchemaRef) -> String {
+    schema
+        .fields()
+        .iter()
+        .map(|f| f.name().as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Coerce an ingested batch to the table schema where the difference is purely
 /// representational (e.g. CSV inference produced Timestamp without timezone,
 /// or non-nullable data typed as nullable). Real mismatches still error in
 /// the core validation.
+///
+/// Columns are matched by **name**. Matching them by position, as this once
+/// did, is silent data corruption rather than a mismatch: a file whose
+/// same-typed columns are in a different order is cast column-for-column and
+/// re-labelled with the table's schema, so the values land in the wrong
+/// columns and every later check sees a batch that already claims to be the
+/// table's own shape.
 pub fn align_batch(batch: RecordBatch, schema: &SchemaRef) -> Result<RecordBatch> {
     if batch.schema() == *schema {
         return Ok(batch);
@@ -221,17 +281,146 @@ pub fn align_batch(batch: RecordBatch, schema: &SchemaRef) -> Result<RecordBatch
     if batch.num_columns() != schema.fields().len() {
         return Ok(batch); // let core produce the precise error
     }
-    let columns = batch
-        .columns()
-        .iter()
-        .zip(schema.fields())
-        .map(|(col, field)| {
-            if col.data_type() == field.data_type() {
-                Ok(col.clone())
-            } else {
-                arrow::compute::cast(col, field.data_type()).map_err(Error::Arrow)
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
+    let incoming = batch.schema();
+    let mut columns = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let Some((index, _)) = incoming.column_with_name(field.name()) else {
+            return Err(Error::invalid(format!(
+                "input has no column named {:?}; the table's columns are [{}] \
+                 and the input's are [{}]",
+                field.name(),
+                column_names(schema),
+                column_names(&incoming)
+            )));
+        };
+        let col = batch.column(index);
+        if col.data_type() == field.data_type() {
+            columns.push(col.clone());
+        } else {
+            columns.push(arrow::compute::cast(col, field.data_type()).map_err(Error::Arrow)?);
+        }
+    }
     RecordBatch::try_new(schema.clone(), columns).map_err(Error::Arrow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{Float64Array, Int64Array};
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    fn table() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("price", DataType::Float64, false),
+            Field::new("size", DataType::Float64, false),
+        ]))
+    }
+
+    #[test]
+    fn a_reordered_input_is_reordered_not_relabelled() {
+        // Same names, same types, different order. Zipping by position stored
+        // this swapped and nothing downstream could tell, because the batch
+        // came out wearing the table's schema.
+        let incoming = Arc::new(Schema::new(vec![
+            Field::new("size", DataType::Float64, false),
+            Field::new("price", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            incoming,
+            vec![
+                Arc::new(Float64Array::from(vec![7.0])),
+                Arc::new(Float64Array::from(vec![101.5])),
+            ],
+        )
+        .unwrap();
+
+        let aligned = align_batch(batch, &table()).unwrap();
+        assert_eq!(aligned.schema(), table());
+        let price = aligned
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let size = aligned
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert_eq!(price.value(0), 101.5, "price is the price column");
+        assert_eq!(size.value(0), 7.0, "size is the size column");
+    }
+
+    #[test]
+    fn a_column_the_table_does_not_have_is_named_in_the_error() {
+        let incoming = Arc::new(Schema::new(vec![
+            Field::new("price", DataType::Float64, false),
+            Field::new("quantity", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            incoming,
+            vec![
+                Arc::new(Float64Array::from(vec![1.0])),
+                Arc::new(Float64Array::from(vec![2.0])),
+            ],
+        )
+        .unwrap();
+        let error = align_batch(batch, &table()).unwrap_err().to_string();
+        assert!(error.contains("size"), "{error}");
+        assert!(error.contains("quantity"), "{error}");
+    }
+
+    #[test]
+    fn a_matching_input_still_casts_representational_differences() {
+        // The reason this function exists: CSV inference types an integer
+        // column Int64 where the table wants Float64.
+        let incoming = Arc::new(Schema::new(vec![
+            Field::new("price", DataType::Int64, false),
+            Field::new("size", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            incoming,
+            vec![
+                Arc::new(Int64Array::from(vec![101])),
+                Arc::new(Float64Array::from(vec![7.0])),
+            ],
+        )
+        .unwrap();
+        let aligned = align_batch(batch, &table()).unwrap();
+        assert_eq!(aligned.schema(), table());
+        assert_eq!(
+            aligned
+                .column(0)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap()
+                .value(0),
+            101.0
+        );
+    }
+
+    #[test]
+    fn a_csv_header_decides_the_column_order_and_the_table_the_types() {
+        // A header already in table order changes nothing at all.
+        let in_order = "price,size\n1.5,2\n";
+        assert_eq!(
+            csv_schema_from_header(in_order.as_bytes(), &table()).unwrap(),
+            table()
+        );
+
+        // A reordered header is honoured, with the table's types, so the
+        // reader parses the file it was actually given.
+        let swapped = "size,price\n2,1.5\n";
+        let schema = csv_schema_from_header(swapped.as_bytes(), &table()).unwrap();
+        assert_eq!(schema.field(0).name(), "size");
+        assert_eq!(schema.field(1).name(), "price");
+        assert_eq!(schema.field(0).data_type(), &DataType::Float64);
+
+        // A header naming a column the table does not have is refused rather
+        // than quietly read into whichever column shares its position.
+        let unknown = "price,quantity\n1.5,2\n";
+        let error = csv_schema_from_header(unknown.as_bytes(), &table())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("quantity"), "{error}");
+    }
 }
