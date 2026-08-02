@@ -1068,20 +1068,41 @@ async fn resolve_all_at(db: &Arc<Database>, at: ReadAt) -> DfResult<Vec<Resolved
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     // `resolve_entry`, not `resolve`: the listing above already produced these
     // catalog entries, and resolving by name would re-read every one of them.
+    let listed = tables.len();
+    // Keep the first skipped-table error. A pin that predates *one* table is
+    // that table reading empty, but a pin that predates *every* table is a pin
+    // pointing nowhere, which is a user naming a version or an instant the
+    // database never had. Reporting the first as the second would make a
+    // legitimate research pin fail; reporting the second as the first would
+    // hand back a silently empty session, and the CLI's contract is that a bad
+    // decision point is a named user error.
+    let mut skipped: Option<h5i_db_core::Error> = None;
     let resolved = futures::future::try_join_all(tables.into_iter().map(|entry| {
         let at = at.clone();
         let db = db.clone();
         async move {
             match db.resolve_entry(entry, at.clone()).await {
-                Ok(table) => Ok(Some(table)),
-                Err(e) if absent_at_pin(&at, &e) => Ok(None),
+                Ok(table) => Ok(Ok(table)),
+                Err(e) if absent_at_pin(&at, &e) => Ok(Err(e)),
                 Err(e) => Err(e),
             }
         }
     }))
     .await
     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    Ok(resolved.into_iter().flatten().collect())
+    let mut kept = Vec::with_capacity(resolved.len());
+    for outcome in resolved {
+        match outcome {
+            Ok(table) => kept.push(table),
+            Err(e) => skipped = skipped.or(Some(e)),
+        }
+    }
+    if kept.is_empty() && listed > 0 {
+        if let Some(e) = skipped {
+            return Err(DataFusionError::External(Box::new(e)));
+        }
+    }
+    Ok(kept)
 }
 
 /// Whether `err` means "this table has no version at the pin" rather than a
