@@ -1998,3 +1998,192 @@ async fn gapfill_point_samples_and_drops_off_grid_and_duplicate_rows() {
     // tie at t=10.
     assert_eq!(price.values(), &[1.0, 4.0]);
 }
+
+async fn count_rows(s: &H5iSession, table: &str) -> i64 {
+    let batches = s
+        .sql(&format!("SELECT count(*) AS n FROM {table}"))
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap()
+        .value(0)
+}
+
+/// A pinned session must not be held hostage by a table the pin cannot see.
+/// The catalog is listed at head, so it names tables created after the pin;
+/// resolving all of them at `Version(v)` failed the whole call as soon as any
+/// one of them had fewer than `v` commits of its own, which meant `refresh()`
+/// (and construction) stopped working because of a table the session was never
+/// going to read.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pinned_session_skips_tables_that_did_not_exist_yet() {
+    use h5i_db_core::ReadAt;
+
+    let (_dir, db) = setup_trades().await; // create + one 4-row append
+    db.append(
+        "trades",
+        vec![trades_batch(&[5_000], &["C"], &[30.0], &[5])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let head = db
+        .resolve("trades", ReadAt::Latest)
+        .await
+        .unwrap()
+        .manifest
+        .sequence;
+
+    // Created afterwards, so its own history is shorter than the pin.
+    db.create_table("late", trades_schema(), time_options())
+        .await
+        .unwrap();
+    let late_head = db
+        .resolve("late", ReadAt::Latest)
+        .await
+        .unwrap()
+        .manifest
+        .sequence;
+    assert!(
+        late_head < head,
+        "the new table must be shorter than the pin for this to test anything"
+    );
+
+    let s = H5iSession::new_at(db.clone(), SessionOptions::default(), ReadAt::Version(head))
+        .await
+        .unwrap();
+    assert_eq!(count_trades(&s).await, 5);
+
+    // The unseeable table is simply absent, and it does not stop the session
+    // from re-resolving the tables the pin does cover.
+    s.refresh().await.unwrap();
+    assert_eq!(count_trades(&s).await, 5);
+    assert!(
+        s.sql("SELECT * FROM late").await.is_err(),
+        "a table with no version at the pin must not be registered"
+    );
+}
+
+/// `refresh()` is all-or-nothing. Registration is fallible per table, and doing
+/// it table by table left the deregistrations applied and an arbitrary prefix
+/// re-registered: the tables before the failure moved, the ones after it did
+/// not, and since names come back sorted the same table blocked every later one
+/// on every later call.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refresh_that_cannot_register_every_table_changes_nothing() {
+    use h5i_db_query::ResearchPin;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    for name in ["aaa", "zzz"] {
+        db.create_table(name, trades_schema(), time_options())
+            .await
+            .unwrap();
+        db.append(
+            name,
+            vec![trades_batch(&[1_000], &["A"], &[10.0], &[1])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    let s = H5iSession::new_pinned(
+        db.clone(),
+        SessionOptions::default(),
+        ResearchPin::default().with_event_time_cutoff_ns(9_000),
+    )
+    .await
+    .unwrap();
+    assert_eq!(count_rows(&s, "aaa").await, 1);
+    assert_eq!(count_rows(&s, "zzz").await, 1);
+
+    // New rows for both, plus a table that cannot be embargoed at all: it has
+    // no time column, so there is no cutoff to enforce on it. Its name sorts
+    // between the other two.
+    for name in ["aaa", "zzz"] {
+        db.append(
+            name,
+            vec![trades_batch(&[2_000], &["B"], &[11.0], &[1])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    db.create_table("mmm", trades_schema(), TableOptions::default())
+        .await
+        .unwrap();
+
+    let err = s.refresh().await.unwrap_err().to_string();
+    assert!(err.contains("no time column"), "unexpected error: {err}");
+    assert_eq!(
+        count_rows(&s, "aaa").await,
+        1,
+        "a refresh that failed must not have applied half of itself"
+    );
+    assert_eq!(count_rows(&s, "zzz").await, 1);
+
+    // Nor is the session wedged: with the un-embargoable table gone, the same
+    // refresh applies in full, to both names.
+    db.drop_table("mmm").await.unwrap();
+    s.refresh().await.unwrap();
+    assert_eq!(count_rows(&s, "aaa").await, 2);
+    assert_eq!(count_rows(&s, "zzz").await, 2);
+}
+
+/// The sidecar policy governs writes, not reads. `latest_on()`'s whole reason
+/// to exist is not scanning every row of every segment, and a read-only store
+/// that ignored the sidecars an earlier read-write run had written took that
+/// O(rows) path on every call — which, since `predicate_cache` defaults to
+/// disabled, was every default session and every CLI run without the flag.
+#[tokio::test]
+async fn a_read_only_latest_store_reads_sidecars_and_writes_none() {
+    use h5i_db_query::latest::{LatestByMode, LatestByStore};
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::create(&dir.path().join("db")).await.unwrap());
+    db.create_table("trades", trades_schema(), time_options())
+        .await
+        .unwrap();
+    db.append(
+        "trades",
+        vec![trades_batch(&[1, 2], &["A", "B"], &[101.0, 102.0], &[1, 1])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+
+    let read_only = LatestByStore::new(db.clone(), LatestByMode::ReadOnly);
+    let (_cold, m1) = read_only
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    assert_eq!(m1.states_built, 1);
+    assert!(
+        db.backend()
+            .list(&ObjectPath::from("cache/latest/v1"))
+            .await
+            .unwrap()
+            .is_empty(),
+        "a read-only store must not write sidecars"
+    );
+
+    // Warm the cache from a read-write store; the read-only one then hits it
+    // instead of rebuilding the segment.
+    LatestByStore::new(db.clone(), LatestByMode::ReadWrite)
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    let (_warm, m2) = read_only
+        .latest_by("trades", h5i_db_core::ReadAt::Latest, "symbol")
+        .await
+        .unwrap();
+    assert_eq!(m2.states_reused, 1);
+    assert_eq!(m2.states_built, 0);
+    assert_eq!(m2.rows_scanned, 0);
+}

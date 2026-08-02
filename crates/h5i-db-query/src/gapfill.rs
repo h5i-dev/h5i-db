@@ -165,6 +165,24 @@ impl GapFillLosses {
     fn is_lossless(&self) -> bool {
         self.rows_collapsed == 0 && self.rows_off_grid == 0
     }
+
+    /// Copy `schema` with the loss counts attached. Every return path goes
+    /// through this, including the empty one: a caller reading
+    /// `h5i.gapfill.rows_collapsed` should not have to special-case the result
+    /// that happens to have no rows, which is exactly the boundary a test
+    /// reaches for first.
+    fn annotate(&self, schema: &SchemaRef) -> SchemaRef {
+        let mut metadata = schema.metadata().clone();
+        metadata.insert(
+            ROWS_COLLAPSED_KEY.to_string(),
+            self.rows_collapsed.to_string(),
+        );
+        metadata.insert(
+            ROWS_OFF_GRID_KEY.to_string(),
+            self.rows_off_grid.to_string(),
+        );
+        Arc::new(Schema::new_with_metadata(schema.fields().clone(), metadata))
+    }
 }
 
 fn build_gapfilled(
@@ -176,15 +194,23 @@ fn build_gapfilled(
 ) -> DfResult<RecordBatch> {
     let combined = arrow::compute::concat_batches(&schema, batches)?;
     if combined.num_rows() == 0 {
-        return Ok(RecordBatch::new_empty(schema));
+        // No input loses nothing, but it still has to say so: the keys are part
+        // of the output contract, not of the non-empty case.
+        return Ok(RecordBatch::new_empty(
+            GapFillLosses::default().annotate(&schema),
+        ));
     }
     let time_idx = schema.index_of(time_col)?;
     let times = h5i_db_core::segment::time_values_i64(&combined, time_col)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let mut rows_by_time = BTreeMap::new();
     for (row, time) in times.iter().copied().enumerate() {
-        // Last row wins, deterministically: scan order is manifest order, so
-        // the newest arrival for a timestamp is the one that survives.
+        // Last row in scan order wins. That is deterministic for a given
+        // manifest, but it is not "the newest arrival": h5i-db-core orders a
+        // manifest's segments by `time_range.min`, so scan order is time order,
+        // not commit order, and a compaction can reorder the survivors of a
+        // collapsed timestamp. Which of them wins is arbitrary, which is why
+        // the count below is published rather than the choice explained.
         rows_by_time.insert(time, row);
     }
     let start = *rows_by_time.first_key_value().unwrap().0;
@@ -278,17 +304,7 @@ fn build_gapfilled(
     // log line is not something a notebook or a test can assert on, and "did
     // this silently drop half my ticks" is exactly the question a caller needs
     // to be able to answer after the fact.
-    let mut metadata = schema.metadata().clone();
-    metadata.insert(
-        ROWS_COLLAPSED_KEY.to_string(),
-        losses.rows_collapsed.to_string(),
-    );
-    metadata.insert(
-        ROWS_OFF_GRID_KEY.to_string(),
-        losses.rows_off_grid.to_string(),
-    );
-    let annotated = Arc::new(Schema::new_with_metadata(schema.fields().clone(), metadata));
-    RecordBatch::try_new(annotated, arrays).map_err(DataFusionError::from)
+    RecordBatch::try_new(losses.annotate(&schema), arrays).map_err(DataFusionError::from)
 }
 
 impl TableFunctionImpl for GapFillFunc {
@@ -459,6 +475,28 @@ mod tests {
         .unwrap();
         let out = build_gapfilled(schema, &[batch], "ts", 10, FillMode::Null).unwrap();
         assert_eq!(out.num_rows(), 4);
+        let schema = out.schema();
+        let metadata = schema.metadata();
+        assert_eq!(
+            metadata.get(ROWS_COLLAPSED_KEY).map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            metadata.get(ROWS_OFF_GRID_KEY).map(String::as_str),
+            Some("0")
+        );
+    }
+
+    /// The boundary case: an empty input publishes the same keys as any other
+    /// result. It used to return before the metadata was attached, so the two
+    /// advertised keys were missing exactly where a caller is most likely to
+    /// look for a zero.
+    #[test]
+    fn an_empty_input_still_reports_zero_losses() {
+        let schema = losses_schema();
+        let batch = RecordBatch::new_empty(schema.clone());
+        let out = build_gapfilled(schema, &[batch], "ts", 10, FillMode::Null).unwrap();
+        assert_eq!(out.num_rows(), 0);
         let schema = out.schema();
         let metadata = schema.metadata();
         assert_eq!(
