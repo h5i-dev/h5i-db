@@ -1840,6 +1840,19 @@ impl Database {
     /// Commit a metadata-only schema revision. Existing immutable segments
     /// remain in place and are adapted on read (nullable trailing columns are
     /// null-filled; supported numeric widenings are cast).
+    ///
+    /// **Known hazard: revision numbers are not monotonic per table.** The next
+    /// revision is derived from the *head manifest's* revision (below), and
+    /// [`Self::restore`] rolls that number backwards to the restored version's.
+    /// So `evolve → restore → evolve` writes `spec/2.json` a second time with an
+    /// unconditional `put`, and the first version at revision 2 silently starts
+    /// resolving to the second schema: an `as_of`/`version` read of it returns
+    /// its old segments labelled with columns they never had. The real fix is a
+    /// table-level monotonic revision counter persisted next to HEAD and never
+    /// rewound by `restore`, which makes spec objects genuinely write-once; that
+    /// is a format change with a migration and is not done here.
+    /// [`crate::fork`]'s promote path refuses the fork-shaped instance of this
+    /// collision rather than letting it reach the base table.
     pub async fn evolve_schema(
         &self,
         name: &str,

@@ -1702,6 +1702,126 @@ async fn promoting_a_schema_evolved_shadow_carries_its_spec_revisions() {
     }
 }
 
+/// `trades_schema()` plus one nullable trailing column, which is the cheapest
+/// legal evolution: metadata only, old segments null-filled on read.
+fn trades_plus(column: &str) -> SchemaRef {
+    let mut fields: Vec<Field> = trades_schema()
+        .fields()
+        .iter()
+        .map(|f| (**f).clone())
+        .collect();
+    fields.push(Field::new(column, DataType::Int64, true));
+    Arc::new(Schema::new(fields))
+}
+
+/// Drive a base table to the state where revision 2 is *already taken* by a
+/// meaning the current head no longer uses: evolve to rev 2, then restore the
+/// pre-evolution version, which rolls `schema_revision` back to 1 while
+/// `spec/2.json` stays on disk. Returns the database with a fork cut from that
+/// head, so the fork's own `evolve_schema` will mint revision 2 a second time.
+async fn base_with_a_reusable_revision_two() -> (tempfile::TempDir, Database, Database) {
+    let (dir, db, _root) = db_with_trades().await;
+    db.evolve_schema("trades", trades_plus("tier"), WriteOptions::default())
+        .await
+        .unwrap();
+    db.restore("trades", 1, WriteOptions::default())
+        .await
+        .unwrap();
+    let head = db.resolve("trades", ReadAt::Latest).await.unwrap();
+    assert_eq!(
+        head.manifest.schema_revision, 1,
+        "restore must roll the revision back for this scenario to exist"
+    );
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
+    let fork_db = db.open_fork("agent-01").await.unwrap();
+    (dir, db, fork_db)
+}
+
+/// Promote must refuse when the shadow's revision number already means
+/// something else on the base.
+///
+/// Revision numbers are reusable: `restore` rewinds `schema_revision`, so the
+/// base can hold `spec/2.json` = `{…, tier}` while its head is back at revision
+/// 1, and a fork cut from that head evolves its *own* revision 2 = `{…, flag}`.
+/// The promoted manifest carries revision 2 and segments stamped
+/// `schema_revision = 2`, and the read path adapts only when those two numbers
+/// differ. They would match, so the fork's rows would be handed back raw under
+/// a schema naming a column they do not contain. The promote has to fail
+/// instead, leaving the base exactly as it was.
+#[tokio::test]
+async fn promoting_a_shadow_whose_revision_number_means_something_else_is_refused() {
+    let (_dir, db, fork_db) = base_with_a_reusable_revision_two().await;
+    fork_db
+        .evolve_schema("trades", trades_plus("flag"), WriteOptions::default())
+        .await
+        .unwrap();
+
+    let err = db.promote("agent-01", "trades").await.unwrap_err();
+    assert!(matches!(err, Error::Corruption { .. }), "{err:?}");
+    let msg = format!("{err}");
+    for needle in ["trades", "2", "tier", "flag"] {
+        assert!(msg.contains(needle), "message must name {needle}: {msg}");
+    }
+
+    // Nothing moved: the base is still at the restored version and revision,
+    // and the older version at revision 2 still means what it always did.
+    let head = db.resolve("trades", ReadAt::Latest).await.unwrap();
+    assert_eq!(head.manifest.schema_revision, 1);
+    assert!(head.schema.field_with_name("flag").is_err());
+    assert!(head.schema.field_with_name("tier").is_err());
+    let evolved = db.resolve("trades", ReadAt::Version(2)).await.unwrap();
+    assert_eq!(evolved.manifest.schema_revision, 2);
+    assert!(
+        evolved.schema.field_with_name("tier").is_ok(),
+        "the refused promote must not have rewritten spec/2.json"
+    );
+    assert_eq!(rows(&db, "trades").await, 3);
+}
+
+/// The refusal is a disagreement check, not a "revision exists" check.
+///
+/// Same collision setup, but the fork evolves to the *same* schema the base
+/// already recorded at revision 2. Both objects then describe one revision, so
+/// there is nothing to mislabel and the promote proceeds as it always has: the
+/// existing spec is left alone (it is already correct) and the base lands on
+/// revision 2.
+#[tokio::test]
+async fn promoting_a_shadow_that_re_evolved_the_same_schema_still_works() {
+    let (_dir, db, fork_db) = base_with_a_reusable_revision_two().await;
+    // Append first, so the row is written under revision 1 and the evolution
+    // that follows is the metadata-only one this test is about.
+    fork_db
+        .append(
+            "trades",
+            vec![trades_batch(&[400], &["C"], &[4.0])],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    fork_db
+        .evolve_schema("trades", trades_plus("tier"), WriteOptions::default())
+        .await
+        .unwrap();
+
+    db.promote("agent-01", "trades").await.unwrap();
+
+    let base = db.resolve("trades", ReadAt::Latest).await.unwrap();
+    assert_eq!(base.manifest.schema_revision, 2);
+    assert_eq!(base.spec.table_id, base.entry.table_id);
+    assert!(base.schema.field_with_name("tier").is_ok());
+    let (batches, _) = db
+        .scan("trades", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    let n: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(
+        n, 4,
+        "the fork's row must have landed with the base's three"
+    );
+}
+
 /// A multi-table transaction into a fresh fork shadows every table it writes.
 ///
 /// The transaction materializes all of its shadows under one metadata lock
