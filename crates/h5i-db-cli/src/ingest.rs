@@ -147,20 +147,22 @@ fn open_buffered(
             })
         }
         InputFormat::Csv => {
-            let cursor = std::io::Cursor::new(bytes);
+            // The header pass borrows the payload rather than cloning the
+            // cursor: `Cursor<Vec<u8>>::clone` copies the whole `Vec`, which
+            // is a second copy of stdin the module doc says we do not make.
             let schema = match schema_hint {
-                Some(table) => csv_schema_from_header(cursor.clone(), &table)?,
+                Some(table) => csv_schema_from_header(std::io::Cursor::new(&bytes), &table)?,
                 None => {
                     let (inferred, _) = arrow::csv::reader::Format::default()
                         .with_header(true)
-                        .infer_schema(cursor.clone(), Some(10_000))
+                        .infer_schema(std::io::Cursor::new(&bytes), Some(10_000))
                         .map_err(Error::Arrow)?;
                     Arc::new(inferred)
                 }
             };
             let reader = arrow::csv::ReaderBuilder::new(schema.clone())
                 .with_header(true)
-                .build(cursor)
+                .build(std::io::Cursor::new(bytes))
                 .map_err(Error::Arrow)?;
             Ok(InputReader {
                 schema,
@@ -242,16 +244,71 @@ fn csv_schema_from_header(reader: impl Read, table: &SchemaRef) -> Result<Schema
     }
     let mut fields = Vec::with_capacity(header.fields().len());
     for field in header.fields() {
-        let Some((index, _)) = table.column_with_name(field.name()) else {
-            return Err(Error::invalid(format!(
-                "CSV column {:?} is not a column of the table; the table has [{}]",
-                field.name(),
-                column_names(table)
-            )));
+        let index = match match_column(table, field.name()) {
+            ColumnMatch::At(i) => i,
+            ColumnMatch::Missing => {
+                return Err(Error::invalid(format!(
+                    "CSV column {:?} is not a column of the table; the table has [{}]",
+                    field.name(),
+                    column_names(table)
+                )));
+            }
+            ColumnMatch::Ambiguous(candidates) => {
+                return Err(Error::invalid(format!(
+                    "CSV column {:?} matches more than one table column when case \
+                     is ignored ([{candidates}]); rename the header to match one exactly",
+                    field.name(),
+                )));
+            }
         };
+        // The table's field, so the reader labels the column the way the
+        // table spells it and the batch needs no later renaming.
         fields.push(table.field(index).clone());
     }
     Ok(Arc::new(arrow::datatypes::Schema::new(fields)))
+}
+
+/// Where a name landed when resolved against a schema.
+enum ColumnMatch {
+    At(usize),
+    Missing,
+    /// Several fields differ from `name` only by case, so folding would have
+    /// to pick one arbitrarily.
+    Ambiguous(String),
+}
+
+/// Resolve a column by name: exactly first, then ignoring ASCII case.
+///
+/// SQL folds unquoted identifiers to lowercase, so a table created as
+/// `ts,symbol,price` reads back that way and a user has no reason to think a
+/// file headed `TS,SYMBOL,PRICE` describes different columns. Before the
+/// by-name rewrite the positional zip loaded such a file correctly, so an
+/// exact-match-only lookup silently broke working files.
+///
+/// An exact match always wins, so a schema that genuinely distinguishes `ts`
+/// from `TS` keeps its old behaviour; only a fold with more than one
+/// candidate is refused, and it says so.
+fn match_column(schema: &SchemaRef, name: &str) -> ColumnMatch {
+    if let Some((index, _)) = schema.column_with_name(name) {
+        return ColumnMatch::At(index);
+    }
+    let folded: Vec<usize> = schema
+        .fields()
+        .iter()
+        .enumerate()
+        .filter(|(_, f)| f.name().eq_ignore_ascii_case(name))
+        .map(|(i, _)| i)
+        .collect();
+    match folded.as_slice() {
+        [] => ColumnMatch::Missing,
+        [only] => ColumnMatch::At(*only),
+        many => ColumnMatch::Ambiguous(
+            many.iter()
+                .map(|i| schema.field(*i).name().as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+    }
 }
 
 fn column_names(schema: &SchemaRef) -> String {
@@ -284,14 +341,24 @@ pub fn align_batch(batch: RecordBatch, schema: &SchemaRef) -> Result<RecordBatch
     let incoming = batch.schema();
     let mut columns = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
-        let Some((index, _)) = incoming.column_with_name(field.name()) else {
-            return Err(Error::invalid(format!(
-                "input has no column named {:?}; the table's columns are [{}] \
-                 and the input's are [{}]",
-                field.name(),
-                column_names(schema),
-                column_names(&incoming)
-            )));
+        let index = match match_column(&incoming, field.name()) {
+            ColumnMatch::At(i) => i,
+            ColumnMatch::Missing => {
+                return Err(Error::invalid(format!(
+                    "input has no column named {:?}; the table's columns are [{}] \
+                     and the input's are [{}]",
+                    field.name(),
+                    column_names(schema),
+                    column_names(&incoming)
+                )));
+            }
+            ColumnMatch::Ambiguous(candidates) => {
+                return Err(Error::invalid(format!(
+                    "table column {:?} matches more than one input column when case \
+                     is ignored ([{candidates}]); rename the input columns to match exactly",
+                    field.name(),
+                )));
+            }
         };
         let col = batch.column(index);
         if col.data_type() == field.data_type() {
@@ -348,6 +415,79 @@ mod tests {
             .unwrap();
         assert_eq!(price.value(0), 101.5, "price is the price column");
         assert_eq!(size.value(0), 7.0, "size is the size column");
+    }
+
+    #[test]
+    fn an_uppercase_header_still_loads() {
+        // `TS,SYMBOL,PRICE` into `ts,symbol,price` loaded before the by-name
+        // rewrite (positional zip, right order) and must keep loading: SQL
+        // folds unquoted identifiers, so the user's model is case-insensitive.
+        let incoming = Arc::new(Schema::new(vec![
+            Field::new("SIZE", DataType::Float64, false),
+            Field::new("PRICE", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            incoming,
+            vec![
+                Arc::new(Float64Array::from(vec![7.0])),
+                Arc::new(Float64Array::from(vec![101.5])),
+            ],
+        )
+        .unwrap();
+
+        let aligned = align_batch(batch, &table()).unwrap();
+        assert_eq!(aligned.schema(), table());
+        let price = aligned
+            .column(0)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        let size = aligned
+            .column(1)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        // Folded by name, so the reorder still applies.
+        assert_eq!(price.value(0), 101.5);
+        assert_eq!(size.value(0), 7.0);
+    }
+
+    #[test]
+    fn an_exact_match_wins_over_a_folded_one() {
+        let mixed: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("PRICE", DataType::Float64, false),
+            Field::new("price", DataType::Float64, false),
+        ]));
+        match match_column(&mixed, "price") {
+            ColumnMatch::At(i) => assert_eq!(i, 1, "the exactly-spelled field"),
+            _ => panic!("exact match should not be ambiguous"),
+        }
+    }
+
+    #[test]
+    fn a_fold_with_two_candidates_is_refused_and_says_why() {
+        let mixed: SchemaRef = Arc::new(Schema::new(vec![
+            Field::new("Price", DataType::Float64, false),
+            Field::new("PRICE", DataType::Float64, false),
+        ]));
+        match match_column(&mixed, "price") {
+            ColumnMatch::Ambiguous(candidates) => {
+                assert!(candidates.contains("Price") && candidates.contains("PRICE"));
+            }
+            _ => panic!("two case-only variants are ambiguous"),
+        }
+    }
+
+    #[test]
+    fn a_csv_header_in_another_case_maps_onto_the_table_fields() {
+        let csv = "SIZE,PRICE\n7.0,101.5\n";
+        let schema =
+            csv_schema_from_header(std::io::Cursor::new(csv.as_bytes()), &table()).unwrap();
+        // Table spellings and table types, in the file's order.
+        assert_eq!(
+            schema.fields().iter().map(|f| f.name()).collect::<Vec<_>>(),
+            vec!["size", "price"]
+        );
     }
 
     #[test]
