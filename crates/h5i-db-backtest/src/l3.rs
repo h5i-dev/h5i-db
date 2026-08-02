@@ -19,6 +19,15 @@
 //! standard ones and are tested exhaustively, but no recorded MBO feed has
 //! been replayed through them. That check is still outstanding and is a
 //! different kind of assurance from the tests below.
+//!
+//! **Not yet wired into the engine.** [`crate::engine::Engine`] keeps
+//! [`crate::book::OrderBook`] per market and models queue position from L2
+//! depth ([`crate::models::QueuePositionFills`]); nothing in the kernel
+//! constructs an [`L3Book`], and [`crate::event::MarketEvent`] carries no MBO
+//! variant to feed one. This module is here as the roadmap item it is
+//! (`ROADMAP_QUANT.md`), complete and tested on its own terms, waiting on an
+//! MBO record type and a fill model that reads it. It is not dead code left
+//! behind by a deletion.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashMap, VecDeque};

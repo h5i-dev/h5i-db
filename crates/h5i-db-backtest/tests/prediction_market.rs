@@ -1064,3 +1064,87 @@ fn the_mark_curve_can_be_turned_off_for_a_run_spanning_many_markets() {
     .unwrap();
     assert!(result.mark_curve.is_empty());
 }
+
+// -- 7. the close is enforced on the fill path, not only on arrival ---------
+
+/// A TWAP child is created already accepted and matched immediately, so it
+/// never passes the arrival check that refuses an order sent into a closed
+/// market. Without a check on the fill path it trades against whatever book
+/// the venue was still tearing down (issue #68).
+#[test]
+fn a_twap_child_does_not_fill_after_the_market_closes() {
+    let mut strategy = Script::new(vec![Box::new(|ctx: &mut Context<'_>| {
+        ctx.twap(
+            h5i_db_backtest::engine::TwapRequest::new(
+                market_id(),
+                OutcomeId::FIRST,
+                Side::Buy,
+                qty(10.0),
+                200,
+            )
+            .interval_nanos(100),
+        );
+        Ok(())
+    })]);
+    let result = run(
+        expiring_market(50),
+        &mut strategy,
+        vec![
+            yes_book(1, 0.40, 0.42),
+            yes_book(100, 0.40, 0.42),
+            yes_book(200, 0.40, 0.42),
+        ],
+        1_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.metrics.twap_slices, 2,
+        "the schedule did release its children"
+    );
+    assert!(
+        result.fills.is_empty(),
+        "and every one of them met a market that had shut at 50: {:?}",
+        result.fills
+    );
+    assert_eq!(result.metrics.orders_rejected_expired, 2);
+}
+
+/// A parked trigger is not on the book, so it is not in `resting` either, so
+/// the expiry sweep never sees it. It has to be refused where it fires
+/// (issue #68).
+#[test]
+fn a_parked_trigger_does_not_fire_into_a_closed_market() {
+    let mut strategy = Script::new(vec![Box::new(|ctx: &mut Context<'_>| {
+        ctx.submit(
+            OrderRequest::market(market_id(), OutcomeId::FIRST, Side::Buy, qty(10.0))
+                .with_trigger(h5i_db_backtest::order::Trigger::below(price(0.30))),
+        );
+        Ok(())
+    })]);
+    let result = run(
+        expiring_market(50),
+        &mut strategy,
+        // The mark falls through the trigger long after the market closed.
+        vec![yes_book(1, 0.40, 0.42), yes_book(100, 0.20, 0.22)],
+        1_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.metrics.orders_triggered, 1,
+        "the mark did reach the trigger"
+    );
+    assert!(
+        result.fills.is_empty(),
+        "but there was nothing left to trade against"
+    );
+    assert_eq!(result.orders[0].status, OrderStatus::Rejected);
+    assert!(
+        result.orders[0]
+            .reject_reason
+            .as_deref()
+            .unwrap()
+            .contains("stopped trading")
+    );
+}

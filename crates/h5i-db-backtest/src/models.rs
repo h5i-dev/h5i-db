@@ -328,8 +328,15 @@ impl FeeModel for TieredFees {
             let (_, amount) = traded.entries.pop_front().expect("peeked");
             traded.total -= amount as i128;
         }
+        // Refused rather than clamped. Every narrowing in this crate errors
+        // instead of wrapping, and a clamp is a wrap wearing a hat: past
+        // `Raw::MAX` the rolling total stops counting, the account freezes in
+        // whatever tier it had reached, and every later fill is priced from a
+        // volume that is no longer the volume. The floor at zero went with
+        // it: a negative total is a bookkeeping bug in the window, not
+        // something to round away.
         let rolling = Money::from_raw(crate::types::narrow(
-            traded.total.clamp(0, Raw::MAX as i128),
+            traded.total,
             "TieredFees rolling volume",
         )?);
         let tier = self.tier_for(rolling);
@@ -414,6 +421,13 @@ pub trait FillModel: std::fmt::Debug {
     /// Whether a resting order at the touch fills when a trade prints
     /// through its price. Conservative by default: a print at your price
     /// does not prove your order was ahead in the queue.
+    ///
+    /// **Not yet consulted by the engine.** Passive fills on prints are
+    /// decided by [`FillModel::uses_queue_position`] instead, which is the
+    /// stricter question: it walks the displayed size ahead of the order
+    /// rather than answering yes or no per print. This hook is the coarse
+    /// alternative for feeds with no usable depth, and nothing reads it until
+    /// such a model exists.
     fn passive_fills_on_trade_at_price(&self) -> bool {
         false
     }
@@ -491,13 +505,19 @@ impl FillModel for TickSlippage {
             .map(|(p, q)| (Price::from_raw(p.raw() + ask_shift), q))
             .collect();
         let mut synthetic = OrderBook::new();
+        // `book_for_fill` has nowhere to report an error, and swallowing one
+        // with `.ok()?` spells a refused snapshot as "no slippage applied" --
+        // silence in the direction that flatters the taker. Stating the
+        // invariant instead: `apply_snapshot` has no failure path, and a
+        // shift that moves one side away from the other cannot cross the
+        // book, so there is nothing here for a future check to reject.
         synthetic
             .apply_snapshot(
                 &bids,
                 &asks,
                 book.last_update().unwrap_or(UnixNanos::new(0)),
             )
-            .ok()?;
+            .expect("shifting one side of a book away cannot make it invalid");
         Some(synthetic)
     }
 }
@@ -546,6 +566,13 @@ impl FillModel for QueuePositionFills {
 /// A periodic venue process: funding, fee waivers, liquidation checks.
 ///
 /// Returns cash adjustments to apply to the account.
+///
+/// **Not yet wired into the engine.** [`crate::engine::Engine`] holds no
+/// module list and runs its periodic work directly off the record stream:
+/// funding on a `Funding` record, liquidation after every mark change. This
+/// trait is the seam for a process that fires on the *clock* rather than on
+/// data (a daily fee waiver, an hourly settlement on a market that went
+/// quiet), and implementing it today does not make anything run.
 pub trait VenueModule: std::fmt::Debug {
     fn name(&self) -> &str;
     /// Interval between runs, in nanoseconds.

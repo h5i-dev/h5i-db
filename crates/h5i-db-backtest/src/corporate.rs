@@ -87,6 +87,18 @@ impl CorporateAction {
     }
 
     /// Quantity and price after a split, leaving position value unchanged.
+    ///
+    /// "Unchanged" holds to fixed-point resolution, not exactly. Both legs
+    /// truncate toward zero, so each loses at most one raw unit (1e-9), and
+    /// the product can move by about `quantity * 1e-9 + price * 1e-9`. The
+    /// residual is dropped rather than redistributed because there is nowhere
+    /// honest to put it: a venue pays cash in lieu of the fractional share it
+    /// creates, and this model does not issue that cash.
+    ///
+    /// Truncation is also why the two legs are not symmetric under a
+    /// round trip. Splitting by `r` and back by `1/r` returns a quantity at
+    /// or below the original, never above, which is the direction that
+    /// cannot manufacture size.
     pub fn split_position(ratio: Price, quantity: Qty, price: Price) -> Result<(Qty, Price)> {
         if !ratio.is_positive() {
             return Err(BacktestError::invalid("split ratio must be positive"));

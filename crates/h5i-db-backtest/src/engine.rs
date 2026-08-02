@@ -128,6 +128,18 @@ impl Slots {
         }
     }
 
+    /// Every slot belonging to one instrument, in outcome order.
+    ///
+    /// For the rare operations that act on a whole instrument rather than one
+    /// book: a corporate action reprices every outcome at once, and finding
+    /// them by scanning `back` would be linear in the whole universe.
+    fn all_for(&self, instrument: &InstrumentId) -> Vec<Slot> {
+        match self.by_instrument.get(instrument) {
+            Some((base, count)) => (0..*count as u32).map(|step| Slot(base + step)).collect(),
+            None => Vec::new(),
+        }
+    }
+
     /// What a slot names.
     ///
     /// Only ever called on slots read back out of the engine's own maps,
@@ -891,11 +903,21 @@ pub struct RunMetrics {
     /// Sells that would have opened short exposure in an outcome nobody can
     /// borrow. See [`EngineBuilder::allow_naked_shorts`].
     pub orders_rejected_naked_short: u64,
-    /// Orders submitted, or arriving after their latency, once the
-    /// instrument had stopped trading.
+    /// Orders submitted, arriving after their latency, or reaching the
+    /// matcher once the instrument had stopped trading -- by expiry or by a
+    /// `Delist` action partway through the run.
     pub orders_rejected_expired: u64,
     /// Post-only orders that would have crossed on arrival.
     pub orders_rejected_post_only: u64,
+    /// Orders the venue could not make sense of: an instrument this run does
+    /// not carry, an outcome it does not have, a limit off the tick grid, a
+    /// post-only order with no limit to rest at.
+    ///
+    /// A rejection rather than an error, and counted rather than swallowed.
+    /// These used to end the run: a strategy that mis-priced one order in ten
+    /// thousand took the other nine thousand nine hundred and ninety-nine
+    /// with it, and the result said nothing about any of them.
+    pub orders_rejected_invalid: u64,
     /// Stops and take-profits whose trigger was reached.
     pub orders_triggered: u64,
     /// Child orders released by a TWAP.
@@ -962,6 +984,13 @@ impl RunMetrics {
                 reasons.push(format!(
                     "{} arrived after their instrument had stopped trading",
                     self.orders_rejected_expired
+                ));
+            }
+            if self.orders_rejected_invalid > 0 {
+                reasons.push(format!(
+                    "{} named an instrument, outcome or price this run cannot \
+                     trade; read their reject_reason",
+                    self.orders_rejected_invalid
                 ));
             }
             if self.orders_rejected_post_only > 0 {
@@ -1063,10 +1092,10 @@ pub struct RunResult {
     /// Net funding paid out over the run. Negative means funding was
     /// received, which is the whole point of a carry strategy.
     pub funding_paid: Money,
-    /// Positions the venue closed because the account fell below its
-    /// maintenance requirement.
     /// Cash received from dividends, net of what a short paid.
     pub dividends_received: Money,
+    /// Positions the venue closed because the account fell below its
+    /// maintenance requirement.
     pub liquidations: Vec<Liquidation>,
     /// Orders refused because the account could not fund them.
     pub rejected_for_margin: u64,
@@ -1131,6 +1160,13 @@ pub struct Engine {
     self_trades_prevented: u64,
     reporting_currency: crate::currency::Currency,
     dividends_received: Money,
+    /// Instruments a `Delist` action has taken off the board.
+    ///
+    /// Read by [`Engine::stopped_trading`], which is what makes the claim
+    /// true: the open positions are cashed out at the delisting price and
+    /// nothing may trade the instrument again, however much data keeps
+    /// arriving. This set was written and never read, so the claim was a
+    /// comment rather than a rule.
     delisted: std::collections::BTreeSet<InstrumentId>,
     metrics: RunMetrics,
     execution: Box<dyn ExecutionClient>,
@@ -1408,9 +1444,31 @@ impl Engine {
     /// so a TWAP and a market order for the same size never both execute at
     /// the submitting instant -- which is what would make slicing look
     /// free.
+    ///
+    /// Two kinds of fault, treated differently, for the reason [`Engine::accept`]
+    /// gives. Naming a market this run does not carry is an order-level fault
+    /// and is recorded as a rejected order: it can depend on data, so a
+    /// strategy sweeping a universe can meet it in the middle of a run. The
+    /// *schedule* -- a non-positive quantity, duration or interval, or an
+    /// interval longer than the duration -- cannot. It is a static property
+    /// of the request, wrong on every record it could be issued on, and it
+    /// surfaces on the first TWAP the strategy ever sends rather than five
+    /// hours in, so it stays an error where the caller sees it immediately.
     fn start_twap(&mut self, request: TwapRequest) -> Result<()> {
-        let instrument = self.instruments.get(&request.instrument)?;
-        instrument.check_outcome(request.outcome)?;
+        let refusal = match self.instruments.get(&request.instrument) {
+            Ok(instrument) => instrument
+                .check_outcome(request.outcome)
+                .err()
+                .map(|error| error.to_string()),
+            Err(_) => Some(format!(
+                "{} is not an instrument this run carries",
+                request.instrument
+            )),
+        };
+        if let Some(reason) = refusal {
+            self.reject_twap(&request, reason)?;
+            return Ok(());
+        }
         let total_slices = request.slices()?;
         let now = self.clock.now();
         self.twaps.push(TwapProgress {
@@ -1421,6 +1479,36 @@ impl Engine {
             total_slices,
             worked: Qty::ZERO,
         });
+        Ok(())
+    }
+
+    /// Record a refused TWAP as a rejected order.
+    ///
+    /// A TWAP that never starts leaves nothing in `twaps` (there is no
+    /// progress to report on a schedule that does not exist), so without this
+    /// the refusal would be invisible in the result. Standing it up as one
+    /// rejected order for the whole size puts it where a reader already looks
+    /// for refusals, carrying the reason, and counts it alongside every other
+    /// order-level rejection.
+    fn reject_twap(&mut self, request: &TwapRequest, reason: String) -> Result<()> {
+        self.next_order_id += 1;
+        let id = OrderId(self.next_order_id);
+        let mut order = Order::new(
+            id,
+            request.instrument.clone(),
+            request.outcome,
+            request.side,
+            OrderKind::Market,
+            request.quantity,
+            TimeInForce::ImmediateOrCancel,
+            self.clock.now(),
+        )?;
+        order.status = OrderStatus::Rejected;
+        order.reject_reason = Some(reason);
+        order.tag = Some(request.tag.clone().unwrap_or_else(|| "twap".to_string()));
+        self.orders.insert(id, order);
+        self.metrics.orders_submitted += 1;
+        self.metrics.orders_rejected_invalid += 1;
         Ok(())
     }
 
@@ -1589,6 +1677,34 @@ impl Engine {
             .filter(|at| ts >= *at)
     }
 
+    /// Why this instrument cannot be traded at `ts`, if it cannot.
+    ///
+    /// There are two ways to stop, and both have to be asked wherever an
+    /// order can reach a book: the expiry declared on the instrument, and a
+    /// `Delist` action partway through the run. Checking only the first left
+    /// `delisted` written and never read, so an instrument the venue had
+    /// cashed out and taken off the board could be traded again by the next
+    /// stray record.
+    ///
+    /// The string is the venue's answer to the order, built once here rather
+    /// than at each call site, so the three places that refuse an order say
+    /// the same thing about the same fact.
+    fn stopped_trading(&self, instrument: &InstrumentId, ts: UnixNanos) -> Option<String> {
+        // This sits on the fill path, and most runs carry neither an expiry
+        // nor a delisting, so the instrument lookup is skipped outright
+        // rather than performed and missed.
+        if self.expiries.is_empty() && self.delisted.is_empty() {
+            return None;
+        }
+        if let Some(at) = self.has_expired(instrument, ts) {
+            return Some(format!("{instrument} stopped trading at {at}"));
+        }
+        if self.delisted.contains(instrument) {
+            return Some(format!("{instrument} was delisted and stopped trading"));
+        }
+        None
+    }
+
     /// Open positions drawing on the shared collateral pool.
     fn cross_positions(&self) -> impl Iterator<Item = &crate::position::Position> {
         self.portfolio
@@ -1604,6 +1720,18 @@ impl Engine {
     /// cross cash as the trade moved against you, which is precisely the
     /// contagion isolation is for: an isolated position is supposed to be
     /// able to lose its collateral and nothing else.
+    ///
+    /// **Limitation: the bucket gates the margin call, it does not cap the
+    /// loss.** What isolation currently changes is *when* the venue closes
+    /// you -- [`Engine::check_isolated_liquidation`] measures the position
+    /// against this bucket alone, so a healthy cross account cannot rescue
+    /// it. It does not change *how much* the trade costs. Realised profit and
+    /// loss are settled into `cash` by [`Engine::book_fill`] like any other
+    /// fill, and when the position goes flat this returns the whole bucket to
+    /// `cash`, so a loss larger than the bucket is still paid in full out of
+    /// cross collateral. Capping it needs a bankruptcy price and something to
+    /// absorb the overshoot (a venue uses its insurance fund), and inventing
+    /// either would be a guess dressed as a model.
     fn rebalance_isolated(&mut self, instrument: &InstrumentId) -> Result<()> {
         if !self.isolated.contains(instrument) {
             return Ok(());
@@ -1798,14 +1926,24 @@ impl Engine {
         Ok(Some(margin_state(&collateral, unrealized, &requirement)?))
     }
 
-    /// Close everything if the account has fallen below maintenance.
+    /// Close what the account can no longer support.
     ///
-    /// Liquidation is all-or-nothing here rather than partial. A partial
-    /// close needs a venue-specific rule for how much to take, and inventing
-    /// one would be a guess dressed as a model; closing the book is the
-    /// conservative reading and is what a margin call ultimately means.
-    /// Positions are closed in instrument order so the sequence is the same
-    /// on every run.
+    /// How much is closed is [`LiquidationPolicy`], stated rather than
+    /// assumed: `CloseAll` takes the whole book, which is what a margin call
+    /// ultimately means, and `Partial` takes only enough to restore the
+    /// maintenance ratio, which is what a venue reaches for first. Positions
+    /// are closed largest requirement first, then in instrument order, so the
+    /// sequence is the same on every run.
+    ///
+    /// This is the **cross** margin call, and it closes only cross positions.
+    /// [`Engine::margin_state`] already excludes isolated ones -- their
+    /// collateral is a bucket outside `cash` -- so building the list from
+    /// every open position closed positions that had contributed nothing to
+    /// the call that triggered it. That is exactly the contagion
+    /// [`EngineBuilder::isolate`] promises to prevent, and it arrived from
+    /// the healthy direction: a cross book blowing up took the isolated trade
+    /// with it. Isolated instruments are called separately, against their own
+    /// buckets, by [`Engine::check_isolated_liquidation`].
     fn check_liquidation(&mut self, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
         let Some(state) = self.margin_state()? else {
             return Ok(());
@@ -1817,7 +1955,7 @@ impl Engine {
         // what actually restores the ratio, and it makes the sequence the
         // same on every run without depending on portfolio iteration order.
         let mut doomed: Vec<(InstrumentId, OutcomeId, Qty, Money)> = Vec::new();
-        for position in self.portfolio.open_positions() {
+        for position in self.cross_positions() {
             let key = self.slots.key(&position.instrument, position.outcome);
             let Some(mark) = self.marks.get(&key).copied() else {
                 continue;
@@ -1858,7 +1996,7 @@ impl Engine {
             let closing = match self.liquidation {
                 LiquidationPolicy::CloseAll => quantity,
                 LiquidationPolicy::Partial => {
-                    self.partial_close_quantity(&instrument, outcome, quantity, mark)?
+                    self.partial_close_quantity(&instrument, quantity, mark)?
                 }
             };
             if closing.is_zero() {
@@ -1913,10 +2051,14 @@ impl Engine {
     /// through the requirement at once, and the relationship is not linear
     /// once fees and a walked book are involved. The grid is at most a few
     /// dozen steps and this runs only on a margin call.
+    ///
+    /// The outcome is not a parameter: the requirement is a function of the
+    /// quantity and the mark, and the mark the caller passes is already the
+    /// one for that outcome. It used to be taken and discarded with a
+    /// `let _ = outcome;`, which reads as a mistake rather than as a decision.
     fn partial_close_quantity(
         &self,
         instrument: &InstrumentId,
-        outcome: OutcomeId,
         quantity: Qty,
         mark: Price,
     ) -> Result<Qty> {
@@ -1943,7 +2085,6 @@ impl Engine {
         let lot = found.lot_size.raw().max(1);
         closing = closing.saturating_add(lot - 1) / lot * lot;
         closing = closing.min(held);
-        let _ = outcome;
         Ok(Qty::from_raw(closing * quantity.raw().signum()))
     }
 
@@ -1995,7 +2136,24 @@ impl Engine {
             let Some(mark) = self.marks.get(&key) else {
                 continue;
             };
-            position_value = position_value.checked_add(position.exposure(*mark)?)?;
+            // What a position contributes to equity depends on whether
+            // opening it moved cash. A funded position (a prediction-market
+            // contract, spot) was paid for out of `cash`, so its whole marked
+            // value belongs in equity. A perpetual was only collateralised:
+            // no cash left on entry, so adding the notional here counts the
+            // entry value twice and inflates every return, drawdown and
+            // Sharpe derived from `bt_equity` by `average_price * quantity`.
+            let funded = self
+                .instruments
+                .get(&position.instrument)
+                .map(|instrument| instrument.kind.is_funded())
+                .unwrap_or(true);
+            let contribution = if funded {
+                position.exposure(*mark)?
+            } else {
+                position.unrealized_pnl(*mark)?
+            };
+            position_value = position_value.checked_add(contribution)?;
             unrealized = unrealized.checked_add(position.unrealized_pnl(*mark)?)?;
         }
         self.equity.push(EquityPoint {
@@ -2108,10 +2266,23 @@ impl Engine {
                 self.apply_corporate_action(&record.instrument, *action, ts)?;
             }
         }
-        if let Some(mid) = self.books.get(key).and_then(|book| book.mid()) {
-            self.set_book_mark(key, mid);
-        } else {
-            self.refresh_mark(key);
+        // Only a record that touched the book re-derives the mark from it.
+        // A print and a bar close *are* the newer information: neither moves
+        // the book, so recomputing the mid afterwards put back a quote the
+        // trade had already gone past, and made the two writes above dead
+        // whenever the book happened to be two-sided. A reference or a
+        // funding record moves neither, so it only refreshes which stored
+        // series the effective mark is taken from.
+        let touched_book = matches!(
+            &record.event,
+            MarketEvent::BookSnapshot { .. }
+                | MarketEvent::BookDelta(_)
+                | MarketEvent::Gap
+                | MarketEvent::Corporate(_)
+        );
+        match self.books.get(key).and_then(|book| book.mid()) {
+            Some(mid) if touched_book => self.set_book_mark(key, mid),
+            _ => self.refresh_mark(key),
         }
         Ok(())
     }
@@ -2200,6 +2371,57 @@ impl Engine {
         Ok(())
     }
 
+    /// Requote a whole instrument in post-split terms: the book, and every
+    /// price series standing alongside it.
+    ///
+    /// Adjusting `marks` alone failed twice over. The *effective* mark is
+    /// rebuilt from `book_marks` and `venue_marks` on the very next record,
+    /// so a stale entry in either put the pre-split number straight back --
+    /// and for the outcome the corporate record itself names, the rebuild
+    /// happened before the record was even finished. And the book is what
+    /// [`Engine::match_resting`] offers the freshly repriced resting orders,
+    /// on this same record: leaving it in pre-split terms let a resting sell
+    /// of 100 at 50 become 200 at 25 and then fill all 200 against a
+    /// pre-split bid of 49.99, which is two hundred shares sold at twice the
+    /// post-split price out of an action that is economically a non-event.
+    ///
+    /// Requoting the book, rather than suppressing matching on the corporate
+    /// record, is the choice made here. It is what the venue does; it leaves
+    /// the ordinary matching path in charge instead of adding a case to it;
+    /// and it means a split can make nothing marketable that was not
+    /// marketable a moment earlier, because both sides moved by the same
+    /// ratio. Suppression would only defer the mismatch to the next record,
+    /// which need not be a book update at all -- a print or a bar would meet
+    /// the same pre-split levels.
+    fn split_quotes(
+        &mut self,
+        instrument: &InstrumentId,
+        ratio: Price,
+        ts: UnixNanos,
+    ) -> Result<()> {
+        use crate::corporate::CorporateAction;
+        let slots = self.slots.all_for(instrument);
+        for slot in &slots {
+            if let Some(book) = self.books.get_mut(slot) {
+                book.apply_split(ratio, ts)?;
+            }
+        }
+        for slot in &slots {
+            for series in [
+                &mut self.marks,
+                &mut self.book_marks,
+                &mut self.venue_marks,
+                &mut self.oracles,
+            ] {
+                if let Some(price) = series.get(slot).copied() {
+                    let (_, adjusted) = CorporateAction::split_position(ratio, Qty::ZERO, price)?;
+                    series.insert(*slot, adjusted);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Apply a corporate action to positions, resting orders and cash.
     ///
     /// Forward only: nothing already replayed is rewritten. A split scales
@@ -2207,6 +2429,12 @@ impl Engine {
     /// stock that just halved is a limit at 25 for twice the size, which is
     /// what the venue does and what stops an untouched order from becoming
     /// wildly marketable the instant the split lands.
+    ///
+    /// **Everything the split renames moves at once**, which is the whole of
+    /// the rule. Repricing the orders while leaving the book, the marks and
+    /// the venue's own reference prices in pre-split terms produces a state
+    /// where the two sides of the same market disagree by the ratio, and the
+    /// very next line of the kernel trades across that disagreement.
     fn apply_corporate_action(
         &mut self,
         instrument: &InstrumentId,
@@ -2241,20 +2469,7 @@ impl Engine {
                         self.resting_index.insert(order, slot);
                     }
                 }
-                // Marks are quoted prices, and the quote is now post-split.
-                let keys: Vec<BookKey> = self
-                    .marks
-                    .keys()
-                    .copied()
-                    .filter(|slot| &self.slots.name(*slot).0 == instrument)
-                    .collect();
-                for key in keys {
-                    if let Some(mark) = self.marks.get(&key).copied() {
-                        let (_, adjusted) =
-                            CorporateAction::split_position(ratio, Qty::ZERO, mark)?;
-                        self.marks.insert(key, adjusted);
-                    }
-                }
+                self.split_quotes(instrument, ratio, ts)?;
                 self.metrics.corporate_actions += 1;
             }
             CorporateAction::Dividend { per_share } => {
@@ -2367,6 +2582,15 @@ impl Engine {
 
     /// Apply an amendment, moving the order to the back of the queue when
     /// the change deserves it.
+    ///
+    /// The new queue position is measured against the book as it stands
+    /// *now*, which is right only because an amendment currently takes
+    /// effect now: [`crate::models::LatencyModel::cancel_nanos`] is not yet
+    /// consulted, so there is no interval between issuing an amendment and
+    /// the venue applying it. Once it is, this has to move with it, or a
+    /// repriced order will join the queue against a book the venue had not
+    /// seen when it re-queued the order -- which is the flattering direction
+    /// exactly when the book is moving.
     fn amend(&mut self, id: OrderId, quantity: Option<Qty>, limit: Option<Price>) -> Result<()> {
         let Some(order) = self.orders.get(&id).cloned() else {
             return Ok(());
@@ -2455,20 +2679,93 @@ impl Engine {
                 return false;
             };
             match (order.side, limit) {
-                // A marketable order crosses whatever is resting.
-                (_, None) => true,
+                // A market order crosses whatever it *reaches*, and it
+                // reaches the account's own order only when that order is at
+                // the front of its side. Treating every resting order as
+                // reachable rejects the market exit that closes a position
+                // whenever some unrelated bid rests far below the market,
+                // which is a refusal no venue would make.
+                (_, None) => self.rests_at_front(resting, resting_price),
                 (Side::Buy, Some(cap)) => resting_price <= cap,
                 (Side::Sell, Some(floor)) => resting_price >= floor,
             }
         })
     }
 
-    fn accept(&mut self, id: OrderId, request: OrderRequest) -> Result<()> {
-        let instrument = self.instruments.get(&request.instrument)?;
-        instrument.check_outcome(request.outcome)?;
-        if let OrderKind::Limit { limit } = request.kind {
-            instrument.check_price(limit)?;
+    /// Is this resting order the first thing an incoming order on the other
+    /// side would reach?
+    ///
+    /// The account's own orders are never inserted into the replayed book, so
+    /// a market order cannot literally match one. What decides whether it
+    /// *would have* is priority: an order at or improving the venue's best
+    /// price on its side sits in front of the displayed depth. An order
+    /// behind that depth is only reached by size large enough to walk to it,
+    /// which this engine does not model, so counting it as a self-trade
+    /// would trade one silent error for another.
+    fn rests_at_front(&self, resting: &Order, price: Price) -> bool {
+        let Some(book) = self
+            .books
+            .get(&self.slots.key(&resting.instrument, resting.outcome))
+        else {
+            // Nothing displayed to be behind.
+            return true;
+        };
+        match resting.side {
+            Side::Buy => book.best_bid().is_none_or(|(bid, _)| price >= bid),
+            Side::Sell => book.best_ask().is_none_or(|(ask, _)| price <= ask),
         }
+    }
+
+    /// Why the venue would refuse this request outright, if it would.
+    ///
+    /// Everything asked here is knowable from the request and the instrument
+    /// set alone: no book, no position, no clock. It is the *shape* of the
+    /// order that is wrong rather than its timing, which is why it can be
+    /// decided before the order object even exists.
+    fn order_refusal(&self, request: &OrderRequest) -> Option<String> {
+        let Ok(instrument) = self.instruments.get(&request.instrument) else {
+            return Some(format!(
+                "{} is not an instrument this run carries",
+                request.instrument
+            ));
+        };
+        if let Err(error) = instrument.check_outcome(request.outcome) {
+            return Some(error.to_string());
+        }
+        if let OrderKind::Limit { limit } = request.kind
+            && let Err(error) = instrument.check_price(limit)
+        {
+            return Some(error.to_string());
+        }
+        if request.post_only && !matches!(request.kind, OrderKind::Limit { .. }) {
+            return Some(
+                "a post-only order must carry a limit price; a market order \
+                 has nothing to rest at"
+                    .to_string(),
+            );
+        }
+        None
+    }
+
+    /// Take one queued order and either send it to the venue or refuse it.
+    ///
+    /// The line drawn here is the one the rest of the engine already drew: a
+    /// fault in *one order* is the venue's answer to that order, so it is
+    /// recorded, counted and explained by `reject_reason`, and the run
+    /// carries on. A fault in the harness -- a stream out of order, an
+    /// incremental update with no snapshot -- stays an error, because every
+    /// later number would be built on it.
+    ///
+    /// An unknown instrument, a missing outcome, a limit off the tick grid
+    /// and a post-only market order used to be on the wrong side of that
+    /// line. They ended the run, while an expired, naked-short, over-risk or
+    /// self-crossing order was merely counted -- so the same class of mistake
+    /// cost a strategy either one order or every order, depending on which
+    /// mistake it was.
+    fn accept(&mut self, id: OrderId, request: OrderRequest) -> Result<()> {
+        // Decided before the order is built, because building it consumes
+        // the request.
+        let refusal = self.order_refusal(&request);
         let now = self.clock.now();
         let mut order = Order::new(
             id,
@@ -2484,12 +2781,6 @@ impl Engine {
         order.reduce_only = request.reduce_only;
         order.post_only = request.post_only;
         order.trigger = request.trigger;
-        if order.post_only && !matches!(order.kind, OrderKind::Limit { .. }) {
-            return Err(BacktestError::invalid(
-                "a post-only order must carry a limit price; a market order \
-                 has nothing to rest at",
-            ));
-        }
 
         self.metrics.orders_submitted += 1;
         // Drop anything that has since terminated, so the checks below scan
@@ -2501,9 +2792,16 @@ impl Engine {
                 .is_some_and(|candidate| candidate.is_open())
         });
         self.live_orders = live;
-        if let Some(at) = self.has_expired(&order.instrument, now) {
+        if let Some(reason) = refusal {
             order.status = OrderStatus::Rejected;
-            order.reject_reason = Some(format!("{} stopped trading at {at}", order.instrument));
+            order.reject_reason = Some(reason);
+            self.orders.insert(id, order);
+            self.metrics.orders_rejected_invalid += 1;
+            return Ok(());
+        }
+        if let Some(reason) = self.stopped_trading(&order.instrument, now) {
+            order.status = OrderStatus::Rejected;
+            order.reject_reason = Some(reason);
             self.orders.insert(id, order);
             self.metrics.orders_rejected_expired += 1;
             return Ok(());
@@ -2711,16 +3009,30 @@ impl Engine {
                     continue;
                 }
             };
+            // The heap carries the order as it was *submitted*. Anything the
+            // strategy did to it while it was in flight went to `self.orders`,
+            // so that map, not this clone, decides what reaches the venue.
+            // Trusting the clone resurrects an order the strategy cancelled
+            // and reverts one it amended, which is invisible under the
+            // default `NoLatency` and silently wrong under every other
+            // latency model.
+            match self.orders.get(&order.id) {
+                Some(current) if current.status == OrderStatus::InFlight => {
+                    order = current.clone();
+                }
+                // Cancelled, or otherwise finished, before it arrived: the
+                // venue never sees it.
+                _ => continue,
+            }
             // The order was sent while the market was open and arrived after
             // it closed. That is a real way to miss a trade, and the honest
             // outcome is a rejection rather than a fill against a book the
-            // venue was already tearing down.
-            if let Some(at) = self.has_expired(&order.instrument, ts) {
+            // venue was already tearing down. A delisting counts: the venue
+            // cashed the position out at a stated price and took the
+            // instrument off the board.
+            if let Some(reason) = self.stopped_trading(&order.instrument, ts) {
                 order.status = OrderStatus::Rejected;
-                order.reject_reason = Some(format!(
-                    "{} stopped trading at {at}, before this order arrived",
-                    order.instrument
-                ));
+                order.reject_reason = Some(format!("{reason}, before this order arrived"));
                 self.orders.insert(order.id, order);
                 self.metrics.orders_rejected_expired += 1;
                 continue;
@@ -2841,11 +3153,31 @@ impl Engine {
     }
 
     /// Match one order against the current book.
+    ///
+    /// The close is enforced *here*, on the fill path, and not only where
+    /// orders arrive. Every other guard sits on a route into the matcher, and
+    /// three routes bypass all of them: a TWAP child is created already
+    /// accepted and matched immediately, a parked trigger is not in
+    /// `self.resting` so `expire_due` never cancels it, and a liquidation is
+    /// the venue's own order. Each of those could reach a book that only
+    /// still exists because the market had closed -- a late print, a final
+    /// teardown -- and fill against it. This is the one place all three pass
+    /// through.
     fn try_fill(&mut self, id: OrderId, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
         let Some(order) = self.orders.get(&id).cloned() else {
             return Ok(());
         };
         if !order.is_open() || order.status == OrderStatus::InFlight {
+            return Ok(());
+        }
+        if let Some(reason) = self.stopped_trading(&order.instrument, ts) {
+            if let Some(order) = self.orders.get_mut(&id) {
+                order.status = OrderStatus::Rejected;
+                order.reject_reason = Some(reason);
+            }
+            self.remove_resting(id);
+            self.fee_model.order_closed(id);
+            self.metrics.orders_rejected_expired += 1;
             return Ok(());
         }
         let key = self.slots.key(&order.instrument, order.outcome);
@@ -3428,18 +3760,35 @@ impl Engine {
         Ok(())
     }
 
+    /// Close the run out and report it.
+    ///
+    /// The terminal-status counters are *assigned*, not accumulated. This is
+    /// a fold over every order the run has created, so incrementing meant
+    /// calling `finish` twice on one engine doubled them -- and `run` can be
+    /// called again on the same engine with a second replay. Recomputing from
+    /// `self.orders` makes the counters a function of the state rather than a
+    /// mutation of it, so the second call reports the run rather than the
+    /// number of times it was asked.
+    ///
+    /// Note what these counters are over: **every** order, including the ones
+    /// the engine itself created (liquidations, TWAP children, delisting
+    /// settlements, complete-set legs). `orders_filled / orders_submitted` is
+    /// therefore not a fill ratio -- `orders_submitted` counts only what a
+    /// strategy asked for.
     fn finish(&mut self) -> Result<RunResult> {
+        let (mut filled, mut partial, mut cancelled_unfilled) = (0u64, 0u64, 0u64);
         for order in self.orders.values() {
             match order.status {
-                OrderStatus::Filled => self.metrics.orders_filled += 1,
-                OrderStatus::PartiallyFilled => self.metrics.orders_partially_filled += 1,
-                OrderStatus::Cancelled if order.filled.is_zero() => {
-                    self.metrics.orders_cancelled_unfilled += 1
-                }
-                OrderStatus::Cancelled => self.metrics.orders_partially_filled += 1,
+                OrderStatus::Filled => filled += 1,
+                OrderStatus::PartiallyFilled => partial += 1,
+                OrderStatus::Cancelled if order.filled.is_zero() => cancelled_unfilled += 1,
+                OrderStatus::Cancelled => partial += 1,
                 _ => {}
             }
         }
+        self.metrics.orders_filled = filled;
+        self.metrics.orders_partially_filled = partial;
+        self.metrics.orders_cancelled_unfilled = cancelled_unfilled;
         // Always close the curve on the last instant actually simulated, so
         // the final equity is a point rather than something a reader has to
         // infer from the summary.
@@ -3739,9 +4088,24 @@ impl EngineBuilder {
 /// state machine), and has no language boundary in the hot loop.
 pub struct SignalReplay {
     intents: VecDeque<(UnixNanos, OrderRequest)>,
+    undelivered: usize,
 }
 
 impl SignalReplay {
+    /// Intents the data never reached.
+    ///
+    /// Zero for a signal list that fits inside the window it was replayed
+    /// over. Anything else means the last record arrived before the last
+    /// intent's timestamp, so those intents were never submitted: the signals
+    /// and the data disagree about where the run ends, usually because the
+    /// window was set from the signal file and the feed stops earlier. Worth
+    /// reading before believing a result that goes quiet at the end.
+    ///
+    /// Only meaningful after the run: it is filled in by `on_stop`.
+    pub fn undelivered(&self) -> usize {
+        self.undelivered
+    }
+
     /// Intents must be in timestamp order; that is checked, not assumed.
     pub fn new(mut intents: Vec<(UnixNanos, OrderRequest)>) -> Result<Self> {
         let mut previous: Option<UnixNanos> = None;
@@ -3760,6 +4124,7 @@ impl SignalReplay {
         intents.shrink_to_fit();
         Ok(Self {
             intents: intents.into(),
+            undelivered: 0,
         })
     }
 }
@@ -3774,6 +4139,33 @@ impl Strategy for SignalReplay {
             let (_, request) = self.intents.pop_front().expect("peeked");
             ctx.submit(request);
         }
+        Ok(())
+    }
+
+    /// Account for the intents the data never reached.
+    ///
+    /// Counted and warned about rather than submitted. [`Engine::run`] calls
+    /// `on_stop`, drains the commands it queued, and stops -- there is no
+    /// further `release_inflight`, so an order submitted here would sit in
+    /// the latency queue for the rest of time, reported as neither filled nor
+    /// cancelled. And there is no data left to fill it against, which is what
+    /// made the intent undeliverable in the first place. Draining them
+    /// silently, which is what happened before, was the one option worse than
+    /// either: a strategy could lose its last hour of signals and the result
+    /// would look like a strategy that stopped trading.
+    ///
+    /// The queue is cleared, so replaying this strategy over a second, longer
+    /// window does not fire a batch of stale intents at its first record.
+    fn on_stop(&mut self, _ctx: &mut Context<'_>) -> Result<()> {
+        self.undelivered = self.intents.len();
+        if self.undelivered > 0 {
+            tracing::warn!(
+                undelivered = self.undelivered,
+                "signal replay ended with intents timestamped after the last \
+                 record; they were never submitted"
+            );
+        }
+        self.intents.clear();
         Ok(())
     }
 }
@@ -3800,9 +4192,20 @@ pub enum ReplayCommand {
 pub struct CommandReplay {
     commands: VecDeque<(UnixNanos, ReplayCommand)>,
     order_ids: BTreeMap<String, OrderId>,
+    undelivered: usize,
 }
 
 impl CommandReplay {
+    /// Commands the data never reached. See [`SignalReplay::undelivered`].
+    ///
+    /// Worth more attention here than for a signal list, because a dropped
+    /// command need not be a submit: a cancel that falls past the last record
+    /// leaves its order resting to the end of the run, so the loss shows up
+    /// as a position the script believed it had closed.
+    pub fn undelivered(&self) -> usize {
+        self.undelivered
+    }
+
     pub fn new(mut commands: Vec<(UnixNanos, ReplayCommand)>) -> Result<Self> {
         let mut previous: Option<UnixNanos> = None;
         for (ts, command) in &commands {
@@ -3831,6 +4234,7 @@ impl CommandReplay {
         Ok(Self {
             commands: commands.into(),
             order_ids: BTreeMap::new(),
+            undelivered: 0,
         })
     }
 
@@ -3877,6 +4281,23 @@ impl Strategy for CommandReplay {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Account for the commands the data never reached.
+    ///
+    /// See [`SignalReplay::on_stop`] for why they are reported rather than
+    /// executed here.
+    fn on_stop(&mut self, _ctx: &mut Context<'_>) -> Result<()> {
+        self.undelivered = self.commands.len();
+        if self.undelivered > 0 {
+            tracing::warn!(
+                undelivered = self.undelivered,
+                "command replay ended with commands timestamped after the \
+                 last record; they were never executed"
+            );
+        }
+        self.commands.clear();
         Ok(())
     }
 }

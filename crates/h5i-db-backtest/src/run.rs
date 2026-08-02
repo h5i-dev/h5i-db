@@ -51,6 +51,17 @@ pub struct RunSpec {
     /// Refuse to run when the loaded data covers less than this fraction of
     /// the requested window.
     pub minimum_coverage: Option<f64>,
+    /// How the execution model was configured, as the caller describes it.
+    ///
+    /// The fee, fill, latency and margin models are boxed trait objects on
+    /// the builder, so a `RunSpec` cannot inspect them, yet they change the
+    /// result completely: two runs identical here but priced under different
+    /// fee curves are different computations. Whoever assembles the models
+    /// records them as a string, and `digest` folds it in. Leaving it `None`
+    /// says only "the caller did not describe its models", which `digest`
+    /// then reports as an unfingerprinted run rather than pretending the
+    /// models matched.
+    pub execution_fingerprint: Option<String>,
 }
 
 impl RunSpec {
@@ -62,7 +73,14 @@ impl RunSpec {
             read_at: ReadAt::Latest,
             equity_interval_nanos: crate::engine::DEFAULT_EQUITY_INTERVAL_NANOS,
             minimum_coverage: None,
+            execution_fingerprint: None,
         }
+    }
+
+    /// Record how the execution model was configured, so `digest` covers it.
+    pub fn execution_fingerprint(mut self, fingerprint: impl Into<String>) -> Self {
+        self.execution_fingerprint = Some(fingerprint.into());
+        self
     }
 
     pub fn window(mut self, window: TimeWindow) -> Self {
@@ -90,13 +108,19 @@ impl RunSpec {
         format!("bt-{}", self.run_id)
     }
 
-    /// A stable hash of everything that determines the result.
+    /// A stable hash of what this spec says about the computation.
     ///
-    /// Two runs agreeing on this digest are the same computation, so a
-    /// stored run can be regenerated and checked rather than trusted.
+    /// Deliberately *not* keyed on `run_id`: a run is identified by its
+    /// inputs, so re-running the same computation under a new name has to
+    /// land on the same digest or the ledger cannot recognise it.
+    ///
+    /// The spec cannot see the execution models, so anything it does not
+    /// know about has to arrive through `execution_fingerprint`. A spec
+    /// carrying no fingerprint hashes as one, and two such runs matching
+    /// means only that their *specs* agree: it is not evidence that they
+    /// were priced the same way.
     pub fn digest(&self) -> String {
         let mut hasher = blake3::Hasher::new();
-        hasher.update(self.run_id.as_bytes());
         hasher.update(&self.starting_cash.raw().to_le_bytes());
         hasher.update(&self.equity_interval_nanos.to_le_bytes());
         match self.window {
@@ -110,6 +134,15 @@ impl RunSpec {
             }
         }
         hasher.update(format!("{:?}", self.read_at).as_bytes());
+        match &self.execution_fingerprint {
+            Some(fingerprint) => {
+                hasher.update(b"x");
+                hasher.update(fingerprint.as_bytes());
+            }
+            None => {
+                hasher.update(b"-");
+            }
+        }
         hasher.finalize().to_hex().to_string()
     }
 }
