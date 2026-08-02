@@ -1,12 +1,15 @@
 # Quant Workflow Layer — Product Roadmap
 
-Status: v2.1, 2026-07-30. v1 (2026-07-29) scoped the layer to
+Status: v2.2, 2026-08-02. v1 (2026-07-29) scoped the layer to
 analytics only and listed backtesting as a non-goal; v2 (same date,
 branch `qpian`) added Part B, a production-grade backtest program, and
 superseded that non-goal (revised boundary in §11); v2.1 adds Part D
 (§8b), a migration gap analysis against the Nautilus-based reference
 stack, written after the prediction-market cookbook work exercised the
-whole surface. The engine-side scope rule in `ROADMAP.md` Part VII is
+whole surface; v2.2 (branch `survey-prediction-market`) adds Part E
+(§13), a survey of what no backtesting engine models for prediction
+markets and the mathematical models worth adopting, with item IDs
+E1-E12. The engine-side scope rule in `ROADMAP.md` Part VII is
 narrowed, not violated: the *engine crates* still borrow no backtester
 mechanisms; the backtester is a separate layer crate that consumes the
 engine (P6).
@@ -1246,3 +1249,112 @@ live execution. The quant layer will not include:
 - **Two roadmaps drifting apart.** This document and `ROADMAP.md` Part VII
   share territory. Rule: engine items live only there, product items only
   here, cross-references by ID; any edit that moves an item updates both.
+
+---
+
+## 13. Part E — Prediction-market frontier (survey 2026-08-02)
+
+Two surveys, run on branch `survey-prediction-market`: an external sweep
+of practitioner writeups, competing OSS engines, and 2025-26 papers, and
+an internal capability map of `h5i-db-backtest` against them. Items carry
+IDs (E1-E12) so later work can cite them the way Parts A-D cite Q- and
+VII- items. Nothing here is committed work; this section is the shortlist
+that survived both surveys, with dependencies and sequencing.
+
+### 13.1 Where the field stands
+
+The external complaints cluster three ways, and two of the three are
+already this codebase's solved ground:
+
+- **Execution realism.** The dominant public failure mode is mid-price
+  fills on markets with 2-5 cent spreads and no historical depth data;
+  practitioners report strategies whose +30 bps backtest edge goes
+  negative under realistic fills, and 50x liquidity swings (Kyle's
+  lambda) around news. Covered here by L2 replay, queue position,
+  conservative fill defaults, and preflight fidelity grading. The most
+  serious standalone OSS backtester uses a flat 2-cent spread proxy; the
+  Nautilus Polymarket adapter and its community extension are the nearest
+  competitors and are stalled on Kalshi L2 history.
+- **Statistical validity.** Binary contracts settle at 0 or 1 and do not
+  roll; the folklore threshold is 30+ resolutions for a real sample, and
+  survivorship bias enters through universes that exclude disputed or
+  voided markets. Partially covered by Q3.4 (deflated Sharpe fed by the
+  ledger's honest trial count); the missing piece is E4.
+- **Prediction-market structure.** Resolution processes, maker reward
+  programs, and cross-market logical relations are modeled by no engine,
+  including this one. That is the open frontier, and it is E1, E2, E5.
+
+The marketing consequence is worth recording: the honest pitch is "the
+things the blogs warn you about are already here", and the novel items
+below extend a lead rather than close a gap.
+
+### 13.2 Structural gaps no engine models
+
+| Item | Description | Depends on |
+|---|---|---|
+| E1 Resolution as a process | Extend `resolutions` from an instant to a timeline (`proposed_ts`, `disputed_ts`, `final_ts`, proposed vs final outcome). Redeemability locks until finality so dispute latency (3-5 days on UMA) and capital lockup cost bite; the dispute window stays tradeable (post-expiration observability already exists, `engine.rs`). Outcome flips become representable (the $7M Ukraine market). E1a: hazard / competing-risk calibration of dispute arrival and time-to-finality from historical resolution timelines, so the process parameters are fitted, not invented. | `resolutions` schema (§8.6), `settlement.rs` |
+| E2 Liquidity-rewards emulation | Score resting orders against Polymarket's published rewards formula (proximity to mid, two-sidedness, minimum size, daily epochs; a $5M+/month pool) and report reward income as a P&L line beside spread capture, which it often dominates for real maker strategies. Kalshi maker programs enter through the same seam. No backtester computes this today. | queue model, fee/fill traits (`models.rs`) |
+| E3 Own-trade impact and capacity curves | Opt-in liquidity-consumption mode: fills decrement the replayed book, with replenishment supplied by E8's calibrated intensities. On top of it, capacity as a first-class report output: sweep the same strategy across position scales (Q3.2 fork sweeps) and emit an edge-vs-capital curve. Answers the top practitioner complaint, "works at $100, fails at $10k". | E8, Q3.2, `FillModel` seam |
+| E4 Resolution-clustered inference | Effective sample size where the independent unit is the resolution event, with markets on one underlying (one election night, one Fed meeting) forming one cluster; clustered bootstrap confidence intervals for Sharpe and Brier advantage; the report withholds a headline Sharpe below a floor of independent resolutions instead of printing folklore-invalid numbers. Operationalizes the "30 resolutions" rule rigorously. | Q3.4, `bt_fills` + `resolutions` |
+| E5 Cross-market logical structure | A market-linking layer: event identity across venues (Kalshi vs Polymarket same-event pairs) plus implication edges between related markets ("by June" implies "by December"). Enables backtesting structural arbitrage with the fee and settlement-timing asymmetries that decide whether it is actually profitable, and gives E11 its joint outcome space. Negative-risk within one instrument is already native; this is the cross-instrument generalization. | `instruments` metadata, E1 (settlement timing) |
+| E6 Point-in-time market universes | Universe queries answering "which markets were discoverable and active at decision time", including markets later disputed or voided, so survivorship bias dies at the selection step rather than being patched in evaluation. The PIT machinery exists (pins, `as_of`); the gap is market metadata as a PIT-queryable universe surface. Aligns with the Lean-style PIT universe selection already noted as absent from nautilus/vectorbt (§8.1, VII-A3). | VII-A3, venue metadata ingestion |
+
+### 13.3 Mathematical models worth adopting
+
+| Item | Description | Depends on |
+|---|---|---|
+| E7 Markout / adverse-selection layer | Post-fill mark drift at multiple horizons for every row of `bt_fills`, as a standard report panel: a maker whose fills are followed by systematic adverse drift is being picked off, and no prediction-market backtester surfaces it. Then an adverse-selection-adjusted fill model charging passive fills their conditional markout. Glosten-Milgrom is literally the binary-terminal-value setting, and the informed/uninformed tiering on Polymarket is empirically measurable (arXiv 2605.11640). | `bt_fills`, mark series; `FillModel` |
+| E8 Empirical fill-intensity estimation | Fit fill/cancel/arrival intensities Λ(δ, book state) from archived L2 + trades; the functional form is unstudied in the literature (noted open in arXiv 2607.17991), and this repo holds the data to publish it. Feeds three consumers: a probabilistic (state-dependent / queue-reactive, arXiv 1312.0563, 2403.02572) fill model as the honest upgrade for `trades_only` and `snapshot_l2` fidelity tiers, E3's replenishment, and E10's calibration. | PMXT/Telonex archives, `FillModel` |
+| E9 Bounded-martingale toolkit | The latent-Gaussian kernel model, p = Φ(X/σ√(T−t)) (arXiv 1703.06351, 2510.15205): volatility peaks at p=0.5, collapses near the boundaries, and rises into settlement, matching the Iowa-market stylized facts. Uses: a synthetic-market generator emitting canonical tables for stress tests and Monte Carlo robustness runs; settlement-aware volatility/time scaling to replace naive annualized Sharpe on terminal-settling assets; prediction-market Greeks and an implied-uncertainty estimator. | canonical schemas (§8.6), `quant.perf` |
+| E10 Optimal-MM reference strategy | The HJB policy of arXiv 2607.17991 (July 2026): fill intensities vanishing at the price boundaries and a terminal penalty γ_T·q²·p(1−p) on settlement variance, which classic Avellaneda-Stoikov lacks. Their numerics cut P&L standard deviation ~2/3 at 99% of the profit of a myopic quoter. Ship as a precomputed quote surface consumed by a Tier 1/2 strategy; calibrate from E8; together with E2 this completes the maker story. | E8, E2, strategy pack |
+| E11 Sizing module (`quant.sizing`) | Multivariate Kelly over the joint resolution space (efficient formulations: arXiv 2604.24723), with fractional and drawdown-constrained variants as the standard hedge against estimation error (full Kelly overbets roughly half the time when p is off by a few points). E5's implication edges prune the joint space, making exact solutions cheaper. Closes the loop from `record_forecast` to stake, which is currently left to the user. | E5 (optional), forecast API |
+| E12 Scoring extensions | Log loss and CRPS beside Brier (the repo currently has no log loss at all); a Diebold-Mariano-style significance test on Brier advantage so the report can say "skill, p < 0.05" instead of a point estimate; confidence intervals shared with E4's clustered bootstrap. | `quant.calibration`, E4 |
+
+A note against §11 (non-goals): E9 and E10 are simulation, calibration,
+and reference-strategy surfaces for the backtester, not a derivatives
+valuation library; the §11 exclusion of options pricing stands. Likewise
+E11 is bet sizing on the engine's own forecasts, not the excluded
+portfolio-optimization surface (covariance shrinkage, solver-bound risk
+measures stay out).
+
+### 13.4 Sequencing
+
+1. **E7 + E8 first**, as one "execution honesty" milestone: small,
+   immediately diagnostic, and E8's intensities are the calibration
+   input everything downstream reuses.
+2. **E1 + E2 second**: the two highest-novelty items, and they change
+   backtest numbers materially for the two dominant live strategy types
+   (hold-to-resolution and market making).
+3. **E3** next as the most marketing-visible feature (capacity curve in
+   the report header), with **E9** built alongside as its stress-test
+   infrastructure.
+4. **E10** once E8 exists; **E4 + E12** as one statistics pass extending
+   Q3.4; **E5 and E6** are the larger structural programs and can trail
+   without blocking anything above.
+
+### 13.5 Debt noted in passing (not Part E scope)
+
+Recorded here because the same survey surfaced them; they are engineering
+debt against Parts B-D, not frontier work:
+
+- The Python binding exposes no margin path (`margin: None`, so no
+  rejection or liquidation from Python), hardcodes the slippage tick to
+  0.0001, and cannot reach `TieredFees`, `MarkSource`,
+  `LiquidationPolicy`, or isolated margin
+  (`crates/h5i-db-python/src/lib.rs:606-775`).
+- Forecasts, `mark_curve`, and `RunMetrics` are not persisted to any
+  `bt_*` table; they live only in the in-memory result and the Python
+  JSON payload, so a stored run cannot be re-scored for calibration.
+- The L3/MBO book (`l3.rs`) remains unwired into the engine and
+  unvalidated against recorded feeds (already tracked in §10a).
+
+Survey sources: arXiv 2607.17991 (optimal MM in prediction markets),
+2510.15205 (Black-Scholes for prediction markets), 1703.06351 /
+1907.01576 (bounded-martingale election pricing and response),
+1312.0563 (queue-reactive model), 2403.02572 (state-dependent fill
+probabilities), 2605.11640 (Polymarket fill-side microstructure),
+2604.24723 (efficient multivariate Kelly); Glosten-Milgrom (1985) and
+Das (2005) for adverse selection; practitioner writeups on the depth
+data problem, overfitting controls, and liquidity-rewards mechanics
+(zenhodl.net, turbinefi.com, Polymarket docs); the Iowa Electronic
+Markets volatility literature for E9's stylized facts.
