@@ -31,6 +31,7 @@ import math
 import random
 import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import suppress
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Union
@@ -170,7 +171,9 @@ class TopK:
     maximize: bool = True
 
     def __post_init__(self) -> None:
-        if isinstance(self.k, bool) or self.k < 1:
+        # `bool` is an `int`, and a `float` k silently truncated a shortlist
+        # to a different size than it read as.
+        if not isinstance(self.k, int) or isinstance(self.k, bool) or self.k < 1:
             raise ValueError("k must be a positive integer")
         if self.metric not in _METRICS:
             raise ValueError(f"metric must be one of {_METRICS}, got {self.metric!r}")
@@ -597,12 +600,59 @@ class BacktestStudy:
         folds: int,
         stage: str,
     ) -> list[BacktestResult]:
-        from .backtest import execute
-
         base = _parameterized(self.base, parameters)
         outputs: list[BacktestResult] = []
         collected: dict[str, list[Any]] = {metric: [] for metric in _METRICS}
         cached_flags: list[bool] = self._cached_flags.setdefault(int(row["trial"]), [])
+        try:
+            self._run_phases(
+                db,
+                row,
+                parameters,
+                walk,
+                folds,
+                stage,
+                base,
+                outputs,
+                collected,
+                cached_flags,
+            )
+        except Exception:
+            # A stage that fails partway leaves the forks its earlier phases
+            # created behind. Each is a complete run carrying its own trial
+            # digest, so `trial_count` counts trials this study never scored
+            # and every multiple-testing correction computed from it is
+            # deflated by runs that produced nothing. Only forks this stage
+            # created are dropped: a cached result names another trial's fork,
+            # and dropping that would delete a run still in use.
+            for created in outputs:
+                if created.get("cached"):
+                    continue
+                with suppress(Exception):
+                    db.drop_fork(created.fork_name)
+            raise
+        if walk is not None and folds > 1:
+            phase = "train" if stage == "train" else "holdout"
+            for metric in _METRICS:
+                row[f"{phase}_median_{metric}"] = _median(collected[metric])
+        return outputs
+
+    def _run_phases(
+        self,
+        db: Any,
+        row: dict[str, Any],
+        parameters: Mapping[str, Any],
+        walk: Optional[WalkForward],
+        folds: int,
+        stage: str,
+        base: BacktestConfig,
+        outputs: list[BacktestResult],
+        collected: dict[str, list[Any]],
+        cached_flags: list[bool],
+    ) -> None:
+        """The phase loop itself, so its caller can clean up after it."""
+        from .backtest import execute
+
         for fold, phase, window in self._phases(walk, stage):
             suffix = phase if folds == 1 else f"{phase}{fold}"
             run_id = f"{self.study_id}-{int(row['trial']):04d}-{suffix}"
@@ -638,11 +688,6 @@ class BacktestStudy:
             row.setdefault("warnings", []).extend(
                 str(item) for item in result.get("warnings", [])
             )
-        if walk is not None and folds > 1:
-            phase = "train" if stage == "train" else "holdout"
-            for metric in _METRICS:
-                row[f"{phase}_median_{metric}"] = _median(collected[metric])
-        return outputs
 
     def _new_row(self, index: int, parameters: Mapping[str, Any]) -> dict[str, Any]:
         return {

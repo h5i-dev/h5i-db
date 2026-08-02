@@ -103,10 +103,21 @@ fn tagged(
 ) -> PyErr {
     Python::attach(|py| {
         let value = err.value(py);
-        let _ = value.setattr("code", code);
-        let _ = value.setattr("hint", hint);
-        let _ = value.setattr("retryable", retryable);
-        let _ = value.setattr("did_you_mean", did_you_mean);
+        // A failed `setattr` cannot be raised from here: this function's job
+        // is to decorate an exception that is already on its way up, and
+        // replacing it would lose the failure the caller actually needs. It
+        // is reported to `sys.unraisablehook` instead, so an exception that
+        // ships without its `code` leaves a trace rather than looking like an
+        // envelope the core never filled in.
+        let note = |result: PyResult<()>| {
+            if let Err(error) = result {
+                error.write_unraisable(py, Some(value.as_any()));
+            }
+        };
+        note(value.setattr("code", code));
+        note(value.setattr("hint", hint));
+        note(value.setattr("retryable", retryable));
+        note(value.setattr("did_you_mean", did_you_mean));
         // List of {"cmd": …, "why": …} so Python callers get the same
         // machine-executable recovery steps the CLI envelope carries. The
         // commands keep the `<db>` placeholder: unlike the CLI, the bindings
@@ -115,12 +126,12 @@ fn tagged(
             .into_iter()
             .map(|(cmd, why)| {
                 let d = pyo3::types::PyDict::new(py);
-                let _ = d.set_item("cmd", cmd);
-                let _ = d.set_item("why", why);
+                note(d.set_item("cmd", cmd));
+                note(d.set_item("why", why));
                 d
             })
             .collect();
-        let _ = value.setattr("next_actions", actions);
+        note(value.setattr("next_actions", actions));
     });
     err
 }
@@ -564,13 +575,6 @@ impl NativeDatabase {
         to_json(&result)
     }
 
-    /// Run SQL; returns an Arrow IPC stream (the schema is always included,
-    /// even for empty results).
-    ///
-    /// `timeout` is a deadline in seconds; on expiry a `TimeoutError` is
-    /// raised and execution is cancelled. `max_rows` raises `LimitError` as
-    /// soon as the result exceeds it — the stream stops being pulled, so
-    /// execution halts early instead of truncating silently.
     /// Run a Tier 1 signal-replay backtest and return its report as JSON.
     ///
     /// The signals table *is* the strategy: the kernel reads timestamped
@@ -578,6 +582,18 @@ impl NativeDatabase {
     /// queue path. Results land on a fork named `bt-<run_id>` as ordinary
     /// tables, so Python reads them back with the same query surface as
     /// market data rather than through a second API.
+    ///
+    /// Every execution model is built *before* the run rather than inside
+    /// the builder closure, because the closure cannot report a failure:
+    /// swallowing one installed no model at all, and the run then reported
+    /// success with zero commissions on a fee rate the caller had asked for.
+    /// A rate this layer cannot turn into a model is an error the caller
+    /// sees.
+    ///
+    /// `fee_rate` with no `fee_kind` is the prediction-market curve, the
+    /// venue this layer leads with. That default is not silent: the report
+    /// carries `execution_fingerprint`, which names the curve that priced
+    /// the run, and the same string is folded into the run digest.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (
         run_id,
@@ -602,6 +618,9 @@ impl NativeDatabase {
         max_open_orders = None,
         commands_table = None,
         python_strategy = None,
+        margin_kind = None,
+        leverage = None,
+        maintenance_margin_rate = None,
     ))]
     fn run_backtest(
         &self,
@@ -628,12 +647,16 @@ impl NativeDatabase {
         max_open_orders: Option<usize>,
         commands_table: Option<String>,
         python_strategy: Option<Py<PyAny>>,
+        margin_kind: Option<String>,
+        leverage: Option<f64>,
+        maintenance_margin_rate: Option<f64>,
     ) -> PyResult<String> {
         use h5i_db_backtest::RiskLimits;
+        use h5i_db_backtest::account::{CashMargin, LinearMargin, MarginModel};
         use h5i_db_backtest::engine::{CommandReplay, SignalReplay, Strategy};
         use h5i_db_backtest::models::{
-            ConstantLatency, KalshiFees, PredictionMarketFees, ProportionalFees,
-            QueuePositionFills, TickSlippage,
+            ConstantLatency, FeeModel, FillModel, KalshiFees, LatencyModel, PredictionMarketFees,
+            ProportionalFees, QueuePositionFills, TickSlippage,
         };
         use h5i_db_backtest::run::{RunSpec, run_in_fork};
         use h5i_db_backtest::types::{Money, Price, Qty};
@@ -677,7 +700,7 @@ impl NativeDatabase {
                 // table at creation, so `Latest` inside the fork is a fixed
                 // version for the life of the run.
                 let mut strategy: Box<dyn Strategy> = if let Some(object) = python_strategy {
-                    Box::new(python_strategy::PythonStrategy::new(object))
+                    Box::new(python_strategy::PythonStrategy::new(object).map_err(backtest_err)?)
                 } else if let Some(table) = commands_table {
                     let commands = h5i_db_backtest::store::read_commands(
                         &inner.db,
@@ -721,52 +744,259 @@ impl NativeDatabase {
                     None
                 };
 
-                let report = run_in_fork(&inner.db, spec, strategy.as_mut(), move |mut builder| {
-                    if let Some(rate) = fee_rate {
-                        match fee_kind.as_deref() {
-                            Some("kalshi") => {
-                                if let Ok(model) = KalshiFees::with_maker_rate(rate, maker_fee_rate)
-                                {
-                                    builder = builder.fee_model(Box::new(model));
-                                }
-                            }
-                            Some("proportional") => {
-                                if let Ok(model) =
-                                    ProportionalFees::new(maker_rebate.unwrap_or(0.0), rate)
-                                {
-                                    builder = builder.fee_model(Box::new(model));
-                                }
-                            }
-                            // Prediction-market curve is the default because
-                            // it is the venue this layer leads with.
-                            _ => {
-                                if let Ok(mut model) = PredictionMarketFees::new(rate) {
-                                    if let Some(rebate) = maker_rebate
-                                        && let Ok(with_rebate) = model.with_maker_rebate(rebate)
-                                    {
-                                        model = with_rebate;
-                                    }
-                                    builder = builder.fee_model(Box::new(model));
-                                }
-                            }
+                // -- execution models ---------------------------------------
+                //
+                // Each model is built here, with its own line in the
+                // fingerprint. The fingerprint is the only way the run digest
+                // can see them: `RunSpec` holds boxed trait objects it cannot
+                // inspect, so two runs priced under different fee curves would
+                // otherwise hash identically. Everything that can change a
+                // fill, a fee or a rejection therefore has to appear below.
+                if maker_fee_rate.is_some() && fee_kind.as_deref() != Some("kalshi") {
+                    return Err(invalid(
+                        "maker_fee_rate only applies to fee_kind='kalshi'; other fee \
+                         curves express maker economics through maker_rebate",
+                    ));
+                }
+                let (fee_model, fee_fingerprint): (Option<Box<dyn FeeModel>>, String) =
+                    match (fee_kind.as_deref(), fee_rate) {
+                        (None, None) => (None, "fee=none".to_string()),
+                        (Some(kind), None) => {
+                            return Err(invalid(format!(
+                                "fee_kind={kind:?} was given without fee_rate, so no fee \
+                                 model can be built; pass the series fee rate"
+                            )));
                         }
+                        (Some("kalshi"), Some(rate)) => {
+                            // Kalshi charges makers a rate and pays no rebate,
+                            // so a rebate here described an economics the run
+                            // would not have applied.
+                            if maker_rebate.is_some() {
+                                return Err(invalid(
+                                    "maker_rebate does not apply to fee_kind='kalshi': the \
+                                     venue charges makers a rate rather than paying them a \
+                                     rebate; pass maker_fee_rate",
+                                ));
+                            }
+                            (
+                                Some(Box::new(
+                                    KalshiFees::with_maker_rate(rate, maker_fee_rate)
+                                        .map_err(backtest_err)?,
+                                )),
+                                format!("fee=kalshi:taker={rate:?}:maker={maker_fee_rate:?}"),
+                            )
+                        }
+                        (Some("proportional"), Some(rate)) => (
+                            Some(Box::new(
+                                ProportionalFees::new(maker_rebate.unwrap_or(0.0), rate)
+                                    .map_err(backtest_err)?,
+                            )),
+                            format!(
+                                "fee=proportional:taker={rate:?}:maker={:?}",
+                                maker_rebate.unwrap_or(0.0)
+                            ),
+                        ),
+                        // Prediction-market curve is the default because it is
+                        // the venue this layer leads with. The fingerprint
+                        // names it, so a run priced by a default nobody typed
+                        // still says which curve it used.
+                        (None | Some("prediction_market"), Some(rate)) => {
+                            let mut model =
+                                PredictionMarketFees::new(rate).map_err(backtest_err)?;
+                            if let Some(rebate) = maker_rebate {
+                                model = model.with_maker_rebate(rebate).map_err(backtest_err)?;
+                            }
+                            (
+                                Some(Box::new(model)),
+                                format!(
+                                    "fee=prediction_market:taker={rate:?}:rebate={maker_rebate:?}"
+                                ),
+                            )
+                        }
+                        (Some(other), Some(_)) => {
+                            return Err(invalid(format!(
+                                "unknown fee_kind {other:?}; expected 'prediction_market', \
+                                 'proportional' or 'kalshi'"
+                            )));
+                        }
+                    };
+
+                if optimistic_queue && !queue_position {
+                    return Err(invalid(
+                        "optimistic_queue describes how a queue is consumed and needs \
+                         queue_position=True",
+                    ));
+                }
+                let (fill_model, fill_fingerprint): (Option<Box<dyn FillModel>>, String) =
+                    match slippage_ticks {
+                        // Only one fill model can be installed, and taking
+                        // slippage silently dropped a queue-position request:
+                        // the run then answered a question nobody asked.
+                        Some(_) if queue_position => {
+                            return Err(invalid(
+                                "slippage_ticks and queue_position are different fill \
+                                 models and only one can be installed; run them as \
+                                 separate scenarios",
+                            ));
+                        }
+                        // An explicit zero means "no slippage", which is the
+                        // book as recorded: the default model already is that,
+                        // and saying so here avoids reading instruments for a
+                        // tick that would be multiplied by zero.
+                        Some(0) => (None, "fill=book:slippage_ticks=0".to_string()),
+                        Some(ticks) => {
+                            // Slippage is a number of *ticks*, so it means
+                            // nothing without the instrument's own tick. The
+                            // hardcoded 0.0001 that used to stand here is a
+                            // prediction-market tick and is wrong by two orders
+                            // of magnitude on a cent-quoted venue, which turns
+                            // one tick of slippage into a hundred.
+                            //
+                            // `TickSlippage` is one model for the whole run, so
+                            // one tick has to serve every instrument. Reading
+                            // them here (the same table, at the same pin, the
+                            // run itself reads) is what makes disagreement
+                            // visible instead of assumed.
+                            let instruments = h5i_db_backtest::store::read_instruments(
+                                &inner.db,
+                                read_at.clone(),
+                            )
+                            .await
+                            .map_err(backtest_err)?;
+                            let mut tick: Option<Price> = None;
+                            let mut disagreeing: Vec<String> = Vec::new();
+                            for id in instruments.ids() {
+                                let size = instruments.get(&id).map_err(backtest_err)?.tick_size;
+                                match tick {
+                                    None => tick = Some(size),
+                                    Some(seen) if seen.raw() == size.raw() => {}
+                                    Some(_) => disagreeing.push(id.to_string()),
+                                }
+                            }
+                            if !disagreeing.is_empty() {
+                                return Err(invalid(format!(
+                                    "slippage_ticks needs one tick size, but the instruments \
+                                     loaded at this pin quote in more than one ({}); run each \
+                                     tick regime as its own backtest, or drop slippage_ticks",
+                                    disagreeing.join(", ")
+                                )));
+                            }
+                            let tick = tick.ok_or_else(|| {
+                                invalid(
+                                    "no instruments are registered, so a tick size cannot be \
+                                     read; write the instruments table before running",
+                                )
+                            })?;
+                            (
+                                Some(Box::new(TickSlippage::new(ticks, tick))),
+                                format!("fill=tick_slippage:ticks={ticks}:tick={}", tick.raw()),
+                            )
+                        }
+                        None if queue_position => (
+                            Some(Box::new(if optimistic_queue {
+                                QueuePositionFills::optimistic()
+                            } else {
+                                QueuePositionFills::new()
+                            })),
+                            format!("fill=queue:optimistic={optimistic_queue}"),
+                        ),
+                        None => (None, "fill=book".to_string()),
+                    };
+
+                let (latency_model, latency_fingerprint): (Option<Box<dyn LatencyModel>>, String) =
+                    match latency_nanos {
+                        Some(nanos) => (
+                            Some(Box::new(ConstantLatency {
+                                insert: nanos,
+                                cancel: nanos,
+                            })),
+                            format!("latency=constant:{nanos}"),
+                        ),
+                        None => (None, "latency=none".to_string()),
+                    };
+
+                // Without a margin model leverage is infinite, and the
+                // `rejected_for_margin` and `liquidations` counters a report
+                // shows are structurally zero rather than measured. Installing
+                // one is what makes them evidence; the report says which model
+                // priced the run so a zero can be read correctly either way.
+                let (margin_model, margin_fingerprint): (Option<Box<dyn MarginModel>>, String) =
+                    match margin_kind.as_deref() {
+                        None => {
+                            if leverage.is_some() || maintenance_margin_rate.is_some() {
+                                return Err(invalid(
+                                    "leverage and maintenance_margin_rate need \
+                                     margin_kind='linear'; with no margin model nothing \
+                                     enforces them",
+                                ));
+                            }
+                            (None, "margin=none".to_string())
+                        }
+                        Some("cash") => {
+                            if leverage.is_some() || maintenance_margin_rate.is_some() {
+                                return Err(invalid(
+                                    "margin_kind='cash' is fully funded: it grants no \
+                                     leverage and has no maintenance level",
+                                ));
+                            }
+                            (Some(Box::new(CashMargin)), "margin=cash".to_string())
+                        }
+                        Some("linear") => {
+                            let leverage = leverage.ok_or_else(|| {
+                                invalid(
+                                    "margin_kind='linear' needs leverage: the initial \
+                                     requirement is notional / leverage",
+                                )
+                            })?;
+                            if !(leverage.is_finite() && leverage >= 1.0) {
+                                return Err(invalid("leverage must be finite and at least 1"));
+                            }
+                            let model = match maintenance_margin_rate {
+                                Some(maintenance) => LinearMargin::new(1.0 / leverage, maintenance)
+                                    .map_err(backtest_err)?,
+                                // Maintenance at half the initial requirement
+                                // is the rule the venues this layer models
+                                // publish; `LinearMargin::from_leverage` is
+                                // where that convention lives.
+                                None => {
+                                    LinearMargin::from_leverage(leverage).map_err(backtest_err)?
+                                }
+                            };
+                            (
+                                Some(Box::new(model)),
+                                format!(
+                                    "margin=linear:initial={}:maintenance={}",
+                                    model.initial_rate.raw(),
+                                    model.maintenance_rate.raw()
+                                ),
+                            )
+                        }
+                        Some(other) => {
+                            return Err(invalid(format!(
+                                "unknown margin_kind {other:?}; expected 'cash' or 'linear'"
+                            )));
+                        }
+                    };
+
+                let execution_fingerprint = format!(
+                    "{fee_fingerprint};{fill_fingerprint};{latency_fingerprint};\
+                     {margin_fingerprint};risk=order={max_order_quantity:?}:\
+                     position={max_abs_position:?}:open={max_open_orders:?}"
+                );
+                spec = spec.execution_fingerprint(execution_fingerprint.clone());
+
+                let report = run_in_fork(&inner.db, spec, strategy.as_mut(), move |mut builder| {
+                    if let Some(model) = fee_model {
+                        builder = builder.fee_model(model);
                     }
-                    if let Some(ticks) = slippage_ticks
-                        && let Ok(tick) = Price::from_f64(0.0001)
-                    {
-                        builder = builder.fill_model(Box::new(TickSlippage::new(ticks, tick)));
-                    } else if queue_position {
-                        builder = builder.fill_model(Box::new(if optimistic_queue {
-                            QueuePositionFills::optimistic()
-                        } else {
-                            QueuePositionFills::new()
-                        }));
+                    if let Some(model) = fill_model {
+                        builder = builder.fill_model(model);
                     }
-                    if let Some(nanos) = latency_nanos {
-                        builder = builder.latency_model(Box::new(ConstantLatency {
-                            insert: nanos,
-                            cancel: nanos,
-                        }));
+                    if let Some(model) = latency_model {
+                        builder = builder.latency_model(model);
+                    }
+                    if let Some(model) = margin_model {
+                        builder = builder.margin_model(model);
                     }
                     if let Some(limits) = risk_limits {
                         builder = builder.risk_limits(limits);
@@ -795,6 +1025,8 @@ impl NativeDatabase {
                             report.result.metrics.orders_rejected_expired,
                         "orders_rejected_post_only":
                             report.result.metrics.orders_rejected_post_only,
+                        "orders_rejected_invalid":
+                            report.result.metrics.orders_rejected_invalid,
                         "orders_triggered": report.result.metrics.orders_triggered,
                         "twap_slices": report.result.metrics.twap_slices,
                         "fills_taker": report.result.metrics.fills_taker,
@@ -864,6 +1096,13 @@ impl NativeDatabase {
                     "coverage": report.coverage.map(|c| c.ratio()),
                     "liquidations": report.result.liquidations.len(),
                     "rejected_for_margin": report.result.rejected_for_margin,
+                    // Which models priced the run. Without them a zero in
+                    // `liquidations` or `rejected_for_margin` reads as "the
+                    // strategy was never at risk" when it means "nothing was
+                    // measuring": `margin_model` is null exactly when no
+                    // margin model was installed.
+                    "margin_model": margin_kind,
+                    "execution_fingerprint": execution_fingerprint,
                     "self_trades_prevented": report.result.self_trades_prevented,
                     "calibration_samples": calibration,
                     "set_operations": set_operations,
@@ -888,6 +1127,13 @@ impl NativeDatabase {
         })
     }
 
+    /// Run SQL; returns an Arrow IPC stream (the schema is always included,
+    /// even for empty results).
+    ///
+    /// `timeout` is a deadline in seconds; on expiry a `TimeoutError` is
+    /// raised and execution is cancelled. `max_rows` raises `LimitError` as
+    /// soon as the result exceeds it — the stream stops being pulled, so
+    /// execution halts early instead of truncating silently.
     #[pyo3(signature = (query, memory_limit = None, timeout = None, max_rows = None, target_partitions = None))]
     fn sql<'py>(
         &self,

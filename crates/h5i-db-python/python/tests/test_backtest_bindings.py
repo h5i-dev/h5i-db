@@ -16,6 +16,7 @@ import h5i_db
 import pyarrow as pa
 import pytest
 from h5i_db import backtest, quant
+from h5i_db.backtest_result import VERIFY_OF, _CONFIG_SCHEMA
 
 SECOND = 1_000_000_000
 MARKET = "will-x-happen"
@@ -51,7 +52,7 @@ INSTRUMENTS = pa.schema(
 )
 
 
-def _seeded(tmp) -> h5i_db.Database:
+def _seeded(tmp, *, tick_size: float = 0.0001) -> h5i_db.Database:
     db = h5i_db.Database(f"{tmp}/bt.db", create=True)
     db.create_table("instruments", INSTRUMENTS, time_column="ts_init")
     db.create_table("book_deltas", BOOK_DELTAS, time_column="ts_init")
@@ -65,7 +66,7 @@ def _seeded(tmp) -> h5i_db.Database:
                 "kind": ["prediction_market"] * 2,
                 "outcome": [0, 1],
                 "outcome_label": ["YES", "NO"],
-                "tick_size": [0.0001] * 2,
+                "tick_size": [tick_size] * 2,
                 "lot_size": [1.0] * 2,
                 "expiration_ns": [None, None],
                 "settlement_observable_ns": [None, None],
@@ -966,4 +967,380 @@ def test_execute_persists_the_metadata_that_groups_runs_into_studies():
         # move it -- otherwise re-labelling a trial would defeat the ledger.
         relabelled = replace(config, metadata={**meta, "phase": "holdout"})
         assert relabelled.trial_digest == config.trial_digest
+        db.close()
+
+
+def test_an_unbuildable_fee_model_is_refused_rather_than_dropped():
+    """A fee the kernel cannot represent must not become a free run.
+
+    The rate was turned into a model inside a builder closure that had no way
+    to report a failure, so an unrepresentable one installed *no* fee model:
+    the run then reported success, zero commissions, and a P&L nobody could
+    have earned on the venue it named.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        with pytest.raises(h5i_db.InvalidInputError, match="overflow"):
+            backtest.run(
+                db,
+                "impossible-fee",
+                starting_cash=500.0,
+                snapshot="seed",
+                fee_rate=1e30,
+            )
+        # Refused before anything was created, so there is no half-run fork
+        # carrying numbers priced by a model that was never installed.
+        assert "bt-impossible-fee" not in db.fork_names()
+        db.close()
+
+
+def test_a_fee_kind_without_a_rate_is_refused():
+    """`fee_kind` alone prices nothing, and used to install nothing."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(db, [])
+        with pytest.raises(h5i_db.InvalidInputError, match="fee_rate"):
+            backtest.run(
+                db,
+                "kind-only",
+                starting_cash=500.0,
+                snapshot="seed",
+                fee_kind="kalshi",
+            )
+        db.close()
+
+    with pytest.raises(ValueError, match="fee_rate"):
+        backtest.ExecutionConfig(fee_kind="proportional")
+    with pytest.raises(ValueError, match="maker_rebate"):
+        backtest.ExecutionConfig(fee_kind="kalshi", fee_rate=0.07, maker_rebate=-0.001)
+
+
+def test_slippage_is_measured_in_the_instruments_own_tick():
+    """One tick of slippage is one tick of *this* market, not of 0.0001.
+
+    The tick was hardcoded, so a venue quoting in cents got a hundredth of the
+    slippage it asked for and the run looked cheaper to trade than it was.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp, tick_size=0.01)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        plain = backtest.run(db, "no-slip", starting_cash=500.0, snapshot="seed")
+        slipped = backtest.run(
+            db,
+            "one-tick",
+            starting_cash=500.0,
+            snapshot="seed",
+            slippage_ticks=1,
+        )
+        assert plain["fills"] == slipped["fills"] == 1
+        # Ten contracts, one cent worse each.
+        assert plain["final_cash"] - slipped["final_cash"] == pytest.approx(
+            0.10, abs=1e-9
+        )
+        db.close()
+
+
+def test_slippage_and_queue_position_cannot_be_requested_together():
+    """Two fill models, one slot: the loser used to be dropped in silence.
+
+    `slippage_ticks=0` is the sharp case. It installed a no-op slippage model
+    and discarded the queue-position request the caller actually made.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(db, [])
+        with pytest.raises(h5i_db.InvalidInputError, match="separate scenarios"):
+            backtest.run(
+                db,
+                "both-models",
+                starting_cash=500.0,
+                snapshot="seed",
+                slippage_ticks=0,
+                queue_position=True,
+            )
+        db.close()
+
+
+def test_the_execution_models_are_part_of_the_run_digest():
+    """Two runs priced differently are two computations, not one.
+
+    `RunSpec` holds its models as boxed trait objects it cannot inspect, so
+    the digest can only see them through the fingerprint the binding builds.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        free = backtest.run(db, "fp-free", starting_cash=500.0, snapshot="seed")
+        charged = backtest.run(
+            db, "fp-charged", starting_cash=500.0, snapshot="seed", fee_rate=0.07
+        )
+        same = backtest.run(
+            db, "fp-charged-again", starting_cash=500.0, snapshot="seed", fee_rate=0.07
+        )
+        assert free["digest"] != charged["digest"]
+        # The run id is not part of the identity: the same computation under a
+        # second name is the same computation.
+        assert charged["digest"] == same["digest"]
+        assert charged["execution_fingerprint"] != free["execution_fingerprint"]
+        assert "prediction_market" in charged["execution_fingerprint"]
+        db.close()
+
+
+def test_a_margin_model_is_installed_when_it_is_asked_for():
+    """A zero in `liquidations` means one of two very different things."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        unmargined = backtest.run(db, "no-margin", starting_cash=500.0, snapshot="seed")
+        margined = backtest.run(
+            db,
+            "cash-margin",
+            starting_cash=500.0,
+            snapshot="seed",
+            margin_kind="cash",
+        )
+        assert unmargined["margin_model"] is None
+        assert margined["margin_model"] == "cash"
+        assert margined["digest"] != unmargined["digest"]
+        with pytest.raises(h5i_db.InvalidInputError, match="leverage"):
+            backtest.run(
+                db,
+                "linear-no-leverage",
+                starting_cash=500.0,
+                snapshot="seed",
+                margin_kind="linear",
+            )
+        db.close()
+
+
+def test_timestamps_convert_without_losing_nanoseconds():
+    """`int(dt.timestamp() * 1e9)` rounds; a window boundary must not.
+
+    A float64 mantissa holds 53 bits and a present-day instant in nanoseconds
+    needs 61, so the obvious spelling moves the boundary by a few hundred
+    nanoseconds -- enough to include or exclude an event.
+    """
+    from h5i_db.backtest import _to_nanos
+
+    moment = dt.datetime(2024, 1, 1, 0, 0, 0, 123457, tzinfo=dt.timezone.utc)
+    exact = 1_704_067_200_123_457_000
+    assert _to_nanos(moment) == exact
+    assert _to_nanos("2024-01-01T00:00:00.123457Z") == exact
+    # A naive datetime is read as UTC, not as the machine's timezone.
+    assert _to_nanos(moment.replace(tzinfo=None)) == exact
+
+
+def test_equivalent_spellings_of_one_trial_share_its_digest():
+    """The ledger identifies a trial by content, so `10000` and `10000.0`,
+    and a window written three ways, have to be one trial."""
+    start = dt.datetime(2024, 1, 1, 0, 0, 1, tzinfo=dt.timezone.utc)
+    end = dt.datetime(2024, 1, 1, 0, 0, 9, tzinfo=dt.timezone.utc)
+    from h5i_db.backtest import _to_nanos
+
+    integral = backtest.BacktestConfig(
+        run_id="ints",
+        portfolio=backtest.PortfolioConfig(starting_cash=10_000),
+        data=backtest.DataConfig(snapshot="seed", window=(start, end)),
+        execution=backtest.ExecutionConfig(fee_kind="proportional", fee_rate=0),
+    )
+    floating = backtest.BacktestConfig(
+        run_id="floats",
+        portfolio=backtest.PortfolioConfig(starting_cash=10_000.0),
+        data=backtest.DataConfig(
+            snapshot="seed", window=(_to_nanos(start), _to_nanos(end))
+        ),
+        execution=backtest.ExecutionConfig(fee_kind="proportional", fee_rate=0.0),
+    )
+    assert integral.trial_digest == floating.trial_digest
+    # The stored form is the canonical one, so a round trip through JSON
+    # cannot reintroduce the difference.
+    assert integral.data.window == floating.data.window
+    assert backtest.BacktestConfig.from_json(integral.to_json()).trial_digest == (
+        floating.trial_digest
+    )
+
+
+def test_a_verification_fork_is_never_offered_to_the_ledger():
+    """`verify()` re-runs a config the ledger already holds, so its temporary
+    fork carries that config's trial digest -- and is deleted when the
+    comparison is done. A concurrent `execute(reuse=True)` matching it would
+    be handed a result that disappears underneath it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        config = backtest.BacktestConfig(
+            run_id="zzz-verified",
+            portfolio=backtest.PortfolioConfig(starting_cash=500.0),
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+        result = backtest.execute(db, config)
+
+        # A verify fork, held open, and named so it sorts *first* in the fork
+        # listing: the ledger must skip it on its merits, not by luck.
+        verify_config = backtest.BacktestConfig.from_dict(
+            {
+                **config.to_dict(),
+                "run_id": "aaa-verify-standin",
+                "metadata": {VERIFY_OF: "zzz-verified"},
+            }
+        )
+        standin = backtest.execute(db, verify_config, reuse=False)
+        assert standin.fork_name < result.fork_name
+        assert (
+            backtest.find_trial(db, config.trial_digest).fork_name == result.fork_name
+        )
+        # A verification is not a search: counting it would deflate every
+        # multiple-testing correction computed from the trial count.
+        assert backtest.trial_count(db) == 1
+
+        verified = result.verify()
+        assert verified["verified"]
+        # The run id is outside the digest, so a re-run under another name is
+        # the same computation and says so.
+        assert verified["same_digest"]
+        # `verify()` drops the fork it created and nothing else.
+        assert not any(
+            name.startswith("bt-verify-zzz-verified-") for name in db.fork_names()
+        )
+        assert result.fork_name in db.fork_names()
+        db.close()
+
+
+def test_a_run_with_an_unwritten_config_does_not_break_the_listing():
+    """A partial `bt_config` is one unreadable run, not an unreadable database.
+
+    `open_result` indexed row zero, so an empty config table raised
+    `IndexError` -- which `list_runs` does not catch, taking every other run
+    in the database down with it.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        _signals(
+            db,
+            [
+                {
+                    "ts": dt.datetime(2024, 1, 1, 0, 0, 3),
+                    "instrument_id": MARKET,
+                    "side": "buy",
+                    "quantity": 10.0,
+                }
+            ],
+        )
+        good = backtest.run(db, "readable", starting_cash=500.0, snapshot="seed")
+        broken = backtest.run(db, "half-written", starting_cash=500.0, snapshot="seed")
+
+        # Exactly the state a half-completed `_persist_config` leaves: the
+        # table was created, the row never landed.
+        fork = db.fork(broken.fork_name)
+        try:
+            fork.drop_table("bt_config")
+            fork.create_table("bt_config", _CONFIG_SCHEMA)
+        finally:
+            fork.close()
+
+        listed = {row["run_id"] for row in backtest.list_runs(db)}
+        assert "readable" in listed
+        assert backtest.open_result(db, "half-written").config is None
+        assert backtest.find_trial(db, good.config.trial_digest) is not None
+        db.close()
+
+
+def test_a_callback_signature_the_engine_cannot_call_is_refused():
+    """Whether a callback wants `context` is read off the parameter's name.
+
+    Counting parameters misbound anything with an extra one: a strategy
+    declaring `on_event(self, event, threshold=0.5)` was handed the context in
+    the `event` slot and read a portfolio snapshot as a market event, with no
+    error anywhere.
+    """
+
+    class Extra(backtest.EventStrategy):
+        def __init__(self):
+            self.seen = []
+
+        def on_event(self, event, threshold=0.5):
+            self.seen.append(event["type"])
+            return None
+
+    class Misnamed(backtest.EventStrategy):
+        # `context` and `ctx` are the names that ask for a context; anything
+        # else leaves a parameter the engine cannot fill.
+        def on_event(self, portfolio, event):
+            return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db = _seeded(tmp)
+        strategy = Extra()
+        result = backtest.run_strategy(
+            db,
+            "defaulted-parameter",
+            strategy,
+            strategy_id="tests.Extra:v1",
+            starting_cash=500.0,
+            data=backtest.DataConfig(snapshot="seed"),
+        )
+        assert result["records_processed"] > 0
+        # Market events, not context dicts.
+        assert strategy.seen and all(isinstance(kind, str) for kind in strategy.seen)
+
+        with pytest.raises(h5i_db.InvalidInputError, match="context"):
+            backtest.run_strategy(
+                db,
+                "misnamed-context",
+                Misnamed(),
+                strategy_id="tests.Misnamed:v1",
+                starting_cash=500.0,
+                data=backtest.DataConfig(snapshot="seed"),
+            )
         db.close()

@@ -90,6 +90,18 @@ def _coerce_window(value: Any) -> Optional[tuple[Any, Any]]:
     return (value[0], value[1])
 
 
+def _canonical_number(value: Any, cast: Any) -> Any:
+    """Store a number in one type, whatever type the caller passed.
+
+    Every config field is serialised into `trial_digest`, and JSON keeps
+    `10` and `10.0` apart. Two callers describing the same trial -- one
+    reading parameters from a grid of ints, one from a JSON file that wrote
+    them as floats -- would otherwise hash to different trials and each pay
+    for the same replay.
+    """
+    return value if value is None else cast(value)
+
+
 @dataclass(frozen=True)
 class DataConfig:
     """Pinned canonical inputs for one replay."""
@@ -133,15 +145,24 @@ class DataConfig:
         ):
             raise ValueError("version must be a non-negative integer")
         window = _coerce_window(self.window)
-        object.__setattr__(self, "window", window)
         if window is not None:
             from .backtest import _to_nanos
 
-            if _to_nanos(window[0]) >= _to_nanos(window[1]):
+            # Stored as the nanoseconds it was validated as, not as whatever
+            # the caller spelled it in. The same window written as an ISO
+            # string, a datetime and an integer is one window, and storing
+            # three spellings made it three trials.
+            window = (_to_nanos(window[0]), _to_nanos(window[1]))
+            if window[0] >= window[1]:
                 raise ValueError("window start must be before window end")
+        object.__setattr__(self, "window", window)
+        object.__setattr__(self, "version", _canonical_number(self.version, int))
         coverage = self.minimum_coverage
         if coverage is not None and not 0.0 <= coverage <= 1.0:
             raise ValueError("minimum_coverage must be between zero and one")
+        object.__setattr__(
+            self, "minimum_coverage", _canonical_number(coverage, float)
+        )
 
     @property
     def is_pinned(self) -> bool:
@@ -185,6 +206,18 @@ class ExecutionConfig:
     optimistic_queue: bool = False
     latency_nanos: Optional[int] = None
     slippage_ticks: Optional[int] = None
+    #: `None` (no margin model), `"cash"` (fully funded, the prediction-market
+    #: and spot case) or `"linear"` (a fixed fraction of notional). Without one
+    #: leverage is infinite and the run's `liquidations` and
+    #: `rejected_for_margin` counters are structurally zero rather than
+    #: measured, which is the shape of a strategy that was never at risk.
+    margin_kind: Optional[str] = None
+    #: Maximum leverage for `margin_kind="linear"`; the initial requirement is
+    #: notional / leverage.
+    leverage: Optional[float] = None
+    #: Overrides the default maintenance level (half the initial requirement,
+    #: the rule the venues modelled here publish).
+    maintenance_margin_rate: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.fee_kind not in (None, "prediction_market", "proportional", "kalshi"):
@@ -212,6 +245,44 @@ class ExecutionConfig:
             raise ValueError("latency_nanos must be non-negative")
         if self.slippage_ticks is not None and self.slippage_ticks < 0:
             raise ValueError("slippage_ticks must be non-negative")
+        if self.fee_kind is not None and self.fee_rate is None:
+            # The kind alone prices nothing, and the native layer used to
+            # install no fee model at all for it: the run then reported
+            # success with zero commissions on a venue the caller had named.
+            raise ValueError(f"fee_kind={self.fee_kind!r} needs fee_rate")
+        if self.maker_rebate is not None and self.fee_kind == "kalshi":
+            raise ValueError(
+                "maker_rebate does not apply to fee_kind='kalshi': the venue charges "
+                "makers a rate rather than paying them a rebate; use maker_fee_rate"
+            )
+        if self.margin_kind not in (None, "cash", "linear"):
+            raise ValueError("margin_kind must be cash, linear, or None")
+        if self.margin_kind == "linear" and self.leverage is None:
+            raise ValueError("margin_kind='linear' needs leverage")
+        if self.margin_kind != "linear" and (
+            self.leverage is not None or self.maintenance_margin_rate is not None
+        ):
+            raise ValueError(
+                "leverage and maintenance_margin_rate need margin_kind='linear'"
+            )
+        if self.leverage is not None and self.leverage < 1:
+            raise ValueError("leverage must be at least 1")
+        if self.maintenance_margin_rate is not None and not (
+            0 <= self.maintenance_margin_rate <= 1
+        ):
+            raise ValueError("maintenance_margin_rate must be between zero and one")
+        for name, cast in (
+            ("fee_rate", float),
+            ("maker_rebate", float),
+            ("maker_fee_rate", float),
+            ("latency_nanos", int),
+            ("slippage_ticks", int),
+            ("leverage", float),
+            ("maintenance_margin_rate", float),
+        ):
+            object.__setattr__(
+                self, name, _canonical_number(getattr(self, name), cast)
+            )
 
 
 @dataclass(frozen=True)
@@ -227,6 +298,10 @@ class PortfolioConfig:
             raise TypeError("starting_cash must be numeric")
         if not 0 < float(self.starting_cash) < float("inf"):
             raise ValueError("starting_cash must be finite and positive")
+        # Stored as the float the kernel is handed. `10000` and `10000.0` are
+        # the same starting cash and must be the same trial; JSON, and so the
+        # digest, would otherwise tell them apart.
+        object.__setattr__(self, "starting_cash", float(self.starting_cash))
 
 
 @dataclass(frozen=True)
@@ -238,6 +313,11 @@ class OutputConfig:
     def __post_init__(self) -> None:
         if self.equity_interval_nanos is not None and self.equity_interval_nanos <= 0:
             raise ValueError("equity_interval_nanos must be positive")
+        object.__setattr__(
+            self,
+            "equity_interval_nanos",
+            _canonical_number(self.equity_interval_nanos, int),
+        )
 
 
 @dataclass(frozen=True)
@@ -263,6 +343,14 @@ class RiskConfig:
             or self.max_open_orders <= 0
         ):
             raise ValueError("max_open_orders must be a positive integer")
+        for name, cast in (
+            ("max_order_quantity", float),
+            ("max_abs_position", float),
+            ("max_open_orders", int),
+        ):
+            object.__setattr__(
+                self, name, _canonical_number(getattr(self, name), cast)
+            )
 
 
 @dataclass(frozen=True)

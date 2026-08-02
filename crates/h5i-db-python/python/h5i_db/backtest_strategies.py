@@ -32,6 +32,8 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 
 import pyarrow as pa
 
+from .dataframe import quote_string
+
 __all__ = [
     "STRATEGIES",
     "SignalPlan",
@@ -89,10 +91,16 @@ def quote_panel(
     quoting after resolution has a jump to 0 or 1 in it, and every momentum or
     volatility rule would read that jump as a signal.
     """
-    source = f"h5i('book_deltas', '{snapshot}')" if snapshot else "book_deltas"
+    # Snapshot and instrument names reach here from callers, config files and
+    # vendor archives, so they are quoted rather than interpolated: an
+    # apostrophe in a market name is enough to make this SQL mean something
+    # else.
+    source = (
+        f"h5i('book_deltas', {quote_string(snapshot)})" if snapshot else "book_deltas"
+    )
     filters = [f"outcome = {int(outcome)}"]
     if instruments:
-        listed = ", ".join(f"'{name}'" for name in instruments)
+        listed = ", ".join(quote_string(str(name)) for name in instruments)
         filters.append(f"instrument_id IN ({listed})")
     if until_expiry and "instruments" in db.tables():
         expiry = db.sql(
@@ -431,7 +439,9 @@ def rsi_reversion(
         strength = gain / loss.replace(0.0, float("nan"))
         rsi = 100 - 100 / (1 + strength)
         rsi = rsi.fillna(50.0)
-        return (oversold - rsi).where(rsi < 50, overbought - rsi).mul(-1).mul(-1)
+        # Positive below `oversold` (buy) and negative above `overbought`
+        # (exit), which is the sign convention `_crossing_signals` reads.
+        return (oversold - rsi).where(rsi < 50, overbought - rsi)
 
     return _crossing_signals(
         panel,
@@ -676,7 +686,9 @@ def pair_arbitrage(
         raise ValueError("fee_rate must be in [0, 1)")
     if len(set(outcomes)) != 2:
         raise ValueError("a pair needs two distinct outcomes")
-    source = f"h5i('book_deltas', '{snapshot}')" if snapshot else "book_deltas"
+    source = (
+        f"h5i('book_deltas', {quote_string(snapshot)})" if snapshot else "book_deltas"
+    )
     first, second = outcomes
     frame = db.sql(
         f"""

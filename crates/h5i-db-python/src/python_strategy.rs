@@ -58,7 +58,10 @@ struct Callable {
 }
 
 impl PythonStrategy {
-    pub(crate) fn new(object: Py<PyAny>) -> Self {
+    /// Resolving the callbacks is where a signature this adapter cannot call
+    /// correctly is caught, so it fails before the run rather than partway
+    /// through one.
+    pub(crate) fn new(object: Py<PyAny>) -> Result<Self> {
         Python::attach(|py| {
             let bound = object.bind(py);
             // The base class is only used to recognise an unoverridden
@@ -69,14 +72,14 @@ impl PythonStrategy {
                 .import("h5i_db.backtest")
                 .and_then(|module| module.getattr("EventStrategy"))
                 .ok();
-            Self {
-                on_start: resolve(bound, base.as_ref(), "on_start", false),
-                on_event: resolve(bound, base.as_ref(), "on_event", true),
-                on_timer: resolve(bound, base.as_ref(), "on_timer", true),
-                on_fill: resolve(bound, base.as_ref(), "on_fill", true),
-                on_stop: resolve(bound, base.as_ref(), "on_stop", false),
+            Ok(Self {
+                on_start: resolve(bound, base.as_ref(), "on_start", false)?,
+                on_event: resolve(bound, base.as_ref(), "on_event", true)?,
+                on_timer: resolve(bound, base.as_ref(), "on_timer", true)?,
+                on_fill: resolve(bound, base.as_ref(), "on_fill", true)?,
+                on_stop: resolve(bound, base.as_ref(), "on_stop", false)?,
                 order_ids: BTreeMap::new(),
-            }
+            })
         })
     }
 
@@ -341,8 +344,10 @@ fn resolve(
     base: Option<&Bound<'_, PyAny>>,
     name: &str,
     carries_event: bool,
-) -> Option<Callable> {
-    let bound = object.getattr(name).ok()?;
+) -> Result<Option<Callable>> {
+    let Ok(bound) = object.getattr(name) else {
+        return Ok(None);
+    };
     if let Some(base) = base
         && let Ok(inherited) = base.getattr(name)
         // Compare the *function* the lookup landed on, not the bound method:
@@ -354,34 +359,82 @@ fn resolve(
         && let Ok(found) = bound.getattr("__func__")
         && found.is(&inherited)
     {
-        return None;
+        return Ok(None);
     }
-    Some(Callable {
-        wants_context: wants_context(&bound, carries_event),
+    Ok(Some(Callable {
+        wants_context: wants_context(&bound, carries_event, name)?,
         function: bound.unbind(),
-    })
+    }))
 }
 
 /// Whether this callback declared a `context` parameter.
 ///
-/// Read off `__code__.co_argcount`, which counts `self`: an event-carrying
-/// callback wants one at three parameters and not at two, and one without an
-/// event at two and not at one.
+/// Decided from the *name* of the first parameter after `self`, not from the
+/// parameter count. Counting worked only for the two documented shapes and
+/// misbound anything else: `on_event(self, event, threshold=0.5)` counts three
+/// parameters, so the context was passed in the `event` slot and the strategy
+/// silently read a portfolio snapshot as a market event. Reading the name
+/// gives the same answer for the documented shapes and the right one for the
+/// rest.
 ///
-/// Anything that cannot be read this way -- a C function, a `*args` wrapper,
-/// a decorator that dropped `__code__` -- is given the context. The cost of
-/// guessing wrong that way is a wasted argument; guessing wrong the other way
-/// is a `TypeError` in the middle of someone's run.
-fn wants_context(bound: &Bound<'_, PyAny>, carries_event: bool) -> bool {
-    let expected = if carries_event { 3 } else { 2 };
-    bound
-        .getattr("__func__")
-        .unwrap_or_else(|_| bound.clone())
-        .getattr("__code__")
-        .and_then(|code| code.getattr("co_argcount"))
-        .and_then(|count| count.extract::<usize>())
-        .map(|count| count >= expected)
-        .unwrap_or(true)
+/// `context` and `ctx` are the names that ask for one. A signature this
+/// cannot call correctly is refused here rather than halfway through a run:
+/// if the engine cannot fill every parameter that has no default --
+/// `on_event(self, portfolio, event)`, where the context was asked for under
+/// a name nothing recognises -- construction fails and says so.
+///
+/// Anything with no readable signature -- a C function, a `*args` wrapper, a
+/// decorator that dropped `__code__` -- is given the context, which is what
+/// `EventStrategy`'s docstring promises. The cost of guessing wrong that way
+/// is a wasted argument.
+fn wants_context(bound: &Bound<'_, PyAny>, carries_event: bool, name: &str) -> Result<bool> {
+    // A bound method carries `self` in its code object; a function assigned
+    // onto the instance is called without one, and both reach here.
+    let implicit_self = bound.getattr("__func__").is_ok();
+    let function = bound.getattr("__func__").unwrap_or_else(|_| bound.clone());
+    let Ok(code) = function.getattr("__code__") else {
+        return Ok(true);
+    };
+    // CO_VARARGS: the callback takes `*args`, so it names nothing and accepts
+    // everything.
+    const CO_VARARGS: usize = 0x04;
+    if code
+        .getattr("co_flags")
+        .and_then(|flags| flags.extract::<usize>())
+        .is_ok_and(|flags| flags & CO_VARARGS != 0)
+    {
+        return Ok(true);
+    }
+    let (Ok(argcount), Ok(names)) = (
+        code.getattr("co_argcount")
+            .and_then(|count| count.extract::<usize>()),
+        code.getattr("co_varnames")
+            .and_then(|names| names.extract::<Vec<String>>()),
+    ) else {
+        return Ok(true);
+    };
+    let skip = usize::from(implicit_self);
+    let wants = matches!(names.get(skip).map(String::as_str), Some("context" | "ctx"));
+    // Parameters with defaults are the caller's business, not the engine's:
+    // only the ones it must fill are counted.
+    let defaults = function
+        .getattr("__defaults__")
+        .ok()
+        .and_then(|values| values.len().ok())
+        .unwrap_or(0);
+    // Both sides count `self`, however it arrives.
+    let required = (argcount + 1 - skip).saturating_sub(defaults);
+    let passed = 1 + usize::from(wants) + usize::from(carries_event);
+    if required > passed {
+        return Err(BacktestError::invalid(format!(
+            "{name} declares {} parameter(s) without defaults, but the engine calls \
+             it with {}. Name the first parameter `context` to be handed one, and \
+             give any further parameter a default.",
+            required - 1,
+            passed - 1
+        )));
+    }
+    Ok(wants)
 }
 
 impl Strategy for PythonStrategy {
@@ -717,6 +770,32 @@ where
     }
 }
 
+/// Carry a Python exception out of a callback as a backtest error.
+///
+/// Two things the plain `{error}` spelling lost. The **traceback** is where
+/// the failure actually is: a `KeyError: 'price'` reported without one names
+/// neither the callback nor the line, and the strategy is the caller's code,
+/// not this crate's. And an **interrupt is not bad input**: `Ctrl-C` or an
+/// exhausted heap arriving mid-callback surfaced as an `InvalidInputError`,
+/// which reads as "your signals table is malformed" and sends the reader
+/// looking in the wrong place. The variant is still `Invalid` -- the backtest
+/// error model has no interrupt case -- so the message has to say it.
 fn py_error(error: PyErr) -> BacktestError {
-    BacktestError::invalid(format!("Python strategy callback failed: {error}"))
+    Python::attach(|py| {
+        let kind = if error.is_instance_of::<pyo3::exceptions::PyKeyboardInterrupt>(py)
+            || error.is_instance_of::<pyo3::exceptions::PySystemExit>(py)
+        {
+            "the Python strategy callback was interrupted"
+        } else if error.is_instance_of::<pyo3::exceptions::PyMemoryError>(py) {
+            "the Python strategy callback ran out of memory"
+        } else {
+            "Python strategy callback failed"
+        };
+        let traceback = error
+            .traceback(py)
+            .and_then(|tb| tb.format().ok())
+            .map(|text| format!("\n{text}"))
+            .unwrap_or_default();
+        BacktestError::invalid(format!("{kind}: {error}{traceback}"))
+    })
 }
