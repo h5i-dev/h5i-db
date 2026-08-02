@@ -3,7 +3,10 @@
 
 use std::sync::Arc;
 
-use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray};
+use arrow::array::{
+    ArrayRef, Float64Array, Int64Array, RecordBatch, StringArray, StructArray,
+    TimestampNanosecondArray,
+};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use h5i_db_core::{
     Database, Error, ReadAt, ScanOptions, StorageOptions, TableOptions, WriteOptions,
@@ -397,4 +400,82 @@ async fn projection_of_unknown_column_errors() {
         .unwrap_err();
     // Surfaced as an arrow schema error, not a panic.
     assert!(err.to_string().contains("nope"), "{err}");
+}
+
+#[tokio::test]
+async fn time_filter_survives_a_nested_column_ahead_of_the_time_column() {
+    // Row-group stats are addressed by parquet leaf index. A struct ahead of
+    // the time column makes the leaf index outrun the Arrow field index, and
+    // reading the wrong leaf's bounds prunes every row group away.
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new(
+            "meta",
+            DataType::Struct(
+                vec![
+                    Field::new("venue", DataType::Utf8, false),
+                    Field::new("seq", DataType::Int64, false),
+                ]
+                .into(),
+            ),
+            false,
+        ),
+        Field::new("ts", DataType::Int64, false),
+        Field::new("v", DataType::Float64, false),
+    ]));
+
+    let (_dir, db) = fresh().await;
+    db.create_table(
+        "t",
+        schema.clone(),
+        TableOptions {
+            time_column: Some("ts".into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let ts: Vec<i64> = (0..64).collect();
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new("venue", DataType::Utf8, false)),
+                    Arc::new(StringArray::from(vec!["x"; 64])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("seq", DataType::Int64, false)),
+                    // Deliberately disjoint from `ts`: this is the leaf the
+                    // Arrow field index used to land on.
+                    Arc::new(Int64Array::from(
+                        ts.iter().map(|t| t + 1_000).collect::<Vec<_>>(),
+                    )) as ArrayRef,
+                ),
+            ])),
+            Arc::new(Int64Array::from(ts.clone())),
+            Arc::new(Float64Array::from(
+                ts.iter().map(|t| *t as f64).collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .unwrap();
+    db.append("t", vec![batch], WriteOptions::default())
+        .await
+        .unwrap();
+
+    let (batches, _) = db
+        .scan(
+            "t",
+            ReadAt::Latest,
+            ScanOptions {
+                time_start: Some(10),
+                time_end: Some(20),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, 10, "time-filtered scan lost rows to bad pruning");
 }

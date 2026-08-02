@@ -991,8 +991,8 @@ pub async fn read_segment(
 
     // Row-group pruning on the time column via parquet stats.
     if let Some((time_col, start, end)) = time_filter {
-        let arrow_schema = metadata.schema();
-        if let Ok(col_idx) = arrow_schema.index_of(time_col) {
+        let parquet_schema = metadata.metadata().file_metadata().schema_descr();
+        if let Some(col_idx) = parquet_leaf_index(parquet_schema, time_col) {
             let keep: Vec<usize> = metadata
                 .metadata()
                 .row_groups()
@@ -1030,6 +1030,26 @@ pub async fn read_segment(
         batches = filter_batches_by_time(batches, time_col, start, end)?;
     }
     Ok(batches)
+}
+
+/// Leaf index of a top-level primitive column, for addressing row-group
+/// column chunks.
+///
+/// Row-group statistics are addressed by *leaf* index, which diverges from
+/// the Arrow field index as soon as any column ahead of `name` is nested (a
+/// struct of three fields occupies one Arrow field but three leaves). Using
+/// the Arrow index there reads another column's bounds and can prune away
+/// every row group, so a time-filtered scan returns zero rows. Returning
+/// `None` for a nested or absent column leaves pruning disabled, which only
+/// costs I/O.
+fn parquet_leaf_index(
+    schema: &parquet::schema::types::SchemaDescriptor,
+    name: &str,
+) -> Option<usize> {
+    schema
+        .columns()
+        .iter()
+        .position(|col| matches!(col.path().parts(), [only] if only == name))
 }
 
 fn parquet_i64_stats(stats: &parquet::file::statistics::Statistics) -> Option<(i64, i64)> {
