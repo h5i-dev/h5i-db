@@ -309,6 +309,12 @@ impl OrderbookDecoder {
     /// A sequence gap yields exactly one `Gap` record and marks the decoder
     /// stale. A later snapshot may yield `[Gap, Snapshot]` when its own
     /// sequence confirms messages were skipped.
+    ///
+    /// Every condition that makes the book untrustworthy is reported the same
+    /// way, as a `Gap` record. Reporting one of them as an `Err` instead would
+    /// make a caller that logs-and-continues silently drop the marker that
+    /// tells a replay its book is no longer reconstructable. `Err` is reserved
+    /// for messages this decoder cannot read at all.
     pub fn decode(&mut self, body: &str, received_at: UnixNanos) -> Result<Vec<Record>> {
         let root = parse_json(body, "Kalshi WebSocket orderbook")?;
         let kind = required_str(&root, "type")?;
@@ -331,10 +337,16 @@ impl OrderbookDecoder {
             )));
         }
 
-        let skipped = self.last_seq.is_some_and(|previous| seq != previous + 1);
-        self.last_seq = Some(seq);
+        let step = Step::of(self.last_seq, seq);
         match kind {
             "orderbook_snapshot" => {
+                // A snapshot carries the whole book, so it is accepted
+                // whatever its sequence says. A resubscribe restarts the
+                // numbering, and treating the restart as stale would leave
+                // the decoder desynced for the rest of the session -- with
+                // the fresh state it needs sitting in the message it just
+                // dropped.
+                self.last_seq = Some(seq);
                 let yes = parse_levels(msg.get("yes_dollars_fp"), "yes_dollars_fp")?;
                 let no = parse_levels(msg.get("no_dollars_fp"), "no_dollars_fp")?;
                 self.yes = raw_levels(&yes);
@@ -347,42 +359,67 @@ impl OrderbookDecoder {
                     OutcomeId::FIRST,
                     MarketEvent::BookSnapshot { bids, asks },
                 );
-                if skipped {
-                    Ok(vec![self.gap(received_at), snapshot])
-                } else {
+                if step == Step::InOrder {
                     Ok(vec![snapshot])
+                } else {
+                    Ok(vec![self.gap(received_at), snapshot])
                 }
             }
             "orderbook_delta" => {
-                let event_at = message_time(msg)?;
-                if skipped {
-                    self.desynced = true;
-                    return Ok(vec![self.gap(event_at)]);
+                match step {
+                    // A sequence already accepted is a duplicate or a
+                    // reordered replay, and a Kalshi delta is a *relative*
+                    // change: applying one twice moves the level by twice
+                    // its size, which no later message corrects. Dropping it
+                    // and leaving `last_seq` alone keeps the accepted stream
+                    // contiguous, so the next in-order delta still applies.
+                    Step::Stale => return Ok(Vec::new()),
+                    Step::Skipped => {
+                        self.last_seq = Some(seq);
+                        self.desynced = true;
+                        // Stamped from the arrival clock like the snapshot
+                        // path, because a gap is something *this* system
+                        // noticed. Stamping it from the venue's clock instead
+                        // lets a stream of records go backwards in time and
+                        // trip `IngestPlan::validate`.
+                        return Ok(vec![self.gap(received_at)]);
+                    }
+                    Step::InOrder => self.last_seq = Some(seq),
                 }
                 if self.desynced {
-                    return Err(BacktestError::invalid(
-                        "Kalshi orderbook delta received before a fresh snapshot",
-                    ));
+                    // The gap was already emitted once. Emitting it again for
+                    // every delta until the resubscribe would bury the one
+                    // that matters, and the book stays unreconstructable
+                    // either way, so the delta is simply not accepted.
+                    return Ok(Vec::new());
                 }
+                let event_at = message_time(msg)?;
                 let side = required_str(msg, "side")?;
                 let price = Price::from_f64(decimal(msg, "price_dollars")?)?;
                 let change = Qty::from_f64(decimal(msg, "delta_fp")?)?.raw();
-                let (levels, canonical_side, canonical_price) = match side {
-                    "yes" => (&mut self.yes, Side::Buy, price),
-                    "no" => (&mut self.no, Side::Sell, price.complement()?),
+                // Which side, as a flag rather than as a borrow: the check
+                // below answers through `self`, and a live `&mut` into one of
+                // these maps would stop it doing so.
+                let (yes_side, canonical_side, canonical_price) = match side {
+                    "yes" => (true, Side::Buy, price),
+                    "no" => (false, Side::Sell, price.complement()?),
                     other => {
                         return Err(BacktestError::invalid(format!(
                             "unknown Kalshi orderbook side {other}"
                         )));
                     }
                 };
-                let updated = levels.get(&price.raw()).copied().unwrap_or(0) + change;
+                let current = if yes_side { &self.yes } else { &self.no };
+                let updated = current.get(&price.raw()).copied().unwrap_or(0) + change;
                 if updated < 0 {
+                    // Same class of failure as a sequence gap -- the book can
+                    // no longer be reconstructed until a snapshot arrives --
+                    // so it is reported through the same channel rather than
+                    // as an error a caller might log and step over.
                     self.desynced = true;
-                    return Err(BacktestError::invalid(
-                        "Kalshi orderbook delta makes a level negative; resnapshot required",
-                    ));
+                    return Ok(vec![self.gap(received_at)]);
                 }
+                let levels = if yes_side { &mut self.yes } else { &mut self.no };
                 let delta = if updated == 0 {
                     levels.remove(&price.raw());
                     BookDelta::delete(canonical_side, canonical_price)
@@ -390,11 +427,16 @@ impl OrderbookDecoder {
                     levels.insert(price.raw(), updated);
                     BookDelta::set(canonical_side, canonical_price, Qty::from_raw(updated))
                 };
+                // Never earlier than the event: the venue stamps `ts_event`
+                // from its clock and we stamp arrival from ours, so a skewed
+                // venue clock reading later than local arrival would have the
+                // record claim it was known before it happened. Clamping is
+                // the honest reading of skew, and `Stamps::new` is the only
+                // place that enforces it -- building the struct by hand, as
+                // this did, walks straight past the causality check.
+                let ts_init = received_at.max(event_at);
                 Ok(vec![Record::new(
-                    Stamps {
-                        ts_event: event_at,
-                        ts_init: received_at,
-                    },
+                    Stamps::new(event_at, ts_init)?,
                     self.ticker.clone(),
                     OutcomeId::FIRST,
                     MarketEvent::BookDelta(delta),
@@ -413,6 +455,33 @@ impl OrderbookDecoder {
             OutcomeId::FIRST,
             MarketEvent::Gap,
         )
+    }
+}
+
+/// How a message's sequence number relates to the last one accepted.
+///
+/// The three cases need different answers and the old single `skipped` flag
+/// could not tell them apart: it read a duplicate as a gap and then moved
+/// `last_seq` backwards onto it, so the rest of the stream looked skipped too.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Step {
+    /// The first message, or the successor of the last one accepted.
+    InOrder,
+    /// Messages between the last accepted one and this one were lost.
+    Skipped,
+    /// A sequence at or below one already accepted: a duplicate, a reordered
+    /// replay, or a stream that restarted its numbering.
+    Stale,
+}
+
+impl Step {
+    fn of(last_seq: Option<i64>, seq: i64) -> Self {
+        match last_seq {
+            None => Step::InOrder,
+            Some(previous) if seq == previous.saturating_add(1) => Step::InOrder,
+            Some(previous) if seq <= previous => Step::Stale,
+            Some(_) => Step::Skipped,
+        }
     }
 }
 
@@ -532,11 +601,12 @@ pub fn parse_candlesticks(body: &str, ticker: &str, period_minutes: i64) -> Resu
             })?;
         let end = UnixNanos::new(end_seconds.saturating_mul(1_000_000_000));
         let volume = optional_decimal(candle, "volume_fp")?.unwrap_or(0.0);
+        // A bar opens at `end - width` and is knowable only at its close, so
+        // go through `Stamps::new`: it is the only place the causality check
+        // lives, and a hand-built struct would let a bad `period_minutes` or a
+        // negative `end` slip an impossible ordering into the store.
         records.push(Record::new(
-            Stamps {
-                ts_event: UnixNanos::new(end.get().saturating_sub(width)),
-                ts_init: end,
-            },
+            Stamps::new(UnixNanos::new(end.get().saturating_sub(width)), end)?,
             instrument.clone(),
             OutcomeId::FIRST,
             MarketEvent::Bar {
@@ -653,18 +723,192 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(gap[0].event, MarketEvent::Gap));
+        assert_eq!(gap.len(), 1);
+        // The gap is stamped from the arrival clock, not the venue's, so a
+        // decoder's own output cannot go backwards in time.
+        assert_eq!(gap[0].ts(), ns(5_000_000));
         assert!(!decoder.is_synced());
-        assert!(
-            decoder
-                .decode(
-                    r#"{"type":"orderbook_delta","seq":14,"msg":{
-                        "market_ticker":"KXTEST","price_dollars":"0.40",
-                        "delta_fp":"1.00","side":"yes","ts_ms":5
-                    }}"#,
-                    ns(6_000_000),
-                )
-                .is_err()
+        // Deltas after the gap are not accepted, and say so the same way the
+        // gap did: no records, not an error a caller could log and step over.
+        let after = decoder
+            .decode(
+                r#"{"type":"orderbook_delta","seq":14,"msg":{
+                    "market_ticker":"KXTEST","price_dollars":"0.40",
+                    "delta_fp":"1.00","side":"yes","ts_ms":5
+                }}"#,
+                ns(6_000_000),
+            )
+            .unwrap();
+        assert!(after.is_empty(), "one gap, not one per following message");
+        assert!(!decoder.is_synced());
+    }
+
+    #[test]
+    fn a_delta_is_known_no_earlier_than_it_happened() {
+        // The venue stamps `ts_ms` from its clock and we stamp arrival from
+        // ours. A venue clock running ahead used to produce a record claiming
+        // it was known before it happened, because the stamps were built as a
+        // struct literal and never saw `Stamps::new`.
+        let mut decoder = OrderbookDecoder::new("KXTEST").unwrap();
+        decoder
+            .decode(
+                r#"{"type":"orderbook_snapshot","seq":1,"msg":{
+                    "market_ticker":"KXTEST",
+                    "yes_dollars_fp":[["0.40","10.00"]]
+                }}"#,
+                ns(0),
+            )
+            .unwrap();
+        let records = decoder
+            .decode(
+                r#"{"type":"orderbook_delta","seq":2,"msg":{
+                    "market_ticker":"KXTEST","price_dollars":"0.40",
+                    "delta_fp":"-1.00","side":"yes","ts_ms":9
+                }}"#,
+                // Arrival reads earlier than the venue's own stamp.
+                ns(1_000_000),
+            )
+            .unwrap();
+        let stamps = records[0].stamps;
+        assert_eq!(stamps.ts_event, ns(9_000_000));
+        assert_eq!(
+            stamps.ts_init,
+            ns(9_000_000),
+            "clamped to the event, never before it"
         );
+        assert!(stamps.ts_init >= stamps.ts_event);
+    }
+
+    #[test]
+    fn a_replayed_delta_is_dropped_rather_than_applied_twice() {
+        // A Kalshi delta is a relative change, so applying a duplicate moves
+        // the level by twice its size and nothing later corrects it. The old
+        // code read any non-successor as a gap and then moved `last_seq` onto
+        // it, which desynced the decoder on a message it should have ignored.
+        let mut decoder = OrderbookDecoder::new("KXTEST").unwrap();
+        decoder
+            .decode(
+                r#"{"type":"orderbook_snapshot","seq":10,"msg":{
+                    "market_ticker":"KXTEST",
+                    "yes_dollars_fp":[["0.40","10.00"]]
+                }}"#,
+                ns(100),
+            )
+            .unwrap();
+        let first = decoder
+            .decode(
+                r#"{"type":"orderbook_delta","seq":11,"msg":{
+                    "market_ticker":"KXTEST","price_dollars":"0.40",
+                    "delta_fp":"-3.00","side":"yes","ts_ms":2
+                }}"#,
+                ns(3_000_000),
+            )
+            .unwrap();
+        let MarketEvent::BookDelta(delta) = first[0].event else {
+            panic!("expected delta");
+        };
+        assert_eq!(delta.size, Qty::from_f64(7.0).unwrap());
+
+        let replay = decoder
+            .decode(
+                r#"{"type":"orderbook_delta","seq":11,"msg":{
+                    "market_ticker":"KXTEST","price_dollars":"0.40",
+                    "delta_fp":"-3.00","side":"yes","ts_ms":2
+                }}"#,
+                ns(3_500_000),
+            )
+            .unwrap();
+        assert!(replay.is_empty(), "a duplicate applies nothing");
+        assert!(decoder.is_synced(), "and does not desync the decoder");
+
+        // The stream continues from where it was, not from the duplicate.
+        let next = decoder
+            .decode(
+                r#"{"type":"orderbook_delta","seq":12,"msg":{
+                    "market_ticker":"KXTEST","price_dollars":"0.40",
+                    "delta_fp":"-2.00","side":"yes","ts_ms":4
+                }}"#,
+                ns(5_000_000),
+            )
+            .unwrap();
+        let MarketEvent::BookDelta(delta) = next[0].event else {
+            panic!("expected delta");
+        };
+        assert_eq!(
+            delta.size,
+            Qty::from_f64(5.0).unwrap(),
+            "10 - 3 - 2, with the replay ignored"
+        );
+    }
+
+    #[test]
+    fn a_resubscribe_snapshot_restores_a_desynced_decoder() {
+        // A resubscribe restarts Kalshi's numbering, so the snapshot that
+        // carries the fresh book arrives with a sequence below the last one
+        // seen. Refusing it as stale would leave the decoder desynced for the
+        // rest of the session.
+        let mut decoder = OrderbookDecoder::new("KXTEST").unwrap();
+        decoder
+            .decode(
+                r#"{"type":"orderbook_snapshot","seq":40,"msg":{
+                    "market_ticker":"KXTEST",
+                    "yes_dollars_fp":[["0.40","10.00"]]
+                }}"#,
+                ns(100),
+            )
+            .unwrap();
+        let gap = decoder
+            .decode(
+                r#"{"type":"orderbook_delta","seq":99,"msg":{
+                    "market_ticker":"KXTEST","price_dollars":"0.40",
+                    "delta_fp":"1.00","side":"yes","ts_ms":1
+                }}"#,
+                ns(2_000_000),
+            )
+            .unwrap();
+        assert!(matches!(gap[0].event, MarketEvent::Gap));
+
+        let fresh = decoder
+            .decode(
+                r#"{"type":"orderbook_snapshot","seq":1,"msg":{
+                    "market_ticker":"KXTEST",
+                    "yes_dollars_fp":[["0.41","8.00"]]
+                }}"#,
+                ns(3_000_000),
+            )
+            .unwrap();
+        // A gap precedes it: the two streams are not one contiguous history.
+        assert!(matches!(fresh[0].event, MarketEvent::Gap));
+        assert!(matches!(fresh[1].event, MarketEvent::BookSnapshot { .. }));
+        assert!(decoder.is_synced());
+    }
+
+    #[test]
+    fn a_level_driven_negative_reports_a_gap_not_an_error() {
+        // "The book can no longer be reconstructed" is one condition and it
+        // gets one channel, whether a sequence or an arithmetic check found it.
+        let mut decoder = OrderbookDecoder::new("KXTEST").unwrap();
+        decoder
+            .decode(
+                r#"{"type":"orderbook_snapshot","seq":1,"msg":{
+                    "market_ticker":"KXTEST",
+                    "yes_dollars_fp":[["0.40","2.00"]]
+                }}"#,
+                ns(100),
+            )
+            .unwrap();
+        let records = decoder
+            .decode(
+                r#"{"type":"orderbook_delta","seq":2,"msg":{
+                    "market_ticker":"KXTEST","price_dollars":"0.40",
+                    "delta_fp":"-5.00","side":"yes","ts_ms":1
+                }}"#,
+                ns(2_000_000),
+            )
+            .unwrap();
+        assert!(matches!(records[0].event, MarketEvent::Gap));
+        assert_eq!(records[0].ts(), ns(2_000_000));
+        assert!(!decoder.is_synced());
     }
 
     #[test]

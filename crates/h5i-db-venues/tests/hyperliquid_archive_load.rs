@@ -164,6 +164,50 @@ async fn loading_the_same_directory_twice_does_not_double_the_book() {
 }
 
 #[tokio::test]
+async fn a_multi_date_load_is_sorted_before_it_becomes_a_plan() {
+    // The walk is per file: date by date, hour by hour, coin by coin. Each
+    // file is internally ordered and their concatenation is not, so a caller
+    // asking for two dates newest-first handed `IngestPlan` a stream that
+    // steps backwards in time and was refused before a row was written.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("archive");
+    for (date, fixture) in [
+        ("20260731", "live_btc_capture.lz4"),
+        ("20250101", "archive_l2book_btc.lz4"),
+    ] {
+        let hour = root.join("market_data").join(date).join("0").join("l2Book");
+        std::fs::create_dir_all(&hour).unwrap();
+        std::fs::copy(fixtures().join(fixture), hour.join("BTC.lz4")).unwrap();
+    }
+
+    // Newest date first: the order the caller asked for, which is not the
+    // order time runs in.
+    let spec = ArchiveSpec::new(&root)
+        .date("20260731")
+        .date("20250101")
+        .coin("BTC")
+        .asset_ctxs(false);
+    let load = plan_from_archive(&spec, &universe()).unwrap();
+    let plan = load.plan.as_ref().unwrap();
+    assert_eq!(plan.book_events.len(), 12, "both files contributed books");
+    assert!(plan.trades.len() >= 50, "and the capture its prints");
+    for stream in [&plan.book_events, &plan.trades] {
+        assert!(
+            stream.windows(2).all(|pair| pair[0].ts() <= pair[1].ts()),
+            "records reach the plan in time order"
+        );
+    }
+    plan.validate().expect("a sorted plan is replayable");
+
+    // And it commits, which is what the caller actually asked for.
+    let db = Database::create(&dir.path().join("multi.db")).await.unwrap();
+    let load = load_archive(&db, &spec, &universe(), UnixNanos::new(0))
+        .await
+        .unwrap();
+    assert!(load.outcome.as_ref().unwrap().was_written());
+}
+
+#[tokio::test]
 async fn a_capture_and_a_download_load_through_the_same_path() {
     // The live capture carries the prints the archive does not, and it is
     // written in the archive's own envelope precisely so it drops into the

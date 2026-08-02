@@ -1111,7 +1111,19 @@ async fn run(cli: Cli) -> Result<()> {
             };
             let db = Arc::new(open_db_ro(&db, fork).await?);
             let options = SessionOptions {
-                memory_limit: memory_limit_mb.map(|m| m * 1024 * 1024),
+                // Checked, like `mb_to_bytes` is for every other `--…-mb`
+                // flag: an unchecked multiply turns a huge limit into a tiny
+                // one, which surfaces as a spurious out-of-memory rather than
+                // as the bad argument it is.
+                memory_limit: memory_limit_mb
+                    .map(|mb| {
+                        mb.checked_mul(1024 * 1024).ok_or_else(|| {
+                            Error::invalid(format!(
+                                "--memory-limit-mb {mb} overflows a byte count"
+                            ))
+                        })
+                    })
+                    .transpose()?,
                 spill_dir,
                 target_partitions: threads,
                 batch_size: None,
@@ -1224,11 +1236,26 @@ async fn run(cli: Cli) -> Result<()> {
                 Ok(report)
             };
             let report = match timeout {
-                Some(t) => tokio::time::timeout(*t, work)
-                    .await
-                    .map_err(|_| Error::Timeout {
-                        seconds: (*t).as_secs(),
-                    })??,
+                Some(t) => match tokio::time::timeout(*t, work).await {
+                    Ok(finished) => finished?,
+                    Err(_) => {
+                        // The timeout drops the writer mid-stream, so nothing
+                        // closes the output: `--format json` has an unclosed
+                        // array and `--format arrow` an IPC stream with no
+                        // end-of-stream marker. The exit code says the query
+                        // failed, but a consumer reading stdout on its own
+                        // would see a short, malformed result and no reason
+                        // for it, so say so where a human will see it.
+                        eprintln!(
+                            "h5i-db: query timed out after {}s; stdout holds a partial, \
+                             unterminated result and must not be parsed",
+                            (*t).as_secs()
+                        );
+                        return Err(Error::Timeout {
+                            seconds: (*t).as_secs(),
+                        });
+                    }
+                },
                 None => work.await?,
             };
             if stats && let Some(report) = report {

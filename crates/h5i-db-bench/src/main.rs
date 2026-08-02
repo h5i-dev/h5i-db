@@ -47,6 +47,12 @@ struct Args {
     /// Working directory (a temp dir when omitted).
     #[arg(long)]
     dir: Option<PathBuf>,
+    /// Delete an existing `bench.db` inside `--dir` before running.
+    ///
+    /// Required, because a benchmark run is not a reason to destroy whatever
+    /// a caller happens to have at that path.
+    #[arg(long)]
+    force: bool,
     /// RNG seed for reproducibility.
     #[arg(long, default_value_t = 42)]
     seed: u64,
@@ -235,6 +241,16 @@ async fn main() {
     };
     let db_path = dir.join("bench.db");
     if db_path.exists() {
+        // A temp dir is ours to clear; a caller-supplied `--dir` is not, and
+        // recursively deleting what is already there is not something a
+        // benchmark should do because it was run twice.
+        if args.dir.is_some() && !args.force {
+            eprintln!(
+                "{} already exists; pass --force to delete it, or point --dir somewhere empty",
+                db_path.display()
+            );
+            std::process::exit(2);
+        }
         std::fs::remove_dir_all(&db_path).unwrap();
     }
     eprintln!(
@@ -267,8 +283,13 @@ async fn main() {
     let start_ns = 1_750_000_000_000_000_000i64; // ~2025-06 in ns
     let mut tick_gen = TickGen::new(args.seed, args.symbols, start_ns);
     let per_commit = (args.trades / args.commits).max(1) as usize;
+    // What actually gets written, not what was asked for: integer division
+    // drops the remainder, and `--trades 99 --commits 50` writes 50 rows while
+    // reporting the throughput of 99. Every rows/sec below is measured against
+    // the rows the generator produced.
+    let trade_rows = per_commit as u64 * args.commits;
 
-    let (r, _) = timed("ingest trades (append commits)", Some(args.trades), async {
+    let (r, _) = timed("ingest trades (append commits)", Some(trade_rows), async {
         for _ in 0..args.commits {
             let batch = tick_gen.trades_batch(per_commit);
             db.append("trades", vec![batch], WriteOptions::default())
@@ -282,7 +303,8 @@ async fn main() {
     let mut qgen = TickGen::new(args.seed + 1, args.symbols, start_ns);
     let quote_commits = 10u64;
     let q_per_commit = (args.quotes / quote_commits).max(1) as usize;
-    let (r, _) = timed("ingest quotes", Some(args.quotes), async {
+    let quote_rows = q_per_commit as u64 * quote_commits;
+    let (r, _) = timed("ingest quotes", Some(quote_rows), async {
         for _ in 0..quote_commits {
             let batch = qgen.quotes_batch(q_per_commit);
             db.append("quotes", vec![batch], WriteOptions::default())

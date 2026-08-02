@@ -115,6 +115,14 @@ fn number(value: &Value, field: &'static str) -> Result<f64> {
 }
 
 /// Timestamps arrive as millisecond strings or integers.
+///
+/// Saturating rather than wrapping on the conversion to nanoseconds: an
+/// absurd millisecond count is network input, and wrapping it would land a
+/// far-future stamp somewhere in the past, where it reads as ordinary data.
+fn millis_to_nanos(ms: i64) -> UnixNanos {
+    UnixNanos::new(ms.saturating_mul(MS))
+}
+
 fn timestamp_ms(value: &Value, field: &'static str) -> Result<i64> {
     match value.get(field) {
         Some(Value::String(text)) => text.parse::<i64>().map_err(|_| BacktestError::Parse {
@@ -159,7 +167,7 @@ fn levels(value: &Value, field: &str) -> Result<Vec<(Price, Qty)>> {
 /// Parse a `book` (full snapshot) message.
 pub fn parse_book(body: &str, tokens: &TokenMap) -> Result<Record> {
     let json = parse_json(body)?;
-    let at = UnixNanos::new(timestamp_ms(&json, "timestamp")? * MS);
+    let at = millis_to_nanos(timestamp_ms(&json, "timestamp")?);
     let outcome = tokens.outcome(text(&json, "asset_id")?)?;
     Ok(Record::new(
         Stamps::immediate(at),
@@ -180,7 +188,7 @@ pub fn parse_book(body: &str, tokens: &TokenMap) -> Result<Record> {
 /// tradable quantity.
 pub fn parse_price_change(body: &str, tokens: &TokenMap) -> Result<Vec<Record>> {
     let json = parse_json(body)?;
-    let at = UnixNanos::new(timestamp_ms(&json, "timestamp")? * MS);
+    let at = millis_to_nanos(timestamp_ms(&json, "timestamp")?);
     let outcome = tokens.outcome(text(&json, "asset_id")?)?;
     let changes = json
         .get("changes")
@@ -213,7 +221,7 @@ pub fn parse_price_change(body: &str, tokens: &TokenMap) -> Result<Vec<Record>> 
 /// Parse a trade message.
 pub fn parse_trade(body: &str, tokens: &TokenMap) -> Result<Record> {
     let json = parse_json(body)?;
-    let at = UnixNanos::new(timestamp_ms(&json, "timestamp")? * MS);
+    let at = millis_to_nanos(timestamp_ms(&json, "timestamp")?);
     let outcome = tokens.outcome(text(&json, "asset_id")?)?;
     // `side` is present on some feeds and absent on others. Absent means
     // unknown, and unknown must survive as unknown: an assumed aggressor
@@ -264,17 +272,25 @@ pub fn instrument_from_market(body: &str) -> Result<(Instrument, TokenMap)> {
     }
 
     let mut instrument = Instrument::prediction_market(condition, "polymarket", labels)?;
-    if let Ok(tick) = number(&json, "minimum_tick_size") {
-        instrument = instrument.with_tick_size(Price::from_f64(tick)?);
+    // Absent means "the payload does not say", and the default tick stands.
+    // Present-but-unreadable is a different thing entirely: swallowing it
+    // hands back an instrument whose tick came from nowhere, and a strategy
+    // that quotes on it submits prices the venue refuses.
+    match json.get("minimum_tick_size") {
+        None | Some(Value::Null) => {}
+        Some(_) => {
+            instrument =
+                instrument.with_tick_size(Price::from_f64(number(&json, "minimum_tick_size")?)?);
+        }
     }
     // Gamma spells it `neg_risk` on the CLOB payload and `negRisk` on the
     // markets payload. Absent means no: a market wrongly believed to trade
-    // as a set is one a strategy could mint cash out of.
+    // as a set is one a strategy could mint cash out of. Either spelling
+    // saying yes is yes -- taking only the last of them let a `false` under
+    // one key mask a `true` under the other.
     let neg_risk = ["neg_risk", "negRisk"]
         .iter()
-        .filter_map(|key| json.get(*key).and_then(Value::as_bool))
-        .next_back()
-        .unwrap_or(false);
+        .any(|key| json.get(*key).and_then(Value::as_bool).unwrap_or(false));
     instrument = instrument.with_neg_risk(neg_risk);
     if let Some(end) = json.get("end_date_iso").and_then(Value::as_str)
         && let Some(ns) = parse_iso8601_ns(end)
@@ -323,7 +339,7 @@ pub fn resolution_from_market(body: &str, observable_at: UnixNanos) -> Result<Op
             )));
         }
         let mut payouts = Vec::with_capacity(rows.len());
-        for (index, row) in rows.iter().enumerate() {
+        for row in rows {
             let value = match row {
                 Value::String(text) => text.parse::<f64>().map_err(|_| BacktestError::Parse {
                     what: "market.payouts",
@@ -343,7 +359,6 @@ pub fn resolution_from_market(body: &str, observable_at: UnixNanos) -> Result<Op
             // per-contract prices, so a two-way split arrives as [1, 1]
             // rather than [0.5, 0.5]. Normalising covers both spellings and
             // is a no-op on one that already sums to a dollar.
-            let _ = index;
             payouts.push(Price::from_f64(value)?);
         }
         if payouts.iter().all(|price| !price.is_positive()) {
@@ -400,21 +415,56 @@ pub fn resolution_from_market(body: &str, observable_at: UnixNanos) -> Result<Op
 }
 
 /// Minimal RFC3339 to nanoseconds, for the `...Z` form Gamma emits.
+///
+/// Works on bytes throughout. Slicing the `&str` at fixed offsets, as this
+/// once did, panics with "byte index is not a char boundary" the moment a
+/// multi-byte character straddles one of them -- and this reads a field off
+/// the network, where "malformed" is a shape the caller must survive, not a
+/// bug to abort on. Every rejection is a `None`, per the contract above.
 fn parse_iso8601_ns(text: &str) -> Option<i64> {
     // Deliberately narrow: only the exact shape the API uses is accepted,
     // and anything else yields None rather than a plausible wrong instant.
     let bytes = text.as_bytes();
-    if bytes.len() < 20 || bytes[10] != b'T' || !text.ends_with('Z') {
+    if bytes.len() < 20 || bytes[10] != b'T' || bytes[bytes.len() - 1] != b'Z' {
         return None;
     }
-    let year: i64 = text[0..4].parse().ok()?;
-    let month: i64 = text[5..7].parse().ok()?;
-    let day: i64 = text[8..10].parse().ok()?;
-    let hour: i64 = text[11..13].parse().ok()?;
-    let minute: i64 = text[14..16].parse().ok()?;
-    let second: i64 = text[17..19].parse().ok()?;
+    if bytes[4] != b'-' || bytes[7] != b'-' || bytes[13] != b':' || bytes[16] != b':' {
+        return None;
+    }
+    let year = digits(bytes, 0, 4)?;
+    let month = digits(bytes, 5, 2)?;
+    let day = digits(bytes, 8, 2)?;
+    let hour = digits(bytes, 11, 2)?;
+    let minute = digits(bytes, 14, 2)?;
+    let second = digits(bytes, 17, 2)?;
+    // Bounds the calendar algorithm cannot check for us: it happily turns
+    // month 47 into a date rather than saying no.
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return None;
+    }
+    if hour > 23 || minute > 59 || second > 60 {
+        return None;
+    }
     let days = days_from_civil(year, month, day);
-    Some(((days * 86_400) + hour * 3_600 + minute * 60 + second) * 1_000_000_000)
+    days.checked_mul(86_400)?
+        .checked_add(hour * 3_600 + minute * 60 + second)?
+        .checked_mul(1_000_000_000)
+}
+
+/// `count` ASCII digits starting at `start`, or `None` for anything else.
+///
+/// Deliberately not `str::parse`, which accepts a leading sign and any
+/// Unicode the slice happens to contain.
+fn digits(bytes: &[u8], start: usize, count: usize) -> Option<i64> {
+    let mut value: i64 = 0;
+    for index in start..start + count {
+        let byte = *bytes.get(index)?;
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+        value = value * 10 + i64::from(byte - b'0');
+    }
+    Some(value)
 }
 
 /// Howard Hinnant's civil-to-days algorithm.
@@ -704,6 +754,80 @@ mod tests {
             panic!()
         };
         assert_eq!(aggressor, None, "unknown must survive as unknown");
+    }
+
+    #[test]
+    fn a_malformed_expiry_is_none_and_never_a_panic() {
+        // The parser reads a field off the network, so every shape it does
+        // not understand has to come back as None. Slicing the &str at fixed
+        // byte offsets used to panic here: the multi-byte characters straddle
+        // the offsets the parser reads.
+        for text in [
+            "",
+            "2024-11-05",
+            "2024-11-05T00:00:00",  // no zone
+            "2024-11-05 00:00:00Z", // no T
+            // Each of these three puts a two-byte character across one of the
+            // fixed offsets the parser reads, which is exactly what "byte
+            // index is not a char boundary" used to mean here.
+            "200\u{00e9}-11-5T00:00:00Z", // across offset 4, in the year
+            "2024-11-05T0\u{00e9}:00:00Z", // across offset 13, in the hour
+            "2024-11-05T00:00:0\u{00e9}Z", // across offset 19, in the second
+            "2024-13-05T00:00:00Z",       // month 13
+            "2024-11-05T25:00:00Z",       // hour 25
+            "+024-11-05T00:00:00Z",       // a sign str::parse would have taken
+        ] {
+            assert_eq!(parse_iso8601_ns(text), None, "{text:?}");
+        }
+        // And the shape it does understand still parses.
+        assert_eq!(
+            parse_iso8601_ns("2024-11-05T00:00:00Z"),
+            Some(1_730_764_800 * 1_000_000_000)
+        );
+        // Fractional seconds are extra bytes before the Z, which the fixed
+        // offsets simply do not read.
+        assert_eq!(
+            parse_iso8601_ns("2024-11-05T00:00:00.123Z"),
+            Some(1_730_764_800 * 1_000_000_000)
+        );
+    }
+
+    #[test]
+    fn a_present_but_unreadable_tick_size_is_refused() {
+        // Absent is "the payload does not say" and the default stands;
+        // present-and-unreadable must not silently become the default, or a
+        // strategy quotes prices the venue refuses.
+        let body = r#"{
+            "condition_id":"0xabc","minimum_tick_size":"not-a-number",
+            "tokens":[{"token_id":"111","outcome":"Yes"},
+                      {"token_id":"222","outcome":"No"}]
+        }"#;
+        assert!(instrument_from_market(body).is_err());
+    }
+
+    #[test]
+    fn either_spelling_of_neg_risk_saying_yes_is_yes() {
+        // Both keys present with different answers: the true one wins, rather
+        // than whichever happens to be read last.
+        let body = r#"{
+            "condition_id":"0xabc","neg_risk":true,"negRisk":false,
+            "tokens":[{"token_id":"111","outcome":"A"},
+                      {"token_id":"222","outcome":"B"},
+                      {"token_id":"333","outcome":"C"}]
+        }"#;
+        assert!(instrument_from_market(body).unwrap().0.neg_risk);
+    }
+
+    #[test]
+    fn an_absurd_timestamp_saturates_rather_than_wrapping() {
+        // Wrapping would land a far-future stamp somewhere in the past, where
+        // it reads as ordinary data instead of as the nonsense it is.
+        let body = format!(
+            r#"{{"asset_id":"111","timestamp":{},"bids":[]}}"#,
+            i64::MAX
+        );
+        let record = parse_book(&body, &tokens()).unwrap();
+        assert_eq!(record.ts().get(), i64::MAX);
     }
 
     #[test]

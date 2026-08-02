@@ -39,6 +39,17 @@ pub const FUNDING_INTERVAL_HOURS: i64 = 1;
 
 const MS: i64 = 1_000_000;
 
+/// Venue milliseconds to canonical nanoseconds.
+///
+/// Saturating rather than wrapping: an absurd millisecond count is network
+/// input, not a bug in this process, and wrapping one would land a far-future
+/// stamp somewhere in the past, where it reads as ordinary data instead of as
+/// the nonsense it is. Matches the Kalshi parser, which already saturates.
+#[inline]
+fn nanos_from_millis(ms: i64) -> UnixNanos {
+    UnixNanos::new(ms.saturating_mul(MS))
+}
+
 /// Body for a candle history request.
 ///
 /// `start_ms` and `end_ms` are Unix **milliseconds**.
@@ -580,7 +591,7 @@ pub fn parse_candles(body: &str, instrument_id: &str) -> Result<Vec<Record>> {
         let open_ms = millis(row, "t")?;
         let close_ms = millis(row, "T")?;
         out.push(Record::new(
-            Stamps::new(UnixNanos::new(open_ms * MS), UnixNanos::new(close_ms * MS))?,
+            Stamps::new(nanos_from_millis(open_ms), nanos_from_millis(close_ms))?,
             id.clone(),
             OutcomeId::FIRST,
             MarketEvent::Bar {
@@ -610,7 +621,7 @@ pub fn parse_funding(body: &str, instrument_id: &str) -> Result<Vec<Record>> {
     let id = InstrumentId::new(instrument_id)?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let at = UnixNanos::new(millis(row, "time")? * MS);
+        let at = nanos_from_millis(millis(row, "time")?);
         out.push(Record::new(
             Stamps::immediate(at),
             id.clone(),
@@ -633,7 +644,7 @@ pub fn parse_l2_book(body: &str, instrument_id: &str) -> Result<Record> {
 }
 
 fn book_from_value(json: &Value, id: &InstrumentId) -> Result<Record> {
-    let at = UnixNanos::new(millis(json, "time")? * MS);
+    let at = nanos_from_millis(millis(json, "time")?);
     let levels = json
         .get("levels")
         .and_then(Value::as_array)
@@ -717,7 +728,7 @@ fn trades_from_value(json: &Value, id: &InstrumentId) -> Result<Vec<Record>> {
     };
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let at = UnixNanos::new(millis(row, "time")? * MS);
+        let at = nanos_from_millis(millis(row, "time")?);
         out.push(Record::new(
             Stamps::immediate(at),
             id.clone(),
@@ -914,7 +925,7 @@ fn records_fast(line: &str, cache: &mut InstrumentCache) -> Option<Vec<Record>> 
             let bids = side(&book.levels[0])?;
             let asks = side(&book.levels[1])?;
             vec![Record::new(
-                Stamps::immediate(UnixNanos::new(book.time * MS)),
+                Stamps::immediate(nanos_from_millis(book.time)),
                 cache.get(book.coin).ok()?,
                 OutcomeId::FIRST,
                 MarketEvent::BookSnapshot { bids, asks },
@@ -925,7 +936,7 @@ fn records_fast(line: &str, cache: &mut InstrumentCache) -> Option<Vec<Record>> 
             let mut out = Vec::with_capacity(trades.len());
             for trade in trades {
                 out.push(Record::new(
-                    Stamps::immediate(UnixNanos::new(trade.time * MS)),
+                    Stamps::immediate(nanos_from_millis(trade.time)),
                     cache.get(trade.coin).ok()?,
                     OutcomeId::FIRST,
                     MarketEvent::Trade {

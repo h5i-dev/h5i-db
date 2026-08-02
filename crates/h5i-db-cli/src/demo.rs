@@ -70,8 +70,7 @@ fn bars(bad_print: bool) -> RecordBatch {
             Arc::new(Int64Array::from(sz)),
         ],
     )
-    .map_err(|e| panic!("demo data: {e}"))
-    .unwrap()
+    .expect("demo data")
 }
 
 fn step(n: usize, title: &str, cmd: &str) {
@@ -200,10 +199,13 @@ pub async fn run(dir: Option<PathBuf>, keep: bool) -> Result<PathBuf> {
         vwap_after - vwap_before
     );
 
+    // The printed command has to be the one actually being run: a reader who
+    // copies it and gets a different number learns the wrong thing about the
+    // tool, not about their data.
     step(
         7,
         "How much of the original number was data that had not arrived?",
-        "h5i-db arrival-delta demo.db \"SELECT vwap(price, size) …\" --as-of 1",
+        &format!("h5i-db arrival-delta demo.db \"SELECT vwap(price, size) …\" --as-of {v1}"),
     );
     let report = h5i_db_query::arrival_delta(
         db.clone(),
@@ -213,14 +215,19 @@ pub async fn run(dir: Option<PathBuf>, keep: bool) -> Result<PathBuf> {
     )
     .await
     .map_err(|e| h5i_db_core::Error::internal(e.to_string()))?;
-    let col = &report.columns[0];
-    println!(
-        "    -> changed: {}, head {:.4} vs as-of {:.4}, delta {:+.4}",
-        report.changed,
-        col.head.unwrap_or_default(),
-        col.asof.unwrap_or_default(),
-        col.delta.unwrap_or_default()
-    );
+    // A report with no numeric columns is a legitimate outcome (the query
+    // returned nothing comparable), and the demo has no business panicking on
+    // one just to print a line.
+    match report.columns.first() {
+        Some(col) => println!(
+            "    -> changed: {}, head {:.4} vs as-of {:.4}, delta {:+.4}",
+            report.changed,
+            col.head.unwrap_or_default(),
+            col.asof.unwrap_or_default(),
+            col.delta.unwrap_or_default()
+        ),
+        None => println!("    -> changed: {} (no comparable columns)", report.changed),
+    }
     println!(
         "       vacuous: {} (there is real arrival history here)",
         report.vacuous
@@ -243,15 +250,19 @@ pub async fn run(dir: Option<PathBuf>, keep: bool) -> Result<PathBuf> {
     println!("    -> unpinned max {unpinned:.4}; pinned at 10:00 max {pinned:.4}");
     println!("       the later bars are not filtered — inside that session they do not exist");
 
+    // Only suggest commands against a database that is still going to be
+    // there. Printing them next to "workspace removed" sends the reader to a
+    // path this function just deleted.
     println!("\nDone. Next:");
-    println!("    h5i-db context {}", db_path.display());
-    println!(
-        "    h5i-db query {} \"SELECT * FROM trades\" --max-rows 5",
-        db_path.display()
-    );
     if !keep && dir.is_none() {
         let _ = std::fs::remove_dir_all(&base);
         println!("    (workspace removed; pass --keep to inspect it)");
+    } else {
+        println!("    h5i-db context {}", db_path.display());
+        println!(
+            "    h5i-db query {} \"SELECT * FROM trades\" --max-rows 5",
+            db_path.display()
+        );
     }
     Ok(base)
 }
