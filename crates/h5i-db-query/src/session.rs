@@ -596,18 +596,12 @@ fn find_function_call(haystack: &str, name: &str) -> Option<usize> {
             // `-- …` to end of line. An unterminated line comment runs to the
             // end of the query, so there is nothing left to find.
             b'-' if quote.is_none() && bytes.get(i + 1) == Some(&b'-') => {
-                match haystack[i..].find('\n') {
-                    Some(offset) => i += offset + 1,
-                    None => return None,
-                }
+                i += haystack[i..].find('\n')? + 1;
                 continue;
             }
             // `/* … */`, not nested (matching sqlparser's default dialects).
             b'/' if quote.is_none() && bytes.get(i + 1) == Some(&b'*') => {
-                match haystack[i + 2..].find("*/") {
-                    Some(offset) => i += 2 + offset + 2,
-                    None => return None,
-                }
+                i += 2 + haystack[i + 2..].find("*/")? + 2;
                 continue;
             }
             b'\'' | b'"' => {

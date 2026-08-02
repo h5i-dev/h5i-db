@@ -311,7 +311,12 @@ chronométré directement ; méthode dans
 ## Développement
 
 ```bash
-cargo test --workspace          # ~290 tests, dont l'injection de fautes pour la sûreté au crash
+# Un paquet à la fois, avec un nombre de threads plafonné : plusieurs suites
+# ouvrent des sessions DataFusion et des runtimes tokio, donc lancer tout le
+# workspace d'un coup peut épuiser la mémoire d'une petite machine.
+for pkg in h5i-db-core h5i-db-query h5i-db-backtest h5i-db-cli h5i-db-ui; do
+  cargo test -p $pkg -- --test-threads=2
+done
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
 cargo run -p h5i-db-bench --profile bench-fast --bin h5i-db-fork-bench
 python3 benchmarks/backtest_compare/run.py \

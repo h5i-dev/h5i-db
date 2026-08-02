@@ -283,7 +283,12 @@ Nautilus と同じ形。コールバック同士なら差は13倍ではなく3.1
 ## 開発
 
 ```bash
-cargo test --workspace          # クラッシュ安全性の障害注入を含む約290テスト
+# パッケージごとに、スレッド数を抑えて実行します。DataFusion のセッションと
+# tokio のランタイムを立ち上げるスイートが複数あるため、ワークスペース全体を
+# 一度に走らせるとメモリの小さいマシンでは足りなくなることがあります。
+for pkg in h5i-db-core h5i-db-query h5i-db-backtest h5i-db-cli h5i-db-ui; do
+  cargo test -p $pkg -- --test-threads=2
+done
 cargo run -p h5i-db-bench --profile bench-fast -- --trades 1000000
 cargo run -p h5i-db-bench --profile bench-fast --bin h5i-db-fork-bench
 python3 benchmarks/backtest_compare/run.py \
