@@ -1,6 +1,6 @@
 # Quant Workflow Layer — Product Roadmap
 
-Status: v2.3, 2026-08-02. v1 (2026-07-29) scoped the layer to
+Status: v2.4, 2026-08-02. v1 (2026-07-29) scoped the layer to
 analytics only and listed backtesting as a non-goal; v2 (same date,
 branch `qpian`) added Part B, a production-grade backtest program, and
 superseded that non-goal (revised boundary in §11); v2.1 adds Part D
@@ -12,7 +12,9 @@ markets and the mathematical models worth adopting, with item IDs
 E1-E12; v2.3 (same day, same branch) adds Part F (§14), the
 venue-general companion survey (latency, impact, session mechanics,
 short-side realism, universes, multiple testing, reactive simulation),
-with item IDs F1-F7. The engine-side scope rule in `ROADMAP.md` Part VII is
+with item IDs F1-F7; v2.4 (same day) upgrades Part F with source-level
+studies of `~/Ref/hftbacktest`, `~/Ref/barter-rs`, and `~/Ref/qstrader`,
+correcting F1 and adding F8-F12 (§14.1-14.3). The engine-side scope rule in `ROADMAP.md` Part VII is
 narrowed, not violated: the *engine crates* still borrow no backtester
 mechanisms; the backtester is a separate layer crate that consumes the
 engine (P6).
@@ -31,8 +33,10 @@ document governs the user-facing API, packaging, and launch sequencing.
 Sources: source-level API inventories of `~/Ref/alphalens` and
 `~/Ref/pyfolio`; architecture studies of `~/Ref/nautilus_trader`,
 `~/Ref/vectorbt`, `~/Ref/Lean`, and `~/Ref/prediction-market-backtesting`
-(all 2026-07-29); the capability inventory of this repository at
-`5b157e35`; and the zipline/qlib study behind `ROADMAP.md` Part VII.
+(all 2026-07-29); source-level studies of `~/Ref/hftbacktest`,
+`~/Ref/barter-rs`, and `~/Ref/qstrader` (2026-08-02, feeding Part F);
+the capability inventory of this repository at `5b157e35`; and the
+zipline/qlib study behind `ROADMAP.md` Part VII.
 
 ---
 
@@ -1380,7 +1384,7 @@ ledger); the cross-references say which.
 
 | Item | Description | Depends on |
 |---|---|---|
-| F1 Empirical latency models | `hftbacktest` treats feed and order latency as first-class pluggable models sampled from data; this engine has only `NoLatency` and `ConstantLatency`. The feed-latency distribution is already sitting in the archives as the `ts_init - ts_event` gap on every record, so an `EmpiricalLatency` model (sample from the observed distribution, optionally conditioned on message rate, since latency spikes when markets are busy) is a contained addition to the existing latency seam. Matters for every maker strategy on every venue; the cheapest item in this Part. | `LatencyModel` trait (`models.rs`), dual stamps (§8.6) |
+| F1 Empirical latency models | This engine has only `NoLatency` and `ConstantLatency`. `hftbacktest` (verified at source, §14.1) ships `IntpOrderLatency`: it replays *recorded* `(req_ts, exch_ts, resp_ts)` rows with linear interpolation, streamed like feed data, plus a convention worth stealing outright: a negative latency means the venue rejected the request and its magnitude is the time until the local side learns of the rejection, so rejection needs no separate model. A Python utility synthesizes order latency from feed latency as `mul x feed + offset`, giving a data-driven, time-varying model from feed data alone with a "what if my infra were 2x better" knob. Our archives already hold the feed-latency distribution as the `ts_init - ts_event` gap on every record, so an `EmpiricalLatency` model is a contained addition to the latency seam. Their own roadmap admits one latency pair covers all request kinds (place, amend, cancel); per-kind latencies is a cheap place to do better. | `LatencyModel` trait (`models.rs`), dual stamps (§8.6) |
 | F2 Market impact and TCA | The square-root law (cost ~ σ√(Q/V)) holds across equities, FX, options, and crypto; propagator models (per-trade price response with exponential decay) reproduce it while keeping prices diffusive. Two features: `SqrtImpact` / `PropagatorImpact` cost models in the fill-model family (the venue-general sibling of E3, sharing E8's replenishment machinery), and a TCA report panel decomposing implementation shortfall per order (spread, impact, timing, fees) from `bt_fills` against arrival mid. `quant.costs.fit_impact` already estimates the curve post hoc; feeding the fitted curve back in as a forward cost model closes a loop no OSS engine closes. | `FillModel` seam, E3/E8, `quant.costs` |
 | F3 Session structure: auctions, halts, calendars | The credibility gate for an equities venue, all mechanics: open/close auctions with MOO/MOC/LOC order types matched at the official auction price (closing-cross volume is a large share of modern equity flow, and a daily-rebalance backtest filling at continuous 4pm prices misstates both price and capacity; nautilus has this only as an open feature request, #2194); halts and LULD bands (5-10% bands, 5-minute pauses) as session-state records, with orders during a halt queued or rejected and resumption reopening via auction; exchange calendars with session open/close as first-class events (today only expiration and windows exist). The typed-record replay with explicit priorities absorbs auction phase transitions as one more record kind. Overnight-vs-intraday return attribution in reports falls out for free. | schema (§8.6), matching (§8.2), venue roadmap (§8.5) |
 | F4 Short-side realism | Long-short equity backtests without borrow costs are systematically inflated (hard-to-borrow fees, locate availability, recall risk are the standard cited omission). The prediction-market side already does the honest thing (no naked shorts, complementary-trade rejection); the equities analog is a PIT borrow-schedule table (rate and availability per security) charged like funding events, with locate failure as a first-class rejection reason in `RunMetrics`. | `funding`-style schema, VII-A1 equities data |
@@ -1408,4 +1412,98 @@ queue-reactive), 2311.18283 and 2603.29086 (square-root law and impact
 models in backtest environments); White (2000), Hansen (2005),
 Romano-Wolf (2005) for multiple testing; the survivorship / delisting /
 borrow-cost pitfall canon (e.g. the "Seven Sins of Quantitative
-Investing" chapter) for F4/F5.
+Investing" chapter) for F4/F5. F1-F7 were drafted from web survey;
+§14.1-14.3 below supersede the web-derived claims with source-level
+findings from clones at `~/Ref/hftbacktest` (v0.9.4),
+`~/Ref/barter-rs` (@33e5618), and `~/Ref/qstrader` (v0.3.0), studied
+2026-08-02.
+
+### 14.1 Additions from the source-level studies
+
+| Item | Description | Depends on |
+|---|---|---|
+| F8 Exchange-clock venue processing | `hftbacktest`'s dual-emission scheme: each physical event can appear twice in the data, once flagged `EXCH_EVENT` (ordered by `exch_ts`, consumed by the exchange simulator) and once `LOCAL_EVENT` (ordered by `local_ts`, consumed by the strategy-side processor); a processor sees a row only if its flag matches. This is strictly stronger than a dual-stamp pair alone: our replay orders everything on `ts_init`, so the simulated venue applies book changes and matches resting orders at *local knowability* time, one feed latency later than the real venue did. For maker studies where queue timing is the edge, an opt-in dual-cursor replay (venue stream on `ts_event`, strategy stream on `ts_init`) closes a fidelity gap we currently cannot express. | `replay.rs` merge, dual stamps (§8.6) |
+| F9 Probabilistic queue models | `hftbacktest`'s `ProbQueueModel` family: on a depth decrease, the shrinkage is split between ahead-of-you and behind-you by probability `f(back)/(f(front)+f(back))` with power or log `f`, after first subtracting trade-driven decreases already counted (their `cum_trade_qty` correction, which is the subtle part). A calibratable middle between our deliberately conservative `QueuePositionFills` default and its `optimistic()` flip; the two-run gap remains the honesty measure, the probabilistic model becomes the point estimate, and E8's intensity estimates calibrate `f`. | queue model (`models.rs`), E8 |
+| F10 Fast-sweep fidelity tier | `hftbacktest`'s "accelerated backtesting": precompute per-interval conservative fill-price bounds (bid fill = min(lowest best ask, lowest sell print + 1 tick), symmetrically for asks), drop queue position and response latency, keep feed and entry latency, then replay one row per interval. An explicitly graded lower-fidelity mode for large parameter sweeps, with survivors re-run under exact replay. Fits our existing vocabulary exactly: a new `ReplayFidelity` tier plus `backtest.study`'s `TopK` second stage. | preflight grading, `backtest.study` |
+| F11 Portfolio-construction workflow | qstrader's one genuinely excellent layer, entirely venue-agnostic: alpha signals -> risk overlay -> optimiser slot -> order sizer -> diff-vs-held-positions, every stage a swappable callable. Specifics worth taking verbatim: the universe-union-holdings zero-fill (anything held but no longer ranked gets a zero target and is liquidated with no special-casing, making rebalances idempotent); the sizer as sole owner of weights-to-quantities (fee-aware *before* integer rounding, `gross_leverage / sum(abs(w))` scaling, floor-longs/ceil-shorts rounding), extended here with tick/lot/min-notional; precomputed rebalance schedules replayed as a first-class event kind rather than qstrader's list-membership test; burn-in separation of "sim started" from "statistics count"; and target allocations recorded as a first-class output, because the gap between intended and realised weights is precisely the implementation-shortfall input F2's TCA panel needs. The optimiser slot stays delegated per §11: portfolio *construction* and sizing are in scope, optimization libraries are not. | strategy API (§8.3), F2, schema (§8.6) |
+| F12 Multi-feed fusion at ingest | `hftbacktest`'s `FusedHashMapMarketDepth`: merge feeds of different granularity and frequency (BBO + partial depth + full depth) by keeping a per-price-level `(qty, timestamp)` and rejecting stale updates, synthesizing deletion events when a crossing update invalidates the other side. Directly applicable to our multi-vendor prediction-market reality, where PMXT hourly full feeds, Predexon cent-rounded snapshots, and Kaggle websocket captures cover the same markets and today an `ArchiveLayout` must be chosen one-at-a-time; fusing them is strictly more coverage with an auditable staleness rule. | `ArchiveLayout` ingestion, `book.rs` |
+
+Sequencing addendum: F8 and F9 join the F1/F2 execution-honesty tier
+(F9 calibrated by E8); F10 lands whenever `backtest.study` next gets
+attention, it is small; F11 is an independent workstream with no engine
+prerequisites; F12 belongs to the next vendor-ingestion push.
+
+### 14.2 Engineering patterns worth borrowing
+
+From barter-rs, whose execution simulation is not a competitor (see
+§14.3) but whose engineering is:
+
+- **Index-based identity.** Dense `ExchangeIndex`/`AssetIndex`/
+  `InstrumentIndex` newtypes assigned once at construction; hot-path
+  state is array-indexed, string names survive only at the boundary via
+  an `Indexer` stream adapter. Our books are keyed by
+  `(instrument, outcome)` maps; worth profiling against a dense-index
+  layout at Part B scale.
+- **Audit as return value.** Every `process()` returns an audit of what
+  happened, so the engine cannot act without producing a record, with
+  monotonic sequence numbers, and a snapshot-plus-updates
+  (`SnapUpdates`) pattern that maps naturally onto versioned-DB
+  checkpointing of engine state.
+- **Type-state orders.** `Order<..., State>` transitions expressed as
+  `From` impls, plus `RiskApproved<T>` / `RiskRefused<T>` newtypes so an
+  unchecked order cannot reach execution. Cheap compile-time honesty for
+  our command pipeline.
+- **Incremental tearsheets.** A `TearSheetGenerator` fed one closed
+  position at a time, generic over a time-interval trait for
+  annualization, instead of requiring the full trade log at the end.
+- **Position flip math as doctests.** Their `Position::update_from_trade`
+  handles increase / partial reduce / exact close / flip with pro-rated
+  fees on the flip, specified by executable doctests with concrete
+  numbers. The pattern (money math specified as compiled worked
+  examples) is worth copying even where our accounting already differs.
+- From hftbacktest: the `ev` bitfield event encoding (kind byte plus
+  side/venue/locality flags on one u64), cache-line-aligned fixed-width
+  event records, and shared-file refcounted readers with lookahead
+  preloading, all relevant to Part B's storage-adjacent hot path.
+
+### 14.3 Design lessons the studies confirm
+
+Recorded because negative results from reference engines are as
+load-bearing as features:
+
+- **barter-rs backtests are nondeterministic by construction.** Its
+  historical clock advances with wall-clock time between events (their
+  own test asserts it), and mock-exchange latency is a real
+  `tokio::sleep` racing a CPU-speed market stream into one channel, so
+  fill-vs-market interleaving varies run to run. This is the direct cost
+  of reusing the live async transport for backtesting. It validates two
+  of our standing decisions: the sync single-threaded kernel with
+  latency as scheduled simulated-time events, and P8 determinism as a
+  property test. Share strategy *code* between live and sim if we ever
+  need to; never share the transport and timing path.
+- **barter-rs fills are a price oracle.** The mock exchange holds no
+  market data at all: market orders fill instantly, in full, at the
+  price the strategy itself supplied (default: L1 volume-weighted mid);
+  limit orders are rejected and cancels are `unimplemented!()`. Its L2
+  book infrastructure exists but is wired only to strategy state, never
+  to fills. No warning in code or docs states this. Keeps our
+  fill-honesty bar where it is, and argues for the §14.2 patterns being
+  the real value of that codebase.
+- **qstrader's broker undercuts its own good pipeline.** Bid and ask are
+  literally the same number end-to-end (the CSV loader sets both to
+  `Price`), the cash-check "scaling" variable is assigned and never
+  applied so insufficient cash proceeds into negative balances, slippage
+  and impact models are constructor parameters overwritten with `None`,
+  and the Sortino denominator is not downside deviation. F11 takes the
+  construction layer and nothing else.
+- **hftbacktest's default exchange model is size-blind for takers.** Its
+  no-partial-fill model fills crossing GTC/FOK/IOC orders entirely at
+  the best tick regardless of size (acknowledged in-source), its
+  partial-fill model's market orders scan a hardcoded 100 ticks, and L3
+  with partial fills is `unimplemented!()`. Our book-walking fills are
+  already stronger; the parity gaps are the latency and queue models
+  (F1, F8, F9), not the matching.
+- **hftbacktest models no margin, funding, settlement, or corporate
+  actions**, and its equity is mid-marked with reporting living entirely
+  in Python. Our account layer, observability-gated settlement, and
+  self-contained reports are differentiators to keep, not table stakes.
