@@ -30,11 +30,17 @@
 //!
 //! Those cross-directory references are the one genuinely delicate part, since
 //! vacuum reclaims per table. They are safe because of a single invariant,
-//! enforced at commit time and re-checked by `verify`:
+//! checked at the two points where a cross-table path can enter a manifest
+//! (shadow materialization and promote) and re-checked by `verify`:
 //!
 //! > A shadow manifest may reference only (a) segments under its own table
 //! > prefix, or (b) segments listed in the base manifest at the pinned
 //! > sequence.
+//!
+//! Ordinary commits are not checked, and do not need to be: each derives its
+//! segment list from a manifest that already satisfied the invariant and adds
+//! only segments it wrote under its own prefix, so the property holds
+//! inductively for the whole history.
 //!
 //! (b) is safe because the fork's pin holds the base's retention floor at or
 //! below the pinned sequence, and base vacuum treats every segment in
@@ -320,6 +326,11 @@ pub async fn create_many(backend: &Backend, forks: &[Fork]) -> Result<()> {
 /// Overwrite an existing fork object (metadata edits). Callers must hold the
 /// database metadata lock.
 ///
+/// **No in-tree caller.** Fork objects are created once and deleted whole
+/// today, so nothing in this crate edits one in place; this is kept as the
+/// supported way for an out-of-tree caller to do so, because the index
+/// invalidation below is not optional and is easy to forget.
+///
 /// Drops the fork index first. The index reuses an entry when the object is
 /// still there at the same size, which an in-place edit can defeat — and the
 /// failure mode is a pin the index no longer reports, which is the one that
@@ -422,6 +433,11 @@ pub(crate) async fn create_entry_unsynced(
 /// Overwrite a fork catalog entry (spec-revision bumps). Callers must hold the
 /// database metadata lock.
 ///
+/// **No in-tree caller**, for the same reason [`store`] has none: a fork
+/// catalog entry is created once and removed whole. Kept for the same reason
+/// too, since the index invalidation is the part a hand-rolled overwrite would
+/// miss.
+///
 /// Invalidates the fork index for the same reason [`store`] does.
 pub async fn store_entry(backend: &Backend, fork_name: &str, entry: &ForkTableEntry) -> Result<()> {
     crate::fork_index::invalidate(backend).await?;
@@ -499,6 +515,29 @@ pub fn check_refinement(
 /// directory's lifecycle governs the file.
 pub fn is_own_segment(prefix: &str, segment_path: &str) -> bool {
     segment_path.starts_with(prefix)
+}
+
+/// The name of the base table a shadow was cut from, per the fork's pins.
+///
+/// Indexing the pin map directly would panic, and a miss is reachable from
+/// public API (`fork_diff`, `promote`) whenever the fork object and the fork
+/// catalog entry disagree about which base table a shadow came from. That is a
+/// damaged database rather than a caller mistake, so it has to surface as
+/// corruption naming both objects, not as an abort.
+fn pinned_base_name<'a>(fork: &'a Fork, base_table_id: Uuid, table: &str) -> Result<&'a str> {
+    fork.pins
+        .get(&base_table_id)
+        .map(|pin| pin.table_name.as_str())
+        .ok_or_else(|| {
+            Error::corruption(
+                layout::fork_path(&fork.name).as_ref(),
+                format!(
+                    "shadow {table:?} records base table {base_table_id}, which fork {:?} \
+                     does not pin",
+                    fork.name
+                ),
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -1124,11 +1163,9 @@ impl crate::database::Database {
         let segments_shared = fork_paths.intersection(&base_paths).count();
         let segments_removed = base_paths.difference(&fork_paths).count();
 
+        let base_name = pinned_base_name(fork, origin.base_table_id, &fe.name)?;
         let base_head = self
-            .head(
-                &fork.pins[&origin.base_table_id].table_name,
-                origin.base_table_id,
-            )
+            .head(base_name, origin.base_table_id)
             .await?
             .head
             .sequence;
@@ -1224,7 +1261,7 @@ impl crate::database::Database {
         };
 
         // --- compare and swap against the base -------------------------
-        let base_name = fork.pins[&origin.base_table_id].table_name.clone();
+        let base_name = pinned_base_name(&fork, origin.base_table_id, &fe.name)?.to_string();
         let base_head_state = self.head(&base_name, origin.base_table_id).await?;
         let base_head = base_head_state.head.sequence;
         let own_prefix = format!("{}/", layout::table_prefix(fe.table_id));
@@ -1346,6 +1383,19 @@ impl crate::database::Database {
             segments.push(moved);
         }
 
+        // --- carry the shadow's schema revisions into the base table ---
+        //
+        // The promoted manifest keeps the fork's `schema_revision`, and specs
+        // are stored per table id. A fork that ran `evolve_schema` on its
+        // shadow wrote `tables/<shadow>/spec/<rev>.json`, and the base table
+        // has no object at that revision, so committing the manifest as-is
+        // publishes a base version whose spec cannot be loaded. That does not
+        // fail only the promoted version: resolution reads the spec at the
+        // manifest's revision, so the *table* stops being readable. Copy
+        // first, and let a failure here abort before HEAD moves.
+        self.copy_spec_revisions(fe.table_id, origin.base_table_id, &base_name)
+            .await?;
+
         let mut manifest = fork_manifest.clone();
         manifest.table_id = origin.base_table_id;
         manifest.sequence = new_sequence;
@@ -1400,6 +1450,60 @@ impl crate::database::Database {
             bytes_copied,
             rebased_from,
         })
+    }
+
+    /// Copy every spec revision `from_table_id` holds that `to_table_id` is
+    /// missing, re-keyed to the target table.
+    ///
+    /// Only revisions *above* the pinned one can be missing: a shadow is born
+    /// with a copy of the base's spec at the revision it forked from, and only
+    /// `evolve_schema` adds more. Revisions the base already has are left
+    /// alone, which is both the common case (nothing evolved, nothing to do)
+    /// and the safe one: spec objects are immutable per revision, so an
+    /// existing one is authoritative and must not be overwritten.
+    ///
+    /// Safe to run before the commit, and safe to have run when the commit
+    /// then fails: an unreferenced spec object is inert, and a retry finds it
+    /// already there with identical content. The reverse order is not safe,
+    /// which is why this is not deferred.
+    async fn copy_spec_revisions(
+        &self,
+        from_table_id: Uuid,
+        to_table_id: Uuid,
+        to_table_name: &str,
+    ) -> Result<()> {
+        let metas = self
+            .backend()
+            .list(&layout::spec_prefix(from_table_id))
+            .await?;
+        let mut paths = Vec::new();
+        for meta in metas {
+            // A listing is the only way to enumerate revisions; anything whose
+            // name is not a revision is not ours to copy.
+            let Some(revision) = layout::spec_revision_from_path(&meta.location) else {
+                continue;
+            };
+            let to = layout::spec_path(to_table_id, revision);
+            if self.backend().get_opt(&to).await?.is_some() {
+                continue;
+            }
+            // Read through `spec` so the source is checksum-verified before it
+            // is re-keyed: this is the moment a corrupt shadow spec would
+            // otherwise be laundered into the base table.
+            let mut spec = self.spec(from_table_id, revision).await?;
+            spec.table_id = to_table_id;
+            spec.name = to_table_name.to_string();
+            spec.checksum = String::new();
+            spec.checksum = spec.compute_checksum()?;
+            self.backend()
+                .put(&to, serde_json::to_vec_pretty(&spec)?.into())
+                .await?;
+            paths.push(to);
+        }
+        if !paths.is_empty() {
+            self.backend().sync_objects(&paths).await?;
+        }
+        Ok(())
     }
 
     /// Promote a table the fork created: it has no base counterpart and every

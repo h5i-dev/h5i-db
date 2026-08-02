@@ -578,6 +578,106 @@ async fn replace_and_delete_range_share_untouched_segments() {
     assert_eq!(total_rows(&batches), 1000);
 }
 
+/// The manifest's segment order is a promise, not a detail: a scan advertises
+/// `output_ordering` on the time column when every segment carries the
+/// `sorted` flag, and it reads segments in manifest order. A range mutation in
+/// the middle of a table appends its rewritten segments after every kept one,
+/// so without an explicit sort the list ends with the earliest rows and that
+/// promise becomes false.
+#[tokio::test]
+async fn a_range_mutation_leaves_the_segment_list_in_time_order() {
+    let (_dir, db) = fresh_db().await;
+    db.create_table("t", trades_schema(), small_segment_options())
+        .await
+        .unwrap();
+
+    // Five segments, one per append, each covering a disjoint decade.
+    for i in 0..5i64 {
+        db.append(
+            "t",
+            vec![trades_batch(
+                &[i * 10, i * 10 + 1, i * 10 + 2],
+                &["A", "B", "A"],
+                &[1.0, 2.0, 3.0],
+            )],
+            WriteOptions::default(),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        db.resolve("t", ReadAt::Latest)
+            .await
+            .unwrap()
+            .manifest
+            .segments
+            .len(),
+        5,
+        "expected one segment per append"
+    );
+
+    /// Per-segment time minima, in the order the manifest lists them.
+    fn segment_minima(m: &h5i_db_core::VersionManifest) -> Vec<i64> {
+        m.segments
+            .iter()
+            .map(|s| s.time_range.map(|(min, _)| min).unwrap_or(i64::MAX))
+            .collect()
+    }
+
+    fn assert_ordered(label: &str, mins: &[i64]) {
+        let mut sorted = mins.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            mins,
+            sorted.as_slice(),
+            "{label}: segments out of time order"
+        );
+    }
+
+    // Replace the middle decade. Its segment lies entirely inside the range,
+    // so it is dropped, and the replacement rows are written as a fresh
+    // segment that lands after the two later decades.
+    db.replace_range(
+        "t",
+        20,
+        30,
+        vec![trades_batch(&[21, 22], &["A", "A"], &[9.0, 9.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    let after_replace = db.resolve("t", ReadAt::Latest).await.unwrap();
+    assert_ordered("replace_range", &segment_minima(&after_replace.manifest));
+
+    // The same for a delete that straddles a boundary: the surviving half of
+    // decade 1 is rewritten, and a rewrite is always an append.
+    db.delete_range("t", 11, 13, WriteOptions::default())
+        .await
+        .unwrap();
+    let after_delete = db.resolve("t", ReadAt::Latest).await.unwrap();
+    let mins = segment_minima(&after_delete.manifest);
+    assert_ordered("delete_range", &mins);
+    assert!(
+        mins.len() >= 4,
+        "the fixture should still hold several segments: {mins:?}"
+    );
+
+    // And the property that actually matters downstream: reading the segments
+    // in manifest order yields globally non-decreasing timestamps.
+    let (batches, _) = db
+        .scan("t", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    let mut seen: Vec<i64> = Vec::new();
+    for b in &batches {
+        seen.extend(h5i_db_core::segment::time_values_i64(b, "ts").unwrap());
+    }
+    assert!(
+        seen.windows(2).all(|w| w[0] <= w[1]),
+        "scan order must be non-decreasing in time: {seen:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // concurrency
 // ---------------------------------------------------------------------------

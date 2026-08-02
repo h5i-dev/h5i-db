@@ -1165,6 +1165,46 @@ async fn a_fork_cannot_drop_a_base_table() {
     assert_eq!(rows(&db, "trades").await, 3);
 }
 
+/// Rename resolves the source name fork-aware but writes the *global* catalog,
+/// so from a fork it would rename main's table out from under main. Refuse.
+#[tokio::test]
+async fn a_fork_cannot_rename_a_table() {
+    let (_dir, db, _root) = db_with_trades().await;
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
+    let fork_db = db.open_fork("agent-01").await.unwrap();
+
+    let err = fork_db
+        .rename_table("trades", "trades_v2")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidInput { .. }), "{err:?}");
+
+    // The base catalog is untouched: one table, under its original name.
+    let names: Vec<String> = db
+        .list_tables()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names, vec!["trades".to_string()]);
+    assert_eq!(rows(&db, "trades").await, 3);
+
+    // Even for a table the fork itself created: the write would still land in
+    // the global catalog, which is the part a fork must not touch.
+    fork_db
+        .create_table("scratch", trades_schema(), default_options())
+        .await
+        .unwrap();
+    let err = fork_db
+        .rename_table("scratch", "scratch_v2")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::InvalidInput { .. }), "{err:?}");
+}
+
 // ---------------------------------------------------------------------------
 // as-of forks: a writable past
 // ---------------------------------------------------------------------------
@@ -1602,6 +1642,64 @@ async fn backfilling_the_new_column_rewrites_only_what_it_touches() {
         })
         .sum();
     assert_eq!(filled_rows, 1, "exactly the backfilled row carries a tier");
+}
+
+/// Promoting an evolved shadow must carry its spec revisions with it.
+///
+/// The promoted manifest keeps the fork's `schema_revision`, and specs are
+/// stored per table id. Without the copy the base's new head names a revision
+/// that has no object under the base table id, and since resolution loads the
+/// spec at the manifest's revision, the *table* stops being readable rather
+/// than just that version.
+#[tokio::test]
+async fn promoting_a_schema_evolved_shadow_carries_its_spec_revisions() {
+    let (_dir, db, _root) = db_with_trades().await;
+    db.create_fork("agent-01", None, None, Default::default())
+        .await
+        .unwrap();
+    let fork_db = db.open_fork("agent-01").await.unwrap();
+
+    let widened: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("symbol", DataType::Utf8, false),
+        Field::new("price", DataType::Float64, false),
+        Field::new("size", DataType::Int64, false),
+        Field::new("tier", DataType::Int64, true),
+    ]));
+    fork_db
+        .evolve_schema("trades", widened, WriteOptions::default())
+        .await
+        .unwrap();
+
+    db.promote("agent-01", "trades").await.unwrap();
+
+    let base = db.resolve("trades", ReadAt::Latest).await.unwrap();
+    assert_eq!(
+        base.manifest.schema_revision, 2,
+        "the promoted version keeps the fork's revision"
+    );
+    // Re-keyed to the base table and re-checksummed: `spec` verifies the
+    // checksum on load, so a copy that forgot to recompute it fails here
+    // rather than at some later read.
+    assert_eq!(base.spec.table_id, base.entry.table_id);
+    assert_eq!(base.spec.schema_revision, 2);
+    assert!(base.schema.field_with_name("tier").is_ok());
+
+    // The rows still read, adapted from the revision they were written under.
+    let (batches, _) = db
+        .scan("trades", ReadAt::Latest, ScanOptions::default())
+        .await
+        .unwrap();
+    let n: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(n, 3);
+    for b in &batches {
+        let tier = b.column_by_name("tier").expect("tier column missing");
+        assert_eq!(tier.null_count(), b.num_rows(), "tier should read as null");
+    }
 }
 
 /// A multi-table transaction into a fresh fork shadows every table it writes.

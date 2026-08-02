@@ -103,6 +103,20 @@ pub fn spec_path(table_id: Uuid, revision: u32) -> ObjPath {
     ObjPath::from(format!("tables/{table_id}/spec/{revision:08}.json"))
 }
 
+pub fn spec_prefix(table_id: Uuid) -> ObjPath {
+    ObjPath::from(format!("tables/{table_id}/spec"))
+}
+
+/// Parse a spec object path back into its revision number.
+///
+/// The mirror of [`spec_path`], needed because a table's revisions are
+/// discoverable only by listing: nothing records how many there are.
+pub fn spec_revision_from_path(path: &ObjPath) -> Option<u32> {
+    let name = path.filename()?;
+    let stem = name.strip_suffix(".json")?;
+    stem.parse::<u32>().ok()
+}
+
 pub fn manifest_prefix(table_id: Uuid) -> ObjPath {
     ObjPath::from(format!("tables/{table_id}/manifests"))
 }
@@ -276,6 +290,26 @@ mod tests {
         assert!(spec_path(id, 1).as_ref().ends_with("/spec/00000001.json"));
         // Padding preserves lexicographic == numeric ordering.
         assert!(spec_path(id, 2).as_ref() < spec_path(id, 10).as_ref());
+    }
+
+    #[test]
+    fn spec_paths_round_trip_through_their_revision() {
+        let id = Uuid::new_v4();
+        for rev in [1u32, 2, 42, 100_000] {
+            let p = spec_path(id, rev);
+            assert!(p.as_ref().starts_with(spec_prefix(id).as_ref()));
+            assert_eq!(spec_revision_from_path(&p), Some(rev));
+        }
+        // Anything that is not a spec object parses to nothing, so a listing
+        // of the prefix can be filtered rather than trusted.
+        assert_eq!(
+            spec_revision_from_path(&segment_path(id, Uuid::new_v4())),
+            None
+        );
+        assert_eq!(
+            spec_revision_from_path(&ObjPath::from("tables/x/spec/HEAD.json")),
+            None
+        );
     }
 
     #[test]

@@ -65,8 +65,15 @@ pub async fn load_entry(backend: &Backend, name: &str) -> Result<Option<CatalogE
     }
 }
 
-/// Store a catalog entry, overwriting any existing object (update semantics —
+/// Store a catalog entry, overwriting any existing object (update semantics:
 /// callers must hold the database metadata lock; see `Backend::meta_lock`).
+///
+/// **No in-tree caller.** Every catalog write in this crate goes through
+/// [`create_entry`] or [`remove_entry`], because "create if absent" is what
+/// makes two racing writers safe without the lock. This is kept as the
+/// supported overwrite path for out-of-tree callers (an entry edited in place,
+/// such as a spec-revision bump), and it is deliberately the only one: an
+/// unlocked overwrite here would lose a concurrent create.
 pub async fn store_entry(backend: &Backend, entry: &CatalogEntry) -> Result<()> {
     let path = layout::catalog_entry_path(&entry.name);
     let bytes = serde_json::to_vec_pretty(entry)?;

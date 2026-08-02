@@ -17,8 +17,18 @@
 //! metadata-only version with `op = evolve_schema`. Segments keep the
 //! revision they were written under; readers adapt each segment batch to the
 //! resolved version's schema via [`adapt_batch`] (null-backfill + widening
-//! cast). Manifests at schema revision > 1 carry `format: 2`, so readers too
-//! old to adapt fail with `FormatTooNew` instead of silently mis-reading.
+//! cast).
+//!
+//! **Known gap: there is no compatibility fence.** An evolved manifest still
+//! carries `format: 1`, because `child_manifest` stamps `FORMAT_VERSION`
+//! unconditionally, so a reader too old to adapt does not fail with
+//! `FormatTooNew`: it reads each segment under the revision it was written
+//! with and returns the pre-evolution shape. Stamping `format: 2` on
+//! `schema_revision > 1` is the fix, and it is not a one-line change, because
+//! `FORMAT_VERSION` is simultaneously the ceiling a reader rejects above (see
+//! `manifest.rs`), so this writer would start refusing its own output. Doing
+//! it properly means the `MIN_READER_VERSION` machinery in `layout.rs`, not a
+//! constant edit.
 //!
 //! Time travel interacts cleanly: a version resolved before the evolution
 //! uses its own spec revision, so `as_of` reads see the old schema, and

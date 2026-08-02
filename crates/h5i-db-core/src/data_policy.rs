@@ -248,7 +248,12 @@ pub async fn clear(backend: &Backend, table_id: uuid::Uuid) -> Result<()> {
 #[derive(Debug, Clone, PartialEq)]
 enum Cell {
     Null,
-    Int(i64),
+    /// Every integer column widens into this one variant, `i128` rather than
+    /// `i64` because `UInt64` does not fit in `i64`: read as one, a counter
+    /// above `i64::MAX` wraps negative and sails through a `>= 0` constraint,
+    /// which is the exact rejection the policy was written to perform. `i128`
+    /// holds the whole of both families, so no integer column can wrap here.
+    Int(i128),
     Float(f64),
     Str(String),
     Bool(bool),
@@ -310,7 +315,7 @@ fn cell_at(array: &dyn Array, i: usize) -> Result<Cell> {
     macro_rules! prim_int {
         ($ty:ty) => {{
             let a = array.as_any().downcast_ref::<$ty>().unwrap();
-            Cell::Int(a.value(i) as i64)
+            Cell::Int(a.value(i) as i128)
         }};
     }
     let cell = match array.data_type() {
@@ -359,7 +364,7 @@ fn cell_at(array: &dyn Array, i: usize) -> Result<Cell> {
                 .as_any()
                 .downcast_ref::<Int64Array>()
                 .ok_or_else(|| Error::invalid("data policy: time column cast did not yield i64"))?;
-            Cell::Int(a.value(i))
+            Cell::Int(a.value(i) as i128)
         }
         other => {
             return Err(Error::invalid(format!(
@@ -377,7 +382,7 @@ fn compare_cell(cell: &Cell, op: CmpOp, lit: &ScalarLit, column: &str) -> Result
     let ordering = match (cell, lit) {
         (Cell::Null, _) => return Ok(false),
         // numeric coercions
-        (Cell::Int(a), ScalarLit::Int(b)) => a.cmp(b),
+        (Cell::Int(a), ScalarLit::Int(b)) => a.cmp(&i128::from(*b)),
         (Cell::Int(a), ScalarLit::Float(b)) => cmp_f64(*a as f64, *b),
         (Cell::Float(a), ScalarLit::Float(b)) => cmp_f64(*a, *b),
         (Cell::Float(a), ScalarLit::Int(b)) => cmp_f64(*a, *b as f64),
@@ -504,6 +509,56 @@ mod tests {
             },
         );
         assert!(p.enforce(&[batch()]).is_ok());
+    }
+
+    #[test]
+    fn unsigned_64_bit_values_above_i64_max_do_not_wrap_negative() {
+        // The regression this guards: read as `i64`, `u64::MAX` becomes -1 and
+        // passes a `>= 0` constraint, so the one row the policy exists to
+        // reject is the one it waves through.
+        use arrow::array::UInt64Array;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "seq",
+            DataType::UInt64,
+            false,
+        )]));
+        let big = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(UInt64Array::from(vec![
+                u64::MAX,
+                i64::MAX as u64 + 1,
+            ]))],
+        )
+        .unwrap();
+
+        // Every value is far above 1_000_000, so a `<= 1_000_000` policy must
+        // reject both rows.
+        let p = reject(
+            "seq_in_range",
+            Predicate::Compare {
+                column: "seq".into(),
+                op: CmpOp::Le,
+                value: ScalarLit::Int(1_000_000),
+            },
+        );
+        match p.enforce(&[big.clone()]).unwrap_err() {
+            Error::DataPolicyViolation { detail, .. } => {
+                assert!(detail.contains("2 row(s)"), "detail: {detail}");
+            }
+            other => panic!("expected DataPolicyViolation, got {other:?}"),
+        }
+
+        // And the mirror image: `>= 0` holds for every unsigned value, so a
+        // policy demanding it must pass.
+        let nonneg = reject(
+            "seq_non_negative",
+            Predicate::Compare {
+                column: "seq".into(),
+                op: CmpOp::Ge,
+                value: ScalarLit::Int(0),
+            },
+        );
+        assert!(nonneg.enforce(&[big]).is_ok());
     }
 
     #[test]

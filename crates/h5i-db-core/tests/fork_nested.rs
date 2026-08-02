@@ -489,6 +489,47 @@ async fn a_parent_with_a_live_child_cannot_be_dropped() {
     assert!(db.fork_names().await.unwrap().is_empty());
 }
 
+/// The same guard, one table at a time. `drop_fork` refuses while a child
+/// lives, but `drop_table` inside the parent deletes everything under the
+/// shadow's prefix directly, and a child that pins that shadow reads its
+/// segments by path. Dropping one table is the same data loss as dropping the
+/// fork, so it is refused for the same reason.
+#[tokio::test]
+async fn a_parent_cannot_drop_a_shadow_its_child_pins() {
+    let (_dir, db) = seeded().await;
+    db.create_fork("p", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+    let p = db.open_fork("p").await.unwrap();
+    // Materializes p's shadow of `t` and gives it a segment of its own.
+    p.append(
+        "t",
+        vec![batch(&[100], &["P"], &[100.0])],
+        WriteOptions::default(),
+    )
+    .await
+    .unwrap();
+    // The child pins the shadow, not the base table.
+    p.create_fork("c", None, None, serde_json::Map::new())
+        .await
+        .unwrap();
+
+    let err = p.drop_table("t").await.unwrap_err();
+    let msg = format!("{err}");
+    assert!(matches!(err, Error::InvalidInput { .. }), "{err:?}");
+    assert!(msg.contains("pinned by fork"), "{msg}");
+
+    // The child still reads every row, which is what the guard is protecting.
+    let c = db.open_fork("c").await.unwrap();
+    assert_eq!(prices(&c, "t").await, vec![10.0, 20.0, 100.0]);
+
+    // Dropping the child releases the pin and the parent may then undo its
+    // edits, exactly as `drop_fork` behaves one level up.
+    db.drop_fork("c").await.unwrap();
+    p.drop_table("t").await.unwrap();
+    assert_eq!(prices(&p, "t").await, vec![10.0, 20.0]);
+}
+
 /// A child that forked before its parent wrote anything holds nothing of the
 /// parent's, so the parent is free to go. The guard is about dependency, not
 /// about lineage.
