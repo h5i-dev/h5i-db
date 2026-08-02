@@ -78,6 +78,10 @@ nav button .badge { display: inline-block; min-width: 16px; padding: 0 4px; marg
   font-size: 10.5px; line-height: 16px; font-weight: 700; }
 nav button .badge.alert { background: var(--red); color: #2b0808; }
 .hright { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.reportslink { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .08em;
+  color: var(--muted); text-decoration: none; white-space: nowrap;
+  padding: 3px 9px; border-radius: 3px; background: var(--surface-2); }
+.reportslink:hover { color: var(--text); }
 .dbpath { font-family: var(--font-mono); font-size: 11px; color: var(--dim);
   max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   direction: rtl; }
@@ -333,6 +337,7 @@ input[type=checkbox] { accent-color: var(--accent); cursor: pointer; }
     <div class="logo">h5i-<b>db</b> <span>review</span></div>
     <nav id="nav"></nav>
     <div class="hright">
+      <a class="reportslink" id="reportslink" href="/reports">reports ↗</a>
       <span class="dbpath" id="dbpath"></span>
       <span class="forkchip" id="forkchip" style="display:none"></span>
       <span class="mode ro" id="mode">…</span>
@@ -430,6 +435,16 @@ const TOKEN = (() => {
   }
   return sessionStorage.getItem("h5i_token") || "";
 })();
+// `/reports` is a separate document, not a view: rendered reports are
+// attacker-influenceable HTML and are kept off this page entirely. That makes
+// it reachable only by navigation, so the link has to hand over the token
+// itself: sessionStorage is per tab, and a middle-click or a "copy link
+// address" would otherwise arrive with nothing to read. The reports shell does
+// what this page does with `?token=`: stores it, then strips it from the
+// address bar so it does not survive in history.
+if (TOKEN) {
+  $("#reportslink").href = "/reports?token=" + encodeURIComponent(TOKEN);
+}
 async function api(path, opts) {
   opts = opts || {};
   const headers = Object.assign({ "authorization": "Bearer " + TOKEN }, opts.headers);
