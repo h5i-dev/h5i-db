@@ -202,11 +202,42 @@ impl Resolution {
 
     /// Check this resolution against the market it claims to resolve.
     ///
-    /// A payout vector of the wrong length, or a winner that is not an
-    /// outcome of the market, is a vendor-mapping mistake. Settling on it
-    /// would silently pay the wrong leg, so it is refused where the
-    /// instrument is known.
+    /// A payout vector of the wrong length, a winner that is not an outcome
+    /// of the market, or an instrument that does not resolve at all is a
+    /// vendor-mapping mistake. Settling on any of them would silently pay
+    /// the wrong leg, so they are refused where the instrument is known.
     pub fn validate(&self, instrument: &Instrument) -> Result<()> {
+        // Resolving is a prediction-market mechanism: outcomes take a
+        // settlement price and then cease to exist. `settle` never sees the
+        // instruments, so nothing downstream can catch this -- a resolution
+        // naming a share used to pay it a contract's dollar per unit held.
+        //
+        // Refused rather than documented, because both other kinds have a
+        // real analogue and it is not this one: a share that stops trading
+        // is a `Delist` corporate action carrying its final price, and a
+        // perpetual has no expiry to resolve at.
+        // Resolving is a prediction-market mechanism: outcomes take a
+        // settlement price and then cease to exist. `settle` never sees the
+        // instruments, so nothing downstream can catch this -- a resolution
+        // naming a share used to pay it a contract's dollar per unit held.
+        //
+        // Refused rather than documented, because both other kinds have a
+        // real analogue and it is not this one: a share that stops trading
+        // is a `Delist` corporate action carrying its final price, and a
+        // perpetual has no expiry to resolve at.
+        if !instrument.kind.is_probability() {
+            let instead = match instrument.kind {
+                crate::instrument::InstrumentKind::Spot => {
+                    "cash it out with a Delist corporate action carrying its final price"
+                }
+                _ => "close the position instead; a perpetual has no expiry to resolve at",
+            };
+            return Err(BacktestError::invalid(format!(
+                "{} is {:?}, which does not resolve: a resolution pays each outcome a \
+                 settlement price, which only a prediction market has. {instead}",
+                instrument.id, instrument.kind
+            )));
+        }
         let expected = instrument.outcome_count();
         match &self.payout {
             Payout::Winner(winner) => instrument.check_outcome(*winner),
@@ -679,6 +710,33 @@ mod tests {
             ])
             .is_informative()
         );
+    }
+
+    #[test]
+    fn an_instrument_that_does_not_resolve_is_refused() {
+        // `settle` never sees the instruments, so this is the only place a
+        // resolution naming a share can be caught. Left through, it paid a
+        // share a contract's dollar per unit held.
+        let mut set = crate::instrument::InstrumentSet::new();
+        set.insert(Instrument::spot("share", "xnas").unwrap())
+            .unwrap();
+        set.insert(Instrument::perpetual("swap", "hyperliquid").unwrap())
+            .unwrap();
+
+        let on_spot = Resolution::new(InstrumentId::new("share").unwrap(), OutcomeId::FIRST, ts(1));
+        let err = validate_resolutions(&[on_spot], &set)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not resolve"), "{err}");
+        // The message names the mechanism that *does* apply to a share.
+        assert!(err.contains("Delist"), "{err}");
+
+        let on_perp = Resolution::new(InstrumentId::new("swap").unwrap(), OutcomeId::FIRST, ts(1));
+        let err = validate_resolutions(&[on_perp], &set)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not resolve"), "{err}");
+        assert!(err.contains("no expiry"), "{err}");
     }
 
     #[test]

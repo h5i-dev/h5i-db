@@ -3011,6 +3011,19 @@ impl Engine {
     /// order, so a sell is only safe if it is covered even when every other
     /// live sell fills first. `reduce_only` sells are exempt because
     /// matching clamps them to what would close.
+    ///
+    /// **Only prediction markets are checked.** A spot sell is not measured
+    /// against inventory, so shares can be shorted here without a locate or
+    /// a borrow, despite `Instrument::spot` describing something bought
+    /// outright. The asymmetry is deliberate: a prediction-market short has
+    /// no lending market at all and its collateral is mis-stated by up to
+    /// the full notional, whereas equity shorting is a real activity that
+    /// this simply does not price yet (roadmap F4 adds borrow cost and
+    /// recall). Perpetuals are short-by-design and need no check.
+    ///
+    /// So a short spot backtest runs, and understates its costs. Gating it
+    /// on kind would forbid a legitimate strategy instead of charging it
+    /// correctly, which is the worse of the two errors while F4 is pending.
     fn naked_short_rejection(&self, order: &Order) -> Option<String> {
         if self.allow_naked_shorts || order.side != Side::Sell || order.reduce_only {
             return None;
