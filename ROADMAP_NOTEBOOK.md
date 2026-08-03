@@ -126,9 +126,14 @@ Lifecycle, in the order the failures actually happen:
   a subscriber, so a single `kernel_info_request` after connect is the classic
   hang. We wait for the iopub welcome where offered, then retry
   `kernel_info_request` on a backoff until a reply or a deadline.
-- **Liveness.** A heartbeat task pings on a fixed interval; N consecutive misses
-  marks the kernel `Dead`. The child process is waited on concurrently, so a
-  segfault is detected immediately rather than at the next heartbeat timeout.
+- **Liveness.** A monitor task owns the child handle and waits on it, so a
+  segfault or an `os._exit` is observed the instant it happens. The heartbeat
+  channel is deliberately *not* used: for a locally launched kernel it adds no
+  information, because ipykernel answers heartbeats from a separate thread that
+  keeps replying while the main thread is wedged, so it cannot distinguish
+  "hung" from "busy" any better than we already do, and it can only add false
+  positives under load. Remote kernels would change that calculus; we do not
+  have them.
 - **Dispatch.** One reader task per channel feeds a routing table keyed by
   `parent_header.msg_id`. Orphan iopub traffic (messages whose parent is not
   ours, or kernel-side prints from a background thread) is surfaced rather than

@@ -9,6 +9,7 @@
 
 pub mod document;
 pub mod error;
+pub mod kernel;
 
 pub use document::Notebook;
 pub use error::{Error, ExitCategory, Result};
