@@ -1,6 +1,6 @@
 # In-Terminal Notebook — Design & Roadmap
 
-`crates/h5i-db-notebook`, exposed as `h5i-db nb …` and as a TUI.
+`crates/h5i-db-notebook`, exposed as the `h5i-nb` command line and (planned) a TUI.
 
 ---
 
@@ -56,8 +56,8 @@ client, which is the part carrying the actual value, is ~3.6k LOC.
 The lesson is not "rewrite euporie in Rust". It is that a terminal notebook is
 mostly a terminal *widget toolkit*, and that ratatui already is one. What we
 port is the kernel client's hard-won lifecycle knowledge (startup handshake
-retries, heartbeat-based death detection, interrupt mode dispatch, restart
-sequencing), not the UI.
+retries, death detection, interrupt mode dispatch, restart sequencing), not
+the UI.
 
 The second lesson is negative: euporie's design centre is a human at a
 keyboard, so every output is rendered for eyes and every byte of a 10,000-row
