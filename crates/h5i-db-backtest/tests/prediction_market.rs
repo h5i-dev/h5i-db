@@ -1148,3 +1148,65 @@ fn a_parked_trigger_does_not_fire_into_a_closed_market() {
             .contains("stopped trading")
     );
 }
+
+/// Mints at `mint_at`, redeems at `redeem_at`.
+struct MintAtThenRedeemAt {
+    instrument: InstrumentId,
+    sets: Qty,
+    mint_at: i64,
+    redeem_at: i64,
+}
+
+impl Strategy for MintAtThenRedeemAt {
+    fn on_event(&mut self, ctx: &mut Context<'_>, record: &Record) -> Result<()> {
+        if record.ts() == ts(self.mint_at) {
+            ctx.mint(&self.instrument, self.sets);
+        } else if record.ts() == ts(self.redeem_at) {
+            ctx.redeem(&self.instrument, self.sets);
+        }
+        Ok(())
+    }
+}
+
+/// Minting and redeeming must respect the close like everything else (#77).
+///
+/// `run_set_operation` calls `book_fill` for each leg, so it never passes the
+/// gate on `try_fill`, and `set_operation_refusal` checked only cash and
+/// inventory. A strategy could therefore mint or redeem a complete set on an
+/// expired market for the rest of the run.
+#[test]
+fn a_set_operation_is_refused_once_the_market_has_stopped_trading() {
+    let mut strategy = MintAtThenRedeemAt {
+        instrument: market_id(),
+        sets: qty(100.0),
+        mint_at: 1,
+        redeem_at: 3,
+    };
+    // Expires between the two operations.
+    let result = run(
+        expiring_market(2),
+        &mut strategy,
+        vec![yes_book(1, 0.40, 0.42), yes_book(3, 0.40, 0.42)],
+        1_000.0,
+    )
+    .unwrap();
+
+    assert_eq!(result.set_operations.len(), 2, "both are recorded");
+    let mint = &result.set_operations[0];
+    assert!(mint.rejected.is_none(), "the mint was before the close");
+    assert_eq!(mint.sets, qty(100.0));
+
+    // The redemption holds a complete set, so cash and inventory both pass:
+    // the close is the only thing refusing it.
+    let redeem = &result.set_operations[1];
+    let reason = redeem
+        .rejected
+        .as_deref()
+        .expect("a redemption after the close must be refused");
+    assert!(reason.contains("stopped trading"), "{reason}");
+    assert_eq!(redeem.sets, qty(0.0), "a refusal moves nothing");
+    assert_eq!(redeem.cash_delta, money(0.0));
+    assert_eq!(result.metrics.set_operations_rejected, 1);
+    // The mint's hundred is still spent; the refused redemption returned none.
+    assert_eq!(result.final_cash, money(900.0));
+}

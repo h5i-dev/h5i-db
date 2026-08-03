@@ -3316,8 +3316,26 @@ impl Engine {
     /// `self.resting` so `expire_due` never cancels it, and a liquidation is
     /// the venue's own order. Each of those could reach a book that only
     /// still exists because the market had closed -- a late print, a final
-    /// teardown -- and fill against it. This is the one place all three pass
-    /// through.
+    /// teardown -- and fill against it. This is where those three meet.
+    ///
+    /// It is **not** the only way to a fill, and reading it as one is how
+    /// #77 survived: `book_fill` is the common sink, and two producers reach
+    /// it without coming through here.
+    ///
+    /// - A mint or redeem calls `book_fill` for each leg. Gated in
+    ///   `set_operation_refusal`, which repeats the same check.
+    /// - A resting order reached by a print calls `execute` from
+    ///   `consume_queue_side`. Safe today by *step ordering* rather than by a
+    ///   check: `expire_due` empties `self.resting` before matching, and
+    ///   `match_resting`'s corporate branch rejects the instrument's resting
+    ///   orders on the delist record. `a_print_cannot_fill_a_resting_order_on_a_closed_market`
+    ///   pins that ordering, because nothing else does.
+    ///
+    /// The gate deliberately does not live in `book_fill` or `execute`, even
+    /// though everything passes through them: a delisting *cashes out* open
+    /// positions through `execute` at the stated final price, so a check
+    /// there would refuse the very teardown that makes the instrument
+    /// untradeable.
     fn try_fill(&mut self, id: OrderId, ts: UnixNanos, strategy: &mut dyn Strategy) -> Result<()> {
         let Some(order) = self.orders.get(&id).cloned() else {
             return Ok(());
@@ -3676,7 +3694,7 @@ impl Engine {
         // Runtime refusals, as opposed to the structural errors above: a
         // strategy can legitimately race into these, so they are recorded
         // and the run continues.
-        if let Some(reason) = self.set_operation_refusal(&instrument, side, sets, cost)? {
+        if let Some(reason) = self.set_operation_refusal(&instrument, side, sets, cost, ts)? {
             record.sets = Qty::ZERO;
             record.cash_delta = Money::ZERO;
             record.cost = Money::ZERO;
@@ -3746,7 +3764,22 @@ impl Engine {
         side: Side,
         sets: Qty,
         cost: Money,
+        ts: UnixNanos,
     ) -> Result<Option<String>> {
+        // Minting and redeeming reach `book_fill` directly, without passing
+        // the gate on the matcher's fill path, so the close has to be
+        // enforced again here. Without it a strategy could mint or redeem a
+        // complete set on an expired or delisted market for the rest of the
+        // run: the legs are priced from `set_basis`, which falls back to
+        // uniform prices when the marks are gone, so there is not even a
+        // missing book to stop it.
+        //
+        // A refusal rather than an error, like the cash and inventory checks
+        // below: a market closing under a strategy is a race it can lose
+        // honestly, and the run should record that and continue.
+        if let Some(reason) = self.stopped_trading(&instrument.id, ts) {
+            return Ok(Some(reason));
+        }
         match side {
             Side::Buy => {
                 // A set costs exactly one unit of cash, whatever the book
