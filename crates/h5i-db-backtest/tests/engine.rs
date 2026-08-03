@@ -2875,3 +2875,65 @@ fn the_margin_engine_and_the_equity_curve_agree_on_equity() {
         state.equity
     );
 }
+
+/// A print must not fill a resting order on a market that has closed (#77).
+///
+/// `consume_queue_side` calls `execute` directly, bypassing the gate on
+/// `try_fill`. It is safe today only because `expire_due` empties
+/// `self.resting` before matching runs, which is step ordering nothing else
+/// pins. This pins it: reorder those steps and this test fails rather than
+/// the safety quietly disappearing.
+#[test]
+fn a_print_cannot_fill_a_resting_order_on_a_closed_market() {
+    let mut set = InstrumentSet::new();
+    set.insert(
+        Instrument::binary(MARKET, "polymarket")
+            .unwrap()
+            .with_expiration(ts(2_500)),
+    )
+    .unwrap();
+
+    let records = vec![
+        deep_snapshot(1_000),
+        // The queue ahead clears and then some: without the close, this
+        // print reaches the order and fills it.
+        print_at(3_000, 0.40, 500.0, Some(Side::Sell)),
+        deep_snapshot(4_000),
+    ];
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            records
+                .clone()
+                .into_iter()
+                .filter(|r| !matches!(r.event, MarketEvent::Trade { .. }))
+                .collect(),
+        )
+        .stream(
+            "trades",
+            priority::TRADE,
+            records
+                .into_iter()
+                .filter(|r| matches!(r.event, MarketEvent::Trade { .. }))
+                .collect(),
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(set)
+        .starting_cash(money(1_000.0))
+        .fill_model(Box::new(QueuePositionFills::new()))
+        .build();
+    let mut strategy = RestBuy {
+        limit: price(0.40),
+        quantity: qty(10.0),
+        submitted: false,
+    };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert!(
+        result.fills.is_empty(),
+        "a print after expiry filled a resting order: {:?}",
+        result.fills
+    );
+}
