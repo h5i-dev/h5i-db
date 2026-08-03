@@ -145,7 +145,13 @@ Lifecycle, in the order the failures actually happen:
   SIGTERM, then SIGKILL, then relaunch.
 - **Reaping.** On drop, always. A notebook tool that leaks kernel processes is
   a notebook tool that eats a laptop, and this is the single most common defect
-  in hand-rolled clients.
+  in hand-rolled clients. `Drop` covers every ordinary path but nothing runs on
+  SIGKILL, so an OOM-killed or `kill -9`ed owner used to leave its kernel
+  reparented to init holding an interpreter's worth of memory. The owning pid
+  is now recorded beside the connection file, and each start sweeps sidecars
+  whose owner is gone. The kernel is only killed after its command line
+  confirms it is still the process recorded, so a recycled pid can never be
+  hit.
 
 ### 4.2 `SqlKernel` (native, in-process)
 

@@ -280,8 +280,18 @@ impl JupyterKernel {
             kernel_name: Some(spec.name.clone()),
         };
 
+        // Before adding one of our own, clear out any kernel whose owner was
+        // killed hard enough that it never got to reap.
+        reap_orphaned_kernels(&runtime_dir());
+
         let connection_file = write_connection_file(&connection, &session_id)?;
         let process = spawn_kernel(&spec, &options, &connection_file, listeners)?;
+        // Recorded after the spawn, so the sidecar never names a pid that does
+        // not exist.
+        let _ = std::fs::write(
+            owner_file(&connection_file),
+            format!("{} {}", std::process::id(), process.pid),
+        );
 
         let mut kernel = Self::connect(
             spec,
@@ -510,6 +520,7 @@ impl JupyterKernel {
             reader.abort();
         }
         let _ = std::fs::remove_file(&self.connection_file);
+        let _ = std::fs::remove_file(owner_file(&self.connection_file));
     }
 }
 
@@ -1036,6 +1047,78 @@ fn write_connection_file(connection: &ConnectionInfo, session_id: &str) -> Resul
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
     Ok(path)
+}
+
+/// Sidecar recording which process owns a kernel, next to its connection file.
+fn owner_file(connection_file: &std::path::Path) -> PathBuf {
+    connection_file.with_extension("owner")
+}
+
+/// Kill kernels whose owning process died without reaping them.
+///
+/// `Process::drop` reaps on every ordinary path, but nothing runs on SIGKILL:
+/// an OOM kill or a `kill -9` of the client leaves the kernel reparented to
+/// init, holding an interpreter's worth of memory forever. That is exactly the
+/// failure this crate claims not to have, so the owner is recorded beside the
+/// connection file and stale ones are swept on the next start.
+///
+/// The kernel is only killed after confirming, through its command line, that
+/// the process still is the kernel we recorded. Acting on the pid alone would
+/// risk killing whatever unrelated process inherited that number.
+fn reap_orphaned_kernels(dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("owner") {
+            continue;
+        }
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let mut parts = body.split_whitespace();
+        let (Some(owner), Some(kernel)) = (parts.next(), parts.next()) else {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        };
+        let (Ok(owner), Ok(kernel)) = (owner.parse::<i32>(), kernel.parse::<i32>()) else {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        };
+        if process_exists(owner) {
+            continue;
+        }
+        let connection_file = path.with_extension("json");
+        if command_line_of(kernel)
+            .is_some_and(|cmd| cmd.contains(&connection_file.to_string_lossy().to_string()))
+        {
+            tracing::info!(pid = kernel, "reaping a kernel whose owner is gone");
+            // SAFETY: the process was confirmed to be the kernel this sidecar
+            // recorded, by matching its command line.
+            unsafe { libc::kill(-kernel, libc::SIGKILL) };
+        }
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&connection_file);
+    }
+}
+
+fn process_exists(pid: i32) -> bool {
+    // SAFETY: signal 0 performs the existence and permission check only.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
+/// A process's command line, where the platform exposes one.
+///
+/// Only Linux is implemented; elsewhere the sweep degrades to leaving the
+/// kernel alone, which loses the cleanup but can never kill the wrong thing.
+fn command_line_of(pid: i32) -> Option<String> {
+    if cfg!(target_os = "linux") {
+        let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+        Some(String::from_utf8_lossy(&raw).replace('\0', " "))
+    } else {
+        None
+    }
 }
 
 fn spawn_kernel(

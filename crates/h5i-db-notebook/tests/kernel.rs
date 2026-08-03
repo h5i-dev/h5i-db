@@ -522,3 +522,70 @@ async fn the_connection_file_is_written_where_jupyter_looks_for_it() {
         assert_eq!(mode & 0o077, 0, "connection file is group/world readable");
     }
 }
+
+#[tokio::test]
+#[ignore = "requires an installed Jupyter kernel"]
+async fn a_kernel_whose_owner_was_killed_is_reaped_by_the_next_start() {
+    // Nothing runs on SIGKILL, so an OOM-killed or `kill -9`ed client leaves
+    // its kernel reparented to init holding an interpreter's worth of memory.
+    // This is the sweep that stops that from accumulating.
+    let spec = test_spec();
+
+    // Stand in for an owner that dies without cleaning up: start a kernel,
+    // then forget it without shutting it down, and rewrite its sidecar to
+    // name a pid that is definitely gone.
+    let kernel = start().await;
+    let pid = kernel.pid();
+    let connection_file = kernel.connection_file().to_path_buf();
+    std::mem::forget(kernel);
+
+    let owner_file = connection_file.with_extension("owner");
+    // A pid that cannot exist, so the sweep sees a dead owner.
+    let dead_owner = i32::MAX;
+    std::fs::write(&owner_file, format!("{dead_owner} {pid}")).unwrap();
+    assert!(pid_alive(pid), "the stand-in kernel is not running");
+
+    // Starting anything else sweeps first.
+    let mut next = JupyterKernel::start(spec, StartOptions::default())
+        .await
+        .unwrap();
+
+    for _ in 0..50 {
+        if !pid_alive(pid) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(!pid_alive(pid), "the orphaned kernel {pid} was not reaped");
+    assert!(!owner_file.exists(), "the stale sidecar was left behind");
+    assert!(
+        !connection_file.exists(),
+        "the stale connection file was left behind"
+    );
+
+    // And the sweep did not touch the kernel that is legitimately running.
+    assert_eq!(next.status(), KernelStatus::Idle);
+    next.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires an installed Jupyter kernel"]
+async fn the_sweep_leaves_kernels_with_a_live_owner_alone() {
+    // The dangerous failure is the opposite one: sweeping a kernel that is
+    // still in use, or a pid that has been recycled by something unrelated.
+    let mut kernel = start().await;
+    let pid = kernel.pid();
+    let owner_file = kernel.connection_file().with_extension("owner");
+    assert!(owner_file.exists(), "no sidecar was written");
+
+    let mut other = JupyterKernel::start(test_spec(), StartOptions::default())
+        .await
+        .unwrap();
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(pid_alive(pid), "a kernel with a live owner was swept");
+    assert_eq!(kernel.status(), KernelStatus::Idle);
+
+    kernel.shutdown().await.unwrap();
+    other.shutdown().await.unwrap();
+}
