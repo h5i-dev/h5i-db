@@ -67,6 +67,12 @@ pub enum Error {
     #[error("invalid cell range {spec:?}: {detail}")]
     InvalidCellRange { spec: String, detail: String },
 
+    /// A cell ran to completion but raised. Distinct from every other error
+    /// because nothing is wrong with the tool or the request: the traceback is
+    /// already on stdout and is the actual answer.
+    #[error("cell {index} raised {ename}")]
+    CellRaised { index: usize, ename: String },
+
     // ---- kernel ---------------------------------------------------------
     #[error("no Jupyter kernel named {name:?} is installed{listed}")]
     KernelNotFound { name: String, listed: String },
@@ -115,11 +121,23 @@ pub enum Error {
 
     #[error("internal error: {detail}")]
     Internal { detail: String },
+
+    /// An error raised inside a session supervisor and relayed over its
+    /// socket. Carried verbatim so a failure behaves identically whether it
+    /// happened in this process or in the one holding the kernel.
+    #[error("{message}")]
+    Remote {
+        code: String,
+        message: String,
+        retryable: bool,
+        hint: Option<String>,
+        exit_code: i32,
+    },
 }
 
 impl Error {
     /// Stable machine-readable code. Never reword these; agents match on them.
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> &str {
         match self {
             Error::NotebookParse { .. } => "notebook_parse",
             Error::UnsupportedNbformat { .. } => "unsupported_nbformat",
@@ -128,6 +146,7 @@ impl Error {
             Error::NotACodeCell { .. } => "not_a_code_cell",
             Error::OutputIndexOutOfRange { .. } => "output_index_out_of_range",
             Error::InvalidCellRange { .. } => "invalid_cell_range",
+            Error::CellRaised { .. } => "cell_raised",
             Error::KernelNotFound { .. } => "kernel_not_found",
             Error::KernelStartFailed { .. } => "kernel_start_failed",
             Error::KernelStartTimeout { .. } => "kernel_start_timeout",
@@ -142,6 +161,7 @@ impl Error {
             Error::LimitExceeded { .. } => "limit_exceeded",
             Error::Io { .. } => "io",
             Error::Internal { .. } => "internal",
+            Error::Remote { code, .. } => code,
         }
     }
 
@@ -173,6 +193,7 @@ impl Error {
             | Error::NotACodeCell { .. }
             | Error::OutputIndexOutOfRange { .. }
             | Error::InvalidCellRange { .. }
+            | Error::CellRaised { .. }
             | Error::KernelNotFound { .. }
             | Error::KernelStartFailed { .. }
             | Error::Protocol { .. }
@@ -181,6 +202,8 @@ impl Error {
             | Error::InvalidInput { .. }
             | Error::LimitExceeded { .. }
             | Error::Internal { .. } => false,
+
+            Error::Remote { retryable, .. } => *retryable,
         }
     }
 
@@ -202,8 +225,8 @@ impl Error {
                 Some("run `h5i-db nb kernel start <notebook>`".into())
             }
             Error::ExecuteTimeout { .. } => Some(
-                "raise --timeout, or run the cell with --detach and poll \
-                 `h5i-db nb cells`"
+                "the cell was interrupted and the kernel is usable again; \
+                 re-run with a larger --timeout (0 removes the limit)"
                     .into(),
             ),
             Error::UnsupportedNbformat { .. } => {
@@ -212,6 +235,7 @@ impl Error {
             Error::SessionBusy { .. } => {
                 Some("wait for the running cell, or `h5i-db nb kernel interrupt <notebook>`".into())
             }
+            Error::Remote { hint, .. } => hint.clone(),
             _ => None,
         }
     }
@@ -221,7 +245,28 @@ impl Error {
             Error::SessionBusy { .. } => ExitCategory::Conflict,
             Error::LimitExceeded { .. } | Error::ExecuteTimeout { .. } => ExitCategory::Limit,
             Error::Internal { .. } | Error::Protocol { .. } => ExitCategory::Internal,
-            Error::Io { .. } => ExitCategory::Internal,
+            // A path the caller got wrong is a user error; a disk that failed
+            // underneath us is not. Collapsing both to "internal" would tell a
+            // supervising agent to retry a typo forever.
+            Error::Io { source, .. } => match source.kind() {
+                std::io::ErrorKind::NotFound
+                | std::io::ErrorKind::PermissionDenied
+                | std::io::ErrorKind::AlreadyExists
+                | std::io::ErrorKind::InvalidInput
+                | std::io::ErrorKind::IsADirectory
+                | std::io::ErrorKind::NotADirectory => ExitCategory::User,
+                _ => ExitCategory::Internal,
+            },
+            // The environment failed, not the request: a supervising agent
+            // should treat these as "something broke, retry", not as "you
+            // asked for the wrong thing".
+            Error::KernelDied { .. } | Error::KernelStartTimeout { .. } => ExitCategory::Internal,
+            Error::Remote { exit_code, .. } => match exit_code {
+                3 => ExitCategory::Conflict,
+                4 => ExitCategory::Limit,
+                5 => ExitCategory::Internal,
+                _ => ExitCategory::User,
+            },
             _ => ExitCategory::User,
         }
     }
@@ -283,6 +328,10 @@ mod tests {
             Error::InvalidCellRange {
                 spec: "3-".into(),
                 detail: "d".into(),
+            },
+            Error::CellRaised {
+                index: 3,
+                ename: "ValueError".into(),
             },
             Error::KernelNotFound {
                 name: "python3".into(),
@@ -377,5 +426,40 @@ mod tests {
         );
         assert_eq!(Error::internal("x").exit_category().code(), 5);
         assert_eq!(Error::invalid("x").exit_category().code(), 2);
+        // A path the caller mistyped, versus a genuine io failure.
+        assert_eq!(
+            Error::io(
+                "nb.ipynb",
+                std::io::Error::from(std::io::ErrorKind::NotFound)
+            )
+            .exit_category()
+            .code(),
+            2
+        );
+        assert_eq!(
+            Error::io("nb.ipynb", std::io::Error::other("disk on fire"))
+                .exit_category()
+                .code(),
+            5
+        );
+        // A dead kernel is an environment failure, not a bad request.
+        assert_eq!(
+            Error::KernelDied {
+                detail: String::new()
+            }
+            .exit_category()
+            .code(),
+            5
+        );
+        // A missing kernelspec is a bad request: no retry installs one.
+        assert_eq!(
+            Error::KernelNotFound {
+                name: "k".into(),
+                listed: String::new()
+            }
+            .exit_category()
+            .code(),
+            2
+        );
     }
 }

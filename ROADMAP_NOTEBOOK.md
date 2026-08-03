@@ -255,16 +255,21 @@ muscle memory the audience has (`Esc`/`Enter` for command/edit, `a`/`b` insert,
 Matches the §8 contract in `DESIGN.md`: `--format table|json|jsonl`, machine
 errors on stderr, stable exit codes, no prompts, no TTY assumptions.
 
+Shipped as its own binary, `h5i-nb`, rather than as an `h5i-db nb`
+subcommand: the notebook crate carries its own error enum, and folding it
+into the main CLI's error plumbing is a mechanical follow-up that would
+have destabilised that binary for no gain during the build.
+
 ```
-h5i-db nb new <file> [--kernel python3]
-h5i-db nb exec <file> --code -            # append a cell, run it, print result
-h5i-db nb run  <file> [--cells 3-7|--all] [--from-clean]
-h5i-db nb output <file> <cell> [--index n] [--raw|--save <path>]
-h5i-db nb cells <file>                    # index, type, status, output shape
-h5i-db nb kernel status|start|stop|restart|interrupt|list
-h5i-db nb edit|insert|delete|move
-h5i-db nb view <file>                     # TUI
-h5i-db nb export <file> --to md|py|html
+h5i-nb new <file> [--kernel python3]
+h5i-nb exec <file> --code -            # append a cell, run it, print result
+h5i-nb run  <file> [--cells 3-7|--all] [--from-clean] [--keep-going]
+h5i-nb output <file> <cell> [--index n] [--raw|--save <path>]
+h5i-nb cells <file>                    # index, type, status, output shape
+h5i-nb kernel list|start|status|interrupt|restart|stop
+h5i-nb edit <file> set|insert|delete|move|clear-outputs
+h5i-nb view <file>                     # TUI (N4, not built)
+h5i-nb export <file> --to md|py|html   # (N5, not built)
 ```
 
 ---
@@ -294,11 +299,27 @@ What separates this from a demo:
 
 Each phase ends with something an agent can actually use.
 
-| Phase | Content | Usable outcome |
+| Phase | Content | Status |
 | --- | --- | --- |
-| N0 | Document model, text rendering, `nb new`/`cells`/`output` | Notebooks can be created and inspected; no kernel yet |
-| N1 | `JupyterKernel`, supervisor, `nb exec`/`nb run` | **The agent product**: persistent Python state across bash calls |
-| N2 | Agent digest renderer, images to file, `--raw` rehydration | Token cost drops below the script-and-bash baseline |
-| N3 | `SqlKernel`, `%%sql`, Arrow handoff | Zero-startup exploration against h5i-db |
-| N4 | TUI | The human review surface |
-| N5 | Export, completion/inspect polish, comm plumbing | Interop and ergonomics |
+| N0 | Document model, canonical nbformat writer, atomic saves | **Done.** Differential-tested against real `nbformat` |
+| N1 | `JupyterKernel`, session, supervisor, CLI | **Done.** Persistent state across separate CLI processes, verified end to end |
+| N2 | Agent digest renderer, elision, `\r` collapsing, `--raw` | **Done** for text and errors. Images are named, not yet written to `<notebook>_files/` |
+| N3 | `SqlKernel`, `%%sql`, Arrow handoff | Not started |
+| N4 | Editable TUI | Not started |
+| N5 | Export, comm plumbing, `h5i-db nb` mount | Not started |
+
+### Known gaps in what is built
+
+- **`exec --detach`** is refused with a clear error rather than silently
+  running synchronously. The supervisor exists partly to enable it (it owns
+  the notebook, so it can finish recording a cell after the client leaves),
+  and the delivered benefit today is narrower: a client killed mid-cell
+  still gets its outputs written, because the supervisor, not the client,
+  owns the file.
+- **Images** are reported as `[image/png]` rather than written to disk and
+  referenced by path. The base64 never reaches the terminal either way, so
+  the token guarantee holds; what is missing is the ability to then look at
+  the picture.
+- **Completion and inspection** are implemented on the kernel and reachable
+  over the supervisor protocol, but no CLI verb exposes them yet. They exist
+  for the TUI.

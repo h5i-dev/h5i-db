@@ -7,9 +7,14 @@
 //! for two very different audiences (a human at a TUI, and an agent reading a
 //! token-budgeted digest), and the CLI those are driven through.
 
+pub mod cli;
 pub mod document;
 pub mod error;
 pub mod kernel;
+pub mod render;
+pub mod session;
+pub mod supervisor;
 
 pub use document::Notebook;
 pub use error::{Error, ExitCategory, Result};
+pub use session::Session;

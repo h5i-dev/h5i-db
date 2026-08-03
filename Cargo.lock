@@ -1949,7 +1949,10 @@ version = "0.1.4"
 dependencies = [
  "async-trait",
  "base64",
+ "blake3",
  "chrono",
+ "clap",
+ "comfy-table",
  "futures",
  "jupyter-protocol",
  "jupyter-zmq-client",
