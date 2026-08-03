@@ -362,7 +362,21 @@ impl App {
                 commands.extend(self.run_in_place());
                 commands
             }
-            (KeyCode::Tab, KeyModifiers::SHIFT) => self.request_inspection(),
+            // Shift+Tab reaches us as `BackTab` in every terminal that lacks
+            // the kitty protocol and as a modified Tab in the ones that have
+            // it. Both mean dedent: binding one of the two encodings to a
+            // different action makes the key do different things depending on
+            // the terminal, which is worse than either choice.
+            (KeyCode::BackTab, _) | (KeyCode::Tab, KeyModifiers::SHIFT) => {
+                if let Some(editor) = self.editor.as_mut() {
+                    editor.dedent();
+                    self.unsaved_edit = true;
+                }
+                Vec::new()
+            }
+            // Inspection needs a binding that survives every terminal, which
+            // Shift+Tab does not.
+            (KeyCode::Char('i'), KeyModifiers::ALT) => self.request_inspection(),
             (KeyCode::Tab, _) => {
                 // Tab indents at the start of a line and completes otherwise,
                 // which is what every notebook front end does.
@@ -378,19 +392,19 @@ impl App {
                     self.request_completion()
                 }
             }
-            (KeyCode::BackTab, _) => {
-                if let Some(editor) = self.editor.as_mut() {
-                    editor.dedent();
-                    self.unsaved_edit = true;
-                }
-                Vec::new()
-            }
             _ => {
                 let editor = match self.editor.as_mut() {
                     Some(editor) => editor,
                     None => return Vec::new(),
                 };
                 match key.code {
+                    // Modified letters are chords, not text. Inserting the
+                    // letter regardless of modifier is how a reflex Ctrl+S
+                    // used to drop a stray `s` into the code.
+                    KeyCode::Char(_)
+                        if key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => {}
                     KeyCode::Char(c) => {
                         editor.insert_char(c);
                         self.unsaved_edit = true;
@@ -551,7 +565,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("R", "restart and clear all outputs"),
     ("s", "save"),
     ("Tab", "indent, or complete"),
-    ("Shift+Tab", "inspect what is under the cursor"),
+    ("Shift+Tab", "dedent"),
+    ("Alt+i", "inspect what is under the cursor"),
     ("?", "this help"),
     ("q", "quit"),
 ];

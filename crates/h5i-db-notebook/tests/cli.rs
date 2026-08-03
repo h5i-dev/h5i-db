@@ -291,6 +291,41 @@ fn a_second_supervisor_refuses_to_take_over_a_live_session() {
     let _ = first.wait();
 }
 
+#[test]
+fn a_detached_cell_that_fails_says_so_in_the_notebook() {
+    // A detached run has nobody to return an error to, so an error that only
+    // lived in the return value left the cell looking exactly like one that
+    // had not started: no outputs, no execution count, no way to ever find out.
+    let nb = Nb::new();
+    nb.write_bare_notebook();
+
+    let queued = nb.run(&[
+        "exec",
+        nb.path(),
+        "--detach",
+        "--code",
+        "%%sql --not-an-option\nSELECT 1",
+    ]);
+    assert_eq!(code(&queued), 0, "{}", stderr(&queued));
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut reported = false;
+    while Instant::now() < deadline {
+        let text = std::fs::read_to_string(&nb.notebook).unwrap();
+        if text.contains("invalid_input") {
+            reported = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = nb.run(&["kernel", "stop", nb.path()]);
+    assert!(
+        reported,
+        "the failure was discarded: {}",
+        std::fs::read_to_string(&nb.notebook).unwrap()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // kernel required
 // ---------------------------------------------------------------------------

@@ -406,12 +406,10 @@ impl Kernel for SqlKernel {
         // SQL keywords, which is what a reader is reaching for nine times in
         // ten. Column completion would need the table in scope, which means
         // parsing the statement; that is a later refinement.
-        let cursor = cursor.min(code.len());
-        let prefix_start = code[..cursor]
-            .rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let prefix = &code[prefix_start..cursor];
+        // `cursor` counts characters; slicing needs bytes.
+        let cursor_byte = byte_index(code, cursor);
+        let prefix_start = word_start(code, cursor_byte, |c| c == '_' || c == '.');
+        let prefix = &code[prefix_start..cursor_byte];
 
         let mut matches: Vec<String> = self
             .table_names()
@@ -431,8 +429,8 @@ impl Kernel for SqlKernel {
 
         Ok(Completions {
             matches,
-            cursor_start: prefix_start,
-            cursor_end: cursor,
+            cursor_start: char_index(code, prefix_start),
+            cursor_end: char_index(code, cursor_byte),
             types,
         })
     }
@@ -443,14 +441,11 @@ impl Kernel for SqlKernel {
         cursor: usize,
         _detail: u8,
     ) -> Result<Option<MimeBundle>> {
-        let cursor = cursor.min(code.len());
-        let start = code[..cursor]
-            .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let end = code[cursor..]
+        let cursor_byte = byte_index(code, cursor);
+        let start = word_start(code, cursor_byte, |c| c == '_');
+        let end = code[cursor_byte..]
             .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .map(|i| i + cursor)
+            .map(|i| i + cursor_byte)
             .unwrap_or(code.len());
         let name = &code[start..end];
         if name.is_empty() {
@@ -530,6 +525,34 @@ impl Kernel for SqlKernel {
         self.status = KernelStatus::Dead;
         Ok(())
     }
+}
+
+/// Byte index of the `chars`-th character, or the end of the text.
+fn byte_index(text: &str, chars: usize) -> usize {
+    text.char_indices()
+        .nth(chars)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len())
+}
+
+/// Number of characters before the byte offset `byte`, which must be a
+/// character boundary.
+fn char_index(text: &str, byte: usize) -> usize {
+    text[..byte].chars().count()
+}
+
+/// Byte offset where the word ending at `cursor` begins.
+///
+/// Walks characters rather than using `rfind` + 1, because a delimiter is not
+/// necessarily one byte wide: a multibyte one would leave the offset inside a
+/// character and panic the next time the text was sliced.
+fn word_start(text: &str, cursor: usize, also_word: impl Fn(char) -> bool) -> usize {
+    text[..cursor]
+        .char_indices()
+        .rev()
+        .find(|(_, c)| !(c.is_alphanumeric() || also_word(*c)))
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0)
 }
 
 /// Render a result set as the mime bundle a notebook stores.
@@ -690,6 +713,34 @@ pub const DEFAULT_SQL_TIMEOUT: Duration = Duration::from_secs(300);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_offsets_survive_multibyte_text() {
+        // The cursor counts characters and slicing counts bytes; conflating
+        // them either panics on a character boundary or completes the wrong
+        // word. Both happen the moment a cell holds anything but ASCII.
+        let code = "SELECT * FROM 日本 WHERE x";
+        let chars = code.chars().count();
+        assert_eq!(byte_index(code, chars), code.len());
+        assert_eq!(char_index(code, code.len()), chars);
+        // Round trip through every character boundary, which is what the
+        // completion path does with whatever cursor the editor hands it.
+        for c in 0..=chars {
+            assert_eq!(char_index(code, byte_index(code, c)), c);
+        }
+    }
+
+    #[test]
+    fn a_word_boundary_is_found_even_when_the_delimiter_is_multibyte() {
+        // `rfind(..) + 1` used to assume a one-byte delimiter, so a multibyte
+        // one left the offset mid-character and the next slice panicked.
+        let code = "SELECT 「trades";
+        let cursor = code.len();
+        let start = word_start(code, cursor, |c| c == '_' || c == '.');
+        assert!(code.is_char_boundary(start), "start split a character");
+        assert_eq!(&code[start..cursor], "trades");
+    }
+
     use arrow::array::{Int64Array, StringArray};
     use arrow::datatypes::{DataType, Field, Schema};
 

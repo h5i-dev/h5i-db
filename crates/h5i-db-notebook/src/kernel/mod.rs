@@ -270,7 +270,12 @@ impl OutputCollector {
 #[derive(Debug, Clone, Default)]
 pub struct Completions {
     pub matches: Vec<String>,
-    /// Byte offsets in the submitted code that the matches replace.
+    /// Character offsets in the submitted code that the matches replace.
+    ///
+    /// Characters rather than bytes throughout, because that is what the
+    /// Jupyter protocol counts and what the editor counts; converting to
+    /// bytes in between bought nothing and put a slicing panic on the path of
+    /// every cell containing a non-ASCII character.
     pub cursor_start: usize,
     pub cursor_end: usize,
     /// `_jupyter_types_experimental` when the kernel provides it, giving a
@@ -358,10 +363,11 @@ pub trait Kernel: Send {
         sink: &mut dyn OutputSink,
     ) -> Result<ExecOutcome>;
 
+    /// Completion candidates at `cursor`, which counts characters.
     async fn complete(&mut self, code: &str, cursor: usize) -> Result<Completions>;
 
     /// Introspection (`?` in IPython). Returns the mime bundle, or `None` when
-    /// the kernel found nothing at the cursor.
+    /// the kernel found nothing at the cursor, which counts characters.
     async fn inspect(
         &mut self,
         code: &str,

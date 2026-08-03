@@ -138,21 +138,20 @@ async fn handle(
 
         Command::Complete { code, cursor } => {
             session.ensure_kernel().await?;
-            // `cursor` is in characters; the protocol wants bytes.
-            let byte_cursor = byte_offset(&code, cursor);
-            let completions = session.kernel_mut()?.complete(&code, byte_cursor).await?;
+            // Characters all the way down: the editor counts them, and so do
+            // the kernel and the protocol.
+            let completions = session.kernel_mut()?.complete(&code, cursor).await?;
             let _ = events.send(Event::Completions {
                 matches: completions.matches,
-                cursor_start: char_offset(&code, completions.cursor_start),
-                cursor_end: char_offset(&code, completions.cursor_end),
+                cursor_start: completions.cursor_start,
+                cursor_end: completions.cursor_end,
             });
             Ok(())
         }
 
         Command::Inspect { code, cursor } => {
             session.ensure_kernel().await?;
-            let byte_cursor = byte_offset(&code, cursor);
-            match session.kernel_mut()?.inspect(&code, byte_cursor, 0).await? {
+            match session.kernel_mut()?.inspect(&code, cursor, 0).await? {
                 Some(bundle) => {
                     let text = bundle.text_plain().unwrap_or("(no text form)").to_string();
                     let _ = events.send(Event::Inspection(crate::render::strip_ansi(&text)));
@@ -210,40 +209,9 @@ impl OutputSink for ForwardSink {
     }
 }
 
-/// Character offset to byte offset.
-fn byte_offset(text: &str, chars: usize) -> usize {
-    text.char_indices()
-        .nth(chars)
-        .map(|(i, _)| i)
-        .unwrap_or(text.len())
-}
-
-/// Byte offset to character offset.
-fn char_offset(text: &str, bytes: usize) -> usize {
-    let bytes = bytes.min(text.len());
-    text[..bytes].chars().count()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn offsets_convert_both_ways_through_multibyte_text() {
-        // The protocol counts bytes and the editor counts characters, so a
-        // completion in a cell containing kana lands in the wrong place if
-        // either direction is wrong.
-        let text = "df = 日本語.st";
-        assert_eq!(byte_offset(text, 5), 5);
-        assert_eq!(byte_offset(text, 8), 5 + 9);
-        assert_eq!(char_offset(text, 5 + 9), 8);
-        assert_eq!(char_offset(text, 0), 0);
-    }
-
-    #[test]
-    fn offsets_past_the_end_clamp() {
-        let text = "abc";
-        assert_eq!(byte_offset(text, 99), 3);
-        assert_eq!(char_offset(text, 99), 3);
-    }
-}
+// Cursor offsets are not converted here any more. The editor, the Jupyter
+// protocol and both kernels all count characters, so the round trip through
+// byte offsets that used to live here only introduced a mismatch: it sent
+// ipykernel a cursor past the one it was asked about, and fed the character
+// offsets that came back to a byte-indexed slice, which panicked whenever a
+// cell held anything outside ASCII.

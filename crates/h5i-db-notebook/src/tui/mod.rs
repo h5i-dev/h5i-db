@@ -119,6 +119,7 @@ async fn event_loop(
     interrupt: &InterruptHandle,
     protocol: ImageProtocol,
 ) -> Result<()> {
+    let mut keys = spawn_terminal_reader();
     loop {
         let mut result = render::DrawResult::default();
         terminal
@@ -169,9 +170,14 @@ async fn event_loop(
                     None => return Ok(()),
                 }
             }
-            key = read_terminal_event() => {
-                match key? {
-                    Some(TermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
+            key = keys.recv() => {
+                match key {
+                    // The reader ended, which only happens when stdin is gone.
+                    // Staying in a loop that can no longer receive a keystroke
+                    // would hang the UI with no way out.
+                    None => return Ok(()),
+                    Some(Err(error)) => return Err(Error::io("terminal", error)),
+                    Some(Ok(TermEvent::Key(key))) if key.kind == KeyEventKind::Press => {
                         // Ctrl-C interrupts the cell rather than killing the
                         // UI. The notebook is the state; losing it to a reflex
                         // keystroke would be unforgivable.
@@ -196,7 +202,7 @@ async fn event_loop(
                             interrupt.interrupt();
                         }
                     }
-                    Some(TermEvent::Mouse(mouse)) => match mouse.kind {
+                    Some(Ok(TermEvent::Mouse(mouse))) => match mouse.kind {
                         MouseEventKind::ScrollDown => app.scroll = app.scroll.saturating_add(3),
                         MouseEventKind::ScrollUp => app.scroll = app.scroll.saturating_sub(3),
                         _ => {}
@@ -209,20 +215,36 @@ async fn event_loop(
     }
 }
 
-/// Read one terminal event without blocking the async runtime.
+/// Read terminal events on a dedicated thread, forever.
 ///
-/// crossterm's reader is synchronous, so it is polled on the blocking pool;
-/// polling it inline would stall every other task, including the one carrying
-/// output from the kernel.
-async fn read_terminal_event() -> Result<Option<TermEvent>> {
-    tokio::task::spawn_blocking(|| {
-        if crossterm::event::poll(Duration::from_millis(50))? {
-            crossterm::event::read().map(Some)
-        } else {
-            Ok(None)
+/// crossterm's reader is synchronous, so it cannot live in the async event
+/// loop directly. Spawning a short-lived reader per loop iteration is the
+/// obvious alternative and is quietly wrong: when another branch of the
+/// `select!` wins, the reader future is dropped but the blocking read it
+/// started cannot be cancelled, so a key pressed in that window is consumed
+/// by a task whose result nobody will ever look at. Under a cell streaming
+/// output that happens constantly, and the keystroke it swallows may be the
+/// Ctrl-C meant to stop the cell.
+///
+/// One thread, one channel, no cancellation: every key that arrives is
+/// delivered, whatever else the loop is doing.
+fn spawn_terminal_reader() -> mpsc::UnboundedReceiver<std::io::Result<TermEvent>> {
+    let (tx, rx) = mpsc::unbounded_channel();
+    std::thread::spawn(move || {
+        loop {
+            match crossterm::event::read() {
+                // The receiver is gone: the UI has exited.
+                Ok(event) => {
+                    if tx.send(Ok(event)).is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = tx.send(Err(error));
+                    return;
+                }
+            }
         }
-    })
-    .await
-    .map_err(|e| Error::internal(format!("terminal reader panicked: {e}")))?
-    .map_err(|e| Error::io("terminal", e))
+    });
+    rx
 }

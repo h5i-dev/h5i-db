@@ -121,7 +121,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     };
     let hint = match app.mode {
         Mode::Command => "⏎ edit  ⇧⏎ run  a/b insert  dd delete  ? keys  q quit",
-        Mode::Edit => "esc done  ⇧⏎ run  tab complete  ⇧tab inspect",
+        Mode::Edit => "esc done  ⇧⏎ run  tab complete  ⇧tab dedent  ⌥i inspect",
     };
     let line = Line::from(vec![
         Span::styled(
@@ -224,16 +224,23 @@ fn draw_cells(frame: &mut Frame, area: Rect, app: &mut App) -> DrawResult {
     }
 
     // Keep the selection (or the cursor) on screen.
-    let height = area.height as usize;
+    let height = (area.height as usize).max(1);
     let focus_start = cursor_line.map(|(l, _)| l).unwrap_or(selected_start);
     let focus_end = cursor_line
         .map(|(l, _)| l + 1)
         .unwrap_or(selected_end.max(focus_start + 1));
-    if focus_start < app.scroll {
-        app.scroll = focus_start;
-    } else if focus_end > app.scroll + height {
-        app.scroll = focus_end.saturating_sub(height);
-    }
+    // Showing the whole focus means scrolling no further down than its start
+    // and no further up than its end minus a screen. A focus taller than the
+    // screen cannot satisfy both, and asking for both is what made the view
+    // flip between the two every frame: for that case, keep the scroll
+    // anywhere inside the focus instead, which also leaves the wheel usable
+    // within a long cell.
+    let (lowest, highest) = if focus_end.saturating_sub(focus_start) <= height {
+        (focus_end.saturating_sub(height), focus_start)
+    } else {
+        (focus_start, focus_end.saturating_sub(height))
+    };
+    app.scroll = app.scroll.clamp(lowest, highest);
     app.scroll = app.scroll.min(lines.len().saturating_sub(1));
 
     let visible: Vec<Line<'static>> = lines
@@ -541,6 +548,52 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn a_cell_taller_than_the_screen_does_not_oscillate() {
+        // Keeping both ends of the focus on screen is impossible when the
+        // focus is taller than the screen, and asking for both made the view
+        // flip between the top of the cell and the end of its outputs on
+        // every frame, roughly twenty times a second.
+        let mut app = app_with(vec![
+            Cell::new_code("first"),
+            Cell::new_code(
+                (0..40)
+                    .map(|i| format!("line {i}"))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        ]);
+        app.selected = 1;
+
+        let first = screen(&mut app, 40, 12);
+        let settled = app.scroll;
+        let second = screen(&mut app, 40, 12);
+        assert_eq!(
+            app.scroll, settled,
+            "the viewport moved with nothing to react to"
+        );
+        assert_eq!(first, second, "the same state drew two different screens");
+    }
+
+    #[test]
+    fn a_tall_cell_can_be_scrolled_through() {
+        // The clamp must keep the view inside the selected cell, not pin it
+        // to one edge: a cell longer than the screen is unreadable otherwise.
+        let mut app = app_with(vec![Cell::new_code(
+            (0..40)
+                .map(|i| format!("line {i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )]);
+        app.selected = 0;
+        screen(&mut app, 40, 12);
+        let top = app.scroll;
+
+        app.scroll += 5;
+        screen(&mut app, 40, 12);
+        assert_eq!(app.scroll, top + 5, "the scroll was snapped back");
     }
 
     #[test]

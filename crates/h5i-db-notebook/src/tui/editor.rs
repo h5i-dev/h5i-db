@@ -81,15 +81,6 @@ impl Editor {
         offset + self.cursor.column
     }
 
-    /// Byte offset of the cursor, for the protocol's `cursor_pos`.
-    pub fn byte_offset(&self) -> usize {
-        let mut offset = 0;
-        for line in self.lines.iter().take(self.cursor.line) {
-            offset += line.len() + 1;
-        }
-        offset + Self::byte_at(&self.lines[self.cursor.line], self.cursor.column)
-    }
-
     pub fn set_cursor(&mut self, line: usize, column: usize) {
         self.cursor.line = line.min(self.lines.len().saturating_sub(1));
         self.cursor.column = column.min(self.line_chars(self.cursor.line));
@@ -197,19 +188,20 @@ impl Editor {
         }
     }
 
-    /// Remove up to four spaces of indentation before the cursor.
+    /// Remove up to four spaces of indentation from the start of the line.
+    ///
+    /// Deliberately indifferent to where the cursor is: what gets removed is
+    /// indentation, never the characters in front of the cursor. Taking the
+    /// count from the leading whitespace and then deleting backwards from the
+    /// cursor is how a dedent at the end of `    x = 1` used to eat `= 1`.
     pub fn dedent(&mut self) {
-        let line = self.lines[self.cursor.line].clone();
-        let leading = line.chars().take_while(|c| *c == ' ').count();
-        let remove = leading.min(4).min(self.cursor.column);
-        for _ in 0..remove {
-            let column = self.cursor.column;
-            let line = &mut self.lines[self.cursor.line];
-            let start = Self::byte_at(line, column - 1);
-            let end = Self::byte_at(line, column);
-            line.replace_range(start..end, "");
-            self.cursor.column -= 1;
+        let line = &mut self.lines[self.cursor.line];
+        let remove = line.chars().take_while(|c| *c == ' ').count().min(4);
+        if remove == 0 {
+            return;
         }
+        line.replace_range(0..remove, "");
+        self.cursor.column = self.cursor.column.saturating_sub(remove);
     }
 
     /// Replace the range `[start, end)` in characters with `text`.
@@ -460,6 +452,25 @@ mod tests {
     }
 
     #[test]
+    fn dedent_removes_indentation_not_the_code_before_the_cursor() {
+        // The count of leading spaces used to be deleted from wherever the
+        // cursor happened to be, so a dedent at the end of an indented line
+        // silently ate the code instead of the indentation.
+        let mut editor = Editor::new("    x = 1");
+        editor.move_to_end();
+        editor.dedent();
+        assert_eq!(editor.text(), "x = 1");
+        assert_eq!(editor.cursor().column, 5, "cursor should follow the text");
+
+        // A line with nothing to remove must not lose a character either.
+        let mut editor = Editor::new("x = 1");
+        editor.move_to_end();
+        editor.dedent();
+        assert_eq!(editor.text(), "x = 1");
+        assert_eq!(editor.cursor().column, 5);
+    }
+
+    #[test]
     fn char_offset_matches_the_flattened_text() {
         let editor = {
             let mut e = Editor::new("ab\ncde\nf");
@@ -468,14 +479,6 @@ mod tests {
         };
         // "ab\ncd|e\nf" -> a b \n c d = 5 characters before the cursor
         assert_eq!(editor.char_offset(), 5);
-    }
-
-    #[test]
-    fn byte_offset_accounts_for_multibyte_lines() {
-        let mut editor = Editor::new("日本\nx");
-        editor.set_cursor(1, 1);
-        // 6 bytes of kana + newline + 1
-        assert_eq!(editor.byte_offset(), 8);
     }
 
     #[test]

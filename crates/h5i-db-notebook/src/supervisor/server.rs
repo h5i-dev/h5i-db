@@ -454,7 +454,14 @@ async fn dispatch(
             let mut guard = background.lock().await;
             guard.busy = true;
             let mut sink = crate::kernel::NullSink;
-            let _ = guard.session.run_cell(index, &mut sink).await;
+            if let Err(error) = guard.session.run_cell(index, &mut sink).await {
+                // Nobody is waiting on this call, so an error that only lives
+                // in its return value is an error nobody can ever see: the
+                // cell would sit there with no outputs, indistinguishable
+                // from one still queued.
+                tracing::warn!("detached cell {index} failed: {error}");
+                guard.session.record_cell_error(index, &error);
+            }
             guard.busy = false;
             guard.last_activity = Instant::now();
         });

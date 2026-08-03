@@ -467,6 +467,33 @@ impl Session {
         Ok(())
     }
 
+    /// Record a failure into the cell's own outputs.
+    ///
+    /// For a detached run there is no caller left to return an error to, so a
+    /// failure that happens before any output exists (a kernel that will not
+    /// start, a database that will not open, a bad `%%sql` option) would leave
+    /// the cell looking exactly like one that has not run yet. Writing it
+    /// where the outputs go puts it where whoever polls the notebook is
+    /// already looking.
+    pub fn record_cell_error(&mut self, index: usize, error: &Error) {
+        let output = Output::Error(crate::document::ErrorOutput {
+            ename: error.code().to_string(),
+            evalue: error.to_string(),
+            traceback: match error.hint() {
+                Some(hint) => vec![format!("{error}"), format!("hint: {hint}")],
+                None => vec![format!("{error}")],
+            },
+            extra: Default::default(),
+        });
+        if let Ok(cell) = self.notebook.get_mut(index)
+            && let Some(code) = cell.as_code_mut()
+        {
+            code.outputs.push(output);
+        }
+        self.dirty = true;
+        let _ = self.save();
+    }
+
     /// Apply a cell edit and save, returning the description to report.
     ///
     /// Edits have to reach the session rather than the file whenever one is
