@@ -66,6 +66,12 @@ pub enum Response {
     Result {
         cells: Vec<CellReport>,
     },
+    /// Terminal frame for a detached `Exec`: the cell exists and is queued,
+    /// but has not run yet.
+    Detached {
+        index: usize,
+        cell_id: Option<String>,
+    },
     Status(SessionInfo),
     Completions {
         matches: Vec<String>,

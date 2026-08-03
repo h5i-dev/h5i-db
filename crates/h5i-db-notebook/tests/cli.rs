@@ -388,3 +388,289 @@ fn the_written_notebook_is_valid_nbformat() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+// ---------------------------------------------------------------------------
+// export, images, and the other N5 surfaces (no kernel needed)
+// ---------------------------------------------------------------------------
+
+/// A notebook written directly, so export tests never need a kernel.
+fn notebook_with_outputs(nb: &Nb) {
+    std::fs::write(
+        &nb.notebook,
+        r##"{"cells": [
+             {"cell_type": "markdown", "id": "m", "metadata": {}, "source": "# Title"},
+             {"cell_type": "code", "execution_count": 1, "id": "c1", "metadata": {},
+              "outputs": [{"output_type": "stream", "name": "stdout", "text": "hello\n"}],
+              "source": "print('hello')"},
+             {"cell_type": "code", "execution_count": 2, "id": "c2", "metadata": {},
+              "outputs": [{"output_type": "display_data", "metadata": {},
+                           "data": {"image/png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+                                    "text/plain": "<Figure>"}}],
+              "source": "plot()"}
+           ], "metadata": {"kernelspec": {"name": "python3", "language": "python", "display_name": "P"}},
+           "nbformat": 4, "nbformat_minor": 5}"##,
+    )
+    .unwrap();
+}
+
+#[test]
+fn export_writes_markdown_python_and_html() {
+    let nb = Nb::new();
+    notebook_with_outputs(&nb);
+
+    let md = nb.run(&["export", nb.path(), "--to", "md"]);
+    assert_eq!(code(&md), 0, "{}", stderr(&md));
+    assert!(stdout(&md).contains("# Title"), "{}", stdout(&md));
+    assert!(stdout(&md).contains("```python"), "{}", stdout(&md));
+
+    let py = nb.run(&["export", nb.path(), "--to", "py"]);
+    assert_eq!(code(&py), 0);
+    assert!(stdout(&py).contains("# %%"), "{}", stdout(&py));
+
+    let html = nb.run(&["export", nb.path(), "--to", "html"]);
+    assert_eq!(code(&html), 0);
+    assert!(
+        stdout(&html).starts_with("<!doctype html>"),
+        "{}",
+        stdout(&html)
+    );
+    // Self-contained: the image is inlined, nothing is fetched.
+    assert!(stdout(&html).contains("data:image/png;base64,"));
+    assert!(!stdout(&html).contains("https://"));
+}
+
+#[test]
+fn export_to_a_file_reports_what_it_wrote() {
+    let nb = Nb::new();
+    notebook_with_outputs(&nb);
+    let out = nb.dir.path().join("export.html");
+    let result = nb.run(&[
+        "export",
+        nb.path(),
+        "--to",
+        "html",
+        "-o",
+        out.to_str().unwrap(),
+        "--format",
+        "json",
+    ]);
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&result)).unwrap();
+    assert_eq!(parsed["format"], "html");
+    assert!(out.exists());
+    assert!(
+        std::fs::read_to_string(&out)
+            .unwrap()
+            .contains("<!doctype html>")
+    );
+}
+
+#[test]
+fn an_unknown_export_format_lists_the_supported_ones() {
+    let nb = Nb::new();
+    notebook_with_outputs(&nb);
+    let result = nb.run(&["export", nb.path(), "--to", "pdf"]);
+    assert_eq!(code(&result), 2);
+    assert!(
+        stderr(&result).contains("md, py, html"),
+        "{}",
+        stderr(&result)
+    );
+}
+
+#[test]
+fn without_outputs_produces_a_clean_export() {
+    let nb = Nb::new();
+    notebook_with_outputs(&nb);
+    let md = nb.run(&["export", nb.path(), "--to", "md", "--without-outputs"]);
+    assert!(!stdout(&md).contains("hello\n```"), "{}", stdout(&md));
+    assert!(stdout(&md).contains("print('hello')"), "{}", stdout(&md));
+}
+
+#[test]
+fn nb_output_writes_images_beside_the_notebook_and_names_the_file() {
+    let nb = Nb::new();
+    notebook_with_outputs(&nb);
+    let result = nb.run(&["output", nb.path(), "2"]);
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+
+    let expected = nb.dir.path().join("test_files/cell-c2-0.png");
+    assert!(expected.exists(), "no file at {}", expected.display());
+    // A real PNG, not the base64 text.
+    let bytes = std::fs::read(&expected).unwrap();
+    assert_eq!(&bytes[..4], b"\x89PNG");
+    // The base64 never reaches the terminal.
+    assert!(stdout(&result).contains("[saved"), "{}", stdout(&result));
+    assert!(!stdout(&result).contains("iVBORw0"), "{}", stdout(&result));
+    assert!(stdout(&result).len() < 400);
+}
+
+#[test]
+fn a_text_only_notebook_creates_no_attachment_directory() {
+    let nb = Nb::new();
+    std::fs::write(
+        &nb.notebook,
+        r#"{"cells": [{"cell_type": "code", "execution_count": 1, "id": "a",
+             "metadata": {}, "outputs": [{"output_type": "stream", "name": "stdout",
+             "text": "just text"}], "source": "print(1)"}],
+            "metadata": {}, "nbformat": 4, "nbformat_minor": 5}"#,
+    )
+    .unwrap();
+    assert_eq!(code(&nb.run(&["output", nb.path(), "0"])), 0);
+    assert!(
+        !nb.dir.path().join("test_files").exists(),
+        "an attachment directory was created for a notebook with no attachments"
+    );
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn a_detached_cell_returns_at_once_and_still_records_its_output() {
+    // The point of the supervisor owning the notebook: the client can leave
+    // and the outputs still land.
+    let nb = with_kernel();
+    let started = std::time::Instant::now();
+    let queued = nb.run(&[
+        "exec",
+        nb.path(),
+        "--detach",
+        "--code",
+        "import time; time.sleep(4); print('late output')",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(code(&queued), 0, "{}", stderr(&queued));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "a detached exec waited for the cell: {:?}",
+        started.elapsed()
+    );
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&queued)).unwrap();
+    assert_eq!(parsed["detached"], true);
+    assert_eq!(parsed["cell"], 0);
+
+    // While it runs, a second exec is refused rather than left to hang.
+    let busy = nb.run(&["exec", nb.path(), "--code", "1"]);
+    assert_eq!(code(&busy), 3, "{}", stderr(&busy));
+    assert!(stderr(&busy).contains("session_busy"), "{}", stderr(&busy));
+
+    // Status still answers while the session is held.
+    let status = nb.run(&["kernel", "status", nb.path(), "--format", "json"]);
+    assert_eq!(code(&status), 0, "{}", stderr(&status));
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&status)).unwrap();
+    assert_eq!(parsed["busy"], true);
+    assert!(
+        parsed["notebook"].as_str().is_some_and(|p| !p.is_empty()),
+        "a busy status must still say which notebook it is: {parsed}"
+    );
+
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let saved = std::fs::read_to_string(&nb.notebook).unwrap();
+        if saved.contains("late output") {
+            stop(&nb);
+            return;
+        }
+    }
+    stop(&nb);
+    panic!("the detached cell never recorded its output");
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn a_detached_cell_can_be_interrupted() {
+    // Interrupting must not need the session lock, which the cell holds.
+    let nb = with_kernel();
+    assert_eq!(
+        code(&nb.run(&[
+            "exec",
+            nb.path(),
+            "--detach",
+            "--code",
+            "import time; time.sleep(120)"
+        ])),
+        0
+    );
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let started = std::time::Instant::now();
+    let interrupted = nb.run(&["kernel", "interrupt", nb.path()]);
+    assert_eq!(code(&interrupted), 0, "{}", stderr(&interrupted));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "interrupt blocked behind the running cell: {:?}",
+        started.elapsed()
+    );
+
+    for _ in 0..40 {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if std::fs::read_to_string(&nb.notebook)
+            .unwrap()
+            .contains("KeyboardInterrupt")
+        {
+            stop(&nb);
+            return;
+        }
+    }
+    stop(&nb);
+    panic!("the interrupt never reached the detached cell");
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn inspect_and_complete_reach_the_kernel() {
+    let nb = with_kernel();
+    assert_eq!(
+        code(&nb.run(&["exec", nb.path(), "--code", "import json"])),
+        0
+    );
+
+    let inspected = nb.run(&["inspect", nb.path(), "len"]);
+    assert_eq!(code(&inspected), 0, "{}", stderr(&inspected));
+    assert!(
+        stdout(&inspected).contains("Docstring"),
+        "{}",
+        stdout(&inspected)
+    );
+    // Terminal colour is noise for anything reading this.
+    assert!(
+        !stdout(&inspected).contains('\u{1b}'),
+        "ANSI escapes leaked"
+    );
+
+    let completed = nb.run(&["complete", nb.path(), "json.du"]);
+    assert_eq!(code(&completed), 0, "{}", stderr(&completed));
+    assert!(
+        stdout(&completed).contains("dumps"),
+        "{}",
+        stdout(&completed)
+    );
+    stop(&nb);
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn figures_are_written_beside_the_notebook_when_a_cell_produces_one() {
+    let nb = with_kernel();
+    let result = nb.run(&[
+        "exec",
+        nb.path(),
+        "--code",
+        "from IPython.display import display, Image\n\
+         import base64\n\
+         png = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==')\n\
+         display(Image(data=png, format='png'))",
+    ]);
+    assert_eq!(code(&result), 0, "{}", stderr(&result));
+    assert!(stdout(&result).contains("[saved"), "{}", stdout(&result));
+
+    let files = nb.dir.path().join("test_files");
+    let written: Vec<_> = std::fs::read_dir(&files)
+        .unwrap_or_else(|e| panic!("no attachment directory at {}: {e}", files.display()))
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(written.len(), 1, "{written:?}");
+    let bytes = std::fs::read(written[0].path()).unwrap();
+    assert_eq!(&bytes[..4], b"\x89PNG", "not a decoded PNG");
+    stop(&nb);
+}

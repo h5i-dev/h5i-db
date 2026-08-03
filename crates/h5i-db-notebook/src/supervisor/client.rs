@@ -14,6 +14,29 @@ use crate::supervisor::socket_path;
 /// How long to wait for a freshly spawned supervisor to start listening.
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Subcommands that reach `serve` in *this* binary.
+///
+/// The supervisor is started by re-executing ourselves, so the argument that
+/// gets there depends on how the command tree was mounted: the standalone
+/// `h5i-nb` takes `serve`, while `h5i-db` takes `nb serve`. Guessing from the
+/// executable's name would break the moment somebody renames or symlinks it,
+/// so each entry point states its own prefix instead.
+static COMMAND_PREFIX: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+
+/// Declare how this process reaches the notebook commands. Called once, by
+/// whichever entry point owns `main`.
+pub fn set_command_prefix<I, S>(prefix: I)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let _ = COMMAND_PREFIX.set(prefix.into_iter().map(Into::into).collect());
+}
+
+fn command_prefix() -> &'static [String] {
+    COMMAND_PREFIX.get().map(Vec::as_slice).unwrap_or(&[])
+}
+
 pub struct SessionClient {
     notebook: PathBuf,
     socket: PathBuf,
@@ -154,6 +177,7 @@ impl SessionClient {
 
         let mut command = tokio::process::Command::new(exe);
         command
+            .args(command_prefix())
             .arg("serve")
             .arg(&self.notebook)
             .arg("--socket")

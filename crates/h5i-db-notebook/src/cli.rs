@@ -7,14 +7,14 @@
 //! session supervisor so state survives between invocations.
 
 use std::io::{IsTerminal, Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::document::{Cell, Notebook, Output};
 use crate::error::{Error, Result};
-use crate::render::{DigestOptions, digest, summarize};
+use crate::render::{DigestOptions, ImageWriter, digest, digest_with_images, summarize};
 use crate::session::parse_cell_range;
 use crate::supervisor::protocol::{CellReport, Request, Response, StreamEvent};
 use crate::supervisor::{SessionClient, server, socket_path};
@@ -68,6 +68,11 @@ pub enum Command {
         /// Print output as it arrives rather than only at the end.
         #[arg(long)]
         stream: bool,
+        /// Return as soon as the cell is queued. Its outputs are still
+        /// recorded, because the session process owns the notebook; poll with
+        /// `h5i-nb cells` or `h5i-nb kernel status`.
+        #[arg(long)]
+        detach: bool,
         /// Do not elide long output.
         #[arg(long)]
         raw: bool,
@@ -120,6 +125,39 @@ pub enum Command {
 
     /// Open the notebook in the terminal UI.
     View { notebook: PathBuf },
+
+    /// Convert the notebook to markdown, a Python script, or standalone HTML.
+    Export {
+        notebook: PathBuf,
+        /// Target format: md, py, or html.
+        #[arg(long = "to", default_value = "md")]
+        to: String,
+        /// Write here instead of stdout.
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// Leave outputs out, for a clean diff or a runnable script.
+        #[arg(long)]
+        without_outputs: bool,
+    },
+
+    /// Ask the kernel what a name is, the way `?` does in IPython.
+    Inspect {
+        notebook: PathBuf,
+        /// Code to introspect; the cursor sits at its end unless --cursor says
+        /// otherwise.
+        code: String,
+        /// Character offset to introspect at.
+        #[arg(long)]
+        cursor: Option<usize>,
+    },
+
+    /// Ask the kernel what completes at the cursor.
+    Complete {
+        notebook: PathBuf,
+        code: String,
+        #[arg(long)]
+        cursor: Option<usize>,
+    },
 
     /// Manage the kernel behind a notebook.
     Kernel {
@@ -218,6 +256,17 @@ fn timeout_arg(seconds: u64) -> Option<u64> {
 }
 
 pub async fn run(cli: Cli) -> Result<()> {
+    run_command(cli.command, cli.format).await
+}
+
+/// Run one notebook command with a caller-supplied output format.
+///
+/// Separate from [`run`] so the command tree can be mounted inside another
+/// CLI that already owns a global `--format`: two global flags with the same
+/// name is a clap conflict, and duplicating the flag would let the two
+/// disagree.
+pub async fn run_command(command: Command, format: Format) -> Result<()> {
+    let cli = Cli { command, format };
     match cli.command {
         Command::New {
             notebook,
@@ -256,20 +305,37 @@ pub async fn run(cli: Cli) -> Result<()> {
             timeout,
             stream,
             raw,
+            detach,
         } => {
             let code = read_code(&code)?;
             let client = SessionClient::new(&notebook);
             let request = Request::Exec {
                 code,
                 timeout_secs: timeout_arg(timeout),
-                detach: false,
+                detach,
             };
             let response = client
                 .request(&request, |event| print_event(event, stream))
                 .await?;
+            if let Response::Detached { index, cell_id } = response {
+                return emit(
+                    cli.format,
+                    serde_json::json!({
+                        "detached": true,
+                        "cell": index,
+                        "cell_id": cell_id,
+                    }),
+                    || {
+                        format!(
+                            "queued cell {index}; poll with `h5i-nb cells {}`",
+                            notebook.display()
+                        )
+                    },
+                );
+            }
             // With --stream the body already reached the terminal as it was
             // produced; printing the digest too would duplicate every line.
-            report_cells(cli.format, response, raw, stream)
+            report_cells(cli.format, response, raw, stream, &notebook)
         }
 
         Command::Run {
@@ -305,7 +371,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                     |event| print_event(event, false),
                 )
                 .await?;
-            report_cells(cli.format, response, raw, false)
+            report_cells(cli.format, response, raw, false, &notebook)
         }
 
         Command::Cells { notebook } => {
@@ -338,24 +404,148 @@ pub async fn run(cli: Cli) -> Result<()> {
             save,
             index,
         } => {
-            let notebook = Notebook::read(&notebook)?;
+            let path = notebook;
+            let notebook = Notebook::read(&path)?;
             let position = notebook.resolve(&cell)?;
             let outputs = notebook.get(position)?.outputs();
-            if let Some(path) = save {
-                return save_output(outputs, index, position, &path);
+            if let Some(save_to) = save {
+                return save_output(outputs, index, position, &save_to);
             }
             let options = DigestOptions {
                 raw,
                 ..Default::default()
             };
-            let text = digest(outputs, &options);
+            let writer = ImageWriter::for_notebook(&path);
+            let label = notebook
+                .get(position)?
+                .id()
+                .map(str::to_string)
+                .unwrap_or_else(|| position.to_string());
+            let images = writer.write(outputs, &label);
+            let text = digest_with_images(outputs, &options, &images);
             emit(
                 cli.format,
                 serde_json::json!({
                     "cell": position,
                     "outputs": outputs,
+                    "saved": images
+                        .iter()
+                        .map(|p| p.as_ref().map(|p| p.display().to_string()))
+                        .collect::<Vec<_>>(),
                 }),
                 || text.clone(),
+            )
+        }
+
+        Command::Export {
+            notebook,
+            to,
+            output,
+            without_outputs,
+        } => {
+            let format = crate::export::Format::parse(&to)?;
+            let document = Notebook::read(&notebook)?;
+            let text = crate::export::export(
+                &document,
+                format,
+                &crate::export::ExportOptions { without_outputs },
+            );
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, &text).map_err(|e| Error::io(path.display(), e))?;
+                    emit(
+                        cli.format,
+                        serde_json::json!({
+                            "wrote": path.display().to_string(),
+                            "bytes": text.len(),
+                            "format": format.extension(),
+                        }),
+                        || format!("wrote {} ({} bytes)", path.display(), text.len()),
+                    )
+                }
+                None => {
+                    // Straight to stdout, unwrapped even under --format json:
+                    // the point of exporting is the document itself, and
+                    // wrapping it in JSON would mean unwrapping it again.
+                    print!("{text}");
+                    let _ = std::io::stdout().flush();
+                    Ok(())
+                }
+            }
+        }
+
+        Command::Inspect {
+            notebook,
+            code,
+            cursor,
+        } => {
+            let cursor = cursor.unwrap_or(code.chars().count());
+            let client = SessionClient::new(&notebook);
+            let response = client
+                .request(
+                    &Request::Inspect {
+                        code,
+                        cursor,
+                        detail: 0,
+                    },
+                    |_| {},
+                )
+                .await?;
+            let Response::Inspect { found, text } = response else {
+                return Err(Error::protocol("expected an inspect reply"));
+            };
+            // IPython colours its introspection output. The escapes are pure
+            // cost for anything reading rather than displaying it, and the
+            // protocol carries the text faithfully so stripping belongs here.
+            let text = text.map(|t| crate::render::strip_ansi(&t));
+            emit(
+                cli.format,
+                serde_json::json!({ "found": found, "text": text }),
+                || match &text {
+                    Some(text) => text.clone(),
+                    None => "nothing to inspect there".to_string(),
+                },
+            )
+        }
+
+        Command::Complete {
+            notebook,
+            code,
+            cursor,
+        } => {
+            let cursor = cursor.unwrap_or(code.chars().count());
+            let client = SessionClient::new(&notebook);
+            let response = client
+                .request(
+                    &Request::Complete {
+                        code: code.clone(),
+                        cursor,
+                    },
+                    |_| {},
+                )
+                .await?;
+            let Response::Completions {
+                matches,
+                cursor_start,
+                cursor_end,
+            } = response
+            else {
+                return Err(Error::protocol("expected a completion reply"));
+            };
+            emit(
+                cli.format,
+                serde_json::json!({
+                    "matches": matches,
+                    "cursor_start": cursor_start,
+                    "cursor_end": cursor_end,
+                }),
+                || {
+                    if matches.is_empty() {
+                        "no completions".to_string()
+                    } else {
+                        matches.join("\n")
+                    }
+                },
             )
         }
 
@@ -645,6 +835,7 @@ fn report_cells(
     response: Response,
     raw: bool,
     body_already_streamed: bool,
+    notebook: &Path,
 ) -> Result<()> {
     let Response::Result { cells } = response else {
         return Err(Error::protocol("expected a result reply"));
@@ -654,12 +845,38 @@ fn report_cells(
         ..Default::default()
     };
 
+    // Figures are written next to the notebook and referred to by path. The
+    // base64 never reaches the terminal either way; this is what lets the
+    // reader actually look at the picture afterwards.
+    let writer = ImageWriter::for_notebook(notebook);
+    let images: Vec<Vec<Option<PathBuf>>> = cells
+        .iter()
+        .map(|cell| writer.write(&cell.outputs, &cell_label(cell)))
+        .collect();
+
     if format == Format::Json {
-        emit(format, serde_json::json!({ "cells": cells }), String::new)?;
+        let saved: Vec<Vec<Option<String>>> = images
+            .iter()
+            .map(|cell| {
+                cell.iter()
+                    .map(|p| p.as_ref().map(|p| p.display().to_string()))
+                    .collect()
+            })
+            .collect();
+        emit(
+            format,
+            serde_json::json!({ "cells": cells, "saved": saved }),
+            String::new,
+        )?;
     } else {
         let mut out = String::new();
-        for cell in &cells {
-            out.push_str(&render_cell_report(cell, &options, body_already_streamed));
+        for (cell, images) in cells.iter().zip(&images) {
+            out.push_str(&render_cell_report(
+                cell,
+                &options,
+                body_already_streamed,
+                images,
+            ));
         }
         print!("{out}");
         let _ = std::io::stdout().flush();
@@ -687,7 +904,19 @@ fn report_cells(
     Ok(())
 }
 
-fn render_cell_report(cell: &CellReport, options: &DigestOptions, header_only: bool) -> String {
+/// A stable, filesystem-safe name for a cell, for attachment file names.
+fn cell_label(cell: &CellReport) -> String {
+    cell.cell_id
+        .clone()
+        .unwrap_or_else(|| cell.index.to_string())
+}
+
+fn render_cell_report(
+    cell: &CellReport,
+    options: &DigestOptions,
+    header_only: bool,
+    images: &[Option<PathBuf>],
+) -> String {
     let body = if header_only {
         // Errors are the exception: a traceback goes to the notebook and to
         // the terminal digest, not to the incremental stream, so suppressing
@@ -702,7 +931,7 @@ fn render_cell_report(cell: &CellReport, options: &DigestOptions, header_only: b
             options,
         )
     } else {
-        digest(&cell.outputs, options)
+        digest_with_images(&cell.outputs, options, images)
     };
     let header = format!(
         "[{}] cell {} · {} · {}ms\n",

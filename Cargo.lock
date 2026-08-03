@@ -2142,6 +2142,7 @@ dependencies = [
  "datafusion",
  "futures",
  "h5i-db-core",
+ "h5i-db-notebook",
  "h5i-db-query",
  "h5i-db-ui",
  "humantime",

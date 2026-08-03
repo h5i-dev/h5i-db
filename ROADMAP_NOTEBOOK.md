@@ -284,7 +284,8 @@ h5i-nb cells <file>                    # index, type, status, output shape
 h5i-nb kernel list|start|status|interrupt|restart|stop
 h5i-nb edit <file> set|insert|delete|move|clear-outputs
 h5i-nb view <file>                     # TUI (N4, not built)
-h5i-nb export <file> --to md|py|html   # (N5, not built)
+h5i-nb export <file> --to md|py|html   # also -o <path>, --without-outputs
+h5i-nb inspect|complete <file> <code>  # what the TUI uses, from a shell
 ```
 
 ---
@@ -321,23 +322,44 @@ Each phase ends with something an agent can actually use.
 | N2 | Agent digest renderer, elision, `\r` collapsing, `--raw` | **Done** for text and errors. Images are named, not yet written to `<notebook>_files/` |
 | N3 | `SqlKernel`, `%%sql`, Arrow handoff | **Done.** 291ms cold SQL cell against 1.6s for a Python kernel |
 | N4 | Editable TUI | **Done.** Verified by driving the real UI through a pty |
-| N5 | Export, comm plumbing, `h5i-db nb` mount | Not started |
+| N5 | Export, images to disk, `--detach`, `h5i-db nb` mount | **Done** |
 
 ### Known gaps in what is built
 
-- **`exec --detach`** is refused with a clear error rather than silently
-  running synchronously. The supervisor exists partly to enable it (it owns
-  the notebook, so it can finish recording a cell after the client leaves),
-  and the delivered benefit today is narrower: a client killed mid-cell
-  still gets its outputs written, because the supervisor, not the client,
-  owns the file.
-- **Images** are reported as `[image/png]` rather than written to disk and
-  referenced by path. The base64 never reaches the terminal either way, so
-  the token guarantee holds; what is missing is the ability to then look at
-  the picture.
-- **Completion and inspection** are reachable from the TUI and over the
-  supervisor protocol, but no CLI verb exposes them.
 - **Multi-line strings** highlight only on their first line: the lexer treats
   lines independently. Wrong for one keystroke inside a triple-quoted block,
   and not worth a stateful lexer to fix.
-- **Export** (`--to md|py|html`) and the `h5i-db nb` subcommand mount are N5.
+- **ipywidgets** do not render. Comm traffic is accepted so a widget-producing
+  library does not crash the session, but nothing interactive draws.
+- **Markdown in exported HTML** is shown as preformatted text rather than
+  parsed. A markdown parser is a dependency and a class of injection bugs, and
+  an exported notebook is read for its outputs.
+- **`option-ext` (MPL-2.0)** rides in transitively through
+  `jupyter-zmq-client -> dirs`, backing a directory lookup we do not call. It
+  carries a narrow per-crate exception in `deny.toml` rather than widening the
+  permissive-only allowlist.
+
+### N5 notes
+
+- **Images** are written to `<notebook stem>_files/cell-<id>-<n>.png`, which is
+  nbconvert's convention, and named by path in the digest. Base64 still never
+  reaches the terminal, and the payload stays in the `.ipynb` so JupyterLab
+  renders it too. Names are deterministic, so re-running a cell replaces its
+  figure instead of accumulating one per execution.
+- **`exec --detach`** returns as soon as the cell exists. The supervisor owns
+  the notebook, so outputs are recorded after the client has gone. While a
+  detached cell runs, `status` answers from the file rather than waiting for
+  the lock, `interrupt` goes through the `InterruptHandle` instead of the lock,
+  and a second `exec` is refused with `session_busy` (exit 3, retryable) rather
+  than being left to look like a hang.
+- **Export** targets three different readers: markdown for a diff or a README,
+  a `# %%` script for re-running the work without notebook machinery, and a
+  single self-contained HTML file with images inlined as `data:` URIs. IPython
+  magics are commented out of the Python export, because `%matplotlib inline`
+  is a `SyntaxError` in a plain script.
+- **`h5i-db nb`** mounts the same command tree inside the main binary. It keeps
+  the notebook crate's own error codes rather than flattening them into core's,
+  and the two binaries share one session, so `h5i-db nb exec` and
+  `h5i-nb status` talk to the same kernel. The supervisor is started by
+  re-executing the running binary, so each entry point declares how `serve` is
+  reached rather than guessing from the executable's name.

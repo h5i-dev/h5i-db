@@ -14,7 +14,10 @@
 //! `nb output --raw`, which is deliberately the same summarise-then-rehydrate
 //! contract as `h5i capture run` / `h5i recall object`.
 
+use std::path::{Path, PathBuf};
+
 use crate::document::{MimeBundle, Output};
+use crate::error::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct DigestOptions {
@@ -46,10 +49,29 @@ const TEXT_PRIORITY: &[&str] = &[
     "application/vnd.h5i.table+text",
 ];
 
+/// Attachments a cell's outputs were written out as, indexed by output.
+///
+/// `None` where an output produced no file, so an index into this slice is
+/// always the output's own index.
+pub type ImagePaths = [Option<PathBuf>];
+
 /// Render one cell's outputs for a terminal.
 pub fn digest(outputs: &[Output], options: &DigestOptions) -> String {
+    digest_with_images(outputs, options, &[])
+}
+
+/// As [`digest`], naming any file an output was written out to.
+///
+/// Splitting the writing from the rendering keeps this function pure: the
+/// caller decides whether files appear on disk, and a TUI drawing the same
+/// outputs inline never writes anything.
+pub fn digest_with_images(
+    outputs: &[Output],
+    options: &DigestOptions,
+    images: &ImagePaths,
+) -> String {
     let mut parts = Vec::new();
-    for output in outputs {
+    for (index, output) in outputs.iter().enumerate() {
         match output {
             Output::Stream(stream) => {
                 let text = collapse_carriage_returns(&stream.text);
@@ -64,10 +86,10 @@ pub fn digest(outputs: &[Output], options: &DigestOptions) -> String {
                 }
             }
             Output::ExecuteResult(result) => {
-                parts.push(render_bundle(&result.data, options));
+                parts.push(render_bundle(&result.data, options, images.get(index)));
             }
             Output::DisplayData(display) => {
-                parts.push(render_bundle(&display.data, options));
+                parts.push(render_bundle(&display.data, options, images.get(index)));
             }
             Output::Error(error) => {
                 // Tracebacks are never elided: every frame matters when the
@@ -100,18 +122,137 @@ fn output_type_of(map: &serde_json::Map<String, serde_json::Value>) -> String {
         .to_string()
 }
 
-fn render_bundle(bundle: &MimeBundle, options: &DigestOptions) -> String {
-    if let Some(mime) = bundle.richest(TEXT_PRIORITY)
-        && let Some(text) = bundle.text_of(mime)
-    {
-        return elide(&strip_ansi(text), options);
+fn render_bundle(
+    bundle: &MimeBundle,
+    options: &DigestOptions,
+    image: Option<&Option<PathBuf>>,
+) -> String {
+    let written = image.and_then(|p| p.as_deref());
+    let text = bundle
+        .richest(TEXT_PRIORITY)
+        .and_then(|mime| bundle.text_of(mime))
+        .map(|text| elide(&strip_ansi(text), options));
+
+    match (text, written) {
+        // A figure usually carries both a picture and a one-line repr; the
+        // repr alone tells the reader nothing they can act on, so the path
+        // goes with it.
+        (Some(text), Some(path)) => format!("{text}\n[saved {}]", path.display()),
+        (Some(text), None) => text,
+        (None, Some(path)) => format!("[saved {}]", path.display()),
+        (None, None) => {
+            // No text form and nothing written: name what is there rather
+            // than dumping base64 into the terminal.
+            let mimes: Vec<&str> = bundle.mime_types().collect();
+            if mimes.is_empty() {
+                String::new()
+            } else {
+                format!("[{}]", mimes.join(", "))
+            }
+        }
     }
-    // No text representation: say what is there rather than dumping base64.
-    let mimes: Vec<&str> = bundle.mime_types().collect();
-    if mimes.is_empty() {
-        return String::new();
+}
+
+/// Mime types worth writing to a file, and the extension each gets.
+///
+/// Ordered by preference: a bundle carrying both PNG and SVG is written once,
+/// as the raster form every viewer can open.
+const SAVEABLE: &[(&str, &str)] = &[
+    ("image/png", "png"),
+    ("image/jpeg", "jpg"),
+    ("image/gif", "gif"),
+    ("application/pdf", "pdf"),
+    ("image/svg+xml", "svg"),
+];
+
+/// Writes a cell's binary outputs next to the notebook.
+///
+/// The directory follows nbconvert's convention (`<notebook stem>_files`), so
+/// files land where a reader already expects them and coexist with anything
+/// `jupyter nbconvert` produced. Names are deterministic, so re-running a cell
+/// overwrites its old figure instead of accumulating one per execution.
+pub struct ImageWriter {
+    directory: PathBuf,
+}
+
+impl ImageWriter {
+    pub fn for_notebook(notebook: &Path) -> Self {
+        let stem = notebook
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "notebook".to_string());
+        // A notebook named without a directory gets a bare relative path, not
+        // a `./` prefix: the path is printed for a reader, and `./` is noise.
+        let directory = match notebook.parent().filter(|p| !p.as_os_str().is_empty()) {
+            Some(parent) => parent.join(format!("{stem}_files")),
+            None => PathBuf::from(format!("{stem}_files")),
+        };
+        ImageWriter { directory }
     }
-    format!("[{}]", mimes.join(", "))
+
+    pub fn directory(&self) -> &Path {
+        &self.directory
+    }
+
+    /// Write every saveable output, returning one entry per output.
+    ///
+    /// A failure to write is reported as `None` rather than as an error: the
+    /// cell already ran, and losing its text output because a figure could not
+    /// be saved would be the wrong trade.
+    pub fn write(&self, outputs: &[Output], cell_label: &str) -> Vec<Option<PathBuf>> {
+        let mut written = Vec::with_capacity(outputs.len());
+        let mut created = false;
+        for (index, output) in outputs.iter().enumerate() {
+            written.push(self.write_one(output, cell_label, index, &mut created));
+        }
+        written
+    }
+
+    fn write_one(
+        &self,
+        output: &Output,
+        cell_label: &str,
+        index: usize,
+        created: &mut bool,
+    ) -> Option<PathBuf> {
+        let bundle = output.data()?;
+        let (mime, extension) = SAVEABLE
+            .iter()
+            .find(|(mime, _)| bundle.get(mime).is_some())?;
+        let payload = bundle.text_of(mime)?;
+
+        // The directory is created only once something needs it, so opening a
+        // text-only notebook never litters the working tree.
+        if !*created {
+            std::fs::create_dir_all(&self.directory).ok()?;
+            *created = true;
+        }
+
+        let path = self
+            .directory
+            .join(format!("cell-{cell_label}-{index}.{extension}"));
+        let bytes = if *mime == "image/svg+xml" {
+            // SVG is stored as text, not base64.
+            payload.as_bytes().to_vec()
+        } else {
+            use base64::Engine;
+            let cleaned: String = payload.chars().filter(|c| !c.is_whitespace()).collect();
+            base64::engine::general_purpose::STANDARD
+                .decode(cleaned)
+                .ok()?
+        };
+        std::fs::write(&path, bytes).ok()?;
+        Some(path)
+    }
+
+    /// Remove the attachment directory, for `nb edit clear-outputs`.
+    pub fn clear(&self) -> Result<()> {
+        match std::fs::remove_dir_all(&self.directory) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(Error::io(self.directory.display(), e)),
+        }
+    }
 }
 
 /// Keep only the last frame of each `\r`-overwritten line.

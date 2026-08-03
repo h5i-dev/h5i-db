@@ -10,6 +10,7 @@
 pub mod cli;
 pub mod document;
 pub mod error;
+pub mod export;
 pub mod kernel;
 pub mod magic;
 pub mod render;

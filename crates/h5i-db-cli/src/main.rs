@@ -163,6 +163,13 @@ enum Command {
         stale_after: Option<humantime::Duration>,
     },
 
+    /// In-terminal notebooks: run cells against a persistent kernel, query
+    /// with %%sql, and review the result in a TUI.
+    Nb {
+        #[command(subcommand)]
+        command: h5i_db_notebook::cli::Command,
+    },
+
     /// Build a small database and walk the whole argument end to end: ingest,
     /// query, a previewed vendor restatement, the leakage it causes, and a
     /// session that cannot read past its decision instant. Takes seconds.
@@ -445,6 +452,9 @@ impl Command {
                 | PlanCmd::Apply { db, .. }
                 | PlanCmd::Discard { db, .. } => db,
             }),
+            // Notebooks name their own database in their metadata, not on the
+            // command line, so there is none to resolve here.
+            Nb { .. } => None,
             // The demo builds its own database, so there is none to name.
             Demo { .. } => None,
             Policy(cmd) => Some(match cmd {
@@ -1010,6 +1020,30 @@ async fn run(cli: Cli) -> Result<()> {
             let doc =
                 context::build(&database, &label, budget, stale_after.map(|d| d.as_secs())).await?;
             write_value(&doc, format)
+        }
+
+        Command::Nb { command } => {
+            // The notebook crate has its own error enum with its own stable
+            // codes and hints. Flattening them into core's would lose them, so
+            // its envelope is rendered here and the process exits with its
+            // category rather than returning into this function's contract.
+            let nb_format = match format {
+                Format::Json => h5i_db_notebook::cli::Format::Json,
+                Format::Table => h5i_db_notebook::cli::Format::Table,
+                other => {
+                    return Err(Error::invalid(format!(
+                        "`nb` supports --format table and json, not {other:?}"
+                    )));
+                }
+            };
+            // The session process is started by re-executing this binary, so
+            // it has to be told that `serve` lives under `nb` here.
+            h5i_db_notebook::supervisor::set_command_prefix(["nb"]);
+            if let Err(error) = h5i_db_notebook::cli::run_command(command, nb_format).await {
+                let code = h5i_db_notebook::cli::report_error(&error, nb_format);
+                std::process::exit(code);
+            }
+            Ok(())
         }
 
         Command::Demo { dir, keep } => {

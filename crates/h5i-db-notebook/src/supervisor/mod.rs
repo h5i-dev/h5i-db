@@ -17,7 +17,7 @@ pub mod client;
 pub mod protocol;
 pub mod server;
 
-pub use client::SessionClient;
+pub use client::{SessionClient, set_command_prefix};
 pub use protocol::{Request, Response, SessionInfo};
 
 use std::path::{Path, PathBuf};

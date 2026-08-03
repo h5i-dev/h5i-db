@@ -57,6 +57,10 @@ pub async fn serve(notebook: &Path, options: ServerOptions) -> Result<()> {
         let _ = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600));
     }
 
+    // Taken before the session moves into the mutex: interrupting must never
+    // need the lock that the cell being interrupted is holding.
+    let interrupt = session.interrupt_handle();
+    let notebook = notebook.to_path_buf();
     let state = Arc::new(Mutex::new(State {
         session,
         last_activity: Instant::now(),
@@ -72,14 +76,26 @@ pub async fn serve(notebook: &Path, options: ServerOptions) -> Result<()> {
                         // Handled one at a time: the session owns a single
                         // kernel, so concurrency here would only buy lock
                         // contention and interleaved output.
-                        handle_connection(stream, state.clone(), shutdown_tx.clone()).await;
+                        handle_connection(
+                            stream,
+                            state.clone(),
+                            shutdown_tx.clone(),
+                            interrupt.clone(),
+                            notebook.clone(),
+                        )
+                        .await;
                     }
                     Err(error) => break Err(Error::io(socket.display(), error)),
                 }
             }
             _ = shutdown_rx.recv() => break Ok(()),
             _ = tokio::time::sleep(Duration::from_secs(30)) => {
-                let guard = state.lock().await;
+                // `try_lock`, never `lock`: a detached cell holds the session
+                // for as long as it runs, and blocking here would stall the
+                // accept loop, so status polling would hang exactly while
+                // there is something worth polling for. A held lock also *is*
+                // the busy signal, so failing to take it means not idle.
+                let Ok(guard) = state.try_lock() else { continue };
                 if !guard.busy && guard.last_activity.elapsed() > options.idle_ttl {
                     tracing::info!("idle for {:?}, exiting", options.idle_ttl);
                     break Ok(());
@@ -105,6 +121,8 @@ async fn handle_connection(
     stream: UnixStream,
     state: Arc<Mutex<State>>,
     shutdown: mpsc::Sender<()>,
+    interrupt: crate::kernel::InterruptHandle,
+    notebook: PathBuf,
 ) {
     let (read_half, write_half) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
@@ -135,7 +153,9 @@ async fn handle_connection(
 
     if let Ok(Some(line)) = lines.next_line().await {
         let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => dispatch(request, &state, &frames, &shutdown).await,
+            Ok(request) => {
+                dispatch(request, &state, &frames, &shutdown, &interrupt, &notebook).await
+            }
             Err(error) => {
                 Response::from_error(&Error::invalid(format!("malformed request: {error}")))
             }
@@ -152,6 +172,8 @@ async fn dispatch(
     state: &Arc<Mutex<State>>,
     frames: &mpsc::UnboundedSender<Response>,
     shutdown: &mpsc::Sender<()>,
+    interrupt: &crate::kernel::InterruptHandle,
+    notebook: &Path,
 ) -> Response {
     // Status must answer while a cell is running, so it never takes the
     // session lock: a status call that blocks behind a twenty-minute cell is
@@ -160,12 +182,20 @@ async fn dispatch(
         return match state.try_lock() {
             Ok(guard) => Response::Status(describe(&guard, false)),
             Err(_) => {
-                // Locked means a cell is running. Report that rather than wait.
+                // A held lock means a cell is running, so answer from the file
+                // rather than waiting for it. A status call that blocks behind
+                // a twenty-minute cell is useless exactly when it is needed,
+                // and one that answers with blanks is barely better.
+                let document = crate::Notebook::read(notebook).ok();
                 Response::Status(SessionInfo {
-                    notebook: String::new(),
-                    kernel_name: String::new(),
+                    notebook: notebook.display().to_string(),
+                    kernel_name: document
+                        .as_ref()
+                        .and_then(|d| d.kernel_name())
+                        .unwrap_or("unknown")
+                        .to_string(),
                     kernel_status: crate::kernel::KernelStatus::Busy,
-                    cells: 0,
+                    cells: document.as_ref().map(|d| d.len()).unwrap_or(0),
                     pid: std::process::id(),
                     busy: true,
                     idle_seconds: 0,
@@ -174,9 +204,65 @@ async fn dispatch(
         };
     }
 
-    let mut guard = state.lock().await;
+    // Interrupt never takes the lock: the cell it is meant to stop is what
+    // holds it. The handle was made for exactly this.
+    if matches!(request, Request::Interrupt) {
+        interrupt.interrupt();
+        return Response::Ok;
+    }
+
+    // A detached run keeps the session for as long as the cell takes. Rather
+    // than let a second `exec` block until it finishes, which reads as a hang,
+    // say so: `session_busy` is retryable and carries exit code 3.
+    let mut guard = match state.try_lock() {
+        Ok(guard) => guard,
+        Err(_) if matches!(request, Request::Exec { .. } | Request::Run { .. }) => {
+            return Response::from_error(&Error::SessionBusy {
+                path: notebook.display().to_string(),
+            });
+        }
+        Err(_) => state.lock().await,
+    };
     guard.last_activity = Instant::now();
     guard.busy = true;
+
+    // Detached execution returns as soon as the cell exists. The supervisor
+    // owns the notebook, so the outputs are still recorded after the client
+    // that asked for it has gone.
+    if let Request::Exec {
+        code,
+        timeout_secs,
+        detach: true,
+    } = &request
+    {
+        apply_timeout(&mut guard.session, *timeout_secs);
+        let index = match guard.session.append(code) {
+            Ok(index) => index,
+            Err(error) => {
+                guard.busy = false;
+                return Response::from_error(&error);
+            }
+        };
+        let cell_id = guard
+            .session
+            .notebook()
+            .get(index)
+            .ok()
+            .and_then(|c| c.id())
+            .map(str::to_string);
+        drop(guard);
+
+        let background = state.clone();
+        tokio::spawn(async move {
+            let mut guard = background.lock().await;
+            guard.busy = true;
+            let mut sink = crate::kernel::NullSink;
+            let _ = guard.session.run_cell(index, &mut sink).await;
+            guard.busy = false;
+            guard.last_activity = Instant::now();
+        });
+        return Response::Detached { index, cell_id };
+    }
 
     let response = run_request(request, &mut guard, frames, shutdown).await;
 
@@ -200,13 +286,9 @@ async fn run_request(
             timeout_secs,
             detach,
         } => {
-            if detach {
-                // Refused rather than silently run synchronously, which would
-                // look to the caller like a hang.
-                return Response::from_error(&Error::invalid(
-                    "detached execution is not implemented yet; run without --detach",
-                ));
-            }
+            // A detached request is handled before the lock is released in
+            // `dispatch`; reaching here means it is a normal one.
+            debug_assert!(!detach);
             apply_timeout(&mut state.session, timeout_secs);
             let mut sink = StreamSink(frames.clone());
             match state.session.exec(&code, &mut sink).await {
@@ -236,15 +318,13 @@ async fn run_request(
             }
         }
 
-        Request::Interrupt => match state.session.interrupt().await {
-            Ok(()) => Response::Ok,
-            Err(error) => Response::from_error(&error),
-        },
-
         Request::Restart { clear_outputs } => match state.session.restart(clear_outputs).await {
             Ok(()) => Response::Ok,
             Err(error) => Response::from_error(&error),
         },
+
+        // Handled in `dispatch`, before the lock is taken.
+        Request::Interrupt => Response::Ok,
 
         Request::Shutdown => {
             let _ = shutdown.send(()).await;

@@ -170,10 +170,20 @@ impl Session {
     /// is still visible in the file, with its source, for whoever has to work
     /// out what the session is stuck on.
     pub async fn exec(&mut self, code: &str, sink: &mut dyn OutputSink) -> Result<CellResult> {
+        let index = self.append(code)?;
+        self.run_cell(index, sink).await
+    }
+
+    /// Append a code cell and save, without running it.
+    ///
+    /// Split out of [`exec`](Self::exec) so a detached run can report the
+    /// cell's index to its caller before the cell has finished, which is the
+    /// only thing that makes a detached run pollable.
+    pub fn append(&mut self, code: &str) -> Result<usize> {
         let index = self.notebook.push(Cell::new_code(code));
         self.dirty = true;
         self.save()?;
-        self.run_cell(index, sink).await
+        Ok(index)
     }
 
     /// Run the cell at `index`, recording its outputs into the notebook.
