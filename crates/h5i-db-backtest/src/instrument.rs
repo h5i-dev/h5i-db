@@ -212,6 +212,16 @@ impl Instrument {
     /// cash leaves the account for the whole notional on entry and the marked
     /// value belongs in equity. It is also the only kind a corporate action
     /// means anything on: shares split and pay dividends, a swap does not.
+    ///
+    /// **"Bought outright" describes a long. A spot sell is not checked
+    /// against inventory**, so a strategy can go short one of these without
+    /// holding it and without borrowing it. That is deliberate but it is not
+    /// free: real equity shorting needs a locate and a borrow, pays a fee,
+    /// and can be recalled, none of which this models (roadmap F4). Only
+    /// prediction markets are refused a naked short today, because there the
+    /// exposure is unbounded in a way the collateral maths gets wrong; see
+    /// `Engine::naked_short_rejection`. Until F4 lands, a short spot result
+    /// is missing a cost it would really have paid.
     pub fn spot(id: impl Into<String>, venue: impl Into<String>) -> Result<Self> {
         Ok(Self {
             id: InstrumentId::new(id)?,
