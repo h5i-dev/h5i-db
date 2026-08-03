@@ -142,6 +142,12 @@ impl SqlKernel {
         self.fork.as_deref()
     }
 
+    /// Adopt an externally owned interrupt handle. See
+    /// [`JupyterKernel::set_interrupt_handle`](super::JupyterKernel::set_interrupt_handle).
+    pub fn set_interrupt_handle(&mut self, handle: InterruptHandle) {
+        self.interrupt = handle;
+    }
+
     pub fn set_max_rows(&mut self, max_rows: usize) {
         self.options.max_rows = max_rows;
     }

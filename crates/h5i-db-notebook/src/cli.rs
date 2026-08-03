@@ -118,6 +118,9 @@ pub enum Command {
         action: EditAction,
     },
 
+    /// Open the notebook in the terminal UI.
+    View { notebook: PathBuf },
+
     /// Manage the kernel behind a notebook.
     Kernel {
         #[command(subcommand)]
@@ -357,6 +360,24 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
 
         Command::Edit { notebook, action } => edit(cli.format, notebook, action),
+
+        Command::View { notebook } => {
+            if !std::io::stdout().is_terminal() {
+                return Err(Error::invalid(
+                    "`view` needs a terminal; use `cells`, `output`, or `exec` when piping",
+                ));
+            }
+            // The UI owns the session in-process rather than going through the
+            // supervisor: a human at a keyboard is one client, and routing
+            // every keystroke's completion request through a socket would add
+            // latency for nothing. A supervisor already holding this notebook
+            // would fight it for the file, so it is stopped first.
+            let client = SessionClient::new(&notebook);
+            if client.is_running().await {
+                client.shutdown().await?;
+            }
+            crate::tui::run(&notebook).await
+        }
 
         Command::Kernel { action } => kernel(cli.format, action).await,
 

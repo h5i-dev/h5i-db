@@ -17,8 +17,8 @@ use crate::error::{Error, Result};
 use crate::kernel::jupyter::StartOptions;
 use crate::kernel::sql::{SqlKernel, SqlOptions};
 use crate::kernel::{
-    ExecOptions, ExecStatus, JupyterKernel, Kernel, KernelStatus, OutputCollector, OutputEvent,
-    OutputSink, spec,
+    ExecOptions, ExecStatus, InterruptHandle, JupyterKernel, Kernel, KernelStatus, OutputCollector,
+    OutputEvent, OutputSink, spec,
 };
 use crate::magic::{CellRoute, SqlMagic, into_variable_code, route};
 
@@ -52,6 +52,9 @@ pub struct Session {
     database: Option<PathBuf>,
     exec_options: ExecOptions,
     start_options: StartOptions,
+    /// Shared with every kernel this session starts, so a UI can interrupt a
+    /// running cell without holding a borrow on the session.
+    interrupt: InterruptHandle,
     /// Temp files backing `%%sql --into` handoffs, deleted with the session.
     handoffs: Vec<tempfile::TempPath>,
     /// Set when the in-memory notebook differs from the file.
@@ -85,6 +88,7 @@ impl Session {
             sql_options: SqlOptions::default(),
             database,
             exec_options: ExecOptions::default(),
+            interrupt: InterruptHandle::new(),
             handoffs: Vec::new(),
             dirty: false,
         })
@@ -126,6 +130,11 @@ impl Session {
         &mut self.start_options
     }
 
+    /// A handle that interrupts whichever kernel is running a cell.
+    pub fn interrupt_handle(&self) -> InterruptHandle {
+        self.interrupt.clone()
+    }
+
     pub fn kernel_status(&self) -> KernelStatus {
         match &self.kernel {
             Some(kernel) => kernel.status(),
@@ -143,7 +152,8 @@ impl Session {
             return Ok(());
         }
         let spec = spec::find(&self.kernel_name())?;
-        let kernel = JupyterKernel::start(spec, self.start_options.clone()).await?;
+        let mut kernel = JupyterKernel::start(spec, self.start_options.clone()).await?;
+        kernel.set_interrupt_handle(self.interrupt.clone());
         self.kernel = Some(kernel);
         Ok(())
     }
@@ -303,7 +313,9 @@ impl Session {
             if let Some(max_rows) = magic.max_rows {
                 options.max_rows = max_rows;
             }
-            self.sql = Some(SqlKernel::open(&wanted, magic.fork.clone(), options).await?);
+            let mut kernel = SqlKernel::open(&wanted, magic.fork.clone(), options).await?;
+            kernel.set_interrupt_handle(self.interrupt.clone());
+            self.sql = Some(kernel);
         } else if let Some(max_rows) = magic.max_rows
             && let Some(kernel) = self.sql.as_mut()
         {

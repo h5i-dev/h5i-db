@@ -15,6 +15,7 @@ pub mod magic;
 pub mod render;
 pub mod session;
 pub mod supervisor;
+pub mod tui;
 
 pub use document::Notebook;
 pub use error::{Error, ExitCategory, Result};

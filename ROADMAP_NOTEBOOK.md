@@ -1,6 +1,6 @@
 # In-Terminal Notebook — Design & Roadmap
 
-`crates/h5i-db-notebook`, exposed as the `h5i-nb` command line and (planned) a TUI.
+`crates/h5i-db-notebook`, exposed as the `h5i-nb` command line and a TUI.
 
 ---
 
@@ -239,14 +239,29 @@ ratatui + crossterm, modal, with Jupyter's key bindings because that is the
 muscle memory the audience has (`Esc`/`Enter` for command/edit, `a`/`b` insert,
 `dd` delete, `Shift+Enter` run-and-advance).
 
-- Cell editor with tree-sitter highlighting (Python and SQL), which stays pure
-  Rust unlike syntect's oniguruma dependency.
-- Completion popup from `complete_request`, debounced; inspection pane from
+- Cell editor: character-indexed (a notebook full of `日本語` must not put the
+  cursor inside a codepoint), auto-indent, block-opening indent after `:`,
+  goal-column memory on vertical movement.
+- **Highlighting is a hand-written lexer, not tree-sitter.** The grammars are C,
+  and adding a `cc` toolchain to the build of a project whose distribution story
+  is a single static binary — and which already picked a pure-Rust ZeroMQ for
+  that reason — buys accuracy nobody can see in a terminal. Keywords, builtins,
+  strings, comments, and numbers are what colouring needs.
+- **`Shift+Enter` cannot be sent by most terminals at all**: without the kitty
+  keyboard protocol it arrives as a plain `Enter`. The protocol is requested
+  when the terminal supports it, and `e` / `E` are the bindings that always
+  work.
+- Completion popup from `complete_request`, anchored under the cursor and
+  flipped above it near the bottom of the screen; inspection overlay from
   `inspect_request`.
-- Collapsible outputs, scrollback, inline images.
-- Status bar: kernel name and status, execution count, elapsed time, dirty flag.
-- Event loop is a `tokio::select!` over crossterm events, the kernel output
-  stream, and a tick, so a busy kernel never blocks input.
+- Inline images through the kitty and iTerm2 protocols, which pass base64
+  straight through. Sixel and half-blocks would need a PNG decoder and a
+  resampler; unsupported terminals get a labelled placeholder and the output
+  stays reachable through `nb output --save`.
+- Event loop is a `tokio::select!` over crossterm events, runner events, and a
+  tick. The session lives on its own task, so a twenty-minute cell never
+  freezes the screen; `Ctrl-C` interrupts the cell rather than killing the UI,
+  because the notebook is the state.
 
 ---
 
@@ -304,8 +319,8 @@ Each phase ends with something an agent can actually use.
 | N0 | Document model, canonical nbformat writer, atomic saves | **Done.** Differential-tested against real `nbformat` |
 | N1 | `JupyterKernel`, session, supervisor, CLI | **Done.** Persistent state across separate CLI processes, verified end to end |
 | N2 | Agent digest renderer, elision, `\r` collapsing, `--raw` | **Done** for text and errors. Images are named, not yet written to `<notebook>_files/` |
-| N3 | `SqlKernel`, `%%sql`, Arrow handoff | Not started |
-| N4 | Editable TUI | Not started |
+| N3 | `SqlKernel`, `%%sql`, Arrow handoff | **Done.** 291ms cold SQL cell against 1.6s for a Python kernel |
+| N4 | Editable TUI | **Done.** Verified by driving the real UI through a pty |
 | N5 | Export, comm plumbing, `h5i-db nb` mount | Not started |
 
 ### Known gaps in what is built
@@ -320,6 +335,9 @@ Each phase ends with something an agent can actually use.
   referenced by path. The base64 never reaches the terminal either way, so
   the token guarantee holds; what is missing is the ability to then look at
   the picture.
-- **Completion and inspection** are implemented on the kernel and reachable
-  over the supervisor protocol, but no CLI verb exposes them yet. They exist
-  for the TUI.
+- **Completion and inspection** are reachable from the TUI and over the
+  supervisor protocol, but no CLI verb exposes them.
+- **Multi-line strings** highlight only on their first line: the lexer treats
+  lines independently. Wrong for one keystroke inside a triple-quoted block,
+  and not worth a stateful lexer to fix.
+- **Export** (`--to md|py|html`) and the `h5i-db nb` subcommand mount are N5.

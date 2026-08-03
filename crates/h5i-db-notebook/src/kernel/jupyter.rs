@@ -477,6 +477,14 @@ impl JupyterKernel {
         &self.connection
     }
 
+    /// Adopt an externally owned interrupt handle.
+    ///
+    /// A session shares one handle across every kernel it starts, so a UI
+    /// holding it can interrupt whichever kernel happens to be running.
+    pub fn set_interrupt_handle(&mut self, handle: InterruptHandle) {
+        self.interrupt = handle;
+    }
+
     /// The kernel process id, for tests and diagnostics.
     pub fn pid(&self) -> u32 {
         self.process.pid

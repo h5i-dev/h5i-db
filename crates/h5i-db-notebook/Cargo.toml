@@ -30,6 +30,8 @@ libc = "0.2"
 blake3 = { workspace = true }
 clap = { workspace = true }
 comfy-table = { workspace = true }
+ratatui = "0.30"
+crossterm = "0.29"
 tempfile = { workspace = true }
 
 jupyter-protocol = "2.0.2"
