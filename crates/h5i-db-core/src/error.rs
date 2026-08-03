@@ -46,6 +46,49 @@ impl NextAction {
     }
 }
 
+/// Whether an OS-level failure can plausibly clear on its own.
+///
+/// The single owner of that question, so the typed `Error::Io` path and the
+/// `object_store` chain-walk cannot come to different conclusions about the
+/// same full disk.
+fn io_is_retryable(source: &std::io::Error) -> bool {
+    // ENOSPC is the one that matters and the one `ErrorKind` cannot express
+    // on stable Rust, so it is matched by errno: a full disk retried in a
+    // loop writes nothing and hides why.
+    const ENOSPC: i32 = 28;
+    source.raw_os_error() != Some(ENOSPC)
+        && !matches!(
+            source.kind(),
+            std::io::ErrorKind::NotFound
+                | std::io::ErrorKind::PermissionDenied
+                | std::io::ErrorKind::AlreadyExists
+                | std::io::ErrorKind::InvalidInput
+                | std::io::ErrorKind::InvalidData
+                | std::io::ErrorKind::Unsupported
+        )
+}
+
+/// The first `std::io::Error` in an error's source chain.
+///
+/// The OS-level cause of a local-store failure is two links down, not one:
+/// `object_store` wraps its own error type in `Generic`, and that type wraps
+/// the `io::Error` that actually happened. Walking rather than downcasting
+/// once also keeps this correct if a backend adds a layer.
+///
+/// Returns `None` for a store whose failures are not io-backed at all (S3
+/// throttling, a 5xx), which is why the caller treats absence as "no opinion"
+/// and falls back to the variant.
+fn first_io_source<'a>(error: &'a (dyn std::error::Error + 'static)) -> Option<&'a std::io::Error> {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if let Some(io) = error.downcast_ref::<std::io::Error>() {
+            return Some(io);
+        }
+        current = error.source();
+    }
+    None
+}
+
 /// Case-insensitive Levenshtein distance, used only on the error path.
 fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.to_lowercase().chars().collect();
@@ -270,35 +313,31 @@ impl Error {
             // will fail identically forever, and retrying them buries the real
             // cause under N copies of itself. Unknown variants stay retryable,
             // because the transient ones are the open-ended set.
-            Error::ObjectStore(e) => !matches!(
-                e,
-                object_store::Error::NotFound { .. }
-                    | object_store::Error::InvalidPath { .. }
-                    | object_store::Error::NotSupported { .. }
-                    | object_store::Error::AlreadyExists { .. }
-                    | object_store::Error::Precondition { .. }
-                    | object_store::Error::NotModified { .. }
-                    | object_store::Error::NotImplemented { .. }
-                    | object_store::Error::PermissionDenied { .. }
-                    | object_store::Error::Unauthenticated { .. }
-                    | object_store::Error::UnknownConfigurationKey { .. }
-            ),
-            Error::Io { source, .. } => {
-                // ENOSPC is the one that matters and the one `ErrorKind` cannot
-                // express on stable Rust, so it is matched by errno: a full
-                // disk retried in a loop writes nothing and hides why.
-                const ENOSPC: i32 = 28;
-                source.raw_os_error() != Some(ENOSPC)
-                    && !matches!(
-                        source.kind(),
-                        std::io::ErrorKind::NotFound
-                            | std::io::ErrorKind::PermissionDenied
-                            | std::io::ErrorKind::AlreadyExists
-                            | std::io::ErrorKind::InvalidInput
-                            | std::io::ErrorKind::InvalidData
-                            | std::io::ErrorKind::Unsupported
-                    )
+            //
+            // The variant alone cannot decide it, though. `Error::Io` in this
+            // crate only covers HEAD-file writes, dir fsyncs, lock files and
+            // the fork hard-link fallback; every segment, manifest, spec,
+            // catalog and fork-object write goes through `Backend::put` and
+            // lands here instead. `object_store` maps every local failure but
+            // `NotFound`/`AlreadyExists` into `Generic`, so a full disk on the
+            // whole data path looked like an unknown variant and stayed
+            // retryable. Ask the OS-level cause whenever there is one.
+            Error::ObjectStore(e) => {
+                !matches!(
+                    e,
+                    object_store::Error::NotFound { .. }
+                        | object_store::Error::InvalidPath { .. }
+                        | object_store::Error::NotSupported { .. }
+                        | object_store::Error::AlreadyExists { .. }
+                        | object_store::Error::Precondition { .. }
+                        | object_store::Error::NotModified { .. }
+                        | object_store::Error::NotImplemented { .. }
+                        | object_store::Error::PermissionDenied { .. }
+                        | object_store::Error::Unauthenticated { .. }
+                        | object_store::Error::UnknownConfigurationKey { .. }
+                ) && first_io_source(e).is_none_or(io_is_retryable)
             }
+            Error::Io { source, .. } => io_is_retryable(source),
             _ => false,
         }
         // PromoteConflict is deliberately NOT retryable: the losing fork's work
@@ -659,6 +698,102 @@ mod tests {
             Error::Serde(serde_json::from_str::<i32>("nope").unwrap_err()),
             Error::Internal { detail: "d".into() },
         ]
+    }
+
+    /// An error that carries an io cause the way `object_store`'s local store
+    /// does: `Generic` wrapping its own type, which wraps the `io::Error`.
+    #[derive(Debug)]
+    struct LocalLike(std::io::Error);
+
+    impl fmt::Display for LocalLike {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Unable to copy data to file: {}", self.0)
+        }
+    }
+
+    impl std::error::Error for LocalLike {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            Some(&self.0)
+        }
+    }
+
+    fn local_store_error(io: std::io::Error) -> Error {
+        Error::ObjectStore(object_store::Error::Generic {
+            store: "LocalFileSystem",
+            source: Box::new(LocalLike(io)),
+        })
+    }
+
+    /// The premise the ENOSPC classification rests on, pinned against a real
+    /// failure rather than a constructed one: `object_store` maps a local
+    /// write failure into `Generic`, burying the `io::Error` two links down.
+    /// If a future version stops doing that, this fails and says so.
+    #[tokio::test]
+    async fn a_real_local_store_failure_carries_its_io_cause() {
+        use object_store::ObjectStoreExt;
+        let dir = tempfile::tempdir().unwrap();
+        // A file where a directory component is expected: an ordinary,
+        // reproducible local-store write failure.
+        std::fs::write(dir.path().join("blocker"), b"x").unwrap();
+        let store = object_store::local::LocalFileSystem::new_with_prefix(dir.path()).unwrap();
+        let err = store
+            .put(
+                &object_store::path::Path::from("blocker/child.bin"),
+                object_store::PutPayload::from_bytes(bytes::Bytes::from_static(b"data")),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, object_store::Error::Generic { .. }),
+            "a local write failure is expected to arrive as Generic, got {err:?}"
+        );
+        let io = first_io_source(&err).expect("the io cause must be reachable from Generic");
+        assert!(
+            io.raw_os_error().is_some(),
+            "the cause should be an OS error, got {io:?}"
+        );
+    }
+
+    /// The bug in #79: every segment, manifest, catalog and fork-object write
+    /// goes through `Backend::put`, so a full disk arrived as `ObjectStore`
+    /// rather than `Io` and the errno check never ran.
+    #[test]
+    fn a_full_disk_is_permanent_on_the_object_store_path_too() {
+        const ENOSPC: i32 = 28;
+        assert!(
+            !local_store_error(std::io::Error::from_raw_os_error(ENOSPC)).retryable(),
+            "a full disk retried in a loop writes nothing and hides why"
+        );
+        // The typed path agrees, which is the point of sharing the rule.
+        assert!(!Error::io("/p", std::io::Error::from_raw_os_error(ENOSPC)).retryable());
+    }
+
+    #[test]
+    fn an_io_cause_decides_a_generic_that_has_one() {
+        // Permanent for the same reasons the typed path calls them permanent.
+        assert!(
+            !local_store_error(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                .retryable()
+        );
+        // ...and transient ones still retry.
+        assert!(
+            local_store_error(std::io::Error::from(std::io::ErrorKind::ConnectionReset))
+                .retryable()
+        );
+    }
+
+    #[test]
+    fn a_generic_without_an_io_cause_is_unchanged() {
+        // Throttling and 5xx from a remote store carry no errno, so the
+        // variant keeps the last word and they stay retryable.
+        assert!(
+            Error::ObjectStore(object_store::Error::Generic {
+                store: "s3",
+                source: "throttled".into(),
+            })
+            .retryable()
+        );
     }
 
     #[test]
