@@ -12,6 +12,9 @@ name = "h5i-nb"
 path = "src/bin/h5i-nb.rs"
 
 [dependencies]
+h5i-db-core = { workspace = true }
+h5i-db-query = { workspace = true }
+arrow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -27,11 +30,13 @@ libc = "0.2"
 blake3 = { workspace = true }
 clap = { workspace = true }
 comfy-table = { workspace = true }
+tempfile = { workspace = true }
 
 jupyter-protocol = "2.0.2"
 jupyter-zmq-client = { version = "1.0.1", default-features = false, features = ["tokio-runtime", "ring"] }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+arrow = { workspace = true }
+h5i-db-core = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 libc = "0.2"

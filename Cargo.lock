@@ -1947,6 +1947,7 @@ dependencies = [
 name = "h5i-db-notebook"
 version = "0.1.4"
 dependencies = [
+ "arrow",
  "async-trait",
  "base64",
  "blake3",
@@ -1954,6 +1955,8 @@ dependencies = [
  "clap",
  "comfy-table",
  "futures",
+ "h5i-db-core",
+ "h5i-db-query",
  "jupyter-protocol",
  "jupyter-zmq-client",
  "libc",

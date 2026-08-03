@@ -50,6 +50,10 @@ pub enum Command {
         /// Kernel to record in the notebook's metadata.
         #[arg(long, default_value = "python3")]
         kernel: String,
+        /// Database that this notebook's `%%sql` cells query by default.
+        /// Recorded in the notebook, so it travels with the file.
+        #[arg(long)]
+        db: Option<String>,
     },
 
     /// Append a code cell and run it. Reads code from stdin when given `-`.
@@ -212,20 +216,33 @@ fn timeout_arg(seconds: u64) -> Option<u64> {
 
 pub async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::New { notebook, kernel } => {
-            let session = crate::Session::create(&notebook, &kernel)?;
+        Command::New {
+            notebook,
+            kernel,
+            db,
+        } => {
+            let mut session = crate::Session::create(&notebook, &kernel)?;
+            if let Some(db) = &db {
+                crate::session::set_notebook_database(session.notebook_mut(), db);
+                session.save()?;
+            }
             emit(
                 cli.format,
                 serde_json::json!({
                     "notebook": notebook.display().to_string(),
                     "kernel": session.kernel_name(),
+                    "database": db,
                 }),
                 || {
-                    format!(
+                    let mut line = format!(
                         "created {} with kernel {}",
                         notebook.display(),
                         session.kernel_name()
-                    )
+                    );
+                    if let Some(db) = &db {
+                        line.push_str(&format!(" and database {db}"));
+                    }
+                    line
                 },
             )
         }
@@ -391,13 +408,11 @@ fn render_cell_table(notebook: &Notebook) -> String {
 }
 
 fn save_output(outputs: &[Output], index: usize, cell: usize, path: &PathBuf) -> Result<()> {
-    let output = outputs
-        .get(index)
-        .ok_or(Error::OutputIndexOutOfRange {
-            index: cell,
-            output: index,
-            len: outputs.len(),
-        })?;
+    let output = outputs.get(index).ok_or(Error::OutputIndexOutOfRange {
+        index: cell,
+        output: index,
+        len: outputs.len(),
+    })?;
     let bundle = output.data().ok_or_else(|| {
         Error::invalid(format!(
             "output {index} of cell {cell} is a {} and has no saveable payload",

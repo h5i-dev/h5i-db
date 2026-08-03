@@ -7,15 +7,20 @@
 
 pub mod jupyter;
 pub mod spec;
+pub mod sql;
 
 pub use jupyter::JupyterKernel;
 pub use spec::{KernelSpecInfo, discover, find};
+pub use sql::SqlKernel;
 
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Notify;
 
 use crate::document::{MimeBundle, Output, StreamName, StreamOutput};
 use crate::error::Result;
@@ -283,10 +288,67 @@ pub enum Completeness {
     Unknown,
 }
 
+/// A cheap, cloneable way to interrupt a cell that is already running.
+///
+/// [`Kernel::interrupt`] takes `&mut self`, so it cannot be called while
+/// `execute` holds the borrow. That is exactly when a user presses Ctrl-C, so
+/// the handle exists to break the deadlock: it only sets a flag and wakes the
+/// running `execute`, which then performs whatever interruption its kernel
+/// actually needs (a signal, a control message, dropping a query future).
+#[derive(Clone, Default)]
+pub struct InterruptHandle {
+    requested: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+impl InterruptHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Request an interrupt. Safe to call from anywhere, including a UI event
+    /// loop that holds no lock on the kernel.
+    pub fn interrupt(&self) {
+        self.requested.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    /// Wait until an interrupt is requested.
+    ///
+    /// Checks the flag first so a request that arrived before the wait began
+    /// is not lost.
+    pub async fn requested(&self) {
+        if self.requested.load(Ordering::Acquire) {
+            return;
+        }
+        self.notify.notified().await;
+    }
+
+    pub fn is_requested(&self) -> bool {
+        self.requested.load(Ordering::Acquire)
+    }
+
+    /// Clear the flag, so the next cell starts uninterrupted.
+    pub fn reset(&self) {
+        self.requested.store(false, Ordering::Release);
+    }
+}
+
+impl std::fmt::Debug for InterruptHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("InterruptHandle")
+            .field("requested", &self.is_requested())
+            .finish()
+    }
+}
+
 #[async_trait]
 pub trait Kernel: Send {
     fn spec(&self) -> &KernelSpecInfo;
     fn status(&self) -> KernelStatus;
+
+    /// A handle that can interrupt a running cell without borrowing the kernel.
+    fn interrupt_handle(&self) -> InterruptHandle;
 
     /// Run `code` to completion, streaming events to `sink`.
     async fn execute(

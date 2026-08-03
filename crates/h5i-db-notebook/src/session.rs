@@ -15,10 +15,12 @@ use std::time::Duration;
 use crate::document::{Cell, Notebook, Output};
 use crate::error::{Error, Result};
 use crate::kernel::jupyter::StartOptions;
+use crate::kernel::sql::{SqlKernel, SqlOptions};
 use crate::kernel::{
     ExecOptions, ExecStatus, JupyterKernel, Kernel, KernelStatus, OutputCollector, OutputEvent,
     OutputSink, spec,
 };
+use crate::magic::{CellRoute, SqlMagic, into_variable_code, route};
 
 /// What happened to one cell in a run.
 #[derive(Debug, Clone)]
@@ -41,8 +43,17 @@ pub struct Session {
     path: PathBuf,
     notebook: Notebook,
     kernel: Option<JupyterKernel>,
+    /// The native SQL backend, opened lazily on the first `%%sql` cell so a
+    /// pure-Python notebook never pays to open a database.
+    sql: Option<SqlKernel>,
+    sql_options: SqlOptions,
+    /// Database `%%sql` uses when a cell does not name one. Read from the
+    /// notebook's own metadata, so it travels with the file.
+    database: Option<PathBuf>,
     exec_options: ExecOptions,
     start_options: StartOptions,
+    /// Temp files backing `%%sql --into` handoffs, deleted with the session.
+    handoffs: Vec<tempfile::TempPath>,
     /// Set when the in-memory notebook differs from the file.
     dirty: bool,
 }
@@ -56,6 +67,7 @@ impl Session {
         let path = path.as_ref().to_path_buf();
         let mut notebook = Notebook::read(&path)?;
         notebook.normalize();
+        let database = notebook_database(&notebook, &path);
         Ok(Session {
             // The kernel's working directory is the notebook's directory, so
             // relative paths in cells mean what the author expects.
@@ -69,7 +81,11 @@ impl Session {
             path,
             notebook,
             kernel: None,
+            sql: None,
+            sql_options: SqlOptions::default(),
+            database,
             exec_options: ExecOptions::default(),
+            handoffs: Vec::new(),
             dirty: false,
         })
     }
@@ -167,10 +183,10 @@ impl Session {
                 },
             });
         }
-        let code = cell.source().to_string();
+        let source = cell.source().to_string();
         let cell_id = cell.id().map(str::to_string);
-
-        self.ensure_kernel().await?;
+        let (destination, body) = route(&source)?;
+        let code = body.to_string();
         let options = self.exec_options.clone();
 
         // Mirror every event into a collector as well as the caller's sink, so
@@ -178,31 +194,69 @@ impl Session {
         // write back.
         let mut collector = OutputCollector::new();
         let mut execution_count = None;
-        let mut outcome = {
-            let kernel = self.kernel_mut()?;
-            let mut tee = Tee {
-                collector: &mut collector,
-                execution_count: &mut execution_count,
-                inner: sink,
-            };
-            kernel.execute(&code, &options, &mut tee).await
+        let mut outcome = match &destination {
+            CellRoute::Kernel => {
+                self.ensure_kernel().await?;
+                let kernel = self.kernel_mut()?;
+                let mut tee = Tee {
+                    collector: &mut collector,
+                    execution_count: &mut execution_count,
+                    inner: sink,
+                };
+                kernel.execute(&code, &options, &mut tee).await
+            }
+            CellRoute::Sql(magic) => {
+                self.ensure_sql(magic).await?;
+                let kernel = self.sql.as_mut().ok_or(Error::KernelNotRunning)?;
+                let mut tee = Tee {
+                    collector: &mut collector,
+                    execution_count: &mut execution_count,
+                    inner: sink,
+                };
+                kernel.execute(&code, &options, &mut tee).await
+            }
         };
 
-        // A timeout or a dead kernel still produced output worth keeping.
-        let (status, outputs, count, elapsed) = match &mut outcome {
-            Ok(o) => (
-                o.status,
-                std::mem::take(&mut o.outputs),
-                o.execution_count,
-                o.elapsed,
-            ),
-            Err(_) => (
-                ExecStatus::Error,
-                collector.into_outputs(),
+        // `--into` runs a second, generated cell against the Python kernel.
+        // It is executed only after a successful query, and its own output is
+        // appended to the SQL cell's, so the notebook shows one cell that both
+        // queried and bound the variable.
+        if let (CellRoute::Sql(magic), Ok(result)) = (&destination, &outcome)
+            && let Some(name) = magic.into.clone()
+            && result.status == ExecStatus::Ok
+            && let Err(error) = self
+                .hand_off_to_python(&code, &name, &mut collector, sink)
+                .await
+        {
+            collector.push(Output::Error(crate::document::ErrorOutput {
+                ename: "HandoffError".to_string(),
+                evalue: error.to_string(),
+                traceback: vec![format!("HandoffError: {error}")],
+                extra: Default::default(),
+            }));
+            outcome = Ok(crate::kernel::ExecOutcome {
+                status: ExecStatus::Error,
                 execution_count,
-                Duration::ZERO,
-            ),
+                outputs: Vec::new(),
+                elapsed: Duration::ZERO,
+            });
+        }
+
+        // Outputs always come from the tee collector rather than the kernel's
+        // own list: a `%%sql --into` cell runs two kernels, and only the
+        // collector saw both halves. A timeout or a dead kernel still produced
+        // output worth keeping, and the collector has that too.
+        let outputs = collector.into_outputs();
+        let (status, elapsed) = match &outcome {
+            Ok(o) => (o.status, o.elapsed),
+            Err(_) => (ExecStatus::Error, Duration::ZERO),
         };
+
+        // The notebook, not the kernel, numbers executions. Two kernels share
+        // one file, so leaving each to its own counter produces a notebook
+        // where a SQL cell reads [5] beside a Python cell that reads [2].
+        let count = Some(self.notebook.max_execution_count() + 1);
+        let _ = execution_count;
 
         if let Some(code_cell) = self.notebook.get_mut(index)?.as_code_mut() {
             code_cell.outputs = outputs.clone();
@@ -222,6 +276,106 @@ impl Session {
             outputs,
             elapsed,
         })
+    }
+
+    /// Open (or reopen) the SQL backend for a cell's requirements.
+    ///
+    /// A cell naming a different database or fork than the one currently open
+    /// gets a fresh backend: silently querying the wrong database because an
+    /// earlier cell opened it first would be the worst possible failure here.
+    async fn ensure_sql(&mut self, magic: &SqlMagic) -> Result<()> {
+        let wanted = match &magic.database {
+            Some(path) => self.resolve_database(path),
+            None => self.database.clone().ok_or_else(|| {
+                Error::invalid(
+                    "this %%sql cell has no database: pass `%%sql --db <path>`, or set one \
+                     for the whole notebook with `h5i-nb new … --db <path>`",
+                )
+            })?,
+        };
+
+        let matches = self
+            .sql
+            .as_ref()
+            .is_some_and(|k| k.database_path() == wanted && k.fork() == magic.fork.as_deref());
+        if !matches {
+            let mut options = self.sql_options.clone();
+            if let Some(max_rows) = magic.max_rows {
+                options.max_rows = max_rows;
+            }
+            self.sql = Some(SqlKernel::open(&wanted, magic.fork.clone(), options).await?);
+        } else if let Some(max_rows) = magic.max_rows
+            && let Some(kernel) = self.sql.as_mut()
+        {
+            kernel.set_max_rows(max_rows);
+        }
+
+        // Keep SQL numbering continuous with whatever the notebook records, so
+        // two kernels sharing one file do not both count from [1].
+        let next = self.notebook.max_execution_count();
+        if let Some(kernel) = self.sql.as_mut() {
+            kernel.set_execution_count(next);
+        }
+        Ok(())
+    }
+
+    /// Relative database paths resolve against the notebook, not the process.
+    fn resolve_database(&self, path: &str) -> PathBuf {
+        let candidate = PathBuf::from(path);
+        if candidate.is_absolute() {
+            return candidate;
+        }
+        match self.path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            Some(dir) => dir.join(candidate),
+            None => candidate,
+        }
+    }
+
+    /// Re-run the query, write it as Arrow IPC, and bind it in the Python
+    /// kernel.
+    ///
+    /// The query runs twice rather than the result being kept from the first
+    /// execution, because the rendered result is capped at `max_rows` while a
+    /// handoff should bind what the query actually returns. Paying for a second
+    /// scan is the honest trade against silently handing over a truncated
+    /// frame.
+    async fn hand_off_to_python(
+        &mut self,
+        sql: &str,
+        name: &str,
+        collector: &mut OutputCollector,
+        sink: &mut dyn OutputSink,
+    ) -> Result<()> {
+        let kernel = self.sql.as_ref().ok_or(Error::KernelNotRunning)?;
+        let file = tempfile::Builder::new()
+            .prefix("h5i-nb-handoff-")
+            .suffix(".arrow")
+            .tempfile()
+            .map_err(|e| Error::io("temp file", e))?;
+        let path = file.into_temp_path();
+        kernel.write_ipc(sql, &path).await?;
+        let code = into_variable_code(name, &path.to_string_lossy());
+        // Held so the file outlives the kernel's read but still goes away with
+        // the session.
+        self.handoffs.push(path);
+
+        self.ensure_kernel().await?;
+        let options = self.exec_options.clone();
+        let kernel = self.kernel_mut()?;
+        let mut execution_count = None;
+        let mut tee = Tee {
+            collector,
+            execution_count: &mut execution_count,
+            inner: sink,
+        };
+        let outcome = kernel.execute(&code, &options, &mut tee).await?;
+        if outcome.status != ExecStatus::Ok {
+            return Err(Error::invalid(format!(
+                "binding the result to `{name}` failed in the Python kernel; \
+                 pyarrow must be importable there"
+            )));
+        }
+        Ok(())
     }
 
     /// Run several cells in order, stopping at the first error.
@@ -393,6 +547,44 @@ pub fn parse_cell_range(spec: &str, total: usize) -> Result<Vec<usize>> {
         }
     }
     Ok(out)
+}
+
+/// The database a notebook's `%%sql` cells default to.
+///
+/// Stored under `metadata.h5i.database` so it travels with the file, and
+/// resolved relative to the notebook so a checked-in notebook works from any
+/// working directory.
+pub fn notebook_database(notebook: &Notebook, notebook_path: &Path) -> Option<PathBuf> {
+    let raw = notebook
+        .metadata
+        .get("h5i")?
+        .get("database")?
+        .as_str()?
+        .to_string();
+    let candidate = PathBuf::from(&raw);
+    if candidate.is_absolute() {
+        return Some(candidate);
+    }
+    Some(
+        match notebook_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            Some(dir) => dir.join(candidate),
+            None => candidate,
+        },
+    )
+}
+
+/// Record the notebook-wide default database.
+pub fn set_notebook_database(notebook: &mut Notebook, database: &str) {
+    let entry = notebook
+        .metadata
+        .entry("h5i")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(map) = entry.as_object_mut() {
+        map.insert(
+            "database".to_string(),
+            serde_json::Value::String(database.to_string()),
+        );
+    }
 }
 
 #[cfg(test)]

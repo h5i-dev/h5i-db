@@ -39,8 +39,8 @@ use crate::document::{
 use crate::error::{Error, Result};
 use crate::kernel::spec::{InterruptMode, KernelSpecInfo, runtime_dir};
 use crate::kernel::{
-    Completeness, Completions, ExecOptions, ExecOutcome, ExecStatus, Kernel, KernelStatus,
-    OutputCollector, OutputEvent, OutputSink,
+    Completeness, Completions, ExecOptions, ExecOutcome, ExecStatus, InterruptHandle, Kernel,
+    KernelStatus, OutputCollector, OutputEvent, OutputSink,
 };
 
 /// How long to wait for the first `kernel_info_reply` before giving up.
@@ -245,6 +245,9 @@ pub struct JupyterKernel {
     stdin: DealerSendConnection,
     router: Arc<Router>,
     status: Arc<SharedStatus>,
+    /// Set by anyone holding an [`InterruptHandle`]; acted on by `execute`,
+    /// which is the only place that knows the kernel's interrupt mode.
+    interrupt: InterruptHandle,
     readers: Vec<JoinHandle<()>>,
     /// Banner and language info from the handshake.
     pub kernel_info: Option<Box<jupyter_protocol::KernelInfoReply>>,
@@ -350,6 +353,7 @@ impl JupyterKernel {
             stdin: stdin_tx,
             router,
             status,
+            interrupt: InterruptHandle::new(),
             readers,
             kernel_info: None,
         })
@@ -526,6 +530,10 @@ impl Kernel for JupyterKernel {
         self.status.get()
     }
 
+    fn interrupt_handle(&self) -> InterruptHandle {
+        self.interrupt.clone()
+    }
+
     async fn execute(
         &mut self,
         code: &str,
@@ -551,6 +559,8 @@ impl Kernel for JupyterKernel {
         };
 
         let started = Instant::now();
+        // A stale request from a previous cell must not interrupt this one.
+        self.interrupt.reset();
         self.send(message, Channel::Shell).await?;
 
         let mut collector = OutputCollector::new();
@@ -558,6 +568,7 @@ impl Kernel for JupyterKernel {
         let mut reply_status: Option<ReplyStatus> = None;
         let mut saw_idle = false;
         let mut interrupted_at: Option<Instant> = None;
+        let mut interrupted_by_user = false;
 
         loop {
             // The kernel is done with a request when it has both sent the
@@ -568,41 +579,63 @@ impl Kernel for JupyterKernel {
             }
 
             let deadline = match interrupted_at {
-                Some(at) => Some(at + INTERRUPT_DRAIN),
-                None => options.timeout.map(|t| started + t),
+                Some(at) => Some(tokio::time::Instant::from_std(at + INTERRUPT_DRAIN)),
+                None => options
+                    .timeout
+                    .map(|t| tokio::time::Instant::from_std(started + t)),
             };
 
-            let next = match deadline {
-                Some(d) => {
-                    let now = Instant::now();
-                    if now >= d {
-                        None
-                    } else {
-                        tokio::time::timeout(d - now, rx.recv()).await.ok()
-                    }
+            // Three things can wake us: a message, the deadline, or somebody
+            // holding an `InterruptHandle` pressing Ctrl-C. The interrupt
+            // branch is disabled once we have already interrupted, so the
+            // drain window is governed purely by the deadline.
+            let wake = {
+                let interrupt = self.interrupt.clone();
+                tokio::select! {
+                    biased;
+                    message = rx.recv() => match message {
+                        Some(message) => Wake::Message(Box::new(message)),
+                        None => Wake::Closed,
+                    },
+                    _ = async {
+                        match deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => Wake::Deadline,
+                    _ = interrupt.requested(), if interrupted_at.is_none() => Wake::Interrupted,
                 }
-                None => Some(rx.recv().await),
             };
 
-            let message = match next {
-                Some(Some(message)) => message,
-                Some(None) => {
+            let message = match wake {
+                Wake::Message(message) => *message,
+                Wake::Closed => {
                     return Err(Error::KernelDied {
                         detail: describe_exit(&self.process),
                     });
                 }
-                None if interrupted_at.is_some() => {
-                    // Interrupt did not settle the kernel in time.
-                    return Err(Error::ExecuteTimeout {
-                        timeout_secs: options.timeout.map(|t| t.as_secs()).unwrap_or(0).max(1),
+                Wake::Deadline if interrupted_at.is_some() => {
+                    // The interrupt did not settle the kernel in time.
+                    return Err(if interrupted_by_user {
+                        Error::Interrupted
+                    } else {
+                        Error::ExecuteTimeout {
+                            timeout_secs: options.timeout.map(|t| t.as_secs()).unwrap_or(0).max(1),
+                        }
                     });
                 }
-                None => {
+                Wake::Deadline => {
                     // Interrupt rather than abandon: leaving the kernel busy
                     // would block every later cell in the session, and the
                     // partial outputs already reached the sink.
                     let _ = self.interrupt().await;
                     interrupted_at = Some(Instant::now());
+                    continue;
+                }
+                Wake::Interrupted => {
+                    let _ = self.interrupt().await;
+                    interrupted_at = Some(Instant::now());
+                    interrupted_by_user = true;
                     continue;
                 }
             };
@@ -628,7 +661,10 @@ impl Kernel for JupyterKernel {
             }
         }
 
-        if interrupted_at.is_some() {
+        // An interrupt that settled cleanly still produced outputs (the
+        // KeyboardInterrupt traceback), so it is reported as a normal error
+        // outcome rather than as a failure of the call.
+        if interrupted_at.is_some() && !interrupted_by_user {
             return Err(Error::ExecuteTimeout {
                 timeout_secs: options.timeout.map(|t| t.as_secs()).unwrap_or(0).max(1),
             });
@@ -910,6 +946,18 @@ impl JupyterKernel {
         }
         Progress::Continue
     }
+}
+
+/// Why the execute loop woke up.
+enum Wake {
+    // Boxed: a JupyterMessage is an order of magnitude larger than the other
+    // variants, and this enum is constructed on every message.
+    Message(Box<JupyterMessage>),
+    /// The kernel's channels closed under us.
+    Closed,
+    Deadline,
+    /// Somebody holding an `InterruptHandle` asked to stop the cell.
+    Interrupted,
 }
 
 /// What one message told us about where the request has got to.
