@@ -329,8 +329,12 @@ impl Kernel for SqlKernel {
                 let mut outputs = Vec::new();
 
                 if truncated {
+                    // Worded as "kept", not "showing": with `%%sql --into` the
+                    // bound variable holds every row, and a message that
+                    // reads as though the whole result were capped would
+                    // contradict the handoff line printed right after it.
                     let warning = format!(
-                        "note: showing the first {} rows; raise --max-rows or add a LIMIT\n",
+                        "note: kept the first {} rows of a larger result (--max-rows)\n",
                         self.options.max_rows
                     );
                     let output = Output::stream(StreamName::Stderr, warning);

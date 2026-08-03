@@ -158,7 +158,7 @@ async fn the_row_cap_is_reported_rather_than_silently_applied() {
             _ => None,
         })
         .expect("truncation must be announced, not silent");
-    assert!(warning.contains("first 10 rows"), "{warning}");
+    assert!(warning.contains("kept the first 10 rows"), "{warning}");
     assert!(result_text(&outcome.outputs).contains("10+ rows"));
 }
 
