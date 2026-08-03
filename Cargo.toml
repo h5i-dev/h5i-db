@@ -14,6 +14,7 @@ members = [
     "crates/h5i-db-ui",
     "crates/h5i-db-backtest",
     "crates/h5i-db-venues",
+    "crates/h5i-db-notebook",
 ]
 default-members = [
     "crates/h5i-db-core",
