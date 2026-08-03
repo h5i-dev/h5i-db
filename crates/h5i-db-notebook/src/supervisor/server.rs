@@ -20,6 +20,28 @@ use crate::supervisor::protocol::{CellReport, Request, Response, SessionInfo, St
 /// restart, short enough that abandoned sessions do not accumulate.
 pub const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(3600);
 
+/// How long to wait for a client's request line before hanging up.
+///
+/// A client writes its request immediately after connecting, so anything
+/// slower is a connection that will never speak: without a bound it would hold
+/// a task (and, before per-connection tasks, the whole accept loop) forever.
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long to wait for a running cell to release the session while shutting
+/// down, before interrupting it.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// How long an edit waits for a running cell before reporting the session busy.
+const EDIT_LOCK_WAIT: Duration = Duration::from_secs(5);
+
+/// How often to test whether the session has been idle past its TTL.
+const IDLE_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How long a starting supervisor waits for a departing one to release the
+/// notebook. Longer than the shutdown drain, so the ordinary stop-then-start
+/// sequence hands over rather than colliding.
+const LOCK_HANDOVER_WAIT: Duration = Duration::from_secs(15);
+
 pub struct ServerOptions {
     pub socket: PathBuf,
     pub idle_ttl: Duration,
@@ -33,7 +55,6 @@ struct State {
 
 /// Run the supervisor until it is told to shut down or idles out.
 pub async fn serve(notebook: &Path, options: ServerOptions) -> Result<()> {
-    let session = Session::open(notebook)?;
     let socket = options.socket.clone();
 
     if let Some(parent) = socket.parent() {
@@ -46,8 +67,42 @@ pub async fn serve(notebook: &Path, options: ServerOptions) -> Result<()> {
             let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
         }
     }
-    // A socket left by a crashed supervisor would make bind fail. The client
-    // only starts us after failing to connect, so a leftover is stale.
+
+    // Ownership is claimed before anything is touched, because everything that
+    // follows is destructive to a supervisor that already owns this notebook:
+    // two supervisors would each hold the file in memory and each rewrite it
+    // whole, so the second to save silently erases the first one's cells.
+    // Held for the whole process lifetime, and released by the kernel on exit
+    // however we die.
+    let lock_path = crate::supervisor::lock_path(notebook);
+    let _ownership = match SupervisorLock::try_acquire(&lock_path)? {
+        Some(held) => held,
+        None => {
+            let already_running = || Error::SessionAlreadyRunning {
+                path: notebook.display().to_string(),
+            };
+            // Somebody holds it. Which of two very different situations that
+            // is shows in whether they are actually serving: a live socket
+            // means this is a duplicate start, and saying so at once beats
+            // waiting; no socket means the holder is on its way out and we are
+            // its replacement, which is the ordinary `kernel stop` followed by
+            // a fresh `exec`. Refusing that one would strand the client, which
+            // is waiting for a socket that nobody is left to bind.
+            if UnixStream::connect(&socket).await.is_ok() {
+                return Err(already_running());
+            }
+            match SupervisorLock::acquire_within(&lock_path, LOCK_HANDOVER_WAIT).await? {
+                Some(held) => held,
+                None => return Err(already_running()),
+            }
+        }
+    };
+
+    let session = Session::open(notebook)?;
+
+    // Safe now: holding the lock means no other supervisor is serving this
+    // notebook, so whatever is at the socket path is a leftover from one that
+    // died without cleaning up.
     let _ = std::fs::remove_file(&socket);
 
     let listener = UnixListener::bind(&socket).map_err(|e| Error::io(socket.display(), e))?;
@@ -68,28 +123,38 @@ pub async fn serve(notebook: &Path, options: ServerOptions) -> Result<()> {
     }));
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel::<()>(1);
 
+    // A ticker rather than a fresh sleep per iteration: a sleep created inside
+    // the `select!` restarts on every connection, so a client polling more
+    // often than the interval would keep the idle check from ever running and
+    // an abandoned session would never exit.
+    let mut idle_check = tokio::time::interval(IDLE_CHECK_INTERVAL);
+    idle_check.tick().await;
+
     let result = loop {
         tokio::select! {
             incoming = listener.accept() => {
                 match incoming {
                     Ok((stream, _)) => {
-                        // Handled one at a time: the session owns a single
-                        // kernel, so concurrency here would only buy lock
-                        // contention and interleaved output.
-                        handle_connection(
+                        // One task per connection. Serving them inline would
+                        // mean the lock-free Status and Interrupt paths queue
+                        // behind whatever request is already being served, so
+                        // a client could neither see nor stop a running cell:
+                        // the two things worth doing while one runs. The
+                        // session mutex, not the accept loop, is what keeps
+                        // execution serialized.
+                        tokio::spawn(handle_connection(
                             stream,
                             state.clone(),
                             shutdown_tx.clone(),
                             interrupt.clone(),
                             notebook.clone(),
-                        )
-                        .await;
+                        ));
                     }
                     Err(error) => break Err(Error::io(socket.display(), error)),
                 }
             }
             _ = shutdown_rx.recv() => break Ok(()),
-            _ = tokio::time::sleep(Duration::from_secs(30)) => {
+            _ = idle_check.tick() => {
                 // `try_lock`, never `lock`: a detached cell holds the session
                 // for as long as it runs, and blocking here would stall the
                 // accept loop, so status polling would hang exactly while
@@ -110,11 +175,110 @@ pub async fn serve(notebook: &Path, options: ServerOptions) -> Result<()> {
     let _ = std::fs::remove_file(&socket);
     drop(listener);
 
-    let mut guard = state.lock().await;
-    let _ = guard.session.shutdown().await;
-    let _ = guard.session.save();
-    drop(guard);
+    // A cell may still hold the session: a detached run, or one whose client
+    // walked away. Wait briefly, then interrupt it. Waiting unconditionally
+    // would let a single `while True` cell keep the supervisor (and its
+    // kernel) alive forever after it was told to stop.
+    let guard = match tokio::time::timeout(SHUTDOWN_GRACE, state.lock()).await {
+        Ok(guard) => Some(guard),
+        Err(_) => {
+            interrupt.interrupt();
+            tokio::time::timeout(SHUTDOWN_GRACE, state.lock())
+                .await
+                .ok()
+        }
+    };
+    match guard {
+        Some(mut guard) => {
+            let _ = guard.session.shutdown().await;
+            let _ = guard.session.save();
+        }
+        None => {
+            // The cell will not yield the session, so its outputs cannot be
+            // saved from here. Exiting anyway is still right: the kernel is a
+            // child process group that dies with us, and every cell that did
+            // finish was saved as it finished.
+            tracing::warn!("shutting down with a cell still running; its outputs are lost");
+        }
+    }
     result
+}
+
+/// Exclusive claim on one notebook's supervisor role.
+///
+/// An advisory `flock` rather than a pid file: the kernel drops it when the
+/// process dies however it dies, so a supervisor that is SIGKILLed or OOM-
+/// killed leaves nothing stale behind. A pid file would need a liveness check,
+/// and checking a recycled pid is exactly the mistake that lets one supervisor
+/// declare another one dead.
+struct SupervisorLock {
+    #[allow(dead_code)]
+    file: std::fs::File,
+}
+
+impl SupervisorLock {
+    /// Claim the lock, waiting up to `limit` for the current holder to exit.
+    ///
+    /// Polled rather than blocking on `flock`, so the wait has a bound: a
+    /// holder that is wedged rather than exiting must not turn every later
+    /// start into a hang.
+    async fn acquire_within(path: &Path, limit: Duration) -> Result<Option<Self>> {
+        let deadline = tokio::time::Instant::now() + limit;
+        loop {
+            if let Some(held) = Self::try_acquire(path)? {
+                return Ok(Some(held));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// Claim the lock, or return `None` if another process holds it.
+    fn try_acquire(path: &Path) -> Result<Option<Self>> {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::io::AsRawFd;
+
+        // The lock lives in the session directory, which an explicit
+        // `--socket` elsewhere would not have created.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent.display(), e))?;
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| Error::io(path.display(), e))?;
+
+        // SAFETY: `flock` on a descriptor we own. LOCK_NB makes it answer
+        // rather than wait, which is what turns "somebody else is serving
+        // this notebook" into a decision instead of a hang.
+        let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if taken != 0 {
+            let error = std::io::Error::last_os_error();
+            return match error.kind() {
+                std::io::ErrorKind::WouldBlock => Ok(None),
+                _ => Err(Error::io(path.display(), error)),
+            };
+        }
+
+        // Recorded for whoever has to work out which process is holding a
+        // session; nothing reads it back, because the lock itself is the
+        // authority on liveness.
+        use std::io::Write;
+        let mut file = file;
+        let _ = file.set_len(0);
+        let _ = writeln!(file, "{}", std::process::id());
+        let _ = file.flush();
+        Ok(Some(SupervisorLock { file }))
+    }
 }
 
 async fn handle_connection(
@@ -151,16 +315,27 @@ async fn handle_connection(
         let _ = out.shutdown().await;
     });
 
-    if let Ok(Some(line)) = lines.next_line().await {
-        let response = match serde_json::from_str::<Request>(&line) {
-            Ok(request) => {
-                dispatch(request, &state, &frames, &shutdown, &interrupt, &notebook).await
-            }
-            Err(error) => {
-                Response::from_error(&Error::invalid(format!("malformed request: {error}")))
-            }
-        };
-        let _ = frames.send(response);
+    // A connection that never sends a request is a leak, not a client.
+    match tokio::time::timeout(REQUEST_READ_TIMEOUT, lines.next_line()).await {
+        Ok(Ok(Some(line))) => {
+            let response = match serde_json::from_str::<Request>(&line) {
+                Ok(request) => {
+                    dispatch(request, &state, &frames, &shutdown, &interrupt, &notebook).await
+                }
+                Err(error) => {
+                    Response::from_error(&Error::invalid(format!("malformed request: {error}")))
+                }
+            };
+            let _ = frames.send(response);
+        }
+        Err(_) => {
+            let _ = frames.send(Response::from_error(&Error::invalid(format!(
+                "no request within {}s of connecting",
+                REQUEST_READ_TIMEOUT.as_secs()
+            ))));
+        }
+        // A client that hung up or failed mid-line has nothing to be told.
+        Ok(_) => {}
     }
 
     drop(frames);
@@ -211,6 +386,14 @@ async fn dispatch(
         return Response::Ok;
     }
 
+    // Nor does shutdown. "Stop this session" has to work while a cell is
+    // running, or an unattended cell with no timeout could never be stopped at
+    // all; the drain in `serve` interrupts whatever is still holding it.
+    if matches!(request, Request::Shutdown) {
+        let _ = shutdown.send(()).await;
+        return Response::Ok;
+    }
+
     // A detached run keeps the session for as long as the cell takes. Rather
     // than let a second `exec` block until it finishes, which reads as a hang,
     // say so: `session_busy` is retryable and carries exit code 3.
@@ -220,6 +403,20 @@ async fn dispatch(
             return Response::from_error(&Error::SessionBusy {
                 path: notebook.display().to_string(),
             });
+        }
+        // An edit has to reach the session that owns the notebook, so it waits
+        // for the running cell rather than being refused outright. Bounded,
+        // because a cell with no timeout would otherwise turn `nb edit` into a
+        // hang with nothing to show for it.
+        Err(_) if matches!(request, Request::Edit { .. }) => {
+            match tokio::time::timeout(EDIT_LOCK_WAIT, state.lock()).await {
+                Ok(guard) => guard,
+                Err(_) => {
+                    return Response::from_error(&Error::SessionBusy {
+                        path: notebook.display().to_string(),
+                    });
+                }
+            }
         }
         Err(_) => state.lock().await,
     };
@@ -326,10 +523,16 @@ async fn run_request(
         // Handled in `dispatch`, before the lock is taken.
         Request::Interrupt => Response::Ok,
 
+        // Handled in `dispatch`, before the lock is taken.
         Request::Shutdown => {
             let _ = shutdown.send(()).await;
             Response::Ok
         }
+
+        Request::Edit { action } => match state.session.apply_edit(&action) {
+            Ok(message) => Response::Edited { message },
+            Err(error) => Response::from_error(&error),
+        },
 
         Request::Complete { code, cursor } => match kernel(state).await {
             Ok(kernel) => match kernel.complete(&code, cursor).await {

@@ -51,6 +51,73 @@ pub enum Request {
         #[serde(default)]
         detail: u8,
     },
+    /// Change the notebook's cells.
+    ///
+    /// Edits go through the supervisor rather than straight to the file
+    /// because the supervisor holds the notebook in memory for its whole
+    /// lifetime and rewrites the file after every cell: an edit written behind
+    /// its back is silently reverted by the next run.
+    Edit {
+        action: EditRequest,
+    },
+}
+
+/// A cell edit, in the form that survives the wire.
+///
+/// Cells are named by the same selector the CLI takes (an index or a cell id)
+/// rather than a resolved index, so the selector is resolved against the
+/// supervisor's notebook: it is the authoritative copy, and resolving on the
+/// client would race with anything it has appended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "edit", rename_all = "snake_case")]
+pub enum EditRequest {
+    Set {
+        cell: String,
+        source: String,
+    },
+    Insert {
+        #[serde(default)]
+        at: Option<usize>,
+        kind: NewCellKind,
+        source: String,
+    },
+    Delete {
+        cell: String,
+    },
+    Move {
+        cell: String,
+        to: usize,
+    },
+    ClearOutputs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NewCellKind {
+    Code,
+    Markdown,
+    Raw,
+}
+
+impl Request {
+    /// Whether sending this request twice is harmless.
+    ///
+    /// The client retries a request whose answer was lost, and a lost answer
+    /// does not mean a lost request: the supervisor may have appended and run
+    /// the cell before it died. Only requests that change nothing, or that
+    /// reach the same state whether they run once or twice, may be repeated.
+    pub fn is_repeatable(&self) -> bool {
+        match self {
+            Request::Status | Request::Complete { .. } | Request::Inspect { .. } => true,
+            // Asking a session that is already gone to stop is a no-op.
+            Request::Interrupt | Request::Shutdown => true,
+            // Each of these appends, runs, or moves cells.
+            Request::Exec { .. }
+            | Request::Run { .. }
+            | Request::Restart { .. }
+            | Request::Edit { .. } => false,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -81,6 +148,11 @@ pub enum Response {
     Inspect {
         found: bool,
         text: Option<String>,
+    },
+    /// Terminal frame for `Edit`, carrying the description the CLI prints so
+    /// the wording lives in one place whoever applied the edit.
+    Edited {
+        message: String,
     },
     Ok,
     /// Terminal frame for any failure, carrying the CLI's error contract so a
@@ -168,6 +240,22 @@ mod tests {
             },
             Request::Restart {
                 clear_outputs: true,
+            },
+            Request::Edit {
+                action: EditRequest::Set {
+                    cell: "3".into(),
+                    source: "x = 1".into(),
+                },
+            },
+            Request::Edit {
+                action: EditRequest::Insert {
+                    at: None,
+                    kind: NewCellKind::Markdown,
+                    source: "# title".into(),
+                },
+            },
+            Request::Edit {
+                action: EditRequest::ClearOutputs,
             },
         ];
         for request in cases {

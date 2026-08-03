@@ -12,11 +12,13 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::document::{Cell, Notebook, Output};
+use crate::document::{Notebook, Output};
 use crate::error::{Error, Result};
 use crate::render::{DigestOptions, ImageWriter, digest, digest_with_images, summarize};
 use crate::session::parse_cell_range;
-use crate::supervisor::protocol::{CellReport, Request, Response, StreamEvent};
+use crate::supervisor::protocol::{
+    CellReport, EditRequest, NewCellKind, Request, Response, StreamEvent,
+};
 use crate::supervisor::{SessionClient, server, socket_path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -549,7 +551,7 @@ pub async fn run_command(command: Command, format: Format) -> Result<()> {
             )
         }
 
-        Command::Edit { notebook, action } => edit(cli.format, notebook, action),
+        Command::Edit { notebook, action } => edit(cli.format, notebook, action).await,
 
         Command::View { notebook } => {
             if !std::io::stdout().is_terminal() {
@@ -658,52 +660,68 @@ fn save_output(outputs: &[Output], index: usize, cell: usize, path: &PathBuf) ->
     Ok(())
 }
 
-fn edit(format: Format, path: PathBuf, action: EditAction) -> Result<()> {
-    let mut notebook = Notebook::read(&path)?;
-    notebook.normalize();
-    let message = match action {
-        EditAction::Set { cell, code } => {
-            let index = notebook.resolve(&cell)?;
-            let source = read_code(&code)?;
-            notebook.get_mut(index)?.set_source(source);
-            // Outputs describe code that no longer exists.
-            notebook.get_mut(index)?.clear_outputs();
-            format!("updated cell {index}")
-        }
-        EditAction::Insert { at, kind, code } => {
-            let source = read_code(&code)?;
-            let cell = match kind {
-                CellKind::Code => Cell::new_code(source),
-                CellKind::Markdown => Cell::new_markdown(source),
-                CellKind::Raw => Cell::new_raw(source),
-            };
-            let index = match at {
-                Some(at) => notebook.insert(at, cell),
-                None => notebook.push(cell),
-            };
-            format!("inserted cell {index}")
-        }
-        EditAction::Delete { cell } => {
-            let index = notebook.resolve(&cell)?;
-            notebook.remove(index)?;
-            format!("deleted cell {index}")
-        }
-        EditAction::Move { cell, to } => {
-            let index = notebook.resolve(&cell)?;
-            notebook.move_cell(index, to)?;
-            format!("moved cell {index} to {to}")
-        }
-        EditAction::ClearOutputs => {
-            notebook.clear_all_outputs();
-            "cleared all outputs".to_string()
-        }
+async fn edit(format: Format, path: PathBuf, action: EditAction) -> Result<()> {
+    // Code is read here, not in the supervisor: `--code -` means this
+    // process's stdin, which the supervisor has no way to reach.
+    let request = edit_request(action)?;
+
+    // A running supervisor holds the notebook in memory and rewrites the whole
+    // file after every cell, so an edit written straight to disk would be
+    // silently reverted by the next run. Route it through the owner when there
+    // is one, and touch the file directly only when there is not.
+    let client = SessionClient::new(&path);
+    let wire = Request::Edit {
+        action: request.clone(),
     };
-    notebook.write(&path)?;
+    let message = match client.request_existing(&wire, |_| {}).await {
+        Ok(Response::Edited { message }) => message,
+        Ok(other) => {
+            return Err(Error::protocol(format!(
+                "the session answered an edit with {other:?}"
+            )));
+        }
+        // Nobody is holding the notebook, so the file is the only copy there
+        // is and editing it directly is safe.
+        Err(Error::NoSession { .. }) => apply_edit_to_file(&path, &request)?,
+        Err(error) => return Err(error),
+    };
+
     emit(
         format,
         serde_json::json!({"notebook": path.display().to_string(), "result": message}),
         || message.clone(),
     )
+}
+
+/// Apply an edit to the file, for a notebook nobody is holding.
+fn apply_edit_to_file(path: &Path, action: &EditRequest) -> Result<String> {
+    let mut notebook = Notebook::read(path)?;
+    notebook.normalize();
+    let message = crate::session::apply_edit(&mut notebook, action)?;
+    notebook.write(path)?;
+    Ok(message)
+}
+
+/// Resolve a command-line edit into its wire form, reading any piped code.
+fn edit_request(action: EditAction) -> Result<EditRequest> {
+    Ok(match action {
+        EditAction::Set { cell, code } => EditRequest::Set {
+            cell,
+            source: read_code(&code)?,
+        },
+        EditAction::Insert { at, kind, code } => EditRequest::Insert {
+            at,
+            kind: match kind {
+                CellKind::Code => NewCellKind::Code,
+                CellKind::Markdown => NewCellKind::Markdown,
+                CellKind::Raw => NewCellKind::Raw,
+            },
+            source: read_code(&code)?,
+        },
+        EditAction::Delete { cell } => EditRequest::Delete { cell },
+        EditAction::Move { cell, to } => EditRequest::Move { cell, to },
+        EditAction::ClearOutputs => EditRequest::ClearOutputs,
+    })
 }
 
 async fn kernel(format: Format, action: KernelAction) -> Result<()> {

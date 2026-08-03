@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
@@ -50,6 +51,66 @@ impl Nb {
             command.env("JUPYTER_PATH", path);
         }
         command.output().expect("failed to run h5i-nb")
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(binary());
+        command
+            .args(args)
+            .current_dir(self.dir.path())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if let Some(path) = &self.jupyter_path {
+            command.env("JUPYTER_PATH", path);
+        }
+        command
+    }
+
+    fn spawn(&self, args: &[&str]) -> std::process::Child {
+        self.command(args).spawn().expect("failed to spawn h5i-nb")
+    }
+
+    /// Run a command, killing it if it outlives `limit`.
+    ///
+    /// `None` means it had to be killed, which is how the tests below assert
+    /// that a call answers at all: a hang is the failure being tested for, so
+    /// blocking on it forever would turn a red test into a stuck suite.
+    fn run_within(&self, args: &[&str], limit: Duration) -> Option<Output> {
+        let mut child = self.spawn(args);
+        let deadline = Instant::now() + limit;
+        loop {
+            match child.try_wait().expect("try_wait failed") {
+                Some(_) => return Some(child.wait_with_output().expect("wait_with_output failed")),
+                None if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                None => std::thread::sleep(Duration::from_millis(25)),
+            }
+        }
+    }
+
+    /// Write a notebook without going through `new`, which needs a kernelspec.
+    fn write_bare_notebook(&self) {
+        std::fs::write(
+            &self.notebook,
+            r#"{"cells": [], "metadata": {"kernelspec": {"name": "python3", "display_name": "Python 3", "language": "python"}}, "nbformat": 4, "nbformat_minor": 5}"#,
+        )
+        .unwrap();
+    }
+
+    /// Poll until a supervisor is serving this notebook.
+    fn wait_until_running(&self, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            let output = self.run(&["kernel", "status", self.path()]);
+            if !stdout(&output).contains("no session running") {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        false
     }
 
     fn path(&self) -> &str {
@@ -190,6 +251,44 @@ fn an_out_of_range_cell_names_the_range_that_exists() {
         "{}",
         stderr(&output)
     );
+}
+
+#[test]
+fn a_second_supervisor_refuses_to_take_over_a_live_session() {
+    // Two supervisors on one notebook each hold it in memory and each rewrite
+    // the whole file, so the second to save silently erases the first one's
+    // cells. Ownership is claimed before the socket is touched, so the loser
+    // must neither serve nor unlink anything.
+    let nb = Nb::new();
+    nb.write_bare_notebook();
+
+    let mut first = nb.spawn(&["serve", nb.path()]);
+    assert!(
+        nb.wait_until_running(Duration::from_secs(10)),
+        "the first supervisor never started serving"
+    );
+
+    let second = nb
+        .run_within(&["serve", nb.path()], Duration::from_secs(10))
+        .expect("the second supervisor hung instead of refusing");
+    assert_eq!(code(&second), 3, "{}", stderr(&second));
+    assert!(
+        stderr(&second).contains("session_already_running"),
+        "{}",
+        stderr(&second)
+    );
+
+    // The loser must not have taken the winner's socket down on its way out.
+    let status = nb.run(&["kernel", "status", nb.path()]);
+    assert!(
+        !stdout(&status).contains("no session running"),
+        "the refused supervisor removed the live one's socket: {}",
+        stdout(&status)
+    );
+
+    let _ = nb.run(&["kernel", "stop", nb.path()]);
+    let _ = first.kill();
+    let _ = first.wait();
 }
 
 // ---------------------------------------------------------------------------
@@ -672,5 +771,190 @@ fn figures_are_written_beside_the_notebook_when_a_cell_produces_one() {
     assert_eq!(written.len(), 1, "{written:?}");
     let bytes = std::fs::read(written[0].path()).unwrap();
     assert_eq!(&bytes[..4], b"\x89PNG", "not a decoded PNG");
+    stop(&nb);
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn an_edit_reaches_the_running_session_rather_than_the_file() {
+    // The supervisor holds the notebook in memory for its whole lifetime and
+    // rewrites the file after every cell, so an edit written straight to disk
+    // is silently reverted by the next run.
+    let nb = with_kernel();
+    let first = nb.run(&["exec", nb.path(), "--code", "a = 1"]);
+    assert_eq!(code(&first), 0, "{}", stderr(&first));
+
+    let edit = nb.run(&["edit", nb.path(), "insert", "--code", "# keep me"]);
+    assert_eq!(code(&edit), 0, "{}", stderr(&edit));
+
+    // The next cell goes through the supervisor, which saves its own copy.
+    let second = nb.run(&["exec", nb.path(), "--code", "a + 1"]);
+    assert_eq!(code(&second), 0, "{}", stderr(&second));
+
+    let cells = nb.run(&["cells", nb.path()]);
+    assert!(
+        stdout(&cells).contains("# keep me"),
+        "the edit was clobbered by the session's copy: {}",
+        stdout(&cells)
+    );
+    stop(&nb);
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn status_and_interrupt_answer_while_an_attached_cell_runs() {
+    // Serving connections one at a time made both of these queue behind the
+    // cell they are meant to report on and stop, which is precisely when they
+    // are worth having.
+    let nb = with_kernel();
+    let _ = nb.run(&["kernel", "start", nb.path()]);
+
+    let mut cell = nb.spawn(&[
+        "exec",
+        nb.path(),
+        "--code",
+        "import time; time.sleep(60)",
+        "--timeout",
+        "0",
+    ]);
+    std::thread::sleep(Duration::from_secs(2));
+
+    let status = nb
+        .run_within(&["kernel", "status", nb.path()], Duration::from_secs(10))
+        .expect("status hung behind the running cell");
+    assert_eq!(code(&status), 0, "{}", stderr(&status));
+
+    let interrupt = nb
+        .run_within(&["kernel", "interrupt", nb.path()], Duration::from_secs(10))
+        .expect("interrupt hung behind the running cell");
+    assert_eq!(code(&interrupt), 0, "{}", stderr(&interrupt));
+
+    // And the interrupt actually reached the cell.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut finished = false;
+    while Instant::now() < deadline {
+        if cell.try_wait().expect("try_wait failed").is_some() {
+            finished = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !finished {
+        let _ = cell.kill();
+    }
+    let _ = cell.wait();
+    assert!(finished, "the interrupt never stopped the cell");
+    stop(&nb);
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn stopping_a_session_does_not_wait_for_an_endless_cell() {
+    // `kernel stop` used to need the session lock that the endless cell holds,
+    // so the one command that could rescue the situation could never run.
+    let nb = with_kernel();
+    let queued = nb.run(&[
+        "exec",
+        nb.path(),
+        "--code",
+        "while True: pass",
+        "--detach",
+        "--timeout",
+        "0",
+    ]);
+    assert_eq!(code(&queued), 0, "{}", stderr(&queued));
+    std::thread::sleep(Duration::from_secs(2));
+
+    let stopped = nb
+        .run_within(&["kernel", "stop", nb.path()], Duration::from_secs(30))
+        .expect("stop hung behind the endless cell");
+    assert_eq!(code(&stopped), 0, "{}", stderr(&stopped));
+
+    // And the supervisor really went away rather than merely answering.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut gone = false;
+    while Instant::now() < deadline {
+        let status = nb.run(&["kernel", "status", nb.path()]);
+        if stdout(&status).contains("no session running") {
+            gone = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(gone, "the supervisor answered the stop but never exited");
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn a_kernel_that_dies_mid_cell_is_reported_dead_rather_than_timed_out() {
+    // Nothing watched the child process, so a kernel that vanished mid-cell
+    // was only noticed when the timeout expired, and was then reported as a
+    // retryable timeout: advice that sends an agent back to a corpse.
+    let nb = with_kernel();
+    let output = nb
+        .run_within(
+            &[
+                "exec",
+                nb.path(),
+                "--code",
+                "import os; os._exit(1)",
+                "--timeout",
+                "60",
+            ],
+            Duration::from_secs(30),
+        )
+        .expect("a dead kernel was never noticed");
+    assert!(
+        stderr(&output).contains("kernel_died"),
+        "expected kernel_died, got: {}",
+        stderr(&output)
+    );
+    stop(&nb);
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn interrupt_still_works_after_a_restart() {
+    // Restarting replaced the kernel wholesale, including the interrupt handle
+    // the session and the UI hold, so every later interrupt signalled a handle
+    // nothing was listening to.
+    let nb = with_kernel();
+    let started = nb.run(&["kernel", "start", nb.path()]);
+    assert_eq!(code(&started), 0, "{}", stderr(&started));
+    let restarted = nb.run(&["kernel", "restart", nb.path()]);
+    assert_eq!(code(&restarted), 0, "{}", stderr(&restarted));
+
+    let mut cell = nb.spawn(&[
+        "exec",
+        nb.path(),
+        "--code",
+        "import time; time.sleep(60)",
+        "--timeout",
+        "0",
+    ]);
+    std::thread::sleep(Duration::from_secs(2));
+
+    let interrupt = nb
+        .run_within(&["kernel", "interrupt", nb.path()], Duration::from_secs(10))
+        .expect("interrupt hung after a restart");
+    assert_eq!(code(&interrupt), 0, "{}", stderr(&interrupt));
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut finished = false;
+    while Instant::now() < deadline {
+        if cell.try_wait().expect("try_wait failed").is_some() {
+            finished = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    if !finished {
+        let _ = cell.kill();
+    }
+    let _ = cell.wait();
+    assert!(
+        finished,
+        "the interrupt was lost: restarting orphaned the handle"
+    );
     stop(&nb);
 }

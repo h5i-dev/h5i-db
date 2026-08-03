@@ -105,6 +105,9 @@ pub enum Error {
     #[error("the session for {path} is already running a cell")]
     SessionBusy { path: String },
 
+    #[error("another supervisor already owns the session for {path}")]
+    SessionAlreadyRunning { path: String },
+
     // ---- generic --------------------------------------------------------
     #[error("{detail}")]
     InvalidInput { detail: String },
@@ -157,6 +160,7 @@ impl Error {
             Error::Interrupted => "interrupted",
             Error::NoSession { .. } => "no_session",
             Error::SessionBusy { .. } => "session_busy",
+            Error::SessionAlreadyRunning { .. } => "session_already_running",
             Error::InvalidInput { .. } => "invalid_input",
             Error::LimitExceeded { .. } => "limit_exceeded",
             Error::Io { .. } => "io",
@@ -199,6 +203,7 @@ impl Error {
             | Error::Protocol { .. }
             | Error::Interrupted
             | Error::NoSession { .. }
+            | Error::SessionAlreadyRunning { .. }
             | Error::InvalidInput { .. }
             | Error::LimitExceeded { .. }
             | Error::Internal { .. } => false,
@@ -235,6 +240,11 @@ impl Error {
             Error::SessionBusy { .. } => {
                 Some("wait for the running cell, or `h5i-db nb kernel interrupt <notebook>`".into())
             }
+            Error::SessionAlreadyRunning { .. } => Some(
+                "that session is already serving this notebook; use it, or stop it with \
+                 `h5i-db nb kernel stop <notebook>`"
+                    .into(),
+            ),
             Error::Remote { hint, .. } => hint.clone(),
             _ => None,
         }
@@ -242,7 +252,9 @@ impl Error {
 
     pub fn exit_category(&self) -> ExitCategory {
         match self {
-            Error::SessionBusy { .. } => ExitCategory::Conflict,
+            Error::SessionBusy { .. } | Error::SessionAlreadyRunning { .. } => {
+                ExitCategory::Conflict
+            }
             Error::LimitExceeded { .. } | Error::ExecuteTimeout { .. } => ExitCategory::Limit,
             Error::Internal { .. } | Error::Protocol { .. } => ExitCategory::Internal,
             // A path the caller got wrong is a user error; a disk that failed

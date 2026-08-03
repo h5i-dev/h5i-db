@@ -54,6 +54,10 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// After an interrupt, how long to keep draining so the `KeyboardInterrupt`
 /// traceback and the trailing `idle` still make it into the notebook.
 const INTERRUPT_DRAIN: Duration = Duration::from_secs(5);
+/// After the kernel process exits, how long to keep draining before reporting
+/// the death: the output and traceback that explain it are usually still in
+/// flight, and they are the whole point of noticing.
+const EXIT_DRAIN: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone)]
 pub struct StartOptions {
@@ -505,7 +509,16 @@ impl JupyterKernel {
         &self.session_id
     }
 
+    /// Refuse to talk to a kernel that cannot answer.
+    ///
+    /// The process is consulted as well as the cached status, because a kernel
+    /// that died without saying so on iopub, or a restart that failed and left
+    /// the status at `Restarting`, would otherwise be treated as usable and
+    /// every call would wait out its whole timeout.
     fn ensure_alive(&self) -> Result<()> {
+        if self.process.has_exited() {
+            self.status.set(KernelStatus::Dead);
+        }
         match self.status.get() {
             KernelStatus::Dead => Err(Error::KernelDied {
                 detail: describe_exit(&self.process),
@@ -588,6 +601,12 @@ impl Kernel for JupyterKernel {
         let mut saw_idle = false;
         let mut interrupted_at: Option<Instant> = None;
         let mut interrupted_by_user = false;
+        let mut exited_at: Option<Instant> = None;
+        // Watched alongside the message channel: a kernel that segfaults or
+        // calls `os._exit` sends no reply and no idle, so without this the
+        // call would wait out the entire timeout (forever, with none set) and
+        // then report a retryable timeout for a kernel that cannot come back.
+        let mut exited = self.process.exited.clone();
 
         loop {
             // The kernel is done with a request when it has both sent the
@@ -597,17 +616,21 @@ impl Kernel for JupyterKernel {
                 break;
             }
 
-            let deadline = match interrupted_at {
-                Some(at) => Some(tokio::time::Instant::from_std(at + INTERRUPT_DRAIN)),
-                None => options
+            let deadline = match (interrupted_at, exited_at) {
+                (Some(at), _) => Some(tokio::time::Instant::from_std(at + INTERRUPT_DRAIN)),
+                // The kernel is already gone: whatever it managed to send is
+                // either here or lost, so this window is only about draining.
+                (None, Some(at)) => Some(tokio::time::Instant::from_std(at + EXIT_DRAIN)),
+                (None, None) => options
                     .timeout
                     .map(|t| tokio::time::Instant::from_std(started + t)),
             };
 
-            // Three things can wake us: a message, the deadline, or somebody
-            // holding an `InterruptHandle` pressing Ctrl-C. The interrupt
-            // branch is disabled once we have already interrupted, so the
-            // drain window is governed purely by the deadline.
+            // Four things can wake us: a message, the deadline, the kernel
+            // process exiting, or somebody holding an `InterruptHandle`
+            // pressing Ctrl-C. The interrupt and exit branches are each
+            // disabled once they have fired, so the drain window that follows
+            // is governed purely by the deadline.
             let wake = {
                 let interrupt = self.interrupt.clone();
                 tokio::select! {
@@ -622,6 +645,7 @@ impl Kernel for JupyterKernel {
                             None => std::future::pending::<()>().await,
                         }
                     } => Wake::Deadline,
+                    _ = wait_for_exit(&mut exited), if exited_at.is_none() => Wake::Exited,
                     _ = interrupt.requested(), if interrupted_at.is_none() => Wake::Interrupted,
                 }
             };
@@ -629,6 +653,21 @@ impl Kernel for JupyterKernel {
             let message = match wake {
                 Wake::Message(message) => *message,
                 Wake::Closed => {
+                    return Err(Error::KernelDied {
+                        detail: describe_exit(&self.process),
+                    });
+                }
+                Wake::Exited => {
+                    // Messages the kernel sent before dying may still be in
+                    // flight, and they are usually the ones that explain the
+                    // death, so drain briefly rather than reporting at once.
+                    exited_at = Some(Instant::now());
+                    continue;
+                }
+                // The kernel died and said nothing further. Reported as death
+                // rather than as a timeout even when a deadline was what woke
+                // us, because "retry the cell" is wrong advice for a corpse.
+                Wake::Deadline if exited_at.is_some() && !interrupted_by_user => {
                     return Err(Error::KernelDied {
                         detail: describe_exit(&self.process),
                     });
@@ -810,7 +849,16 @@ impl Kernel for JupyterKernel {
 
         let spec = self.spec.clone();
         let options = self.start_options.clone();
-        let fresh = JupyterKernel::start(spec, options).await?;
+        let mut fresh = JupyterKernel::start(spec, options).await?;
+
+        // The fresh kernel starts with an interrupt handle of its own, which
+        // nobody else holds. Carry ours across instead, or the session and the
+        // UI would keep signalling the handle of the kernel we just replaced
+        // and every interrupt after a restart would be silently ignored.
+        fresh.interrupt = self.interrupt.clone();
+        // A request that arrived while the old kernel was dying is not meant
+        // for the new one.
+        fresh.interrupt.reset();
 
         // Move the new kernel's guts into `self` so callers keep their handle.
         let old = std::mem::replace(self, fresh);
@@ -977,6 +1025,27 @@ enum Wake {
     Deadline,
     /// Somebody holding an `InterruptHandle` asked to stop the cell.
     Interrupted,
+    /// The kernel process is gone.
+    Exited,
+}
+
+/// Resolves once the kernel process has been reaped.
+///
+/// Never resolves when the exit status can no longer be learned (the monitor
+/// task went away without recording one), because a lost monitor must not be
+/// mistaken for a dead kernel: the deadline still governs that case.
+async fn wait_for_exit(exited: &mut watch::Receiver<Option<std::process::ExitStatus>>) {
+    loop {
+        if exited.borrow().is_some() {
+            return;
+        }
+        if exited.changed().await.is_err() {
+            if exited.borrow().is_some() {
+                return;
+            }
+            std::future::pending::<()>().await;
+        }
+    }
 }
 
 /// What one message told us about where the request has got to.

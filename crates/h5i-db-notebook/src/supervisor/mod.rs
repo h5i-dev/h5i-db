@@ -83,6 +83,16 @@ pub fn socket_path(notebook: &Path) -> PathBuf {
     session_dir().join(format!("{}.sock", session_id(notebook)))
 }
 
+/// Lock file whose holder owns this notebook's supervisor.
+///
+/// Kept beside the socket rather than derived from it, so a caller that passes
+/// `--socket` explicitly still gets one supervisor per notebook: the notebook
+/// is what a session is about, and two supervisors on two sockets would still
+/// be two kernels writing one file.
+pub fn lock_path(notebook: &Path) -> PathBuf {
+    session_dir().join(format!("{}.lock", session_id(notebook)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

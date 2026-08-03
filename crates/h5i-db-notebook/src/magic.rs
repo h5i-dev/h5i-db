@@ -31,6 +31,12 @@ pub struct SqlMagic {
     pub max_rows: Option<usize>,
     /// Query a fork rather than the base database.
     pub fork: Option<String>,
+    /// Open the database read-write for this cell.
+    ///
+    /// Off by default: a notebook is usually read *about* a database, and a
+    /// read-write open runs transaction recovery, which is a mutation the
+    /// reader of a shared database did not ask for.
+    pub write: bool,
 }
 
 /// Split a cell into its route and the body the target kernel should run.
@@ -72,6 +78,7 @@ fn parse_sql_magic(arguments: &str) -> Result<SqlMagic> {
                 magic.into = Some(name);
             }
             "--fork" => magic.fork = Some(expect_value("--fork")?),
+            "--write" => magic.write = true,
             "--max-rows" => {
                 let raw = expect_value("--max-rows")?;
                 magic.max_rows = Some(raw.parse().map_err(|_| {
@@ -80,7 +87,8 @@ fn parse_sql_magic(arguments: &str) -> Result<SqlMagic> {
             }
             other => {
                 return Err(Error::invalid(format!(
-                    "unknown %%sql option {other:?}; supported: --db, --fork, --into, --max-rows"
+                    "unknown %%sql option {other:?}; supported: --db, --fork, --into, \
+                     --max-rows, --write"
                 )));
             }
         }
@@ -205,9 +213,26 @@ mod tests {
                 into: Some("df".into()),
                 max_rows: Some(50),
                 fork: Some("bt-1".into()),
+                write: false,
             })
         );
         assert_eq!(body, "SELECT *");
+    }
+
+    #[test]
+    fn write_is_opt_in_per_cell() {
+        let (writing, body) = route("%%sql --write\nINSERT INTO t VALUES (1)").unwrap();
+        match writing {
+            CellRoute::Sql(magic) => assert!(magic.write),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(body, "INSERT INTO t VALUES (1)");
+        // Absent, a cell must not be able to write: that is the whole point.
+        let (reading, _) = route("%%sql\nSELECT 1").unwrap();
+        match reading {
+            CellRoute::Sql(magic) => assert!(!magic.write),
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

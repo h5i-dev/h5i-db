@@ -21,6 +21,7 @@ use crate::kernel::{
     OutputEvent, OutputSink, spec,
 };
 use crate::magic::{CellRoute, SqlMagic, into_variable_code, route};
+use crate::supervisor::protocol::{EditRequest, NewCellKind};
 
 /// What happened to one cell in a run.
 #[derive(Debug, Clone)]
@@ -314,12 +315,18 @@ impl Session {
             })?,
         };
 
-        let matches = self
-            .sql
-            .as_ref()
-            .is_some_and(|k| k.database_path() == wanted && k.fork() == magic.fork.as_deref());
+        // A cell that asks to write cannot be served by a read-only handle, so
+        // the open mode is part of what identifies the backend, exactly like
+        // the database and the fork.
+        let read_only = !magic.write;
+        let matches = self.sql.as_ref().is_some_and(|k| {
+            k.database_path() == wanted
+                && k.fork() == magic.fork.as_deref()
+                && k.is_read_only() == read_only
+        });
         if !matches {
             let mut options = self.sql_options.clone();
+            options.read_only = read_only;
             if let Some(max_rows) = magic.max_rows {
                 options.max_rows = max_rows;
             }
@@ -460,6 +467,19 @@ impl Session {
         Ok(())
     }
 
+    /// Apply a cell edit and save, returning the description to report.
+    ///
+    /// Edits have to reach the session rather than the file whenever one is
+    /// running: the session rewrites the whole notebook after every cell, so
+    /// an edit written straight to disk behind its back would be silently
+    /// reverted by the next run.
+    pub fn apply_edit(&mut self, action: &EditRequest) -> Result<String> {
+        let message = apply_edit(&mut self.notebook, action)?;
+        self.dirty = true;
+        self.save()?;
+        Ok(message)
+    }
+
     pub async fn interrupt(&mut self) -> Result<()> {
         self.kernel_mut()?.interrupt().await
     }
@@ -484,6 +504,49 @@ impl Session {
     pub fn is_dirty(&self) -> bool {
         self.dirty
     }
+}
+
+/// Apply one edit to a notebook, returning the description to report.
+///
+/// Lives here rather than in the CLI because both the supervisor and the
+/// direct-to-file path apply the same edits and must word them identically.
+pub fn apply_edit(notebook: &mut Notebook, action: &EditRequest) -> Result<String> {
+    let message = match action {
+        EditRequest::Set { cell, source } => {
+            let index = notebook.resolve(cell)?;
+            notebook.get_mut(index)?.set_source(source.clone());
+            // Outputs describe code that no longer exists.
+            notebook.get_mut(index)?.clear_outputs();
+            format!("updated cell {index}")
+        }
+        EditRequest::Insert { at, kind, source } => {
+            let cell = match kind {
+                NewCellKind::Code => Cell::new_code(source.clone()),
+                NewCellKind::Markdown => Cell::new_markdown(source.clone()),
+                NewCellKind::Raw => Cell::new_raw(source.clone()),
+            };
+            let index = match at {
+                Some(at) => notebook.insert(*at, cell),
+                None => notebook.push(cell),
+            };
+            format!("inserted cell {index}")
+        }
+        EditRequest::Delete { cell } => {
+            let index = notebook.resolve(cell)?;
+            notebook.remove(index)?;
+            format!("deleted cell {index}")
+        }
+        EditRequest::Move { cell, to } => {
+            let index = notebook.resolve(cell)?;
+            notebook.move_cell(index, *to)?;
+            format!("moved cell {index} to {to}")
+        }
+        EditRequest::ClearOutputs => {
+            notebook.clear_all_outputs();
+            "cleared all outputs".to_string()
+        }
+    };
+    Ok(message)
 }
 
 /// Forwards events to the caller's sink while folding them into a collector.

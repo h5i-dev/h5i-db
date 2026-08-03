@@ -67,70 +67,114 @@ impl SessionClient {
     pub async fn request(
         &self,
         request: &Request,
-        mut on_event: impl FnMut(&Response),
+        on_event: impl FnMut(&Response),
     ) -> Result<Response> {
-        match self.attempt(request, &mut on_event).await {
-            Err(error) if is_stale_socket(&error) => {
-                // A supervisor that is shutting down still has a connectable
-                // socket for a moment, so a request can land on a listener
-                // that is about to disappear. That is transient: clear the
-                // stale socket and start a fresh session once.
-                let _ = std::fs::remove_file(&self.socket);
-                self.attempt(request, &mut on_event).await
-            }
-            other => other,
-        }
+        self.send(request, on_event, StartPolicy::Start).await
     }
 
-    /// Whether a failure looks like a socket whose owner has gone away.
+    /// Send a request only to a supervisor that is already running.
     ///
-    /// Deliberately narrow: a real protocol or execution error must not be
-    /// retried, because re-running a cell that already ran would be worse than
-    /// reporting the failure.
-    fn is_transport_failure(error: &Error) -> bool {
-        matches!(error, Error::Io { .. })
-            || matches!(error, Error::Protocol { detail } if detail.contains("without answering"))
+    /// Fails with [`Error::NoSession`] rather than starting one, for callers
+    /// that have something useful to do without a session: an edit can be
+    /// applied to the file directly, and starting a supervisor (which then
+    /// idles for an hour) to avoid that would be a poor trade.
+    pub async fn request_existing(
+        &self,
+        request: &Request,
+        on_event: impl FnMut(&Response),
+    ) -> Result<Response> {
+        self.send(request, on_event, StartPolicy::Fail).await
+    }
+
+    async fn send(
+        &self,
+        request: &Request,
+        mut on_event: impl FnMut(&Response),
+        start: StartPolicy,
+    ) -> Result<Response> {
+        match self.attempt(request, &mut on_event, start).await {
+            Ok(response) => Ok(response),
+            Err(Attempt { error, delivered }) => {
+                // A supervisor that is shutting down still has a connectable
+                // socket for a moment, so a request can land on a listener
+                // that is about to disappear. Retrying that is right, but only
+                // while the supervisor cannot already have acted on it: a
+                // request that was delivered and then lost its answer may have
+                // appended and run a cell, and running it twice is worse than
+                // reporting that the answer was lost.
+                let safe = is_transport_failure(&error) && (!delivered || request.is_repeatable());
+                if !safe {
+                    return Err(error);
+                }
+                self.attempt(request, &mut on_event, start)
+                    .await
+                    .map_err(|attempt| attempt.error)
+            }
+        }
     }
 
     async fn attempt(
         &self,
         request: &Request,
         on_event: &mut impl FnMut(&Response),
-    ) -> Result<Response> {
+        start: StartPolicy,
+    ) -> std::result::Result<Response, Attempt> {
+        let undelivered = |error: Error| Attempt {
+            error,
+            delivered: false,
+        };
+        let delivered = |error: Error| Attempt {
+            error,
+            delivered: true,
+        };
+
         let stream = match UnixStream::connect(&self.socket).await {
             Ok(stream) => stream,
+            Err(_) if start == StartPolicy::Fail => {
+                return Err(undelivered(Error::NoSession {
+                    path: self.notebook.display().to_string(),
+                }));
+            }
             Err(_) => {
-                self.spawn_supervisor().await?;
+                // The socket is missing or nobody is listening on it. A
+                // supervisor that is starting claims ownership before it binds,
+                // so at most one of several racing clients actually starts one.
+                self.spawn_supervisor().await.map_err(undelivered)?;
                 UnixStream::connect(&self.socket)
                     .await
-                    .map_err(|e| Error::io(self.socket.display(), e))?
+                    .map_err(|e| undelivered(Error::io(self.socket.display(), e)))?
             }
         };
 
         let (read_half, mut write_half) = stream.into_split();
-        let mut line = serde_json::to_vec(request).map_err(Error::internal)?;
+        let mut line = serde_json::to_vec(request).map_err(|e| undelivered(Error::internal(e)))?;
         line.push(b'\n');
         write_half
             .write_all(&line)
             .await
-            .map_err(|e| Error::io(self.socket.display(), e))?;
+            .map_err(|e| undelivered(Error::io(self.socket.display(), e)))?;
         write_half
             .flush()
             .await
-            .map_err(|e| Error::io(self.socket.display(), e))?;
+            .map_err(|e| undelivered(Error::io(self.socket.display(), e)))?;
 
+        // Past this point the supervisor has the request and may act on it, so
+        // every failure below is reported as delivered.
         let mut lines = BufReader::new(read_half).lines();
         let mut last = None;
         while let Some(line) = lines
             .next_line()
             .await
-            .map_err(|e| Error::io(self.socket.display(), e))?
+            .map_err(|e| delivered(Error::io(self.socket.display(), e)))?
         {
             if line.trim().is_empty() {
                 continue;
             }
-            let response: Response = serde_json::from_str(&line)
-                .map_err(|e| Error::protocol(format!("unreadable frame from the session: {e}")))?;
+            let response: Response = serde_json::from_str(&line).map_err(|e| {
+                delivered(Error::protocol(format!(
+                    "unreadable frame from the session: {e}"
+                )))
+            })?;
             match response {
                 Response::Event(_) => on_event(&response),
                 terminal => last = Some(terminal),
@@ -144,17 +188,17 @@ impl SessionClient {
                 retryable,
                 hint,
                 exit_code,
-            }) => Err(Error::Remote {
+            }) => Err(delivered(Error::Remote {
                 code,
                 message,
                 retryable,
                 hint,
                 exit_code,
-            }),
+            })),
             Some(response) => Ok(response),
-            None => Err(Error::protocol(
+            None => Err(delivered(Error::protocol(
                 "the session closed the connection without answering",
-            )),
+            ))),
         }
     }
 
@@ -219,6 +263,27 @@ impl SessionClient {
     }
 }
 
-fn is_stale_socket(error: &Error) -> bool {
-    SessionClient::is_transport_failure(error)
+/// Whether a request may start a supervisor that is not running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartPolicy {
+    Start,
+    Fail,
+}
+
+/// A failed attempt, and whether the supervisor could have acted on it.
+struct Attempt {
+    error: Error,
+    /// The request reached the supervisor's socket. Anything that fails after
+    /// that point may have been executed, however the call ended here.
+    delivered: bool,
+}
+
+/// Whether a failure looks like a socket whose owner has gone away.
+///
+/// Deliberately narrow: a real protocol or execution error must not be
+/// retried, because re-running a cell that already ran would be worse than
+/// reporting the failure.
+fn is_transport_failure(error: &Error) -> bool {
+    matches!(error, Error::Io { .. })
+        || matches!(error, Error::Protocol { detail } if detail.contains("without answering"))
 }

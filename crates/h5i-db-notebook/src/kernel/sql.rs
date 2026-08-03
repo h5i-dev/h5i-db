@@ -48,8 +48,13 @@ pub struct SqlOptions {
     pub display_rows: usize,
     /// Query memory budget, in bytes.
     pub memory_limit: Option<usize>,
-    /// Read-only: `open_read_only` refuses a database that would need
-    /// recovery, so an exploration session can never mutate what it reads.
+    /// Open the database read-only, so an exploration session cannot mutate
+    /// what it reads.
+    ///
+    /// On by default, and turned off per cell with `%%sql --write`. It is not
+    /// only about rejecting stray DML: a read-write open runs transaction
+    /// recovery, which writes to a database that another process may be in the
+    /// middle of using, so merely *looking* at one would not be free.
     pub read_only: bool,
 }
 
@@ -101,9 +106,11 @@ impl SqlKernel {
         fork: Option<&str>,
         options: &SqlOptions,
     ) -> Result<H5iSession> {
-        let db = Database::open(path)
-            .await
-            .map_err(|e| Error::invalid(format!("cannot open database {}: {e}", path.display())))?;
+        let db = match options.read_only {
+            true => Database::open_read_only(path).await,
+            false => Database::open(path).await,
+        }
+        .map_err(|e| Error::invalid(format!("cannot open database {}: {e}", path.display())))?;
         let db = match fork {
             Some(name) => db.open_fork(name).await.map_err(|e| {
                 Error::invalid(format!(
@@ -140,6 +147,11 @@ impl SqlKernel {
 
     pub fn fork(&self) -> Option<&str> {
         self.fork.as_deref()
+    }
+
+    /// Whether this kernel opened its database read-only.
+    pub fn is_read_only(&self) -> bool {
+        self.options.read_only
     }
 
     /// Adopt an externally owned interrupt handle. See
