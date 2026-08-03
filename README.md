@@ -1,6 +1,6 @@
 # h5i-db
 
-<a href="https://github.com/h5i-dev/h5i-db/actions/workflows/ci.yaml"><img alt="tests" src="https://github.com/h5i-dev/h5i-db/actions/workflows/ci.yaml/badge.svg"></a>
+<a href="https://github.com/h5i-dev/h5i-db/actions/workflows/ci.yml"><img alt="tests" src="https://github.com/h5i-dev/h5i-db/actions/workflows/ci.yml/badge.svg"></a>
 <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE"><img alt="Apache-2.0" src="https://img.shields.io/github/license/h5i-dev/h5i-db?color=blue"></a>
 
 **English** · [Español](README.es.md) · [Français](README.fr.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
