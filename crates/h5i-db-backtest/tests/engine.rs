@@ -15,7 +15,7 @@ use h5i_db_backtest::engine::{
 use h5i_db_backtest::event::{MarketEvent, Record};
 use h5i_db_backtest::instrument::{Instrument, InstrumentId, InstrumentSet, OutcomeId};
 use h5i_db_backtest::models::{ConstantLatency, PredictionMarketFees, TickSlippage};
-use h5i_db_backtest::order::{OrderStatus, TimeInForce};
+use h5i_db_backtest::order::{OrderStatus, TimeInForce, Trigger};
 use h5i_db_backtest::replay::{Replay, priority};
 use h5i_db_backtest::settlement::{Resolution, settle};
 use h5i_db_backtest::types::{Money, Price, Qty, Side, Stamps, UnixNanos};
@@ -2679,5 +2679,199 @@ fn an_unusable_order_is_refused_rather_than_ending_the_run() {
             .filter(|order| order.status == OrderStatus::Rejected)
             .all(|order| order.reject_reason.is_some()),
         "every rejection says why"
+    );
+}
+
+/// A split must move a parked stop's trigger, not just the book (issue #76).
+///
+/// Long 100 at 50 with a protective stop at 45. A 2-for-1 lands: the mark
+/// becomes 25 and, with the trigger left at 45, `25 <= 45` fires it on an
+/// economic non-event -- and for 100 shares rather than the 200 now held.
+#[test]
+fn a_split_reprices_a_parked_stop_instead_of_firing_it() {
+    struct BuyThenStop {
+        submitted: bool,
+        stopped: bool,
+    }
+    impl Strategy for BuyThenStop {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            if !self.submitted {
+                self.submitted = true;
+                ctx.submit(OrderRequest::market(
+                    InstrumentId::new(EQUITY).unwrap(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    qty(100.0),
+                ));
+            } else if !self.stopped {
+                self.stopped = true;
+                ctx.submit(
+                    OrderRequest::market(
+                        InstrumentId::new(EQUITY).unwrap(),
+                        OutcomeId::FIRST,
+                        Side::Sell,
+                        qty(100.0),
+                    )
+                    .with_trigger(Trigger::stop_loss(Side::Sell, price(45.0))),
+                );
+            }
+            Ok(())
+        }
+    }
+
+    let mut strategy = BuyThenStop {
+        submitted: false,
+        stopped: false,
+    };
+    let result = run_equity(
+        &mut strategy,
+        vec![
+            equity_snapshot(1_000, 50.0),
+            equity_snapshot(2_000, 50.0),
+            action_at(3_000, CorporateAction::Split { ratio: price(2.0) }),
+            equity_snapshot(4_000, 25.0),
+            equity_snapshot(5_000, 25.0),
+        ],
+        10_000.0,
+    )
+    .unwrap();
+
+    // One fill: the entry. The stop is still parked, because 25 is not
+    // below a trigger that moved to 22.5 with everything else.
+    assert_eq!(
+        result.fills.len(),
+        1,
+        "the split fired the stop: {:?}",
+        result.fills
+    );
+    let stop = result
+        .orders
+        .iter()
+        .find(|o| o.trigger.is_some())
+        .expect("the stop order");
+    assert_eq!(
+        stop.trigger.unwrap().price,
+        price(22.5),
+        "the trigger has to move with the split"
+    );
+    assert_eq!(
+        stop.quantity,
+        qty(200.0),
+        "and so does the size it would sell"
+    );
+}
+
+/// The same seam for an order still crossing the latency gap (issue #76).
+///
+/// It arrives *after* the split, so it has to arrive in post-split terms.
+/// Left at its pre-split limit it is wildly marketable the moment it lands,
+/// which is the exact failure the resting-order rescale exists to prevent.
+#[test]
+fn a_split_reprices_an_order_still_in_flight() {
+    struct RestBelowOnce {
+        submitted: bool,
+    }
+    impl Strategy for RestBelowOnce {
+        fn on_event(&mut self, ctx: &mut Context<'_>, _record: &Record) -> Result<()> {
+            if !self.submitted {
+                self.submitted = true;
+                ctx.submit(OrderRequest::limit(
+                    InstrumentId::new(EQUITY).unwrap(),
+                    OutcomeId::FIRST,
+                    Side::Buy,
+                    price(26.0),
+                    qty(100.0),
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                equity_snapshot(1_000_000, 50.0),
+                // Long after the 5 ms insert latency has elapsed.
+                equity_snapshot(9_000_000, 25.0),
+            ],
+        )
+        .stream(
+            "corporate",
+            priority::CORPORATE,
+            // Lands at 3 ms, while the order is still in flight.
+            vec![action_at(
+                3_000_000,
+                CorporateAction::Split { ratio: price(2.0) },
+            )],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(equity_instruments())
+        .starting_cash(money(10_000.0))
+        .latency_model(Box::new(ConstantLatency::millis(5, 5)))
+        .build();
+    let mut strategy = RestBelowOnce { submitted: false };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    assert!(
+        result.fills.is_empty(),
+        "a buy at 26 arriving into a 25 book crossed it: {:?}",
+        result.fills
+    );
+    let order = &result.orders[0];
+    assert_eq!(order.limit_price(), Some(price(13.0)));
+    assert_eq!(order.quantity, qty(200.0));
+}
+
+/// One engine, one definition of equity (issue #78).
+///
+/// `margin_state` computed `cash + unrealized`, which is right for a
+/// perpetual and wrong for anything bought outright: a spot or
+/// prediction-market position already paid its notional out of cash, and
+/// counting only its profit never credits back the asset. The equity curve
+/// had it right, so the two disagreed by the whole funded notional --
+/// enough for `available()` to refuse roughly half the account's capital.
+#[test]
+fn the_margin_engine_and_the_equity_curve_agree_on_equity() {
+    let mut replay = Replay::builder()
+        .stream(
+            "book",
+            priority::SNAPSHOT,
+            vec![
+                equity_snapshot(1_000, 50.0),
+                equity_snapshot(2_000, 50.0),
+                equity_snapshot(3_000, 50.0),
+            ],
+        )
+        .build()
+        .unwrap();
+    let mut engine = Engine::builder(equity_instruments())
+        .starting_cash(money(10_000.0))
+        .margin_model(Box::new(LinearMargin::from_leverage(10.0).unwrap()))
+        .build();
+    let mut strategy = BuyEquity {
+        quantity: qty(100.0),
+        submitted: false,
+    };
+    let result = engine.run(&mut replay, &mut strategy).unwrap();
+
+    let curve = result.equity.last().expect("an equity point");
+    let state = engine
+        .margin_state()
+        .unwrap()
+        .expect("a margin model is set");
+    // Nothing is isolated here, so the curve's `open_positions` and the
+    // margin engine's `cross_positions` are the same set.
+    assert_eq!(
+        state.equity, curve.equity,
+        "two numbers called equity, computed differently, in one engine"
+    );
+    // ~5,000 of cash and ~5,000 of stock, not 5,000 of cash and nothing.
+    assert!(
+        (state.equity.to_f64() - 10_000.0).abs() < 20.0,
+        "the funded notional went missing: equity is {}",
+        state.equity
     );
 }

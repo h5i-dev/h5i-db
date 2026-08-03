@@ -858,6 +858,30 @@ enum InFlightAction {
     Set(SetOperationRequest),
 }
 
+/// Move one order's size and every price it carries across a split.
+///
+/// The single owner of what a split does to an order, so the book, the
+/// parked triggers and the latency heap cannot disagree about it.
+///
+/// A market order has no limit to move but its size still doubles on a
+/// 2-for-1, so this must not bail out on a missing limit price -- the
+/// limit-only path this replaced left every stop-market order at its
+/// pre-split size.
+fn split_order(ratio: Price, order: &mut Order) -> Result<()> {
+    use crate::corporate::CorporateAction;
+    let (quantity, _) = CorporateAction::split_position(ratio, order.quantity, Price::ZERO)?;
+    order.quantity = quantity;
+    if let OrderKind::Limit { limit } = order.kind {
+        let (_, limit) = CorporateAction::split_position(ratio, Qty::ZERO, limit)?;
+        order.kind = OrderKind::Limit { limit };
+    }
+    if let Some(trigger) = order.trigger.as_mut() {
+        let (_, price) = CorporateAction::split_position(ratio, Qty::ZERO, trigger.price)?;
+        trigger.price = price;
+    }
+    Ok(())
+}
+
 /// An action waiting out its latency before the venue sees it.
 #[derive(PartialEq, Eq)]
 struct InFlight {
@@ -1895,6 +1919,17 @@ impl Engine {
 
     /// The account's margin position right now, or `None` when no margin
     /// model is in force (a cash account cannot be called).
+    ///
+    /// Equity here means what it means on the equity curve: cash, plus a
+    /// funded position's marked exposure, plus an unfunded one's unrealised
+    /// profit. Valuing every position at its profit instead -- which this
+    /// did -- is right for a perpetual and wrong for anything bought
+    /// outright, and the error is not cosmetic. On a mixed book (a perp
+    /// under `LinearMargin` plus prediction-market longs) `available()`
+    /// treated the prepaid contracts as if their cash were still gone *and*
+    /// charged an initial requirement for them, refusing roughly half the
+    /// capital; a large enough funded book dragged equity under maintenance
+    /// and cross-liquidated a perp that was never in trouble.
     pub fn margin_state(&self) -> Result<Option<MarginState>> {
         let Some(model) = self.margin.as_deref() else {
             return Ok(None);
@@ -1915,23 +1950,29 @@ impl Engine {
         // closing a book on a number known to be partial is worse than
         // waiting for the rate.
         let mut unconvertible = Vec::new();
-        let mut unrealized = Money::ZERO;
+        let mut marked = Money::ZERO;
         for position in self.cross_positions() {
             let key = self.slots.key(&position.instrument, position.outcome);
             let Some(mark) = self.marks.get(&key) else {
                 continue;
             };
-            let pnl = position.unrealized_pnl(*mark)?;
-            let settlement = &self
-                .instruments
-                .get(&position.instrument)?
-                .settlement_currency;
-            if settlement == &self.reporting_currency {
-                unrealized = unrealized.checked_add(pnl)?;
+            let instrument = self.instruments.get(&position.instrument)?;
+            // The same split `push_equity` makes, and for the same reason: a
+            // funded position was paid for out of `cash`, so counting only
+            // its profit charges the account for money it spent and never
+            // credits it the asset it bought.
+            let value = if instrument.kind.is_funded() {
+                position.exposure(*mark)?
             } else {
-                match self.fx.convert(pnl, settlement, &self.reporting_currency) {
-                    Ok(converted) => unrealized = unrealized.checked_add(converted)?,
-                    Err(_) => unconvertible.push((settlement.clone(), pnl)),
+                position.unrealized_pnl(*mark)?
+            };
+            let settlement = &instrument.settlement_currency;
+            if settlement == &self.reporting_currency {
+                marked = marked.checked_add(value)?;
+            } else {
+                match self.fx.convert(value, settlement, &self.reporting_currency) {
+                    Ok(converted) => marked = marked.checked_add(converted)?,
+                    Err(_) => unconvertible.push((settlement.clone(), value)),
                 }
             }
         }
@@ -1940,7 +1981,7 @@ impl Engine {
             currency: self.reporting_currency.clone(),
             unconvertible,
         };
-        Ok(Some(margin_state(&collateral, unrealized, &requirement)?))
+        Ok(Some(margin_state(&collateral, marked, &requirement)?))
     }
 
     /// Close what the account can no longer support.
@@ -2477,19 +2518,28 @@ impl Engine {
         Ok(())
     }
 
-    /// Apply a corporate action to positions, resting orders and cash.
+    /// Apply a corporate action to positions, orders and cash.
     ///
     /// Forward only: nothing already replayed is rewritten. A split scales
-    /// the position and any resting order together -- a limit at 50 on a
-    /// stock that just halved is a limit at 25 for twice the size, which is
-    /// what the venue does and what stops an untouched order from becoming
-    /// wildly marketable the instant the split lands.
+    /// the position and any order together -- a limit at 50 on a stock that
+    /// just halved is a limit at 25 for twice the size, which is what the
+    /// venue does and what stops an untouched order from becoming wildly
+    /// marketable the instant the split lands.
     ///
     /// **Everything the split renames moves at once**, which is the whole of
     /// the rule. Repricing the orders while leaving the book, the marks and
     /// the venue's own reference prices in pre-split terms produces a state
     /// where the two sides of the same market disagree by the ratio, and the
     /// very next line of the kernel trades across that disagreement.
+    ///
+    /// "Orders" is all three places one can be, not just the book. A parked
+    /// stop is the case that bites: leaving its trigger in pre-split terms
+    /// while the marks halve means `arm_triggers` compares a post-split mark
+    /// against a pre-split trigger, so a 2-for-1 fires every protective stop
+    /// on the instrument at once -- and at the un-doubled size, because the
+    /// quantity was not moved either. An order still crossing the latency
+    /// gap arrives *after* the split, so it must arrive in post-split terms
+    /// for the same reason.
     fn apply_corporate_action(
         &mut self,
         instrument: &InstrumentId,
@@ -2501,6 +2551,8 @@ impl Engine {
         match action {
             CorporateAction::Split { ratio } => {
                 self.portfolio.apply_split(instrument, ratio)?;
+                // On the book: the resting index is keyed by price, so it
+                // has to be rebuilt around the change.
                 let resting: Vec<OrderId> = self.resting.clone();
                 for id in resting {
                     let Some(order) = self.orders.get(&id).cloned() else {
@@ -2509,20 +2561,55 @@ impl Engine {
                     if &order.instrument != instrument {
                         continue;
                     }
-                    let Some(limit) = order.limit_price() else {
-                        continue;
-                    };
-                    let (quantity, price) =
-                        CorporateAction::split_position(ratio, order.quantity, limit)?;
                     let slot = self.slots.resolve(&order.instrument, order.outcome)?;
                     self.resting_index.remove(&order, slot);
                     if let Some(order) = self.orders.get_mut(&id) {
-                        order.quantity = quantity;
-                        order.kind = OrderKind::Limit { limit: price };
+                        split_order(ratio, order)?;
                     }
                     if let Some(order) = self.orders.get(&id) {
                         self.resting_index.insert(order, slot);
                     }
+                }
+                // Parked on a trigger: off the book, so there is no index to
+                // maintain, but the trigger price is exactly as much a
+                // pre-split price as a limit is.
+                // Parked on a trigger: off the book, so there is no index to
+                // maintain, but the trigger price is exactly as much a
+                // pre-split price as a limit is.
+                let untriggered: Vec<OrderId> = self.untriggered.clone();
+                for id in untriggered {
+                    let Some(order) = self.orders.get_mut(&id) else {
+                        continue;
+                    };
+                    if &order.instrument != instrument {
+                        continue;
+                    }
+                    split_order(ratio, order)?;
+                }
+                // Still crossing the latency gap: it arrives after the
+                // split, so it has to arrive in post-split terms.
+                //
+                // Scaled in `self.orders` rather than in the latency heap,
+                // because since #43 `release_inflight` discards its own
+                // clone and takes the map's copy -- so the heap entry is
+                // what the strategy *sent* and the map is what the venue
+                // *sees*. `live_orders` is scanned rather than the whole
+                // map for the usual reason: the map only grows, and a sweep
+                // over it is quadratic in the length of the run.
+                //
+                // The `InFlight` filter is what keeps this from
+                // double-scaling the two loops above: a resting order is
+                // `Accepted`, a parked one is `Untriggered`, and neither
+                // has arrived yet if it is `InFlight`.
+                let live: Vec<OrderId> = self.live_orders.clone();
+                for id in live {
+                    let Some(order) = self.orders.get_mut(&id) else {
+                        continue;
+                    };
+                    if order.status != OrderStatus::InFlight || &order.instrument != instrument {
+                        continue;
+                    }
+                    split_order(ratio, order)?;
                 }
                 self.split_quotes(instrument, ratio, ts)?;
                 self.metrics.corporate_actions += 1;
