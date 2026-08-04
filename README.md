@@ -55,26 +55,29 @@ h5i-db query market.db "SELECT count(*) FROM trades" \
 h5i-db ui market.db                                                # review + experiments surface
 ```
 
-**Notebook in the terminal** (the kernel stays alive between commands)
+**Notebook in the terminal**
 
 ```bash
 h5i-db nb new research.ipynb --kernel python3 --db market.db
-h5i-db nb exec research.ipynb --code "import pandas as pd; df = pd.read_parquet('ticks.parquet')"
-h5i-db nb exec research.ipynb --code "df.shape"      # same kernel, df is still there
+h5i-db nb view research.ipynb        # ⏎ edit · e run · a insert · ? all keys · q quit
+```
 
-h5i-db nb exec research.ipynb --code - <<'SQL'       # query the database, no Python involved
+A cell that starts with `%%sql` queries the database directly, with no Python
+in between:
+
+```sql
 %%sql
 SELECT symbol, count(*) AS trades FROM trades GROUP BY symbol
-SQL
+```
 
-h5i-db nb cells research.ipynb                       # what ran, and what it produced
-h5i-db nb view research.ipynb                        # edit and run it in a TUI
-h5i-db nb watch research.ipynb --split right         # live read-only pane, e.g. beside an agent
-h5i-db nb export research.ipynb --to md
+```bash
+h5i-db nb watch research.ipynb --split right   # follow along while an agent runs cells
+h5i-db nb export research.ipynb --to html
 ```
 
 It writes a real `.ipynb`, so JupyterLab opens the same file. A Python kernel
-needs `pip install ipykernel`; `%%sql` cells need nothing.
+needs `pip install ipykernel`; `%%sql` cells need nothing. Agents drive the
+same session non-interactively with `h5i-db nb exec`.
 
 **Python Library for DataFrames and SQL**
 
