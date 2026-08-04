@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/cli/#article","headline":"CLI reference","name":"CLI reference","description":"Every command, flag, output format, and exit code of the h5i-db command-line tool.","url":"https://db.h5i.dev/manual/cli/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/cli/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"CLI reference","item":"https://db.h5i.dev/manual/cli/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/cli/#article","headline":"CLI reference","name":"CLI reference","description":"Every command, flag, output format, and exit code of the h5i-db command-line tool.","url":"https://db.h5i.dev/manual/cli/","inLanguage":"en","dateModified":"2026-08-03","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/cli/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"CLI reference","item":"https://db.h5i.dev/manual/cli/"}]}]}</script>
 </head>
 <body>
 
@@ -60,7 +60,7 @@
       <kbd>/</kbd>
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
-<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/" class="active">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/" class="active">CLI reference</a></li><li><a href="/manual/notebooks/">Notebooks</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/data-onramp/">Data on-ramp</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
   </aside>
@@ -338,8 +338,8 @@ file (exactly one required).</p>
 </code></pre></div>
 
 </div></section><section class="api-member"><h3 id="h5i-db-drop-table"><code><span class="api-qual">h5i-db </span><span class="api-name">drop-table</span></code><a class="headerlink" href="#h5i-db-drop-table" title="Permanent link">#</a></h3><div class="api-body">
-<p>Drop a table and its data. Refuses if the table is pinned by a snapshot, and
-requires <code>--yes</code>:</p>
+<p>Drop a table and its data. Refuses if the table is pinned by a snapshot or a
+fork, and requires <code>--yes</code>:</p>
 <div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>drop-table<span class="w"> </span>market.db<span class="w"> </span>scratch<span class="w"> </span>--yes
 </code></pre></div>
 
@@ -739,9 +739,9 @@ branches a reasonable thing to create and then throw away. With <code>--count</c
 command returns a JSON list; without it, a single object as before.</p>
 <p><strong>The <code>--fork</code> flag.</strong> Every data command takes <code>--fork &lt;name&gt;</code> and then reads
 and writes inside that workspace, so an existing script runs unchanged against
-a fork by adding one flag. Database-wide commands (<code>snapshot</code>, <code>vacuum</code>,
-<code>set-retention</code>) refuse it and say so: they move state a fork's siblings
-depend on. <code>fork create</code> is the exception: with <code>--fork</code> it creates the new
+a fork by adding one flag. Database-wide commands (<code>snapshot</code>, <code>vacuum</code>, fork
+management) refuse it and say so: they move state a fork's siblings depend
+on. <code>fork create</code> is the exception: with <code>--fork</code> it creates the new
 fork <em>inside</em> that one (see <a href="/manual/concepts/#forks-nest">Forks</a>).</p>
 <p><strong>Promotion conflicts.</strong> <code>fork promote</code> compare-and-swaps against the version
 the fork started from. If the base moved, it exits 3 with
@@ -756,6 +756,83 @@ while the fork still holds every row it inherited; a fork that deleted
 inherited rows cannot be replayed from metadata (a compacted segment may merge
 rows it dropped with rows it kept), so that case still conflicts and the
 message says why.</p>
+<hr />
+</div></section><h2 id="notebooks">Notebooks<a class="headerlink" href="#notebooks" title="Permanent link">#</a></h2>
+<section class="api-member"><h3 id="h5i-db-nb"><code><span class="api-qual">h5i-db </span><span class="api-name">nb</span></code><a class="headerlink" href="#h5i-db-nb" title="Permanent link">#</a></h3><div class="api-body">
+<p>In-terminal, Jupyter-compatible notebooks whose kernel persists between
+invocations, with <code>%%sql</code> cells that run in-process against a database
+instead of through a Python driver. The same commands are on a standalone
+binary, <code>h5i-nb</code>; both drive the same sessions.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>new<span class="w"> </span>research.ipynb<span class="w"> </span>--db<span class="w"> </span>market.db
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>research.ipynb<span class="w"> </span>--code<span class="w"> </span><span class="s2">&quot;df = load()&quot;</span><span class="w">    </span><span class="c1"># the kernel outlives the command</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>research.ipynb<span class="w"> </span>--code<span class="w"> </span><span class="s2">&quot;df.shape&quot;</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>watch<span class="w"> </span>research.ipynb<span class="w"> </span>--split<span class="w"> </span>right<span class="w">          </span><span class="c1"># live read-only pane</span>
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Subcommand</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nb new &lt;nb&gt;</code></td>
+<td>Create a notebook; <code>--kernel &lt;spec&gt;</code> (default <code>python3</code>), <code>--db &lt;path&gt;</code> for its <code>%%sql</code> default</td>
+</tr>
+<tr>
+<td><code>nb exec &lt;nb&gt;</code></td>
+<td>Append a cell and run it; <code>--code &lt;src&gt;\|-</code>, <code>--timeout &lt;secs&gt;</code> (default 300), <code>--stream</code>, <code>--detach</code>, <code>--raw</code></td>
+</tr>
+<tr>
+<td><code>nb run &lt;nb&gt;</code></td>
+<td>Re-run existing cells; <code>--cells 3-7\|1,4,9\|all</code>, <code>--from-clean</code>, <code>--keep-going</code></td>
+</tr>
+<tr>
+<td><code>nb cells &lt;nb&gt;</code></td>
+<td>Index, id, type, execution count and output shape per cell</td>
+</tr>
+<tr>
+<td><code>nb output &lt;nb&gt; &lt;cell&gt;</code></td>
+<td>One cell's output; <code>--index &lt;n&gt;</code>, <code>--raw</code>, <code>--save &lt;path&gt;</code></td>
+</tr>
+<tr>
+<td><code>nb edit &lt;nb&gt; …</code></td>
+<td><code>set</code>, <code>insert</code>, <code>delete</code>, <code>move</code>, <code>clear-outputs</code> — no execution</td>
+</tr>
+<tr>
+<td><code>nb view &lt;nb&gt;</code></td>
+<td>Editable terminal UI; <code>--split right\|left\|down\|up</code></td>
+</tr>
+<tr>
+<td><code>nb watch &lt;nb&gt;</code></td>
+<td>Live read-only view: no lock, no kernel, no writes</td>
+</tr>
+<tr>
+<td><code>nb ls</code></td>
+<td>Notebook sessions running on this machine</td>
+</tr>
+<tr>
+<td><code>nb export &lt;nb&gt;</code></td>
+<td><code>--to md\|py\|html</code>, <code>-o &lt;path&gt;</code>, <code>--without-outputs</code></td>
+</tr>
+<tr>
+<td><code>nb inspect\|complete &lt;nb&gt; &lt;code&gt;</code></td>
+<td>The kernel's <code>?</code> and completion, from a shell; <code>--cursor &lt;n&gt;</code></td>
+</tr>
+<tr>
+<td><code>nb kernel …</code></td>
+<td><code>list</code>, <code>start</code>, <code>status</code>, <code>interrupt</code>, <code>restart</code> (<code>--clear-outputs</code>), <code>stop</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Output is token-budgeted by default — long text elided in the middle, frames
+summarised by shape, images written to <code>&lt;notebook&gt;_files/</code> and reported as
+paths — with the untruncated bytes still in the <code>.ipynb</code> behind <code>--raw</code>.
+Notebook failures use their own codes (<code>cell_raised</code>, <code>execute_timeout</code>,
+<code>session_busy</code>, <code>kernel_died</code>) in the same error envelope.</p>
+<p>See <a href="/manual/notebooks/">Notebooks</a> for the full guide.</p>
 <hr />
 </div></section><h2 id="maintenance-tools">Maintenance &amp; tools<a class="headerlink" href="#maintenance-tools" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="h5i-db-compact"><code><span class="api-qual">h5i-db </span><span class="api-name">compact</span></code><a class="headerlink" href="#h5i-db-compact" title="Permanent link">#</a></h3><div class="api-body">
@@ -862,10 +939,10 @@ swarm against a database if you want to watch the tree move, and
 (<code>synth --symbols AAPL,MSFT,NVDA --db &lt;db&gt;</code>) or a day of real 1s bars from
 Binance's public archive (<code>binance --symbols BTCUSDT,ETHUSDT --db &lt;db&gt;</code>,
 no API key).</p></div></section>
-    <nav class="page-nav"><a class="prev" href="/manual/concepts/"><span class="dir">← Previous</span><span class="pn-title">Core concepts</span></a><a class="next" href="/manual/sql/"><span class="dir">Next →</span><span class="pn-title">SQL reference</span></a></nav>
+    <nav class="page-nav"><a class="prev" href="/manual/concepts/"><span class="dir">← Previous</span><span class="pn-title">Core concepts</span></a><a class="next" href="/manual/notebooks/"><span class="dir">Next →</span><span class="pn-title">Notebooks</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-context">h5i-db context</a></li><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li><li><a href="#h5i-db-arrival-delta">h5i-db arrival-delta</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-data-policy">h5i-db data-policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li><li><a href="#h5i-db-fork">h5i-db fork</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-demo">h5i-db demo</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#global-behavior">Global behavior</a><ul><li><a href="#output-formats">Output formats</a></li><li><a href="#errors-and-exit-codes">Errors and exit codes</a></li><li><a href="#shared-write-flags">Shared write flags</a></li></ul></li><li><a href="#database-tables">Database &amp; tables</a><ul><li><a href="#h5i-db-context">h5i-db context</a></li><li><a href="#h5i-db-init">h5i-db init</a></li><li><a href="#h5i-db-create-table">h5i-db create-table</a></li><li><a href="#h5i-db-tables">h5i-db tables</a></li><li><a href="#h5i-db-schema">h5i-db schema</a></li><li><a href="#h5i-db-sample">h5i-db sample</a></li><li><a href="#h5i-db-rename">h5i-db rename</a></li><li><a href="#h5i-db-drop-table">h5i-db drop-table</a></li></ul></li><li><a href="#reading-querying">Reading &amp; querying</a><ul><li><a href="#h5i-db-query">h5i-db query</a></li><li><a href="#h5i-db-versions">h5i-db versions</a></li><li><a href="#h5i-db-arrival-delta">h5i-db arrival-delta</a></li></ul></li><li><a href="#writing-data">Writing data</a><ul><li><a href="#h5i-db-ingest">h5i-db ingest</a></li><li><a href="#h5i-db-restore">h5i-db restore</a></li><li><a href="#h5i-db-replace-range">h5i-db replace-range</a></li><li><a href="#h5i-db-delete-range">h5i-db delete-range</a></li></ul></li><li><a href="#plans-policy-snapshots">Plans, policy &amp; snapshots</a><ul><li><a href="#h5i-db-plan">h5i-db plan</a></li><li><a href="#h5i-db-policy">h5i-db policy</a></li><li><a href="#h5i-db-data-policy">h5i-db data-policy</a></li><li><a href="#h5i-db-snapshot">h5i-db snapshot</a></li><li><a href="#h5i-db-fork">h5i-db fork</a></li></ul></li><li><a href="#notebooks">Notebooks</a><ul><li><a href="#h5i-db-nb">h5i-db nb</a></li></ul></li><li><a href="#maintenance-tools">Maintenance &amp; tools</a><ul><li><a href="#h5i-db-compact">h5i-db compact</a></li><li><a href="#h5i-db-vacuum">h5i-db vacuum</a></li><li><a href="#h5i-db-verify">h5i-db verify</a></li><li><a href="#h5i-db-demo">h5i-db demo</a></li><li><a href="#h5i-db-ui">h5i-db ui</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

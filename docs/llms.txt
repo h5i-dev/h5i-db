@@ -11,15 +11,17 @@ A database is a single directory on disk; there is no server. Every write is an 
 - [Migrating from DuckDB](https://db.h5i.dev/manual/migrating-from-duckdb/): Move tables from a .duckdb file into a versioned h5i-db store via Parquet, and the query differences to expect once they land.
 - [Core concepts](https://db.h5i.dev/manual/concepts/): The mental model behind h5i-db: versions, segments, manifests, snapshots, previewable mutation plans, and the mutation policy.
 - [CLI reference](https://db.h5i.dev/manual/cli/): Every command, flag, output format, and exit code of the h5i-db command-line tool.
+- [Notebooks](https://db.h5i.dev/manual/notebooks/): In-terminal Jupyter notebooks whose kernel outlives the command, with %%sql cells that skip the interpreter entirely.
 - [SQL reference](https://db.h5i.dev/manual/sql/): h5i-db's SQL beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill and resample, tail, time_bucket, vwap, ewma, and rolling sugar.
 - [Agents & automation](https://db.h5i.dev/manual/agents/): The machine contract: structured output and errors, stable exit codes, resource limits as flags, and policy-gated review for AI agents and pipelines.
 - [Quant workflows](https://db.h5i.dev/manual/quant/): Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.
 - [Operations guide](https://db.h5i.dev/manual/operations/): Running h5i-db in production: backup and restore, vacuum and compaction cadence, disk-usage math, and the torn-HEAD recovery runbook.
+- [Data on-ramp](https://db.h5i.dev/manual/data-onramp/): h5i_db.venues: turning vendor archives, bar files, trade dumps and live captures into the canonical tables a replay reads.
 - [Backtesting](https://db.h5i.dev/manual/backtest/): Deterministic event-driven backtesting on versioned data: canonical tables, runs that live on forks, and settlement that refuses to book what a run never reached.
 
 ## Python API
 - [Overview](https://db.h5i.dev/api/): The h5i_db Python library: install, the five-minute tour, data interchange, and error handling.
-- [Database](https://db.h5i.dev/api/database/): h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, mutation plans, policy, and maintenance.
+- [Database](https://db.h5i.dev/api/database/): h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, forks, mutation plans, policy, and maintenance.
 - [DataFrame builder](https://db.h5i.dev/api/dataframe/): Build queries as Python, not SQL strings: db.table(), lazy verbs, expressions, rolling and cross-sectional operators, and ASOF joins.
 - [QueryResult & MutationPlan](https://db.h5i.dev/api/results-and-plans/): Converting query results to Arrow, pandas, and Polars; previewing and applying mutation plans.
 - [Exceptions](https://db.h5i.dev/api/exceptions/): The typed error hierarchy: every h5i-db error carries a stable code, a hint you can act on, and a retryable flag.

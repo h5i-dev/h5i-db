@@ -24,6 +24,9 @@ escritos en Rust.**
 - **Análisis estadístico profesional:** métricas de factores y de rendimiento
   con paridad `alphalens` y `empyrical`, además de Sharpe deflactado y detección de
   la probabilidad de sobreajuste.
+- **Notebooks dentro del terminal:** agentes y personas exploran los datos sin
+  salir del terminal. `h5i-db nb view` ejecuta archivos `.ipynb` corrientes
+  sobre un kernel de Jupyter real y dibuja las gráficas de matplotlib en línea.
 - **Bifurca una base de datos en milisegundos:** los forks comparten los datos
   en lugar de copiarlos. Un agente puede recorrer ciclos amplios de ensayo y
   error (bifurcar, mutar, evaluar, descartar) a un coste casi nulo.
@@ -71,6 +74,10 @@ h5i-db nb export research.ipynb --to html
 Escribe un `.ipynb` de verdad, así que JupyterLab abre el mismo archivo. Un
 kernel de Python necesita `pip install ipykernel`. Los agentes manejan la misma
 sesión de forma no interactiva con `h5i-db nb exec`.
+
+<p align="center">
+  <img src="./docs/_static/in-terminal-notebook-demo.png" width="99%" />
+</p>
 
 **Biblioteca de Python para DataFrames y SQL**
 
@@ -212,6 +219,10 @@ propio fork y escribe allí sus órdenes, ejecuciones, posiciones y curva
 de patrimonio como tablas normales. Así, dos ejecuciones se comparan al nivel de
 ejecución con `fork_diff`, un barrido entero se agrega en una sola consulta entre
 forks, la que merece la pena se `promote` y el resto se descarta.
+- **Notebooks en el terminal, por lo mismo que los quants ya usan Jupyter.**
+Ejecución parcial, un kernel que conserva el estado entre pasos, resultados
+guardados junto al código que los produjo. Un agente consigue los tres desde la
+línea de comandos, con `nb exec` y `nb run --cells 3-7`.
 - **La superficie de revisión reparte atención en vez de clasificar.** `h5i-db ui`
 ordena las pruebas por lo que necesita a una persona a continuación: decisión
 requerida, luego fallidas o con avisos, luego terminadas y no vistas, luego en

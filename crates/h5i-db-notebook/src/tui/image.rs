@@ -1,269 +1,457 @@
 //! Inline images, where the terminal can show them.
 //!
-//! Only the protocols that pass base64 straight through are implemented:
-//! kitty's graphics protocol (kitty, ghostty, WezTerm) and iTerm2's inline
-//! image escape (iTerm2, WezTerm). Both take the PNG bytes as-is.
+//! Two things have to be true before a PNG in a notebook reaches the screen,
+//! and guessing at either one is what kept plots invisible for so long.
 //!
-//! Sixel and unicode half-blocks are deliberately absent: both require
-//! decoding the PNG to pixels, which means an image-decoding dependency and a
-//! resampler, for terminals that are increasingly rare. A terminal we cannot
-//! draw in gets a labelled placeholder and the output stays reachable through
-//! `h5i-nb output --save`, so nothing is lost but the convenience.
+//! **Which protocol the terminal speaks.** Reading `TERM_PROGRAM` and
+//! `KITTY_WINDOW_ID` looks like it answers this, and under WSL it cannot: the
+//! terminal runs on the Windows side and its environment does not cross into
+//! Linux unless `WSLENV` says so, which it almost never does. Every terminal
+//! then looks like a bare `xterm-256color` and every image becomes a
+//! placeholder. So ask the terminal instead — [`Picker::from_query_stdio`]
+//! writes the kitty, iTerm2 and device-attribute queries and reads the
+//! answers, which is also how euporie gets this right.
+//!
+//! **What the pixels are.** Sixel needs the PNG decoded and quantised, and
+//! every protocol needs the real aspect ratio if the plot is not to be drawn
+//! into a box of the wrong shape. `ratatui-image` owns both, so this module is
+//! a cache in front of it: PNG dimensions by digest (a header read, not a
+//! decode) to size the reserved rows, and encoded protocols by digest and box
+//! so a scroll or a keystroke does not re-encode every plot on screen.
 
+use std::collections::HashMap;
 use std::io::Write;
+use std::time::{Duration, Instant};
 
-/// Which inline-image escape this terminal understands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ImageProtocol {
-    Kitty,
-    ITerm2,
-    None,
-}
+use ratatui::layout::{Rect, Size};
+use ratatui_image::Resize;
+use ratatui_image::picker::{Picker, ProtocolType};
+use ratatui_image::protocol::Protocol;
 
-impl ImageProtocol {
-    /// Sniff the terminal from its environment.
-    ///
-    /// Environment sniffing rather than a terminal query: a query needs a
-    /// response read within a timeout, and getting that wrong on a terminal
-    /// that stays silent hangs the UI before it has drawn anything.
-    pub fn detect() -> Self {
-        Self::from_env(|name| std::env::var(name).ok())
-    }
-
-    pub fn from_env(get: impl Fn(&str) -> Option<String>) -> Self {
-        // An explicit override always wins, so a user in an unrecognised
-        // terminal is not stuck with placeholders.
-        if let Some(value) = get("H5I_NB_IMAGES") {
-            return match value.to_ascii_lowercase().as_str() {
-                "kitty" => ImageProtocol::Kitty,
-                "iterm" | "iterm2" => ImageProtocol::ITerm2,
-                _ => ImageProtocol::None,
-            };
-        }
-        if get("KITTY_WINDOW_ID").is_some() {
-            return ImageProtocol::Kitty;
-        }
-        let term_program = get("TERM_PROGRAM").unwrap_or_default();
-        if term_program == "iTerm.app" {
-            return ImageProtocol::ITerm2;
-        }
-        if term_program == "WezTerm" {
-            return ImageProtocol::ITerm2;
-        }
-        if term_program == "ghostty" {
-            return ImageProtocol::Kitty;
-        }
-        match get("TERM").unwrap_or_default().as_str() {
-            t if t.contains("kitty") => ImageProtocol::Kitty,
-            _ => ImageProtocol::None,
-        }
-    }
-
-    pub fn is_supported(self) -> bool {
-        self != ImageProtocol::None
-    }
-}
-
-/// Rows an inline image is drawn into.
+/// Rows an image is drawn into when its real shape is unknown.
 ///
-/// Fixed rather than derived from the image: knowing the real aspect ratio
-/// would mean decoding the PNG, and both protocols will scale to fit a row
-/// count we give them.
+/// Only reached when the PNG header will not parse, or when no terminal query
+/// was possible: with a picker the row count comes from the image itself.
 pub const IMAGE_ROWS: u16 = 15;
 
-/// The escape sequence that draws `base64_png` at the cursor.
+/// The tallest an image may be drawn, so one plot cannot fill the screen and
+/// push the cell that produced it out of view.
+pub const MAX_IMAGE_ROWS: u16 = 24;
+
+/// How long the terminal gets to prove it answers a query at all.
 ///
-/// Returns `None` when the terminal cannot show it, so the caller falls back
-/// to the placeholder it already drew.
-pub fn escape_sequence(
-    protocol: ImageProtocol,
-    base64_png: &str,
-    rows: u16,
-    columns: u16,
-) -> Option<String> {
-    // Whitespace is legal inside a notebook's base64 payload but not inside
-    // these escapes.
+/// A round trip is milliseconds even over ssh; this is long enough that a slow
+/// link is not mistaken for a silent terminal, and short enough that starting
+/// up in front of one that never answers is not a visible pause.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How many encoded protocols to keep before starting over.
+///
+/// Each entry holds an encoded frame, which for sixel is a few hundred
+/// kilobytes, so this is a memory bound rather than a hit-rate tuning knob.
+/// Dropping the lot is fine: the next frame re-encodes only what is on screen.
+const CACHE_LIMIT: usize = 16;
+
+/// Decoded images, ready to draw, and the terminal's answer about how.
+pub struct Images {
+    /// `None` when the terminal was never asked (tests) or refused to answer.
+    picker: Option<Picker>,
+    /// PNG dimensions by payload digest. Cheap, and never invalidated.
+    sizes: HashMap<[u8; 16], (u32, u32)>,
+    /// Encoded protocols by payload digest and the box they were encoded for.
+    encoded: HashMap<([u8; 16], u16, u16), Protocol>,
+}
+
+impl Images {
+    /// Ask the terminal what it can draw.
+    ///
+    /// Must be called after entering the alternate screen and before anything
+    /// starts reading keys: the query writes to stdout and reads the reply off
+    /// stdin, and a reader thread would eat that reply.
+    pub fn detect() -> Self {
+        Self::with_override(std::env::var("H5I_NB_IMAGES").ok())
+    }
+
+    /// A picker that draws nothing, for tests and for `H5I_NB_IMAGES=off`.
+    pub fn disabled() -> Self {
+        Images {
+            picker: None,
+            sizes: HashMap::new(),
+            encoded: HashMap::new(),
+        }
+    }
+
+    fn with_override(setting: Option<String>) -> Self {
+        let forced = match setting.as_deref().map(str::trim) {
+            // Turning images off is worth honouring without a query at all:
+            // somebody setting this has a terminal that misbehaves, and the
+            // query itself is part of what they are turning off.
+            Some("off" | "none" | "0" | "false" | "no") => return Self::disabled(),
+            Some("kitty") => Some(ProtocolType::Kitty),
+            Some("iterm" | "iterm2") => Some(ProtocolType::Iterm2),
+            Some("sixel") => Some(ProtocolType::Sixel),
+            Some("halfblocks" | "blocks" | "unicode") => Some(ProtocolType::Halfblocks),
+            _ => None,
+        };
+        // The query is still worth running even when the protocol is forced,
+        // because it is also how the cell size in pixels is discovered, and
+        // without that an image cannot be scaled to a box of character cells.
+        //
+        // But only where it is safe to run, and that has to be established
+        // first. `from_query_stdio` reads the replies on a thread it spawns
+        // and does not own: the thread blocks in `stdin().read()` until a
+        // device status report arrives, and when the outer timeout fires the
+        // thread is abandoned rather than stopped. On a terminal that never
+        // answers it stays parked on stdin forever and eats every keystroke
+        // after it, so the notebook paints perfectly and then ignores every
+        // key including `q`. Sending our own status report first, and reading
+        // the reply with a timed `poll` that cannot block, tells us whether
+        // that thread will ever come back.
+        let mut picker = if answers_a_status_report(PROBE_TIMEOUT) {
+            Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
+        } else {
+            // Half-blocks need no query and no pixel size, so a silent
+            // terminal still gets a recognisable plot rather than a label.
+            Picker::halfblocks()
+        };
+        if let Some(protocol) = forced {
+            picker.set_protocol_type(protocol);
+        }
+        Images {
+            picker: Some(picker),
+            sizes: HashMap::new(),
+            encoded: HashMap::new(),
+        }
+    }
+
+    /// Whether anything will be drawn at all.
+    pub fn is_supported(&self) -> bool {
+        self.picker.is_some()
+    }
+
+    /// The protocol in use, for the status line and for tests.
+    pub fn protocol_type(&self) -> Option<ProtocolType> {
+        self.picker.as_ref().map(|p| p.protocol_type())
+    }
+
+    /// How many rows an image should be given, at `columns` wide.
+    ///
+    /// Derived from the PNG's own dimensions and the terminal's cell size, so
+    /// a wide plot gets a short box and a tall one a taller box, and neither
+    /// is stretched to fit. Falls back to [`IMAGE_ROWS`] when the header will
+    /// not parse or the terminal never answered.
+    pub fn rows_for(&mut self, base64_png: &str, columns: u16) -> u16 {
+        let columns = columns.max(1);
+        let Some(font) = self.picker.as_ref().map(|p| p.font_size()) else {
+            return IMAGE_ROWS.min(MAX_IMAGE_ROWS);
+        };
+        let Some((width_px, height_px)) = self.dimensions(base64_png) else {
+            return IMAGE_ROWS.min(MAX_IMAGE_ROWS);
+        };
+        let (font_w, font_h) = (font.width.max(1) as u32, font.height.max(1) as u32);
+        (rows_for_pixels(width_px, height_px, columns, font_w, font_h)) as u16
+    }
+
+    /// The encoded image for `area`, or `None` if it cannot be drawn.
+    ///
+    /// Encoding is where the cost is (a decode, a resample, and for sixel a
+    /// colour quantisation), so the result is kept until the box changes.
+    pub fn protocol(&mut self, base64_png: &str, area: Rect) -> Option<&Protocol> {
+        self.picker.as_ref()?;
+        if area.width == 0 || area.height == 0 {
+            return None;
+        }
+        let key = (digest(base64_png), area.width, area.height);
+        if !self.encoded.contains_key(&key) {
+            // Bounded rather than evicted by age: what is on screen is
+            // re-encoded on the next frame anyway, and a scroll through a
+            // notebook of plots would otherwise grow without limit.
+            if self.encoded.len() >= CACHE_LIMIT {
+                self.encoded.clear();
+            }
+            let image = decode(base64_png)?;
+            let picker = self.picker.as_ref()?;
+            let protocol = picker
+                .new_protocol(
+                    image,
+                    Size::new(area.width, area.height),
+                    // Fit rather than Scale: an image smaller than its box is
+                    // left alone instead of being blown up into a blur.
+                    Resize::Fit(None),
+                )
+                .ok()?;
+            self.encoded.insert(key, protocol);
+        }
+        self.encoded.get(&key)
+    }
+
+    /// PNG dimensions, read from the header rather than by decoding.
+    fn dimensions(&mut self, base64_png: &str) -> Option<(u32, u32)> {
+        let key = digest(base64_png);
+        if let Some(size) = self.sizes.get(&key) {
+            return Some(*size);
+        }
+        let bytes = decode_base64(base64_png)?;
+        let size = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok()?;
+        self.sizes.insert(key, size);
+        Some(size)
+    }
+}
+
+impl Default for Images {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
+impl std::fmt::Debug for Images {
+    // `Protocol` holds encoded frames and is not `Debug`, and printing them
+    // would be useless anyway.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Images")
+            .field("protocol", &self.protocol_type())
+            .field("cached", &self.encoded.len())
+            .finish()
+    }
+}
+
+/// Does this terminal answer a device status report within `timeout`?
+///
+/// The one question every terminal since the VT100 can answer, asked here only
+/// to find out whether asking anything is safe: see [`Images::with_override`]
+/// for why a terminal that stays silent must never be queried again.
+///
+/// Read with `poll` rather than a plain read so that a silent terminal costs
+/// the timeout and nothing more. The caller must already be in raw mode, or
+/// the reply sits in the line buffer until the user presses Enter.
+fn answers_a_status_report(timeout: Duration) -> bool {
+    let mut out = std::io::stdout();
+    if out.write_all(b"\x1b[5n").is_err() || out.flush().is_err() {
+        return false;
+    }
+
+    let deadline = Instant::now() + timeout;
+    let mut seen: Vec<u8> = Vec::with_capacity(64);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        let mut fd = libc::pollfd {
+            fd: libc::STDIN_FILENO,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one initialised pollfd, and a count that matches it.
+        let ready = unsafe { libc::poll(&mut fd, 1, left.as_millis() as libc::c_int) };
+        if ready <= 0 {
+            return false;
+        }
+        let mut buffer = [0u8; 64];
+        // SAFETY: reading into a buffer we own, for at most its own length.
+        let read =
+            unsafe { libc::read(libc::STDIN_FILENO, buffer.as_mut_ptr().cast(), buffer.len()) };
+        // Nothing more is coming: stdin is closed, or not a terminal at all.
+        if read <= 0 {
+            return false;
+        }
+        seen.extend_from_slice(&buffer[..read as usize]);
+        if is_status_report(&seen) {
+            return true;
+        }
+        // A terminal answering something other than what was asked, at length.
+        // Whatever it is doing, it is not the conversation we need.
+        if seen.len() > 512 {
+            return false;
+        }
+    }
+}
+
+/// `CSI 0 n` (ready) or `CSI 3 n` (not ready), the two legal answers.
+fn is_status_report(bytes: &[u8]) -> bool {
+    bytes.windows(4).any(|w| w == b"\x1b[0n" || w == b"\x1b[3n")
+}
+
+/// How many rows an image of `width_px` x `height_px` will actually occupy.
+///
+/// Two cases, and getting only the first of them right is what leaves a band
+/// of blank rows under every small plot. An image narrower than the space it
+/// is offered is drawn at its own size, because [`Resize::Fit`] does not
+/// upscale — blowing a 200px figure up to fill the pane would only blur it. A
+/// wider one is scaled down until it fits, and its height shrinks with it. So
+/// the answer is the smaller of "its natural height" and "its height once the
+/// width fits", which is also exactly what `Fit` will do.
+fn rows_for_pixels(width_px: u32, height_px: u32, columns: u16, font_w: u32, font_h: u32) -> u64 {
+    let natural_rows = (height_px as u64).div_ceil(font_h as u64);
+    let fitted_rows = (height_px as u64 * columns as u64 * font_w as u64)
+        .div_ceil((width_px as u64 * font_h as u64).max(1));
+    natural_rows
+        .min(fitted_rows)
+        .clamp(1, MAX_IMAGE_ROWS as u64)
+}
+
+/// A short, stable key for a base64 payload.
+///
+/// The payload itself would work as a key and can be megabytes; hashing keeps
+/// the cache's own memory proportional to the number of images, not their size.
+fn digest(base64_png: &str) -> [u8; 16] {
+    let hash = blake3::hash(base64_png.as_bytes());
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&hash.as_bytes()[..16]);
+    key
+}
+
+/// nbformat stores base64 wrapped across lines, which no decoder accepts.
+fn decode_base64(base64_png: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
     let payload: String = base64_png.chars().filter(|c| !c.is_whitespace()).collect();
     if payload.is_empty() {
         return None;
     }
-    match protocol {
-        ImageProtocol::None => None,
-        ImageProtocol::ITerm2 => Some(format!(
-            "\u{1b}]1337;File=inline=1;preserveAspectRatio=1;width={columns};height={rows}:{payload}\u{7}"
-        )),
-        ImageProtocol::Kitty => {
-            // a=T transmits and displays; f=100 says the payload is PNG;
-            // c/r give the cell box to scale into. The payload is chunked
-            // because terminals cap the length of a single escape.
-            let mut out = String::with_capacity(payload.len() + 256);
-            let chunks: Vec<&str> = chunk(&payload, 4096);
-            for (index, chunk) in chunks.iter().enumerate() {
-                let more = u8::from(index + 1 < chunks.len());
-                if index == 0 {
-                    out.push_str(&format!(
-                        "\u{1b}_Ga=T,f=100,c={columns},r={rows},m={more};{chunk}\u{1b}\\"
-                    ));
-                } else {
-                    out.push_str(&format!("\u{1b}_Gm={more};{chunk}\u{1b}\\"));
-                }
-            }
-            Some(out)
-        }
-    }
+    base64::engine::general_purpose::STANDARD
+        .decode(payload.as_bytes())
+        .ok()
 }
 
-fn chunk(text: &str, size: usize) -> Vec<&str> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let mut start = 0;
-    while start < text.len() {
-        let end = (start + size).min(text.len());
-        out.push(&text[start..end]);
-        start = end;
-    }
-    out
-}
-
-/// Draw an image at a screen position, leaving the cursor where it was.
-///
-/// ratatui owns the screen, so this runs after the frame is drawn: the cursor
-/// is saved, moved into the cell ratatui reserved, the escape is written, and
-/// the cursor is restored.
-pub fn draw_at(
-    out: &mut impl Write,
-    protocol: ImageProtocol,
-    base64_png: &str,
-    column: u16,
-    row: u16,
-    rows: u16,
-    columns: u16,
-) -> std::io::Result<()> {
-    let Some(sequence) = escape_sequence(protocol, base64_png, rows, columns) else {
-        return Ok(());
-    };
-    // Save cursor, move (1-based), draw, restore.
-    write!(out, "\u{1b}7\u{1b}[{};{}H", row + 1, column + 1)?;
-    out.write_all(sequence.as_bytes())?;
-    write!(out, "\u{1b}8")?;
-    out.flush()
+fn decode(base64_png: &str) -> Option<image::DynamicImage> {
+    let bytes = decode_base64(base64_png)?;
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
-    fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
-        let map: HashMap<String, String> = pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        move |name: &str| map.get(name).cloned()
+    /// A 4x2 PNG, so dimensions and aspect ratio are known exactly.
+    fn png_4x2() -> String {
+        use base64::Engine as _;
+        let mut bytes = Vec::new();
+        let image = image::RgbaImage::from_pixel(4, 2, image::Rgba([255, 0, 0, 255]));
+        image::DynamicImage::ImageRgba8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
     #[test]
-    fn terminals_are_detected_from_their_own_markers() {
-        assert_eq!(
-            ImageProtocol::from_env(env(&[("KITTY_WINDOW_ID", "1")])),
-            ImageProtocol::Kitty
-        );
-        assert_eq!(
-            ImageProtocol::from_env(env(&[("TERM_PROGRAM", "iTerm.app")])),
-            ImageProtocol::ITerm2
-        );
-        assert_eq!(
-            ImageProtocol::from_env(env(&[("TERM_PROGRAM", "WezTerm")])),
-            ImageProtocol::ITerm2
-        );
-        assert_eq!(
-            ImageProtocol::from_env(env(&[("TERM", "xterm-kitty")])),
-            ImageProtocol::Kitty
-        );
-        assert_eq!(
-            ImageProtocol::from_env(env(&[("TERM", "xterm-256color")])),
-            ImageProtocol::None
-        );
-        assert_eq!(ImageProtocol::from_env(env(&[])), ImageProtocol::None);
-    }
-
-    #[test]
-    fn an_explicit_override_beats_detection() {
-        assert_eq!(
-            ImageProtocol::from_env(env(&[
-                ("H5I_NB_IMAGES", "iterm2"),
-                ("KITTY_WINDOW_ID", "1")
-            ])),
-            ImageProtocol::ITerm2
-        );
-        assert_eq!(
-            ImageProtocol::from_env(env(&[("H5I_NB_IMAGES", "off"), ("KITTY_WINDOW_ID", "1")])),
-            ImageProtocol::None
-        );
-    }
-
-    #[test]
-    fn kitty_payloads_are_chunked_and_terminated() {
-        let payload = "A".repeat(10_000);
-        let sequence = escape_sequence(ImageProtocol::Kitty, &payload, 15, 40).unwrap();
-        assert!(sequence.starts_with("\u{1b}_Ga=T,f=100,c=40,r=15,m=1;"));
-        assert!(sequence.ends_with("\u{1b}\\"));
-        // 10000 / 4096 = 3 chunks.
-        assert_eq!(sequence.matches("\u{1b}_G").count(), 3);
-        // Every chunk but the last says more is coming.
-        assert_eq!(sequence.matches("m=1;").count(), 2);
-        assert_eq!(sequence.matches("m=0;").count(), 1);
-    }
-
-    #[test]
-    fn a_short_kitty_payload_is_a_single_chunk() {
-        let sequence = escape_sequence(ImageProtocol::Kitty, "iVBORw0KGgo=", 15, 40).unwrap();
-        assert_eq!(sequence.matches("\u{1b}_G").count(), 1);
-        assert!(sequence.contains("m=0;iVBORw0KGgo="));
-    }
-
-    #[test]
-    fn iterm_sequences_carry_the_size_and_terminate_with_bel() {
-        let sequence = escape_sequence(ImageProtocol::ITerm2, "iVBOR", 15, 40).unwrap();
-        assert!(sequence.starts_with("\u{1b}]1337;File=inline=1"));
-        assert!(sequence.contains("width=40;height=15"));
-        assert!(sequence.ends_with("\u{7}"));
-    }
-
-    #[test]
-    fn base64_newlines_are_stripped_before_being_sent() {
-        // nbformat stores base64 payloads split across lines; an embedded
-        // newline would terminate the escape early and dump the rest as text.
-        let sequence = escape_sequence(ImageProtocol::Kitty, "iVBO\nRw0K\n", 15, 40).unwrap();
-        assert!(!sequence.contains('\n'));
-        assert!(sequence.contains("iVBORw0K"));
-    }
-
-    #[test]
-    fn nothing_is_emitted_without_support_or_payload() {
-        assert!(escape_sequence(ImageProtocol::None, "iVBOR", 15, 40).is_none());
-        assert!(escape_sequence(ImageProtocol::Kitty, "   \n ", 15, 40).is_none());
-    }
-
-    #[test]
-    fn drawing_saves_and_restores_the_cursor() {
-        let mut buffer = Vec::new();
-        draw_at(&mut buffer, ImageProtocol::Kitty, "iVBOR", 10, 4, 15, 40).unwrap();
-        let text = String::from_utf8(buffer).unwrap();
-        assert!(text.starts_with("\u{1b}7"), "cursor was not saved");
+    fn a_disabled_picker_draws_nothing_and_still_reserves_rows() {
+        let mut images = Images::disabled();
+        assert!(!images.is_supported());
         assert!(
-            text.contains("\u{1b}[5;11H"),
-            "wrong 1-based position: {text:?}"
+            images
+                .protocol(&png_4x2(), Rect::new(0, 0, 40, 15))
+                .is_none()
         );
-        assert!(text.ends_with("\u{1b}8"), "cursor was not restored");
+        // The rows are still reserved, so the layout does not jump between a
+        // terminal that can draw and one that cannot.
+        assert_eq!(images.rows_for(&png_4x2(), 40), IMAGE_ROWS);
     }
 
     #[test]
-    fn drawing_into_an_unsupported_terminal_writes_nothing() {
-        let mut buffer = Vec::new();
-        draw_at(&mut buffer, ImageProtocol::None, "iVBOR", 0, 0, 15, 40).unwrap();
-        assert!(buffer.is_empty());
+    fn turning_images_off_skips_the_terminal_query_entirely() {
+        // Without this the query would run in a test process with no terminal,
+        // which is slow at best and reads somebody else's stdin at worst.
+        for setting in ["off", "none", "0", "false", "no"] {
+            let images = Images::with_override(Some(setting.to_string()));
+            assert!(!images.is_supported(), "{setting} left images on");
+        }
+    }
+
+    #[test]
+    fn dimensions_come_from_the_png_header() {
+        let mut images = Images::disabled();
+        assert_eq!(images.dimensions(&png_4x2()), Some((4, 2)));
+        // Second look is served from the cache, and agrees.
+        assert_eq!(images.dimensions(&png_4x2()), Some((4, 2)));
+    }
+
+    #[test]
+    fn base64_split_across_lines_still_decodes() {
+        // nbformat wraps long payloads; an unfiltered decode rejects them and
+        // every plot in a real notebook would fall back to a placeholder.
+        let payload = png_4x2();
+        let wrapped = payload
+            .as_bytes()
+            .chunks(16)
+            .map(|c| String::from_utf8_lossy(c).into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_eq!(decode_base64(&wrapped), decode_base64(&payload));
+        assert!(decode(&wrapped).is_some());
+    }
+
+    #[test]
+    fn nothing_decodes_from_an_empty_or_broken_payload() {
+        assert!(decode_base64("   \n ").is_none());
+        assert!(decode("bm90IGEgcG5n").is_none());
+        let mut images = Images::disabled();
+        assert!(images.dimensions("bm90IGEgcG5n").is_none());
+    }
+
+    #[test]
+    fn a_wide_image_is_scaled_down_and_keeps_its_shape() {
+        // 640x480 in a 93-column pane of 8x16 cells: 80x30 cells at its own
+        // size, too tall, so it is scaled until the height fits and the rows
+        // reserved are the rows it will take.
+        assert_eq!(rows_for_pixels(640, 480, 93, 8, 16), MAX_IMAGE_ROWS as u64);
+        // 800x100 is 100 cells wide with only 50 to give it, so it is halved:
+        // 400x50 pixels, which is 4 rows rather than the 7 its full height
+        // would have needed.
+        assert_eq!(rows_for_pixels(800, 100, 50, 8, 16), 4);
+    }
+
+    #[test]
+    fn a_small_image_reserves_only_the_rows_it_will_use() {
+        // 200x120 at 8x16 is 25x8 cells, and it is drawn at that size because
+        // `Resize::Fit` does not upscale. Reserving the full width's worth of
+        // rows (28, before clamping) would leave sixteen blank rows under
+        // every small plot, which is what the naive aspect-ratio sum does.
+        assert_eq!(rows_for_pixels(200, 120, 93, 8, 16), 8);
+    }
+
+    #[test]
+    fn no_image_is_allowed_to_fill_the_screen_or_vanish() {
+        // 100x1000 is 50 rows at its own size and has the width to stay
+        // there, so only the cap stops it from burying the cell above it.
+        assert_eq!(
+            rows_for_pixels(100, 1000, 40, 10, 20),
+            MAX_IMAGE_ROWS as u64
+        );
+        // A tall sliver narrow enough to fit is left at its own height, since
+        // the cap is the only thing that shrinks an image that already fits.
+        assert_eq!(rows_for_pixels(4, 400, 40, 10, 20), 20);
+        // And a single-pixel-tall one still gets a row rather than none.
+        assert_eq!(rows_for_pixels(4000, 1, 40, 10, 20), 1);
+    }
+
+    #[test]
+    fn only_a_real_status_report_counts_as_an_answer() {
+        assert!(is_status_report(b"\x1b[0n"));
+        assert!(is_status_report(b"\x1b[3n"));
+        // Buried in whatever else the terminal had to say.
+        assert!(is_status_report(b"\x1b[?62;4;22c\x1b[0n"));
+        assert!(!is_status_report(b""));
+        assert!(!is_status_report(b"\x1b[0"));
+        // The query we sent, echoed back by a terminal with echo still on, is
+        // not an answer: treating it as one would let the query that hangs
+        // run against a terminal that never replies.
+        assert!(!is_status_report(b"\x1b[5n"));
+    }
+
+    #[test]
+    fn a_digest_separates_payloads_and_survives_the_same_one_twice() {
+        assert_eq!(digest("aaa"), digest("aaa"));
+        assert_ne!(digest("aaa"), digest("aab"));
     }
 }

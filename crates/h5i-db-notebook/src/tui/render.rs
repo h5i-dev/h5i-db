@@ -11,19 +11,28 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui_image::Image;
 
 use crate::document::{CellType, Output};
 use crate::kernel::KernelStatus;
 use crate::render::{DigestOptions, collapse_carriage_returns, strip_ansi};
 use crate::tui::app::{App, Mode, WATCH_HELP, help_rows};
 use crate::tui::highlight::{Language, Token, highlight_line};
-use crate::tui::image::IMAGE_ROWS;
+use crate::tui::image::Images;
 
-/// An image the caller must draw over the frame after ratatui has finished.
+/// An image this draw laid out, and whether it made it onto the screen.
+///
+/// Reported rather than acted on: the drawing already happened, and a caller
+/// (or a test) that wants to know what the frame contains should not have to
+/// re-derive it.
 #[derive(Debug, Clone)]
 pub struct PendingImage {
     pub base64: String,
     pub area: Rect,
+    /// False when the terminal cannot draw it, or when the rows it needs are
+    /// half off the screen and the protocol cannot be clipped. Either way the
+    /// reader sees the labelled placeholder instead.
+    pub drawn: bool,
 }
 
 /// What one draw produced, beyond the frame itself.
@@ -38,7 +47,7 @@ pub struct DrawResult {
 
 const GUTTER: usize = 7;
 
-pub fn draw(frame: &mut Frame, app: &mut App) -> DrawResult {
+pub fn draw(frame: &mut Frame, app: &mut App, images: &mut Images) -> DrawResult {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -48,13 +57,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> DrawResult {
         ])
         .split(frame.area());
 
+    // An overlay is decided before the cells are drawn rather than after,
+    // because images now go into the frame as it is built. Clearing them
+    // afterwards would be too late: the escape sequence would already be in
+    // the buffer, and an overlay that does not happen to cover every row of a
+    // plot would leave half of it showing through the panel.
+    let mut suppressed = Images::disabled();
+    let overlaid = app.inspection.is_some() || app.show_help;
+    let for_cells = if overlaid { &mut suppressed } else { images };
+
     draw_header(frame, chunks[0], app);
-    let mut result = draw_cells(frame, chunks[1], app);
+    let result = draw_cells(frame, chunks[1], app, for_cells);
     draw_status(frame, chunks[2], app);
 
     if let Some(text) = app.inspection.clone() {
         draw_overlay(frame, frame.area(), "inspect  (any key closes)", &text);
-        result.images.clear();
     }
     if app.show_help {
         let rows = if app.read_only {
@@ -68,7 +85,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> DrawResult {
             .collect::<Vec<_>>()
             .join("\n");
         draw_overlay(frame, frame.area(), "keys  (any key closes)", &text);
-        result.images.clear();
     }
     if app.completions.is_some() {
         draw_completions(frame, chunks[1], app, result.cursor);
@@ -166,11 +182,13 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Build every line of the notebook, then render the visible window.
-fn draw_cells(frame: &mut Frame, area: Rect, app: &mut App) -> DrawResult {
+fn draw_cells(frame: &mut Frame, area: Rect, app: &mut App, images: &mut Images) -> DrawResult {
     let language_hint = app.language().map(str::to_string);
     let width = area.width.saturating_sub(GUTTER as u16 + 1) as usize;
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut images: Vec<(usize, String)> = Vec::new();
+    // Line number, payload, and the rows it was given, which depend on the
+    // image's own shape and so cannot be recomputed from the line alone.
+    let mut placements: Vec<(usize, String, u16)> = Vec::new();
     // Screen row of the cursor, once the scroll offset is known.
     let mut cursor_line: Option<(usize, usize)> = None;
     let mut selected_start = 0usize;
@@ -232,7 +250,7 @@ fn draw_cells(frame: &mut Frame, area: Rect, app: &mut App) -> DrawResult {
         }
 
         for output in app.displayed_outputs(index) {
-            render_output(output, width, &mut lines, &mut images);
+            render_output(output, width, &mut lines, &mut placements, images);
         }
         if selected {
             selected_end = lines.len();
@@ -268,24 +286,39 @@ fn draw_cells(frame: &mut Frame, area: Rect, app: &mut App) -> DrawResult {
         .collect();
     frame.render_widget(Paragraph::new(visible), area);
 
-    let pending: Vec<PendingImage> = images
-        .into_iter()
-        .filter_map(|(line, base64)| {
-            let row = line.checked_sub(app.scroll)?;
-            if row >= height {
-                return None;
+    let mut pending: Vec<PendingImage> = Vec::new();
+    for (line, base64, rows) in placements {
+        // Scrolled past the top, or not reached yet.
+        let Some(row) = line.checked_sub(app.scroll) else {
+            continue;
+        };
+        if row >= height {
+            continue;
+        }
+        // The box the image was encoded for is the full one, even when the
+        // bottom of it is off the screen. Encoding for the visible part
+        // instead would re-encode every image on every scrolled row, and a
+        // sixel encode is a decode plus a colour quantisation.
+        let full = Rect {
+            x: area.x + GUTTER as u16,
+            y: area.y + row as u16,
+            width: area.width.saturating_sub(GUTTER as u16),
+            height: rows,
+        };
+        let visible = full.intersection(area);
+        let drawn = match place(frame, images, &base64, full, visible) {
+            true => true,
+            false => {
+                label_image(frame, &base64, visible);
+                false
             }
-            Some(PendingImage {
-                base64,
-                area: Rect {
-                    x: area.x + GUTTER as u16,
-                    y: area.y + row as u16,
-                    width: area.width.saturating_sub(GUTTER as u16),
-                    height: IMAGE_ROWS.min(area.height.saturating_sub(row as u16)),
-                },
-            })
-        })
-        .collect();
+        };
+        pending.push(PendingImage {
+            base64,
+            area: full,
+            drawn,
+        });
+    }
 
     let cursor = cursor_line.and_then(|(line, column)| {
         let row = line.checked_sub(app.scroll)?;
@@ -302,6 +335,42 @@ fn draw_cells(frame: &mut Frame, area: Rect, app: &mut App) -> DrawResult {
         cursor,
         content_height: lines.len(),
     }
+}
+
+/// Put one image on the frame, and say whether it went.
+///
+/// `full` is the box it was encoded for and `visible` the part of that box
+/// still on screen. Kitty and half-blocks can be cut off mid-image and are let
+/// through; sixel and iTerm2 draw a whole image or nothing, so a clipped one
+/// is refused here rather than allowed to spill over the status bar.
+fn place(frame: &mut Frame, images: &mut Images, base64: &str, full: Rect, visible: Rect) -> bool {
+    if visible.width == 0 || visible.height == 0 {
+        return false;
+    }
+    let Some(protocol) = images.protocol(base64, full) else {
+        return false;
+    };
+    if protocol.needs_placeholder(visible).is_some() {
+        return false;
+    }
+    frame.render_widget(Image::new(protocol).allow_clipping(true), visible);
+    true
+}
+
+/// What a reader sees where an image could not be drawn.
+fn label_image(frame: &mut Frame, base64: &str, visible: Rect) {
+    if visible.width == 0 || visible.height == 0 {
+        return;
+    }
+    let text = format!("[image/png · {} bytes]", base64.len());
+    let line = Rect {
+        height: 1,
+        ..visible
+    };
+    frame.render_widget(
+        Paragraph::new(text).style(Style::default().fg(Color::DarkGray)),
+        line,
+    );
 }
 
 fn style_source_line(text: &str, kind: CellType, language: Language) -> Vec<Span<'static>> {
@@ -339,7 +408,8 @@ fn render_output(
     output: &Output,
     width: usize,
     lines: &mut Vec<Line<'static>>,
-    images: &mut Vec<(usize, String)>,
+    placements: &mut Vec<(usize, String, u16)>,
+    images: &mut Images,
 ) {
     let prefix = || Span::styled(" ".repeat(GUTTER), Style::default());
     let push = |text: String, style: Style, lines: &mut Vec<Line<'static>>| {
@@ -374,16 +444,17 @@ fn render_output(
         Output::ExecuteResult(_) | Output::DisplayData(_) => {
             let Some(bundle) = output.data() else { return };
             if let Some(base64) = bundle.text_of("image/png") {
-                images.push((lines.len(), base64.to_string()));
-                // Reserve the rows the image occupies; a terminal that cannot
-                // draw it sees this placeholder instead of nothing.
-                for row in 0..IMAGE_ROWS {
-                    let text = if row == 0 {
-                        format!("[image/png · {} bytes]", base64.len())
-                    } else {
-                        String::new()
-                    };
-                    push(text, Style::default().fg(Color::DarkGray), lines);
+                // How tall the image really is, so the rows reserved here and
+                // the rows it is drawn into are the same rows: reserving a
+                // fixed block would leave a gap under a wide plot and squash
+                // a tall one.
+                let rows = images.rows_for(base64, width as u16);
+                placements.push((lines.len(), base64.to_string(), rows));
+                // The rows are held open with blanks whether or not the image
+                // can be drawn. The placeholder is written over them at draw
+                // time, once it is known which it is.
+                for _ in 0..rows {
+                    push(String::new(), Style::default(), lines);
                 }
                 return;
             }
@@ -551,7 +622,10 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal
             .draw(|frame| {
-                draw(frame, app);
+                // Disabled rather than detected: a test process has no
+                // terminal to query, and one that did would have its stdin
+                // read out from under the harness.
+                draw(frame, app, &mut Images::disabled());
             })
             .unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -699,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn an_image_reserves_rows_and_is_reported_for_later_drawing() {
+    fn an_image_reserves_rows_and_falls_back_to_a_label() {
         let mut notebook = Notebook::new("python3", "Python 3", "python");
         let mut bundle = MimeBundle::new();
         bundle.insert("image/png", json!("iVBORw0KGgo="));
@@ -718,12 +792,21 @@ mod tests {
         let mut result = DrawResult::default();
         terminal
             .draw(|frame| {
-                result = draw(frame, &mut app);
+                result = draw(frame, &mut app, &mut Images::disabled());
             })
             .unwrap();
         assert_eq!(result.images.len(), 1);
         assert_eq!(result.images[0].base64, "iVBORw0KGgo=");
-        assert_eq!(result.images[0].area.height, IMAGE_ROWS);
+        assert_eq!(result.images[0].area.height, crate::tui::image::IMAGE_ROWS);
+        assert!(
+            !result.images[0].drawn,
+            "a terminal that was never queried cannot have drawn anything"
+        );
+
+        // The rows are held open and the label sits in the first of them, so
+        // an unshowable plot is still accounted for on screen.
+        let text = screen(&mut app, 80, 30);
+        assert!(text.contains("[image/png ·"), "{text}");
     }
 
     #[test]
@@ -736,7 +819,7 @@ mod tests {
         let mut result = DrawResult::default();
         terminal
             .draw(|frame| {
-                result = draw(frame, &mut app);
+                result = draw(frame, &mut app, &mut Images::disabled());
             })
             .unwrap();
         let (x, _) = result.cursor.expect("no cursor while editing");

@@ -1,6 +1,6 @@
 ---
 title: Database
-description: "h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, mutation plans, policy, and maintenance."
+description: "h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, forks, mutation plans, policy, and maintenance."
 order: 1
 seo_title: "h5i_db.Database Python API reference"
 ---
@@ -392,6 +392,142 @@ Pin current table versions under a name. Address it later from SQL as
 
 `note` (`str`, optional)
 :   Free-text note.
+
+## Forks
+
+A fork is a writable workspace over a pinned view of every table: one small
+metadata object, no data copied, so one dataset can back many parallel lines
+of work. See [Forks](../manual/concepts.html#forks) for the model and
+[`h5i-db fork`](../manual/cli.html#h5i-db-fork) for the command-line
+equivalent.
+
+```python
+db.create_fork("agent-01", meta={"hypothesis": "momentum"})
+work = db.fork("agent-01")          # a Database handle scoped to the fork
+work.append("features", batch)      # copy-on-write; the base never moves
+db.fork_diff("agent-01")            # what it changed, from manifests alone
+db.promote("agent-01", "features")  # land one table on the base
+db.drop_fork("agent-01")
+```
+
+### `Database.create_fork`
+
+```python
+create_fork(name, note=None, as_of=None, meta=None) -> dict
+```
+
+Create a fork pinning every table at its current version.
+
+**Parameters**
+
+`as_of` (`str` | `int` | `datetime`, optional)
+:   Pin each table at its last version committed at or before this instant,
+    giving a workspace over a frozen past; tables that did not exist then are
+    not pinned. Strings and datetimes carry microsecond resolution while
+    commits are stamped in nanoseconds, so pass an int of nanoseconds when
+    you need to name one exact commit rather than a moment.
+
+`meta` (`dict`, optional)
+:   Carried verbatim and never interpreted. Use it to tie a fork back to the
+    run or hypothesis that produced it; the review UI surfaces it.
+
+### `Database.create_forks` / `Database.fork_many`
+
+```python
+create_forks(names, note=None, as_of=None, meta=None) -> list[dict]
+fork_many(prefix, count, note=None, as_of=None, meta=None) -> list[dict]
+```
+
+Create many forks over a **single** resolution of the base. Every fork of one
+base at one instant pins the same versions, so a wide fanout costs one pass
+over the catalog rather than one per branch — which is what makes a few
+hundred short-lived branches reasonable to create and throw away.
+
+```python
+db.create_forks([f"trial-{i}" for i in range(500)])
+db.fork_many("trial", 500)          # trial-0000 … trial-0499
+```
+
+Names must be distinct and none may already exist; both are checked before
+anything is written, so the usual mistakes leave no partial fanout behind.
+`fork_many`'s zero-padded suffix keeps name order equal to creation order,
+which is the order every listing sorts by.
+
+### `Database.fork`
+
+```python
+fork(name) -> Database
+```
+
+A `Database` handle scoped to the fork. Table lookups resolve to the fork's
+own tables first and fall back to its pinned view of the base, so existing
+code runs unchanged inside a fork; writes to a base table's name
+transparently copy-on-write into the fork, and the base is never modified.
+`Database.fork_name` is the fork a handle is scoped to, or `None` on a base
+handle.
+
+### `Database.forks` / `Database.fork_names` / `Database.fork_info`
+
+```python
+forks() -> list[dict]
+fork_names() -> list[str]
+fork_info(name) -> dict
+```
+
+`forks()` reports every fork with its lineage, what it owns, and what it
+holds back from reclamation (`bytes_pinned`). `fork_names()` is one read of
+the fork index, where `forks()` reads a manifest per table per fork to report
+sizes — use it when you only need the names.
+
+### `Database.fork_diff`
+
+```python
+fork_diff(name, table=None) -> dict
+```
+
+What a fork changed, computed from manifests alone: no segment is read.
+
+### `Database.fork_scan`
+
+```python
+fork_scan(name, forks=None) -> LazyFrame
+```
+
+A lazy query reading one table **across forks at once**, with a `__fork`
+column naming the source. Forks share their base's segments, so a segment
+several forks can see is read once.
+
+```python
+db.fork_scan("bt_equity").group_by("__fork").agg(...).collect()
+db.fork_scan("trades", ["agent-01", "agent-02"]).sql()
+```
+
+Schemas are not coerced; use `fork_diff` to see how they differ.
+
+### `Database.promote`
+
+```python
+promote(fork, table) -> dict
+```
+
+Promote one of a fork's tables into the base. Compare-and-swap against the
+version the fork was created from: the first promote wins and a later one
+raises rather than merging, because the work was computed against a base that
+no longer exists. The conflict unit is the whole table.
+
+### `Database.drop_fork` / `Database.drop_forks`
+
+```python
+drop_fork(name) -> int
+drop_forks(names) -> int
+```
+
+Delete forks and everything they own, releasing their pins; both return the
+table count. `drop_forks` takes the batch under one metadata lock, which is
+the shape mass pruning wants. A name that does not exist stops the batch
+rather than being skipped, so a typo in a list you believe you deleted is
+reported instead of swallowed; forks dropped before the failure stay dropped,
+and re-running with what `fork_names()` still reports completes the job.
 
 ## Mutation plans
 

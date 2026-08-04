@@ -34,7 +34,7 @@ use crate::error::{Error, Result};
 use crate::kernel::InterruptHandle;
 use crate::session::Session;
 use crate::tui::app::{App, Command, Event};
-use crate::tui::image::ImageProtocol;
+use crate::tui::image::Images;
 
 /// How often the UI redraws when nothing has happened.
 ///
@@ -53,9 +53,8 @@ pub async fn run(path: impl AsRef<Path>) -> Result<()> {
     let runner = tokio::spawn(runner::run(session, command_rx, event_tx));
 
     let mut app = App::new(path.as_ref().to_path_buf(), notebook);
-    let protocol = ImageProtocol::detect();
 
-    let (mut terminal, enhanced) = enter()?;
+    let (mut terminal, enhanced, mut images) = enter()?;
     // What the terminal answered decides what the UI may offer: `e` and `E`
     // are the bindings that always work, and Shift+Enter is only advertised
     // where it can actually be sent.
@@ -68,7 +67,7 @@ pub async fn run(path: impl AsRef<Path>) -> Result<()> {
         &command_tx,
         &mut event_rx,
         &interrupt,
-        protocol,
+        &mut images,
     )
     .await;
     leave(&mut terminal, enhanced)?;
@@ -87,31 +86,15 @@ pub(crate) type Backend = CrosstermBackend<io::Stdout>;
 pub(crate) fn present(
     terminal: &mut Terminal<Backend>,
     app: &mut App,
-    protocol: ImageProtocol,
+    images: &mut Images,
 ) -> Result<()> {
     let mut result = render::DrawResult::default();
     terminal
         .draw(|frame| {
-            result = render::draw(frame, app);
+            result = render::draw(frame, app, images);
         })
         .map_err(|e| Error::io("terminal", e))?;
 
-    // Images are written over the frame ratatui just painted, because they
-    // are escape sequences its buffer knows nothing about.
-    if protocol.is_supported() && !result.images.is_empty() {
-        let mut out = io::stdout();
-        for pending in &result.images {
-            let _ = image::draw_at(
-                &mut out,
-                protocol,
-                &pending.base64,
-                pending.area.x,
-                pending.area.y,
-                pending.area.height,
-                pending.area.width,
-            );
-        }
-    }
     match result.cursor {
         Some((x, y)) => {
             terminal.show_cursor().ok();
@@ -125,11 +108,25 @@ pub(crate) fn present(
     Ok(())
 }
 
-pub(crate) fn enter() -> Result<(Terminal<Backend>, bool)> {
+pub(crate) fn enter() -> Result<(Terminal<Backend>, bool, Images)> {
     enable_raw_mode().map_err(|e| Error::io("terminal", e))?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
         .map_err(|e| Error::io("terminal", e))?;
+
+    // Asked here and nowhere else, because the window for it is narrow: the
+    // alternate screen is up (so the queries and their replies are not left
+    // on the user's scrollback) and no reader thread exists yet (so the
+    // replies come back to us rather than being delivered as keystrokes).
+    //
+    // It also has to come before any crossterm call that reads the terminal.
+    // Both this and `supports_keyboard_enhancement` write a query and read the
+    // reply, but they read it through different machinery — this one straight
+    // off stdin, crossterm's through the event source it keeps for the rest of
+    // the session. Once that source exists, a raw read behind its back leaves
+    // it unable to deliver a keystroke, and the UI comes up with the notebook
+    // painted and every key dead.
+    let images = Images::detect();
 
     // Without this, Shift+Enter and Ctrl+Enter arrive as a plain Enter: a
     // terminal cannot express them in the legacy encoding at all. Terminals
@@ -144,7 +141,7 @@ pub(crate) fn enter() -> Result<(Terminal<Backend>, bool)> {
     }
     let terminal =
         Terminal::new(CrosstermBackend::new(stdout)).map_err(|e| Error::io("terminal", e))?;
-    Ok((terminal, enhanced))
+    Ok((terminal, enhanced, images))
 }
 
 pub(crate) fn leave(terminal: &mut Terminal<Backend>, enhanced: bool) -> Result<()> {
@@ -167,11 +164,11 @@ async fn event_loop(
     commands: &mpsc::UnboundedSender<Command>,
     events: &mut mpsc::UnboundedReceiver<Event>,
     interrupt: &InterruptHandle,
-    protocol: ImageProtocol,
+    images: &mut Images,
 ) -> Result<()> {
     let mut keys = spawn_terminal_reader();
     loop {
-        present(terminal, app, protocol)?;
+        present(terminal, app, images)?;
 
         tokio::select! {
             biased;

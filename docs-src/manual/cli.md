@@ -174,8 +174,8 @@ $ h5i-db rename market.db trades trades_raw
 
 ### `h5i-db drop-table`
 
-Drop a table and its data. Refuses if the table is pinned by a snapshot, and
-requires `--yes`:
+Drop a table and its data. Refuses if the table is pinned by a snapshot or a
+fork, and requires `--yes`:
 
 ```console
 $ h5i-db drop-table market.db scratch --yes
@@ -463,9 +463,9 @@ command returns a JSON list; without it, a single object as before.
 
 **The `--fork` flag.** Every data command takes `--fork <name>` and then reads
 and writes inside that workspace, so an existing script runs unchanged against
-a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`,
-`set-retention`) refuse it and say so: they move state a fork's siblings
-depend on. `fork create` is the exception: with `--fork` it creates the new
+a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`, fork
+management) refuse it and say so: they move state a fork's siblings depend
+on. `fork create` is the exception: with `--fork` it creates the new
 fork *inside* that one (see [Forks](concepts.html#forks-nest)).
 
 **Promotion conflicts.** `fork promote` compare-and-swaps against the version
@@ -482,6 +482,47 @@ while the fork still holds every row it inherited; a fork that deleted
 inherited rows cannot be replayed from metadata (a compacted segment may merge
 rows it dropped with rows it kept), so that case still conflicts and the
 message says why.
+
+---
+
+## Notebooks
+
+### `h5i-db nb`
+
+In-terminal, Jupyter-compatible notebooks whose kernel persists between
+invocations, with `%%sql` cells that run in-process against a database
+instead of through a Python driver. The same commands are on a standalone
+binary, `h5i-nb`; both drive the same sessions.
+
+```console
+$ h5i-db nb new research.ipynb --db market.db
+$ h5i-db nb exec research.ipynb --code "df = load()"    # the kernel outlives the command
+$ h5i-db nb exec research.ipynb --code "df.shape"
+$ h5i-db nb watch research.ipynb --split right          # live read-only pane
+```
+
+| Subcommand | Meaning |
+|---|---|
+| `nb new <nb>` | Create a notebook; `--kernel <spec>` (default `python3`), `--db <path>` for its `%%sql` default |
+| `nb exec <nb>` | Append a cell and run it; `--code <src>\|-`, `--timeout <secs>` (default 300), `--stream`, `--detach`, `--raw` |
+| `nb run <nb>` | Re-run existing cells; `--cells 3-7\|1,4,9\|all`, `--from-clean`, `--keep-going` |
+| `nb cells <nb>` | Index, id, type, execution count and output shape per cell |
+| `nb output <nb> <cell>` | One cell's output; `--index <n>`, `--raw`, `--save <path>` |
+| `nb edit <nb> …` | `set`, `insert`, `delete`, `move`, `clear-outputs` — no execution |
+| `nb view <nb>` | Editable terminal UI; `--split right\|left\|down\|up` |
+| `nb watch <nb>` | Live read-only view: no lock, no kernel, no writes |
+| `nb ls` | Notebook sessions running on this machine |
+| `nb export <nb>` | `--to md\|py\|html`, `-o <path>`, `--without-outputs` |
+| `nb inspect\|complete <nb> <code>` | The kernel's `?` and completion, from a shell; `--cursor <n>` |
+| `nb kernel …` | `list`, `start`, `status`, `interrupt`, `restart` (`--clear-outputs`), `stop` |
+
+Output is token-budgeted by default — long text elided in the middle, frames
+summarised by shape, images written to `<notebook>_files/` and reported as
+paths — with the untruncated bytes still in the `.ipynb` behind `--raw`.
+Notebook failures use their own codes (`cell_raised`, `execute_timeout`,
+`session_busy`, `kernel_died`) in the same error envelope.
+
+See [Notebooks](notebooks.html) for the full guide.
 
 ---
 

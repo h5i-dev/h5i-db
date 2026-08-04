@@ -32,6 +32,11 @@ clap = { workspace = true }
 comfy-table = { workspace = true }
 ratatui = "0.30"
 crossterm = "0.29"
+# Terminal image protocols. Default features are off on purpose: they turn on
+# `image`'s full codec set, which drags in AVIF and EXR encoders (rav1e, ravif,
+# exr) for a notebook that only ever carries PNG.
+ratatui-image = { version = "11", default-features = false, features = ["crossterm"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = { workspace = true }
 
 jupyter-protocol = "2.0.2"

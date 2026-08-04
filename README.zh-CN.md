@@ -19,6 +19,9 @@
 - **原生支持交易场所：** [Kalshi](#数据源)、[Polymarket](#数据源)、[Hyperliquid](#数据源)、[Binance](#数据源) 等。
 - **专业的统计分析：** 与 `alphalens`、`empyrical` 对齐的因子与绩效指标，外加
   deflated Sharpe 和过拟合概率检测。
+- **终端里的 notebook：** 智能体和人都不用离开终端就能做探索性分析。
+  `h5i-db nb view` 在真正的 Jupyter 内核上运行普通的 `.ipynb`，
+  并把 matplotlib 图直接画在终端里。
 - **毫秒级 fork 一个数据库：** fork 共享数据而不是复制数据。智能体因此可以
   近乎零成本地大规模试错（fork、修改、评估、丢弃）。
 - **每次写入都是一次原子的、带版本的提交：** 任何历史版本都能以 O(1) 读取，
@@ -61,6 +64,10 @@ h5i-db nb export research.ipynb --to html
 
 写出的是标准 `.ipynb`，同一个文件 JupyterLab 也能打开。Python 内核需要
 `pip install ipykernel`。智能体用 `h5i-db nb exec` 以非交互方式驱动同一个会话。
+
+<p align="center">
+  <img src="./docs/_static/in-terminal-notebook-demo.png" width="99%" />
+</p>
 
 **Python 库：DataFrame 与 SQL**
 
@@ -187,6 +194,9 @@ python examples/backtest_report_demo.py
 - **一次回测是一个分支。** 每次运行都在自己的 fork 里执行，并把订单、成交、持仓和
 净值曲线当作普通表写在那里。于是两次运行可以用 `fork_diff` 在成交级别
 对比，整轮扫描能用一条跨 fork 查询汇总，值得留下的那次 `promote`，其余的丢掉。
+- **终端里的 notebook，理由和量化研究员早就在用 Jupyter 的理由一样。** 只跑一部分
+单元格、内核在步骤之间保留状态、结果就记在产生它的代码旁边。这三点智能体都能从
+命令行拿到，用 `nb exec` 和 `nb run --cells 3-7`。
 - **审阅界面做的是分配注意力，不是排名。** `h5i-db ui` 按“接下来需要人看什么”排序：
 需要决策的、失败或有告警的、已完成但未读的、正在跑的、已读的。扫一眼列表并不算读过；
 只有打开某次试验的详情，它才计为已读。

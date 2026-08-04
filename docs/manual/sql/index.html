@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/sql/#article","headline":"SQL reference","name":"SQL reference","description":"h5i-db's SQL beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill and resample, tail, time_bucket, vwap, ewma, and rolling sugar.","url":"https://db.h5i.dev/manual/sql/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/sql/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"SQL reference","item":"https://db.h5i.dev/manual/sql/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/sql/#article","headline":"SQL reference","name":"SQL reference","description":"h5i-db's SQL beyond stock DataFusion: time travel with h5i(), ASOF joins, gapfill and resample, tail, time_bucket, vwap, ewma, and rolling sugar.","url":"https://db.h5i.dev/manual/sql/","inLanguage":"en","dateModified":"2026-08-03","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/sql/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"SQL reference","item":"https://db.h5i.dev/manual/sql/"}]}]}</script>
 </head>
 <body>
 
@@ -60,7 +60,7 @@
       <kbd>/</kbd>
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
-<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/" class="active">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/notebooks/">Notebooks</a></li><li><a href="/manual/sql/" class="active">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/data-onramp/">Data on-ramp</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
   </aside>
@@ -245,6 +245,23 @@ only). <code>poll_ms</code> defaults to 250 (minimum 10).</p>
 <li>Size <code>LIMIT</code> from <code>versions</code> row deltas to fetch "exactly what's new since
   version N", with no timestamp-cursor guesswork.</li>
 </ul>
+</div></section><section class="api-member"><h3 id="latest_on"><code>latest_on</code><a class="headerlink" href="#latest_on" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">latest_on</span><span class="p">(</span><span class="s1">&#39;table&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;by_column&#39;</span><span class="p">)</span>
+</code></pre></div><div class="api-body">
+
+<p>One row per group: the most recent row per symbol, per instrument, per
+whatever <code>by_column</code> names. Both arguments are string literals, and the group
+column must be string-like.</p>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">symbol</span><span class="p">,</span><span class="w"> </span><span class="n">price</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">latest_on</span><span class="p">(</span><span class="s1">&#39;trades&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;symbol&#39;</span><span class="p">);</span>
+</code></pre></div>
+
+<p>It precomputes each immutable segment's last row per group and caches that as
+a checksummed sidecar, so an append-only table reuses every prior segment's
+contribution and scans only what is new — segments × groups rather than rows.
+The cache is a pure accelerator: a miss, a corrupt entry or a version
+mismatch rebuilds from the segment and never changes the answer. Sidecar
+writing follows the session's
+<a href="/manual/cli/#h5i-db-query"><code>--predicate-cache</code></a> setting, so a default query reads
+caches without writing any.</p>
 </div></section><h2 id="scalar-aggregate-window-functions">Scalar, aggregate &amp; window functions<a class="headerlink" href="#scalar-aggregate-window-functions" title="Permanent link">#</a></h2>
 <section class="api-member"><h3 id="time_bucket"><code>time_bucket</code><a class="headerlink" href="#time_bucket" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span>
 <span class="n">time_bucket</span><span class="p">(</span><span class="nb">interval</span><span class="p">,</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">origin_or_timezone</span><span class="p">)</span>
@@ -290,19 +307,103 @@ NULL inputs carry the previous smoothed value forward. Matches
 </code></pre></div>
 
 </div></section><section class="api-member"><h3 id="rolling_avg-rolling_sum-rolling_min-rolling_max"><code>rolling_avg</code> / <code>rolling_sum</code> / <code>rolling_min</code> / <code>rolling_max</code><a class="headerlink" href="#rolling_avg-rolling_sum-rolling_min-rolling_max" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">rolling_avg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">order_by</span><span class="p">,</span><span class="w"> </span><span class="k">rows</span><span class="p">)</span>
+<span class="n">rolling_avg</span><span class="p">(</span><span class="n">value</span><span class="p">,</span><span class="w"> </span><span class="n">order_by</span><span class="p">,</span><span class="w"> </span><span class="k">rows</span><span class="p">,</span><span class="w"> </span><span class="n">partition_by</span><span class="p">)</span>
 </code></pre></div><div class="api-body">
 
 <p>Convenience sugar, expanded before parsing into the standard window frame
-<code>AVG(value) OVER (ORDER BY order_by ROWS BETWEEN rows−1 PRECEDING AND
-CURRENT ROW)</code>. <code>rows</code> must be an integer literal in 1…1,000,000.</p>
+<code>AVG(value) OVER (PARTITION BY partition_by ORDER BY order_by ROWS BETWEEN
+rows−1 PRECEDING AND CURRENT ROW)</code>. <code>rows</code> must be an integer literal in
+1…1,000,000. The <code>PARTITION BY</code> is emitted only when the fourth argument is
+given.</p>
 <div class="admonition warning">
-<p class="admonition-title">Not partitioned</p>
-<p>The sugar has <strong>no <code>PARTITION BY</code></strong>: it is a trailing n-row window in
-global order and will mix symbols on a multi-symbol table. Use it on
-single-key subsets, or write the explicit window:
-<code>AVG(x) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN n−1 PRECEDING
-AND CURRENT ROW)</code>. It also cannot take its own <code>OVER</code> clause.</p>
+<p class="admonition-title">The three-argument form is not partitioned</p>
+<p>Without a fourth argument the window is a trailing n-row window in
+<strong>global</strong> order, so on a multi-symbol table it averages across symbols
+and returns a plausible, wrong number. Pass the partition column, use the
+sugar on single-key subsets, or write the window out in full. Either form
+still cannot take its own <code>OVER</code> clause.</p>
 </div>
+</div></section><section class="api-member"><h3 id="rolling-window-functions">Rolling window functions<a class="headerlink" href="#rolling-window-functions" title="Permanent link">#</a></h3><div class="api-body">
+<p>Eight window functions DataFusion does not have. Unlike the <code>rolling_avg</code>
+sugar above these are real window functions, so they take their own <code>OVER</code>
+clause and any frame you like:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Over the frame</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mad(x)</code></td>
+<td>Mean absolute deviation</td>
+</tr>
+<tr>
+<td><code>skew(x)</code></td>
+<td>Sample skewness</td>
+</tr>
+<tr>
+<td><code>kurt(x)</code></td>
+<td>Excess kurtosis</td>
+</tr>
+<tr>
+<td><code>ts_rank(x)</code></td>
+<td>The current row's rank within the frame, scaled to <code>(0, 1]</code></td>
+</tr>
+<tr>
+<td><code>idxmax(x)</code> / <code>idxmin(x)</code></td>
+<td>1-based position of the frame's maximum / minimum</td>
+</tr>
+<tr>
+<td><code>ts_corr(x, y)</code> / <code>ts_cov(x, y)</code></td>
+<td>Correlation and covariance of two columns</td>
+</tr>
+</tbody>
+</table></div>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">symbol</span><span class="p">,</span>
+<span class="w">       </span><span class="n">mad</span><span class="p">(</span><span class="n">price</span><span class="p">)</span><span class="w">             </span><span class="n">OVER</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">mad_5</span><span class="p">,</span>
+<span class="w">       </span><span class="n">ts_rank</span><span class="p">(</span><span class="n">price</span><span class="p">)</span><span class="w">         </span><span class="n">OVER</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">rank_5</span><span class="p">,</span>
+<span class="w">       </span><span class="n">ts_corr</span><span class="p">(</span><span class="n">price</span><span class="p">,</span><span class="w"> </span><span class="k">size</span><span class="p">)</span><span class="w">   </span><span class="n">OVER</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">corr_5</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">trades</span>
+<span class="n">WINDOW</span><span class="w"> </span><span class="n">w</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">symbol</span><span class="w"> </span><span class="k">ORDER</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="w"> </span><span class="k">ROWS</span><span class="w"> </span><span class="mi">4</span><span class="w"> </span><span class="n">PRECEDING</span><span class="p">);</span>
+</code></pre></div>
+
+<p>The rest of the rolling family (<code>rolling_mean</code>, <code>rolling_std</code>,
+<code>rolling_var</code>, <code>rolling_sum</code>, <code>rolling_min</code>, <code>rolling_max</code>, <code>rolling_count</code>)
+is reachable through stock DataFusion aggregates in an <code>OVER</code> clause; the
+<a href="/api/dataframe/#rolling-and-cross-sectional-operators">DataFrame builder</a>
+names them uniformly and compiles to exactly that.</p>
+</div></section><section class="api-member"><h3 id="cross-sectional-window-functions">Cross-sectional window functions<a class="headerlink" href="#cross-sectional-window-functions" title="Permanent link">#</a></h3><div class="api-body">
+<p>Two operators for the "against everything else at this instant" shape.
+Partition by the timestamp, not by the asset:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cs_rank(x)</code></td>
+<td>Rank within the partition, scaled to <code>(0, 1]</code></td>
+</tr>
+<tr>
+<td><code>cs_winsorize(x, lower_pct, upper_pct)</code></td>
+<td><code>x</code> clipped to the partition's percentile bounds</td>
+</tr>
+</tbody>
+</table></div>
+<div class="highlight"><pre><span></span><code><span class="k">SELECT</span><span class="w"> </span><span class="n">ts</span><span class="p">,</span><span class="w"> </span><span class="n">symbol</span><span class="p">,</span>
+<span class="w">       </span><span class="n">cs_rank</span><span class="p">(</span><span class="n">signal</span><span class="p">)</span><span class="w">                    </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">rank</span><span class="p">,</span>
+<span class="w">       </span><span class="n">cs_winsorize</span><span class="p">(</span><span class="n">signal</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">05</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">.</span><span class="mi">95</span><span class="p">)</span><span class="w">   </span><span class="n">OVER</span><span class="w"> </span><span class="p">(</span><span class="n">PARTITION</span><span class="w"> </span><span class="k">BY</span><span class="w"> </span><span class="n">ts</span><span class="p">)</span><span class="w"> </span><span class="k">AS</span><span class="w"> </span><span class="n">clipped</span>
+<span class="k">FROM</span><span class="w"> </span><span class="n">signals</span><span class="p">;</span>
+</code></pre></div>
+
+<p><code>cs_demean</code> and <code>cs_zscore</code> are plain SQL over the same partition
+(<code>x - avg(x) OVER (PARTITION BY ts)</code>), and the DataFrame builder spells all
+four the same way.</p>
 </div></section><section class="api-member"><h3 id="first_value-last_value"><code>first_value</code> / <code>last_value</code><a class="headerlink" href="#first_value-last_value" title="Permanent link">#</a></h3><div class="api-body">
 <p>Stock DataFusion, but the idiom is easy to miss: <code>last_value(x ORDER BY ts)</code>
 inside a <code>GROUP BY</code> is how you take "closing" values without a self-join. See
@@ -322,10 +423,10 @@ the OHLCV query at the top of this page.</p>
 <p>For a guided tour with real data, see the cookbook:
 <a href="/cookbook/00_fundamentals/04_sql_tour_for_quants/">A SQL tour for quants</a>
 and <a href="/cookbook/03_risk_and_production/10_performance_tuning/">Performance tuning</a>.</p>
-    <nav class="page-nav"><a class="prev" href="/manual/cli/"><span class="dir">← Previous</span><span class="pn-title">CLI reference</span></a><a class="next" href="/manual/agents/"><span class="dir">Next →</span><span class="pn-title">Agents &amp; automation</span></a></nav>
+    <nav class="page-nav"><a class="prev" href="/manual/notebooks/"><span class="dir">← Previous</span><span class="pn-title">Notebooks</span></a><a class="next" href="/manual/agents/"><span class="dir">Next →</span><span class="pn-title">Agents &amp; automation</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#reading-tables-time-travel">Reading tables &amp; time travel</a><ul><li><a href="#plain-names-vs-h5i">Plain names vs h5i()</a></li></ul></li><li><a href="#table-functions">Table functions</a><ul><li><a href="#asof_join">asof_join</a></li><li><a href="#gapfill-resample">gapfill / resample</a></li><li><a href="#forks">forks</a></li><li><a href="#tail">tail</a></li></ul></li><li><a href="#scalar-aggregate-window-functions">Scalar, aggregate &amp; window functions</a><ul><li><a href="#time_bucket">time_bucket</a></li><li><a href="#vwap-wavg">vwap / wavg</a></li><li><a href="#ewma">ewma</a></li><li><a href="#rolling_avg-rolling_sum-rolling_min-rolling_max">rolling_avg / rolling_sum / rolling_min / rolling_max</a></li><li><a href="#first_value-last_value">first_value / last_value</a></li></ul></li><li><a href="#sessions-pruning-performance">Sessions, pruning &amp; performance</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#reading-tables-time-travel">Reading tables &amp; time travel</a><ul><li><a href="#plain-names-vs-h5i">Plain names vs h5i()</a></li></ul></li><li><a href="#table-functions">Table functions</a><ul><li><a href="#asof_join">asof_join</a></li><li><a href="#gapfill-resample">gapfill / resample</a></li><li><a href="#forks">forks</a></li><li><a href="#tail">tail</a></li><li><a href="#latest_on">latest_on</a></li></ul></li><li><a href="#scalar-aggregate-window-functions">Scalar, aggregate &amp; window functions</a><ul><li><a href="#time_bucket">time_bucket</a></li><li><a href="#vwap-wavg">vwap / wavg</a></li><li><a href="#ewma">ewma</a></li><li><a href="#rolling_avg-rolling_sum-rolling_min-rolling_max">rolling_avg / rolling_sum / rolling_min / rolling_max</a></li><li><a href="#rolling-window-functions">Rolling window functions</a></li><li><a href="#cross-sectional-window-functions">Cross-sectional window functions</a></li><li><a href="#first_value-last_value">first_value / last_value</a></li></ul></li><li><a href="#sessions-pruning-performance">Sessions, pruning &amp; performance</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">
