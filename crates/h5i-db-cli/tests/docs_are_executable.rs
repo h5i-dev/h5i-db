@@ -94,24 +94,31 @@ fn extract(path: &Path) -> Vec<Invocation> {
     out
 }
 
-/// The subcommand path, e.g. `["snapshot", "create"]`. Nested subcommands are
-/// two words; everything else is one.
-/// Whether `cmd` has subcommands of its own, asked of the binary rather than
-/// kept in a list here.
+/// Whether the command at `path` has subcommands of its own, asked of the
+/// binary rather than kept in a list here.
 ///
 /// This used to be a hardcoded array, which made the drift-detector itself a
 /// source of drift: a new command group was simply not checked, and its
 /// documented flags silently validated against the wrong help text.
-fn is_nested(cmd: &str) -> bool {
+///
+/// `path` is passed one word per argument, which is the whole point. Joining
+/// it into `"nb edit"` and passing that as a single argument asks the binary
+/// about a subcommand of that literal name, which never exists, so every
+/// command more than two words deep answered "not nested" and had its flags
+/// checked against its parent: `nb edit … set --code` was reported as
+/// `nb edit` not accepting `--code`, which is the same class of quiet
+/// mis-validation the hardcoded array used to cause.
+fn is_nested(path: &[String]) -> bool {
     static CACHE: OnceLock<Mutex<BTreeMap<String, bool>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let key = path.join(" ");
     let mut cache = cache.lock().unwrap();
-    if let Some(known) = cache.get(cmd) {
+    if let Some(known) = cache.get(&key) {
         return *known;
     }
-    let nested = help_for(&[cmd.to_string()])
-        .is_some_and(|h| h.contains("Commands:") || h.contains("<COMMAND>"));
-    cache.insert(cmd.to_string(), nested);
+    let nested =
+        help_for(path).is_some_and(|h| h.contains("Commands:") || h.contains("<COMMAND>"));
+    cache.insert(key, nested);
     nested
 }
 
@@ -129,9 +136,12 @@ fn subcommand(tokens: &[String]) -> Vec<String> {
         return Vec::new();
     }
     // Walk as deep as the binary actually nests, so flags are always checked
-    // against the help text of the command that would receive them.
+    // against the help text of the command that would receive them. The path
+    // may run through a positional on the way down (`nb edit <file> set`),
+    // which is why the walk asks the binary at every step instead of assuming
+    // a depth.
     let mut sub = vec![first.to_string()];
-    while is_nested(&sub.join(" ")) {
+    while is_nested(&sub) {
         let Some(next) = words.get(sub.len()) else {
             break;
         };
