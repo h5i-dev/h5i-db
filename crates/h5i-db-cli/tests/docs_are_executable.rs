@@ -116,8 +116,7 @@ fn is_nested(path: &[String]) -> bool {
     if let Some(known) = cache.get(&key) {
         return *known;
     }
-    let nested =
-        help_for(path).is_some_and(|h| h.contains("Commands:") || h.contains("<COMMAND>"));
+    let nested = help_for(path).is_some_and(|h| h.contains("Commands:") || h.contains("<COMMAND>"));
     cache.insert(key, nested);
     nested
 }

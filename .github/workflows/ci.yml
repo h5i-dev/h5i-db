@@ -49,6 +49,13 @@ jobs:
           for pkg in h5i-db-core h5i-db-query h5i-db-cli h5i-db-ui; do
             cargo test -p $pkg -- --test-threads=2
           done
+      # The notebook, on its own line and single-threaded: every test here
+      # spawns processes of its own (the `h5i-nb` binary, a session supervisor,
+      # a pty for the terminal UI), so running several at once buys contention
+      # rather than speed. The tests that need a Jupyter kernel are #[ignore]d,
+      # so what runs here is the part that needs nothing installed — including
+      # the watch pane, which is driven through a real pty.
+      - run: cargo test -p h5i-db-notebook -- --test-threads=1
 
   # The backtest kernel compiles two ways: its fixed-point raw type is `i64`
   # by default and `i128` under `wide` (`types::Raw`). Both are supported, so

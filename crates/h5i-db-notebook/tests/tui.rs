@@ -104,6 +104,26 @@ impl Pty {
         String::from_utf8_lossy(&out).to_string()
     }
 
+    /// Read until `wanted` is on screen, or `limit` elapses; returns the screen.
+    ///
+    /// Bytes accumulate across reads and the whole run is replayed into one
+    /// screen, because ratatui writes only the cells that changed: rendering a
+    /// later chunk on its own would show a mostly blank terminal. Waiting for
+    /// the content rather than draining for a fixed time is what keeps these
+    /// tests honest on a slow or loaded machine, where a fixed wait turns into
+    /// a flake rather than a failure.
+    fn wait_for(&mut self, wanted: &str, limit: Duration) -> String {
+        let deadline = Instant::now() + limit;
+        let mut raw = String::new();
+        loop {
+            raw.push_str(&self.drain(Duration::from_millis(250)));
+            let screen = visible(&raw);
+            if screen.contains(wanted) || Instant::now() >= deadline {
+                return screen;
+            }
+        }
+    }
+
     /// Wait for the child to exit, killing it if it overstays.
     fn finish(mut self, grace: Duration) -> i32 {
         let deadline = Instant::now() + grace;
@@ -556,7 +576,7 @@ fn ctrl_c_interrupts_the_cell_instead_of_killing_the_ui() {
 fn watch_paints_the_notebook_and_says_it_is_read_only() {
     let fixture = bare_fixture(&["x = 41"]);
     let mut pty = fixture.watch();
-    let painted = visible(&pty.drain(Duration::from_secs(3)));
+    let painted = pty.wait_for("WATCH", Duration::from_secs(20));
 
     assert!(painted.contains("watch.ipynb"), "{painted}");
     assert!(painted.contains("x = 41"), "{painted}");
@@ -574,7 +594,7 @@ fn watch_ignores_every_key_that_would_change_the_notebook() {
     let fixture = bare_fixture(&["keep me"]);
     let before = fixture.bytes();
     let mut pty = fixture.watch();
-    pty.drain(Duration::from_secs(2));
+    pty.wait_for("keep me", Duration::from_secs(20));
 
     // Delete a cell, open the editor, type into it, run it, save it: the whole
     // editing vocabulary, none of which a watcher may use.
@@ -583,7 +603,7 @@ fn watch_ignores_every_key_that_would_change_the_notebook() {
     pty.send("junk");
     pty.send("\x1b");
     pty.send("es");
-    let after_keys = visible(&pty.drain(Duration::from_secs(2)));
+    let after_keys = pty.wait_for("read-only", Duration::from_secs(20));
     assert!(
         after_keys.contains("read-only"),
         "a rejected key said nothing: {after_keys}"
@@ -603,7 +623,7 @@ fn watch_shows_a_change_made_by_another_process_without_a_keypress() {
     // The whole point: an agent runs a cell, and the human's pane updates.
     let fixture = bare_fixture(&["first"]);
     let mut pty = fixture.watch();
-    let painted = visible(&pty.drain(Duration::from_secs(3)));
+    let painted = pty.wait_for("first", Duration::from_secs(20));
     assert!(painted.contains("first"), "{painted}");
     assert!(
         !painted.contains("second"),
@@ -613,14 +633,7 @@ fn watch_shows_a_change_made_by_another_process_without_a_keypress() {
     fixture.insert("second");
 
     // Nothing is typed here. The pane has to notice on its own.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut updated = String::new();
-    while Instant::now() < deadline {
-        updated = visible(&pty.drain(Duration::from_millis(500)));
-        if updated.contains("second") {
-            break;
-        }
-    }
+    let updated = pty.wait_for("second", Duration::from_secs(20));
     assert!(
         updated.contains("second"),
         "the change never reached the pane: {updated}"
@@ -634,10 +647,10 @@ fn watch_shows_a_change_made_by_another_process_without_a_keypress() {
 fn watch_help_offers_only_what_a_watcher_can_do() {
     let fixture = bare_fixture(&["x = 1"]);
     let mut pty = fixture.watch();
-    pty.drain(Duration::from_secs(2));
+    pty.wait_for("WATCH", Duration::from_secs(20));
 
     pty.send("?");
-    let help = visible(&pty.drain(Duration::from_secs(2)));
+    let help = pty.wait_for("follow", Duration::from_secs(20));
     assert!(help.contains("follow"), "{help}");
     assert!(help.contains("interrupt"), "{help}");
     assert!(
@@ -657,7 +670,7 @@ fn ctrl_c_closes_a_watch_pane_rather_than_stopping_someone_elses_cell() {
     // thing that kills an agent's work. `ii` is the way to do that on purpose.
     let fixture = bare_fixture(&["x = 1"]);
     let mut pty = fixture.watch();
-    pty.drain(Duration::from_secs(2));
+    pty.wait_for("WATCH", Duration::from_secs(20));
 
     pty.send("\x03");
     assert_eq!(
@@ -674,18 +687,11 @@ fn a_watch_pane_shows_cells_an_agent_runs_through_the_supervisor() {
     // from another process, and the human's pane keeps up on its own.
     let fixture = fixture(&["x = 1"]);
     let mut pty = fixture.watch();
-    pty.drain(Duration::from_secs(2));
+    pty.wait_for("WATCH", Duration::from_secs(20));
 
     fixture.exec("print('hello from the agent')");
 
-    let deadline = Instant::now() + Duration::from_secs(20);
-    let mut seen = String::new();
-    while Instant::now() < deadline {
-        seen = visible(&pty.drain(Duration::from_millis(500)));
-        if seen.contains("hello from the agent") {
-            break;
-        }
-    }
+    let seen = pty.wait_for("hello from the agent", Duration::from_secs(30));
     assert!(
         seen.contains("hello from the agent"),
         "the agent's output never reached the watch pane: {seen}"
