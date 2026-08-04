@@ -53,6 +53,30 @@ h5i-db query market.db "SELECT count(*) FROM trades" \
 h5i-db ui market.db                                                # レビューと実験の画面
 ```
 
+**ターミナルのノートブック**
+
+```bash
+h5i-db nb new research.ipynb --kernel python3 --db market.db
+h5i-db nb view research.ipynb        # ⏎ 編集 · e 実行 · a セル追加 · ? キー一覧 · q 終了
+```
+
+`%%sql` で始まるセルは、Pythonを介さずにデータベースへ直接問い合わせる。
+
+```sql
+%%sql
+SELECT symbol, count(*) AS trades FROM trades GROUP BY symbol
+```
+
+```bash
+h5i-db nb watch research.ipynb --split right   # エージェントの作業を隣で眺める
+h5i-db nb export research.ipynb --to html
+```
+
+保存されるのは普通の `.ipynb` なので、同じファイルをJupyterLabでも開ける。
+Pythonカーネルには `pip install ipykernel` が必要だが、`%%sql` のセルには
+何もいらない。エージェントは同じセッションを `h5i-db nb exec` から非対話で
+動かせる。
+
 **Pythonライブラリ（DataFrameとSQL）**
 
 ```bash
