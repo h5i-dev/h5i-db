@@ -112,8 +112,25 @@ pub fn load(kernel_json: impl AsRef<Path>) -> Result<KernelSpecInfo> {
 /// Jupyter's data directories, highest precedence first.
 ///
 /// Mirrors `jupyter_core.paths.jupyter_path()`: `JUPYTER_PATH`, then the user
-/// directory, then the environment (venv/conda) prefix, then system paths.
+/// directory and the environment (venv/conda) prefix in whichever order
+/// [`prefer_env_over_user`] asks for, then system paths.
 pub fn data_dirs() -> Vec<PathBuf> {
+    build_data_dirs(
+        jupyter_path_entries(),
+        user_data_dir(),
+        env_data_dirs(),
+        prefer_env_over_user(),
+    )
+}
+
+/// The ordering itself, separated from the environment so it can be tested
+/// without mutating process-wide state.
+fn build_data_dirs(
+    jupyter_path: Vec<PathBuf>,
+    user: Option<PathBuf>,
+    env: Vec<PathBuf>,
+    prefer_env: bool,
+) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     let mut push = |p: PathBuf| {
         if !dirs.contains(&p) {
@@ -121,35 +138,108 @@ pub fn data_dirs() -> Vec<PathBuf> {
         }
     };
 
-    if let Ok(raw) = std::env::var("JUPYTER_PATH") {
-        for entry in std::env::split_paths(&raw) {
-            if !entry.as_os_str().is_empty() {
-                push(entry);
-            }
-        }
+    for entry in jupyter_path {
+        push(entry);
     }
 
-    if let Ok(dir) = std::env::var("JUPYTER_DATA_DIR") {
+    // Jupyter emits these two groups in one order or the other; everything
+    // else about them is the same.
+    let (first, second): (Vec<PathBuf>, Vec<PathBuf>) = if prefer_env {
+        (env, user.into_iter().collect())
+    } else {
+        (user.into_iter().collect(), env)
+    };
+    for dir in first.into_iter().chain(second) {
+        push(dir);
+    }
+
+    for dir in SYSTEM_DIRS {
         push(PathBuf::from(dir));
-    } else if let Some(home) = home_dir() {
-        // macOS puts it under Library, every other unix under XDG.
-        if cfg!(target_os = "macos") {
-            push(home.join("Library/Jupyter"));
-        } else if let Ok(xdg) = std::env::var("XDG_DATA_HOME").filter_non_empty() {
-            push(PathBuf::from(xdg).join("jupyter"));
-        } else {
-            push(home.join(".local/share/jupyter"));
-        }
     }
-
-    for prefix in env_prefixes() {
-        push(prefix.join("share/jupyter"));
-    }
-
-    push(PathBuf::from("/usr/local/share/jupyter"));
-    push(PathBuf::from("/usr/share/jupyter"));
 
     dirs
+}
+
+const SYSTEM_DIRS: [&str; 2] = ["/usr/local/share/jupyter", "/usr/share/jupyter"];
+
+fn jupyter_path_entries() -> Vec<PathBuf> {
+    let Ok(raw) = std::env::var("JUPYTER_PATH") else {
+        return Vec::new();
+    };
+    std::env::split_paths(&raw)
+        .filter(|entry| !entry.as_os_str().is_empty())
+        .collect()
+}
+
+fn user_data_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var("JUPYTER_DATA_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    let home = home_dir()?;
+    // macOS puts it under Library, every other unix under XDG.
+    Some(if cfg!(target_os = "macos") {
+        home.join("Library/Jupyter")
+    } else if let Ok(xdg) = std::env::var("XDG_DATA_HOME").filter_non_empty() {
+        PathBuf::from(xdg).join("jupyter")
+    } else {
+        home.join(".local/share/jupyter")
+    })
+}
+
+/// `share/jupyter` under each candidate prefix, minus the system directories.
+///
+/// The subtraction matters when the interpreter on `PATH` is the system one:
+/// `/usr/share/jupyter` must not get promoted above the user directory just
+/// because it happens to also be an environment prefix.
+fn env_data_dirs() -> Vec<PathBuf> {
+    env_prefixes()
+        .into_iter()
+        .map(|prefix| prefix.join("share/jupyter"))
+        .filter(|dir| !SYSTEM_DIRS.iter().any(|s| Path::new(s) == dir))
+        .collect()
+}
+
+/// Whether the active environment's kernels outrank the user's.
+///
+/// Mirrors `jupyter_core.paths.prefer_environment_over_user()`, and skipping it
+/// is not cosmetic: a project venv with its own `ipykernel` is precisely the
+/// case where the user directory holds a `python3` spec pointing at some other
+/// interpreter, so getting this backwards runs cells in the wrong environment
+/// and reports the venv's packages as missing.
+fn prefer_env_over_user() -> bool {
+    if let Ok(raw) = std::env::var("JUPYTER_PREFER_ENV_PATH") {
+        return envset(&raw);
+    }
+    env_prefixes()
+        .iter()
+        .any(|prefix| is_owned_environment(prefix))
+}
+
+/// `jupyter_core.utils.envset` for a variable known to be present: anything
+/// but an explicit denial counts as set.
+fn envset(raw: &str) -> bool {
+    !matches!(
+        raw.to_ascii_lowercase().as_str(),
+        "no" | "n" | "false" | "off" | "0" | "0.0"
+    )
+}
+
+/// A prefix the user chose, as opposed to the interpreter they happened to
+/// inherit: a virtualenv (`pyvenv.cfg` is what `venv` writes and what makes
+/// `sys.prefix` differ from `sys.base_prefix`), or a non-base conda env.
+fn is_owned_environment(prefix: &Path) -> bool {
+    if prefix.join("pyvenv.cfg").is_file() {
+        return true;
+    }
+    match std::env::var("CONDA_PREFIX").filter_non_empty() {
+        Ok(conda) if Path::new(&conda) == prefix => {
+            std::env::var("CONDA_DEFAULT_ENV")
+                .as_deref()
+                .unwrap_or("base")
+                != "base"
+        }
+        _ => false,
+    }
 }
 
 /// Candidate `sys.prefix` values, without paying for a Python subprocess.
@@ -360,6 +450,92 @@ mod tests {
         unsafe { std::env::remove_var("JUPYTER_PATH") };
         assert!(dirs.contains(&PathBuf::from("/tmp/one")), "{dirs:?}");
         assert!(dirs.contains(&PathBuf::from("/tmp/two")), "{dirs:?}");
+    }
+
+    #[test]
+    fn an_owned_environment_outranks_the_user_directory() {
+        // The bug this guards: a project venv with its own ipykernel loses to
+        // a ~/.local `python3` spec pointing at another interpreter, and every
+        // package installed in the venv reads as missing.
+        let user = PathBuf::from("/home/u/.local/share/jupyter");
+        let env = PathBuf::from("/proj/.venv/share/jupyter");
+        let dirs = build_data_dirs(vec![], Some(user.clone()), vec![env.clone()], true);
+        let pos = |p: &PathBuf| dirs.iter().position(|d| d == p).unwrap();
+        assert!(pos(&env) < pos(&user), "{dirs:?}");
+    }
+
+    #[test]
+    fn without_an_owned_environment_the_user_directory_wins() {
+        let user = PathBuf::from("/home/u/.local/share/jupyter");
+        let env = PathBuf::from("/usr/share/jupyter-ish");
+        let dirs = build_data_dirs(vec![], Some(user.clone()), vec![env.clone()], false);
+        let pos = |p: &PathBuf| dirs.iter().position(|d| d == p).unwrap();
+        assert!(pos(&user) < pos(&env), "{dirs:?}");
+    }
+
+    #[test]
+    fn jupyter_path_outranks_both_either_way() {
+        let explicit = PathBuf::from("/explicit");
+        for prefer_env in [true, false] {
+            let dirs = build_data_dirs(
+                vec![explicit.clone()],
+                Some(PathBuf::from("/home/u/.local/share/jupyter")),
+                vec![PathBuf::from("/proj/.venv/share/jupyter")],
+                prefer_env,
+            );
+            assert_eq!(dirs.first(), Some(&explicit), "{dirs:?}");
+        }
+    }
+
+    #[test]
+    fn a_system_prefix_is_not_promoted_above_the_user_directory() {
+        // Running the system interpreter makes /usr its prefix; that must not
+        // turn /usr/share/jupyter into a high-precedence "environment" dir.
+        for dir in env_data_dirs() {
+            assert!(
+                !SYSTEM_DIRS.iter().any(|s| Path::new(s) == dir),
+                "system dir {dir:?} leaked into the environment group"
+            );
+        }
+    }
+
+    #[test]
+    fn system_dirs_come_last_in_their_own_order() {
+        let dirs = build_data_dirs(
+            vec![],
+            None,
+            vec![PathBuf::from("/proj/.venv/share/jupyter")],
+            true,
+        );
+        assert_eq!(
+            dirs,
+            [
+                PathBuf::from("/proj/.venv/share/jupyter"),
+                PathBuf::from("/usr/local/share/jupyter"),
+                PathBuf::from("/usr/share/jupyter"),
+            ],
+            "{dirs:?}"
+        );
+    }
+
+    #[test]
+    fn envset_reads_denials_but_treats_anything_else_as_set() {
+        for deny in ["0", "false", "FALSE", "no", "off"] {
+            assert!(!envset(deny), "{deny} should disable");
+        }
+        for allow in ["1", "true", "yes", ""] {
+            assert!(envset(allow), "{allow} should enable");
+        }
+    }
+
+    #[test]
+    fn a_pyvenv_cfg_marks_a_prefix_as_owned() {
+        let dir = std::env::temp_dir().join(format!("h5i-nb-spec-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!is_owned_environment(&dir));
+        std::fs::write(dir.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+        assert!(is_owned_environment(&dir));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

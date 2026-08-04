@@ -188,6 +188,23 @@ $ h5i-db nb kernel status research.ipynb      # answers even mid-cell
 | `kernel restart <nb>` | Restart the kernel; `--clear-outputs` also drops recorded outputs |
 | `kernel stop <nb>` | Stop the session and its kernel |
 
+### Which interpreter a kernel name resolves to
+
+`--kernel python3` is a name, not a path, and the same name usually exists in
+more than one place. The search order is Jupyter's own: `JUPYTER_PATH`, then
+the active environment's `share/jupyter` and `~/.local/share/jupyter` (or
+`~/Library/Jupyter`), then `/usr/local/share/jupyter` and `/usr/share/jupyter`.
+
+Inside a virtualenv or a non-base conda env, the environment comes first, so a
+project venv that has `ipykernel` installed runs cells with that venv's
+packages even when a `python3` spec in your home directory points at another
+interpreter. Set `JUPYTER_PREFER_ENV_PATH=0` to put the home directory back on
+top, or `=1` to force the environment when there is none active.
+
+`nb kernel list --format json` prints the `kernel.json` each name resolved to,
+which is the quickest answer to "why does this import fail here but not in my
+shell".
+
 !!! note "Why a supervisor, not `--existing`"
     A supervisor process owns the kernel, subscribes to iopub continuously,
     and serves a control socket under `$XDG_RUNTIME_DIR`. Reconnecting to a
