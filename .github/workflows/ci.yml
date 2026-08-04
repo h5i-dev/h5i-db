@@ -91,6 +91,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The whole workspace, not just core. Testing one crate here let the
+      # notebook reach a release tag having never been compiled on Windows,
+      # and the first thing to try was the release job that builds the
+      # shipped binary. A check is cheap; discovering it at `git push --tags`
+      # is not.
+      - run: cargo check --workspace --all-targets
       - run: cargo test -p h5i-db-core -- --test-threads=2
 
   # Build-check the whole workspace on the exact `rust-version` from

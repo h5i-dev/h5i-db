@@ -8,6 +8,9 @@
 //! `crates/h5i-db-notebook/src/document/mod.rs` mean something. Asserting
 //! against a fixture we wrote by hand would only prove we are self-consistent.
 
+// The crate this exercises is Unix only; see its lib.rs.
+#![cfg(unix)]
+
 use std::path::{Path, PathBuf};
 
 use h5i_db_notebook::Notebook;

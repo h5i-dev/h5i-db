@@ -14,6 +14,9 @@
 //! interpreter, and running the suite concurrently is what makes a small
 //! machine start swapping.
 
+// The crate this exercises is Unix only; see its lib.rs.
+#![cfg(unix)]
+
 use std::time::Duration;
 
 use h5i_db_notebook::document::{Output, StreamName};
