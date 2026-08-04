@@ -15,7 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::document::{CellType, Output};
 use crate::kernel::KernelStatus;
 use crate::render::{DigestOptions, collapse_carriage_returns, strip_ansi};
-use crate::tui::app::{App, HELP, Mode, WATCH_HELP};
+use crate::tui::app::{App, Mode, WATCH_HELP, help_rows};
 use crate::tui::highlight::{Language, Token, highlight_line};
 use crate::tui::image::IMAGE_ROWS;
 
@@ -57,8 +57,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> DrawResult {
         result.images.clear();
     }
     if app.show_help {
-        let keys = if app.read_only { WATCH_HELP } else { HELP };
-        let text = keys
+        let rows = if app.read_only {
+            WATCH_HELP.to_vec()
+        } else {
+            help_rows(app.enhanced_keys)
+        };
+        let text = rows
             .iter()
             .map(|(keys, what)| format!("{keys:<16}{what}"))
             .collect::<Vec<_>>()
@@ -123,11 +127,18 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         Some(c) => format!(" {c}…"),
         None => String::new(),
     };
-    let hint = match (app.read_only, app.mode) {
-        (true, _) if app.following => "following  f unfollow  ii interrupt  ? keys  q quit",
-        (true, _) => "f follow  j/k move  ii interrupt  ? keys  q quit",
-        (false, Mode::Command) => "⏎ edit  ⇧⏎ run  a/b insert  dd delete  ? keys  q quit",
-        (false, Mode::Edit) => "esc done  ⇧⏎ run  tab complete  ⇧tab dedent  ⌥i inspect",
+    // The run hint names the key this terminal can actually send: on anything
+    // without the kitty keyboard protocol, Shift+Enter arrives as a plain
+    // Enter and opens the editor instead.
+    let hint = match (app.read_only, app.mode, app.enhanced_keys) {
+        (true, _, _) if app.following => "following  f unfollow  ii interrupt  ? keys  q quit",
+        (true, _, _) => "f follow  j/k move  ii interrupt  ? keys  q quit",
+        (false, Mode::Command, true) => "⏎ edit  ⇧⏎ run  a/b insert  dd delete  ? keys  q quit",
+        (false, Mode::Command, false) => "⏎ edit  e run  a/b insert  dd delete  ? keys  q quit",
+        (false, Mode::Edit, true) => "esc done  ⇧⏎ run  tab complete  ⇧tab dedent  ⌥i inspect",
+        (false, Mode::Edit, false) => {
+            "esc done, then e runs  tab complete  ⇧tab dedent  ⌥i inspect"
+        }
     };
     let line = Line::from(vec![
         Span::styled(
@@ -600,6 +611,39 @@ mod tests {
         app.scroll += 5;
         screen(&mut app, 40, 12);
         assert_eq!(app.scroll, top + 5, "the scroll was snapped back");
+    }
+
+    #[test]
+    fn a_terminal_without_modified_enter_is_told_so() {
+        let mut app = app_with(vec![Cell::new_code("x = 1")]);
+        app.enhanced_keys = false;
+
+        // The status bar names the key that works here.
+        let status = screen(&mut app, 100, 12);
+        assert!(status.contains("e run"), "{status}");
+        assert!(
+            !status.contains("⇧⏎ run"),
+            "the status bar promised a key this terminal cannot send: {status}"
+        );
+
+        // And the help says why, rather than listing it and letting the user
+        // discover that Enter edits the cell instead.
+        app.show_help = true;
+        let help = screen(&mut app, 100, 30);
+        assert!(
+            help.contains("kitty"),
+            "the explanation was clipped: {help}"
+        );
+        assert!(
+            !help.contains("e, Shift+Enter"),
+            "the help still advertised the key: {help}"
+        );
+
+        // A capable terminal keeps the full binding and gets no lecture.
+        app.enhanced_keys = true;
+        let help = screen(&mut app, 100, 30);
+        assert!(help.contains("e, Shift+Enter"), "{help}");
+        assert!(!help.contains("kitty"), "{help}");
     }
 
     #[test]

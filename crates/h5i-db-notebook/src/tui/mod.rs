@@ -56,6 +56,10 @@ pub async fn run(path: impl AsRef<Path>) -> Result<()> {
     let protocol = ImageProtocol::detect();
 
     let (mut terminal, enhanced) = enter()?;
+    // What the terminal answered decides what the UI may offer: `e` and `E`
+    // are the bindings that always work, and Shift+Enter is only advertised
+    // where it can actually be sent.
+    app.enhanced_keys = enhanced;
     // The terminal must be restored whatever happens, so the loop's result is
     // captured and the teardown runs unconditionally.
     let outcome = event_loop(

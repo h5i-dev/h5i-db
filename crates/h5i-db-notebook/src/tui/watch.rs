@@ -57,6 +57,7 @@ pub async fn run(path: impl AsRef<Path>) -> Result<()> {
     let protocol = ImageProtocol::detect();
 
     let (mut terminal, enhanced) = enter()?;
+    app.enhanced_keys = enhanced;
     let outcome = watch_loop(
         &mut terminal,
         &mut app,

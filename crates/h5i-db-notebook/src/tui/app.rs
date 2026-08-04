@@ -114,6 +114,13 @@ pub struct App {
     pub quit: bool,
     /// Set while an edit has not been committed to the runner.
     pub unsaved_edit: bool,
+    /// Whether the terminal can send a modified Enter.
+    ///
+    /// False on anything without the kitty keyboard protocol, where
+    /// Shift+Enter is byte-identical to Enter and so cannot be bound at all.
+    /// The UI has to know, because offering a key the terminal cannot send
+    /// sends the user looking for a bug in us.
+    pub enhanced_keys: bool,
     /// Watching rather than driving: keys that would change the notebook do
     /// nothing, and nothing here ever writes the file.
     pub read_only: bool,
@@ -141,6 +148,9 @@ impl App {
             show_help: false,
             quit: false,
             unsaved_edit: false,
+            // Assumed until the terminal is asked. Claiming a limitation
+            // nobody detected would be its own kind of wrong.
+            enhanced_keys: true,
             read_only: false,
             following: false,
         }
@@ -686,7 +696,34 @@ pub fn last_changed_cell(old: &Notebook, new: &Notebook) -> Option<usize> {
     changed
 }
 
-/// The key reference shown by `?`.
+/// The key reference shown by `?`, as the terminal can actually deliver it.
+///
+/// Most terminals cannot encode a modified Enter: without the kitty keyboard
+/// protocol, Shift+Enter arrives as a plain Enter, which in command mode opens
+/// the editor. Listing it anyway means the user presses it, watches something
+/// else happen, and goes looking for the bug in us. So the promise is withdrawn
+/// where it cannot be kept, and the reason is stated once.
+pub fn help_rows(enhanced_keys: bool) -> Vec<(&'static str, &'static str)> {
+    let mut rows: Vec<(&'static str, &'static str)> = Vec::new();
+    for (keys, what) in HELP {
+        match *keys {
+            "e, Shift+Enter" if !enhanced_keys => rows.push(("e", *what)),
+            "E, Ctrl+Enter" if !enhanced_keys => {
+                rows.push(("E", *what));
+                // Beside the bindings it explains, not at the foot of the
+                // list: this is where a reader looks for how to run a cell,
+                // and a long overlay on a short terminal loses its last lines.
+                rows.push(("", "(the modified Enters need a terminal that"));
+                rows.push(("", " speaks the kitty keyboard protocol: kitty,"));
+                rows.push(("", " Ghostty, WezTerm, foot. This one cannot.)"));
+            }
+            _ => rows.push((*keys, *what)),
+        }
+    }
+    rows
+}
+
+/// The bindings, before the terminal's own limits are applied.
 pub const HELP: &[(&str, &str)] = &[
     ("j / k, ↓ / ↑", "select cell"),
     ("g / G", "first / last cell"),
@@ -736,6 +773,49 @@ mod tests {
             notebook.push(Cell::new_code(*source));
         }
         App::watching(std::path::PathBuf::from("t.ipynb"), notebook)
+    }
+
+    #[test]
+    fn help_offers_shift_enter_only_where_it_can_be_sent() {
+        let capable = help_rows(true);
+        assert!(
+            capable.iter().any(|(k, _)| *k == "e, Shift+Enter"),
+            "a capable terminal was not offered the binding it has"
+        );
+        assert!(
+            !capable.iter().any(|(_, what)| what.contains("kitty")),
+            "a capable terminal was warned about a limit it does not have"
+        );
+
+        // On a terminal that cannot encode a modified Enter, the promise is
+        // withdrawn rather than left to fail in the user's hands.
+        let plain = help_rows(false);
+        assert!(
+            !plain.iter().any(|(k, _)| k.contains("Shift+Enter")),
+            "a key this terminal cannot send was still advertised: {plain:?}"
+        );
+        assert!(
+            !plain.iter().any(|(k, _)| k.contains("Ctrl+Enter")),
+            "{plain:?}"
+        );
+        // The fallbacks are still there, and the reason is stated once.
+        assert!(plain.iter().any(|(k, _)| *k == "e"));
+        assert!(plain.iter().any(|(k, _)| *k == "E"));
+        assert!(
+            plain.iter().any(|(_, what)| what.contains("kitty")),
+            "no explanation of why the key is missing: {plain:?}"
+        );
+        // Beside the run bindings, not orphaned at the end where a short
+        // terminal would clip it.
+        let explained = plain
+            .iter()
+            .position(|(_, what)| what.contains("kitty"))
+            .unwrap();
+        let runs_in_place = plain.iter().position(|(k, _)| *k == "E").unwrap();
+        assert!(
+            explained - runs_in_place <= 3,
+            "the explanation drifted away from the keys it explains: {plain:?}"
+        );
     }
 
     #[test]
