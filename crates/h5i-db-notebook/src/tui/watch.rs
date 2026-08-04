@@ -26,7 +26,7 @@ use crate::kernel::KernelStatus;
 use crate::supervisor::SessionClient;
 use crate::supervisor::protocol::{Request, Response};
 use crate::tui::app::{App, Command, Event};
-use crate::tui::image::ImageProtocol;
+use crate::tui::image::Images;
 use crate::tui::{Backend, TICK, enter, leave, present, spawn_terminal_reader};
 
 /// How often the file is checked for changes.
@@ -54,16 +54,15 @@ pub async fn run(path: impl AsRef<Path>) -> Result<()> {
     let watcher = tokio::spawn(watch_source(path.clone(), event_tx, command_rx));
 
     let mut app = App::watching(path, notebook);
-    let protocol = ImageProtocol::detect();
 
-    let (mut terminal, enhanced) = enter()?;
+    let (mut terminal, enhanced, mut images) = enter()?;
     app.enhanced_keys = enhanced;
     let outcome = watch_loop(
         &mut terminal,
         &mut app,
         &command_tx,
         &mut event_rx,
-        protocol,
+        &mut images,
     )
     .await;
     leave(&mut terminal, enhanced)?;
@@ -78,11 +77,11 @@ async fn watch_loop(
     app: &mut App,
     commands: &mpsc::UnboundedSender<Command>,
     events: &mut mpsc::UnboundedReceiver<Event>,
-    protocol: ImageProtocol,
+    images: &mut Images,
 ) -> Result<()> {
     let mut keys = spawn_terminal_reader();
     loop {
-        present(terminal, app, protocol)?;
+        present(terminal, app, images)?;
 
         tokio::select! {
             biased;

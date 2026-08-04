@@ -222,9 +222,8 @@ $ h5i-db nb ls                                 # sessions running on this machin
 `view` is the full terminal UI: Jupyter's key bindings (`Esc`/`Enter` for
 command and edit mode, `a`/`b` to insert, `dd` to delete), a completion
 popup from `complete_request`, an inspection overlay from `inspect_request`,
-and inline images through the kitty and iTerm2 graphics protocols.
-`Ctrl-C` interrupts the running cell rather than killing the UI, because the
-notebook is the state.
+and inline plots. `Ctrl-C` interrupts the running cell rather than killing
+the UI, because the notebook is the state.
 
 `watch` is a live read-only view. It writes nothing, holds no lock, and
 starts no kernel, so any number of them can follow a session someone else is
@@ -240,6 +239,31 @@ died.
     Most terminals cannot send it: without the kitty keyboard protocol it
     arrives as a plain `Enter`. The protocol is requested where it is
     supported, and `e` / `E` are the run bindings that always work.
+
+### Inline plots
+
+A `image/png` output is drawn in the terminal, at the figure's own aspect
+ratio. Which escape sequence is used depends on what the terminal answers
+when asked: the kitty graphics protocol (kitty, ghostty, WezTerm), iTerm2's
+inline images (iTerm2, WezTerm, Konsole), or sixel (Windows Terminal 1.22+,
+foot, xterm, mlterm, recent VS Code). A terminal with none of them gets
+unicode half-blocks, which are coarse but readable.
+
+The terminal is asked rather than guessed at from `TERM_PROGRAM` and friends,
+because those variables do not survive the trip into WSL: under Windows
+Terminal, environment sniffing sees a bare `xterm-256color` and would draw
+nothing.
+
+Set `H5I_NB_IMAGES` to override:
+
+```console
+$ H5I_NB_IMAGES=sixel h5i-db nb view research.ipynb   # force a protocol
+$ H5I_NB_IMAGES=off h5i-db nb view research.ipynb     # placeholders only
+```
+
+Accepted values are `kitty`, `iterm2`, `sixel`, `halfblocks`, and `off`.
+With `off`, each plot becomes a `[image/png · N bytes]` label and the figure
+is still reachable through `h5i-db nb output --save`.
 
 ## Exporting
 

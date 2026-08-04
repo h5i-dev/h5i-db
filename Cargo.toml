@@ -28,7 +28,11 @@ version = "0.1.5"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/h5i-dev/h5i-db"
-rust-version = "1.89"
+# 1.90 rather than 1.89 because the notebook's terminal-image support reaches
+# `quantette` (through `ratatui-image` → `icy_sixel`), which declares 1.90 and
+# has no release that does not. Sixel is the only protocol Windows Terminal
+# speaks, so the alternative was no inline plots there at all.
+rust-version = "1.90"
 
 [workspace.dependencies]
 # version alongside path so `cargo publish` can rewrite these for crates.io.
