@@ -7,6 +7,9 @@
 //! H5I_TEST_KERNEL_JSON=… cargo test -p h5i-db-notebook --test cli -- --ignored --test-threads=1
 //! ```
 
+// The crate this exercises is Unix only; see its lib.rs.
+#![cfg(unix)]
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant};

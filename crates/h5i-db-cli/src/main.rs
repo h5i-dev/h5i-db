@@ -165,9 +165,22 @@ enum Command {
 
     /// In-terminal notebooks: run cells against a persistent kernel, query
     /// with %%sql, and review the result in a TUI.
+    #[cfg(unix)]
     Nb {
         #[command(subcommand)]
         command: h5i_db_notebook::cli::Command,
+    },
+
+    /// In-terminal notebooks. Unix only; see `h5i-db nb` for why.
+    ///
+    /// Kept on Windows rather than compiled away so that `nb` answers with a
+    /// reason instead of "unrecognized subcommand", which reads like a typo.
+    #[cfg(not(unix))]
+    Nb {
+        /// Swallowed whole, so the platform is the error rather than the
+        /// arguments failing to parse first.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
 
     /// Build a small database and walk the whole argument end to end: ingest,
@@ -1022,6 +1035,14 @@ async fn run(cli: Cli) -> Result<()> {
             write_value(&doc, format)
         }
 
+        #[cfg(not(unix))]
+        Command::Nb { .. } => Err(Error::invalid(
+            "`nb` needs a Unix-like platform. The notebook's session \
+             supervisor is built on Unix domain sockets, flock, and POSIX \
+             signals; everything else in h5i-db works here.",
+        )),
+
+        #[cfg(unix)]
         Command::Nb { command } => {
             // The notebook crate has its own error enum with its own stable
             // codes and hints. Flattening them into core's would lose them, so

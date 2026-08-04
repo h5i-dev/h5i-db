@@ -4,6 +4,9 @@
 //! query never leaves the process. They build a real h5i-db database and run
 //! real DataFusion plans against it, so they run by default.
 
+// The crate this exercises is Unix only; see its lib.rs.
+#![cfg(unix)]
+
 use std::sync::Arc;
 
 use arrow::array::{Float64Array, Int64Array, RecordBatch, StringArray};

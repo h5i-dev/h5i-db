@@ -1,8 +1,22 @@
 //! `h5i-nb`: the in-terminal notebook command line.
 
+#[cfg(not(unix))]
+fn main() {
+    // A binary that exists and explains itself, rather than a build that
+    // fails or a command that is silently absent.
+    eprintln!(
+        "error[unsupported]: h5i-nb needs a Unix-like platform. The session \
+         supervisor is built on Unix domain sockets, flock, and POSIX signals."
+    );
+    std::process::exit(3);
+}
+
+#[cfg(unix)]
 use clap::Parser;
+#[cfg(unix)]
 use h5i_db_notebook::cli::{Cli, report_error, run};
 
+#[cfg(unix)]
 fn main() {
     let cli = Cli::parse();
     let format = cli.format;

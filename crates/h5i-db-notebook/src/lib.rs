@@ -6,6 +6,19 @@
 //! the document (nbformat v4), the kernel lifecycle, the rendering of outputs
 //! for two very different audiences (a human at a TUI, and an agent reading a
 //! token-budgeted digest), and the CLI those are driven through.
+//!
+//! # Unix only
+//!
+//! The crate compiles to nothing anywhere else, and the `nb` subcommand says
+//! so rather than going missing. This is not an oversight waiting on a
+//! `#[cfg]`: the session supervisor is built on Unix domain sockets, the
+//! single-writer guarantee on `flock`, kernel reaping on POSIX signals, and
+//! the socket's privacy on Unix file modes. Windows has an answer for each
+//! (named pipes, `LockFileEx`, `TerminateProcess`, ACLs), but they are
+//! different enough that pretending otherwise would mean a supervisor that
+//! compiles and then loses notebooks.
+
+#![cfg(unix)]
 
 pub mod cli;
 pub mod document;
