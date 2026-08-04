@@ -33,7 +33,7 @@ where
     let _ = COMMAND_PREFIX.set(prefix.into_iter().map(Into::into).collect());
 }
 
-fn command_prefix() -> &'static [String] {
+pub fn command_prefix() -> &'static [String] {
     COMMAND_PREFIX.get().map(Vec::as_slice).unwrap_or(&[])
 }
 
@@ -47,6 +47,20 @@ impl SessionClient {
         let notebook = notebook.as_ref().to_path_buf();
         let socket = socket_path(&notebook);
         SessionClient { notebook, socket }
+    }
+
+    /// A client for a socket whose notebook is not known yet.
+    ///
+    /// `ls` walks the session directory, where the notebook path is something
+    /// the supervisor reports rather than something the caller has. Only
+    /// requests that never start a supervisor are meaningful here, since
+    /// starting one needs a notebook to open.
+    pub fn for_socket(socket: impl AsRef<Path>) -> Self {
+        let socket = socket.as_ref().to_path_buf();
+        SessionClient {
+            notebook: socket.clone(),
+            socket,
+        }
     }
 
     pub fn socket(&self) -> &Path {
@@ -219,11 +233,21 @@ impl SessionClient {
         let exe = std::env::current_exe()
             .map_err(|e| Error::internal(format!("cannot locate our own binary: {e}")))?;
 
+        // Canonical, not as typed. The supervisor outlives the shell that
+        // started it and reports its own path to `ls` and `status`, where a
+        // relative path names nothing in particular. Routing is unaffected:
+        // the session id is already computed from the canonical form, which is
+        // why a relative and an absolute path reach the same session.
+        let notebook = self
+            .notebook
+            .canonicalize()
+            .unwrap_or_else(|_| self.notebook.clone());
+
         let mut command = tokio::process::Command::new(exe);
         command
             .args(command_prefix())
             .arg("serve")
-            .arg(&self.notebook)
+            .arg(&notebook)
             .arg("--socket")
             .arg(&self.socket)
             .stdin(Stdio::null())

@@ -14,10 +14,12 @@
 //! subscribed to iopub continuously is what makes those cases work.
 
 pub mod client;
+pub mod lock;
 pub mod protocol;
 pub mod server;
 
 pub use client::{SessionClient, set_command_prefix};
+pub use lock::SupervisorLock;
 pub use protocol::{Request, Response, SessionInfo};
 
 use std::path::{Path, PathBuf};

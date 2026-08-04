@@ -1,6 +1,6 @@
 ---
 name: h5i-db
-description: Use when working with an h5i-db database — an embedded, versioned time-series database and event-driven backtesting engine for quant research, driven by the `h5i-db` CLI or the `h5i_db` Python package. Covers creating a database and loading Parquet or CSV tick data, orienting in an existing one, querying it (SQL, ASOF joins, OHLCV/VWAP rollups, time travel) under a context budget, look-ahead-free reads, running event-driven backtests with settlement and fee models, scoring them (factor stats, tearsheets, deflated Sharpe), importing vendor market-data archives, and previewing destructive changes before they land.
+description: Use when working with an h5i-db database — an embedded, versioned time-series database and event-driven backtesting engine for quant research, driven by the `h5i-db` CLI or the `h5i_db` Python package. Covers creating a database and loading Parquet or CSV tick data, orienting in an existing one, querying it (SQL, ASOF joins, OHLCV/VWAP rollups, time travel) under a context budget, look-ahead-free reads, exploring in a notebook whose kernel survives between commands, running event-driven backtests with settlement and fee models, scoring them (factor stats, tearsheets, deflated Sharpe), importing vendor market-data archives, and previewing destructive changes before they land.
 ---
 
 # Driving h5i-db
@@ -60,6 +60,23 @@ fixed order and tells you what it dropped.
 4. **Make writes retry-safe.** Pass `--idempotency-key <token>` on any ingest
    you might repeat. A retry after an ambiguous failure then returns the commit
    that already happened instead of appending the rows twice.
+
+## Exploring: don't pay the load twice
+
+When answering a question means running code more than once against the same
+state, use the notebook. Its kernel persists between commands, so a 40-second
+load is paid once instead of once per idea, and the `.ipynb` is what a human
+opens afterwards to see what you actually tried.
+
+```bash
+h5i-db nb exec research.ipynb --code "df = load(); df.shape"
+h5i-db nb exec research.ipynb --code "df.groupby('venue').size()"   # df is still there
+```
+
+`%%sql` cells query a database with no Python in the way, `--detach` covers
+runs too long to wait for, and `nb watch <file> --split right` puts a live,
+read-only view in a pane beside the human without touching your session.
+→ [references/notebook.md](references/notebook.md)
 
 ## Trying something you might throw away
 
@@ -150,6 +167,7 @@ python -m h5i_db.venues ingest  market.db specs.json --root /mnt/mirror --min-co
 [mutations and safety net](references/mutations.md) ·
 [research mode and leakage](references/research-mode.md) ·
 [forks and parallel work](references/forks.md) ·
+[notebooks](references/notebook.md) (persistent kernels, `%%sql`, detached cells, watch panes) ·
 [Python](references/python.md) ·
 [backtesting](references/backtest.md) (configs, preflight, settlement, studies) ·
 [quant analytics](references/quant.md) (factors, tearsheets, deflated Sharpe, PBO) ·

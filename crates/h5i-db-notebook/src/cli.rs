@@ -127,7 +127,27 @@ pub enum Command {
     },
 
     /// Open the notebook in the terminal UI.
-    View { notebook: PathBuf },
+    View {
+        notebook: PathBuf,
+        /// Open in a new pane beside this one: right, left, down, or up.
+        #[arg(long)]
+        split: Option<String>,
+    },
+
+    /// Follow a notebook as it runs, without being able to change it.
+    ///
+    /// Read-only and non-exclusive: it takes no lock, starts no kernel, and
+    /// never writes the file, so any number can watch a session that an agent
+    /// is driving through `exec`.
+    Watch {
+        notebook: PathBuf,
+        /// Open in a new pane beside this one: right, left, down, or up.
+        #[arg(long)]
+        split: Option<String>,
+    },
+
+    /// List the notebook sessions running on this machine.
+    Ls,
 
     /// Convert the notebook to markdown, a Python script, or standalone HTML.
     Export {
@@ -578,7 +598,10 @@ pub async fn run_command(command: Command, format: Format) -> Result<()> {
 
         Command::Edit { notebook, action } => edit(cli.format, notebook, action).await,
 
-        Command::View { notebook } => {
+        Command::View { notebook, split } => {
+            if let Some(direction) = split {
+                return open_in_pane(cli.format, &direction, "view", &notebook);
+            }
             if !std::io::stdout().is_terminal() {
                 return Err(Error::invalid(
                     "`view` needs a terminal; use `cells`, `output`, or `exec` when piping",
@@ -595,6 +618,23 @@ pub async fn run_command(command: Command, format: Format) -> Result<()> {
             }
             crate::tui::run(&notebook).await
         }
+
+        Command::Watch { notebook, split } => {
+            if let Some(direction) = split {
+                return open_in_pane(cli.format, &direction, "watch", &notebook);
+            }
+            if !std::io::stdout().is_terminal() {
+                return Err(Error::invalid(
+                    "`watch` needs a terminal; use `cells` or `output` when piping",
+                ));
+            }
+            // Deliberately no supervisor handling: watching takes nothing and
+            // changes nothing, which is what lets it sit beside a session that
+            // an agent is driving.
+            crate::tui::watch::run(&notebook).await
+        }
+
+        Command::Ls => list_sessions(cli.format).await,
 
         Command::Kernel { action } => kernel(cli.format, action).await,
 
@@ -720,6 +760,132 @@ async fn edit(format: Format, path: PathBuf, action: EditAction) -> Result<()> {
         serde_json::json!({"notebook": path.display().to_string(), "result": message}),
         || message.clone(),
     )
+}
+
+/// Run `subcommand <notebook>` in a new pane beside this one.
+///
+/// Returns as soon as the pane exists. That is the point: an agent can put a
+/// notebook in front of a human mid-turn without blocking on a UI that will be
+/// open for an hour.
+fn open_in_pane(format: Format, direction: &str, subcommand: &str, notebook: &Path) -> Result<()> {
+    let direction = crate::split::Direction::parse(direction)?;
+    // Resolved here rather than in the pane: the new pane may start in a
+    // different working directory, and a relative path would then name a
+    // different file, or nothing at all.
+    let absolute = notebook
+        .canonicalize()
+        .unwrap_or_else(|_| notebook.to_path_buf());
+    let argv =
+        crate::split::self_command(&[subcommand.to_string(), absolute.display().to_string()])?;
+    let mux = crate::split::spawn(direction, &argv)?;
+
+    emit(
+        format,
+        serde_json::json!({
+            "opened": subcommand,
+            "notebook": absolute.display().to_string(),
+            "multiplexer": format!("{mux:?}").to_lowercase(),
+        }),
+        || {
+            format!(
+                "opened {subcommand} on {} in a new pane",
+                absolute.display()
+            )
+        },
+    )
+}
+
+/// Every session with a supervisor listening, plus a sweep of the dead ones.
+///
+/// The sweep rides along because this is the command someone runs when things
+/// look wrong, and because the two questions have the same answer: a socket
+/// nobody answers on, whose ownership lock nobody holds, is litter.
+async fn list_sessions(format: Format) -> Result<()> {
+    let directory = crate::supervisor::session_dir();
+    let mut sockets: Vec<PathBuf> = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "sock"))
+            .collect(),
+        // No directory means no session has ever run here, which is an empty
+        // list rather than a failure.
+        Err(_) => Vec::new(),
+    };
+    sockets.sort();
+
+    let mut sessions: Vec<crate::supervisor::SessionInfo> = Vec::new();
+    let mut swept: Vec<String> = Vec::new();
+    for socket in sockets {
+        match session_at(&socket).await {
+            Some(info) => sessions.push(info),
+            None => {
+                // Unlink only what nobody owns. The lock, not the socket, is
+                // the authority on liveness: a supervisor that is still
+                // starting up has the lock before it has the socket, and
+                // clearing its files would strand it.
+                let lock = socket.with_extension("lock");
+                if crate::supervisor::SupervisorLock::is_unowned(&lock) {
+                    let _ = std::fs::remove_file(&socket);
+                    let _ = std::fs::remove_file(&lock);
+                    swept.push(socket.display().to_string());
+                }
+            }
+        }
+    }
+
+    sessions.sort_by(|a, b| a.notebook.cmp(&b.notebook));
+    emit(
+        format,
+        serde_json::json!({
+            "sessions": sessions.iter().map(|s| serde_json::json!({
+                "notebook": s.notebook,
+                "kernel": s.kernel_name,
+                "kernel_status": s.kernel_status,
+                "busy": s.busy,
+                "cells": s.cells,
+                "pid": s.pid,
+                "idle_seconds": s.idle_seconds,
+            })).collect::<Vec<_>>(),
+            "swept": swept,
+        }),
+        || {
+            if sessions.is_empty() {
+                return "no notebook sessions running".to_string();
+            }
+            let mut table = comfy_table::Table::new();
+            table.load_preset(comfy_table::presets::NOTHING);
+            table.set_header(["notebook", "kernel", "state", "cells", "pid", "idle"]);
+            for session in &sessions {
+                table.add_row([
+                    session.notebook.clone(),
+                    session.kernel_name.clone(),
+                    if session.busy { "busy" } else { "idle" }.to_string(),
+                    session.cells.to_string(),
+                    session.pid.to_string(),
+                    format!("{}s", session.idle_seconds),
+                ]);
+            }
+            table.to_string()
+        },
+    )
+}
+
+/// Ask one socket who it is, or `None` if nobody answers.
+///
+/// Bounded, because an unresponsive supervisor must not make `ls` hang: the
+/// listing exists to diagnose exactly that situation.
+async fn session_at(socket: &Path) -> Option<crate::supervisor::SessionInfo> {
+    let client = SessionClient::for_socket(socket);
+    let answer = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.request_existing(&Request::Status, |_| {}),
+    )
+    .await;
+    match answer {
+        Ok(Ok(Response::Status(info))) => Some(info),
+        _ => None,
+    }
 }
 
 /// Whether two paths name the same file.

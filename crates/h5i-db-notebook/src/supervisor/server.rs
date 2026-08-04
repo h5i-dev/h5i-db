@@ -12,6 +12,7 @@ use crate::document::{Output, StreamName};
 use crate::error::{Error, Result};
 use crate::kernel::{Kernel, OutputEvent, OutputSink};
 use crate::session::{CellResult, Session};
+use crate::supervisor::lock::SupervisorLock;
 use crate::supervisor::protocol::{CellReport, Request, Response, SessionInfo, StreamEvent};
 
 /// How long a supervisor sticks around with no client attached.
@@ -202,83 +203,6 @@ pub async fn serve(notebook: &Path, options: ServerOptions) -> Result<()> {
         }
     }
     result
-}
-
-/// Exclusive claim on one notebook's supervisor role.
-///
-/// An advisory `flock` rather than a pid file: the kernel drops it when the
-/// process dies however it dies, so a supervisor that is SIGKILLed or OOM-
-/// killed leaves nothing stale behind. A pid file would need a liveness check,
-/// and checking a recycled pid is exactly the mistake that lets one supervisor
-/// declare another one dead.
-struct SupervisorLock {
-    #[allow(dead_code)]
-    file: std::fs::File,
-}
-
-impl SupervisorLock {
-    /// Claim the lock, waiting up to `limit` for the current holder to exit.
-    ///
-    /// Polled rather than blocking on `flock`, so the wait has a bound: a
-    /// holder that is wedged rather than exiting must not turn every later
-    /// start into a hang.
-    async fn acquire_within(path: &Path, limit: Duration) -> Result<Option<Self>> {
-        let deadline = tokio::time::Instant::now() + limit;
-        loop {
-            if let Some(held) = Self::try_acquire(path)? {
-                return Ok(Some(held));
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return Ok(None);
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    }
-
-    /// Claim the lock, or return `None` if another process holds it.
-    fn try_acquire(path: &Path) -> Result<Option<Self>> {
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::io::AsRawFd;
-
-        // The lock lives in the session directory, which an explicit
-        // `--socket` elsewhere would not have created.
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent.display(), e))?;
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
-        }
-
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .write(true)
-            .truncate(false)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| Error::io(path.display(), e))?;
-
-        // SAFETY: `flock` on a descriptor we own. LOCK_NB makes it answer
-        // rather than wait, which is what turns "somebody else is serving
-        // this notebook" into a decision instead of a hang.
-        let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if taken != 0 {
-            let error = std::io::Error::last_os_error();
-            return match error.kind() {
-                std::io::ErrorKind::WouldBlock => Ok(None),
-                _ => Err(Error::io(path.display(), error)),
-            };
-        }
-
-        // Recorded for whoever has to work out which process is holding a
-        // session; nothing reads it back, because the lock itself is the
-        // authority on liveness.
-        use std::io::Write;
-        let mut file = file;
-        let _ = file.set_len(0);
-        let _ = writeln!(file, "{}", std::process::id());
-        let _ = file.flush();
-        Ok(Some(SupervisorLock { file }))
-    }
 }
 
 async fn handle_connection(

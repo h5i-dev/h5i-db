@@ -51,6 +51,11 @@ pub enum Command {
         code: String,
         cursor: usize,
     },
+    /// Stop the running cell. Only a watcher raises this: the editing UI holds
+    /// an [`InterruptHandle`](crate::kernel::InterruptHandle) and uses it
+    /// directly, because the queue this would travel on is exactly what a
+    /// running cell has blocked.
+    Interrupt,
     Quit,
 }
 
@@ -109,6 +114,12 @@ pub struct App {
     pub quit: bool,
     /// Set while an edit has not been committed to the runner.
     pub unsaved_edit: bool,
+    /// Watching rather than driving: keys that would change the notebook do
+    /// nothing, and nothing here ever writes the file.
+    pub read_only: bool,
+    /// Keep the selection on whatever changed last, so a watcher's viewport
+    /// follows the agent without anyone touching the keyboard.
+    pub following: bool,
 }
 
 impl App {
@@ -130,6 +141,20 @@ impl App {
             show_help: false,
             quit: false,
             unsaved_edit: false,
+            read_only: false,
+            following: false,
+        }
+    }
+
+    /// The same UI, watching instead of driving.
+    ///
+    /// Following starts on, because a watcher is opened to see what happens
+    /// next, not to study what is already there.
+    pub fn watching(path: PathBuf, notebook: Notebook) -> Self {
+        App {
+            read_only: true,
+            following: true,
+            ..App::new(path, notebook)
         }
     }
 
@@ -209,10 +234,105 @@ impl App {
         {
             return commands;
         }
+        if self.read_only {
+            return self.watch_key(key);
+        }
         match self.mode {
             Mode::Command => self.command_key(key),
             Mode::Edit => self.edit_key(key),
         }
+    }
+
+    /// Keys a watcher accepts.
+    ///
+    /// An allow-list rather than a filter over `command_key`: a binding added
+    /// later must not become writable here by default, and a reader who tries
+    /// to edit deserves to be told why nothing happened rather than left
+    /// wondering whether the key registered.
+    fn watch_key(&mut self, key: KeyEvent) -> Vec<Command> {
+        // `ii` is the one thing a watcher can do to the session, and the
+        // person staring at a runaway cell is exactly who needs it. It changes
+        // no document state and goes through the supervisor's lock-free path.
+        if self.pending == Some('i') {
+            self.pending = None;
+            if key.code == KeyCode::Char('i') {
+                self.message = "interrupting".to_string();
+                return vec![Command::Interrupt];
+            }
+            return Vec::new();
+        }
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Char('q'), _) | (KeyCode::Esc, _) => vec![Command::Quit],
+            (KeyCode::Char('?'), _) => {
+                self.show_help = true;
+                Vec::new()
+            }
+            (KeyCode::Char('i'), KeyModifiers::NONE) => {
+                self.pending = Some('i');
+                Vec::new()
+            }
+            (KeyCode::Char('f'), _) => {
+                self.following = !self.following;
+                self.message = if self.following {
+                    "following the latest change".to_string()
+                } else {
+                    "following off".to_string()
+                };
+                Vec::new()
+            }
+            // Moving by hand means the reader has somewhere of their own to
+            // be, so the viewport stops chasing the writer.
+            (KeyCode::Char('j') | KeyCode::Down, _) => {
+                self.selected = (self.selected + 1).min(self.cell_count().saturating_sub(1));
+                self.stop_following();
+                Vec::new()
+            }
+            (KeyCode::Char('k') | KeyCode::Up, _) => {
+                self.selected = self.selected.saturating_sub(1);
+                self.stop_following();
+                Vec::new()
+            }
+            (KeyCode::Char('g'), _) => {
+                self.selected = 0;
+                self.stop_following();
+                Vec::new()
+            }
+            (KeyCode::Char('G'), _) => {
+                self.selected = self.cell_count().saturating_sub(1);
+                self.stop_following();
+                Vec::new()
+            }
+            _ => {
+                self.message =
+                    "read-only: this pane is watching. `f` follows, `ii` interrupts, `q` quits"
+                        .to_string();
+                Vec::new()
+            }
+        }
+    }
+
+    /// Stop the viewport chasing changes, quietly.
+    fn stop_following(&mut self) {
+        if self.following {
+            self.following = false;
+            self.message = "following off".to_string();
+        }
+    }
+
+    /// Take a new document read from disk, following the change if asked.
+    ///
+    /// Separate from `Event::Notebook` because a watcher has to compare the
+    /// two versions to know where the writer is working; the runner already
+    /// knows, because it is the writer.
+    pub fn on_watched_notebook(&mut self, notebook: Notebook) {
+        if self.following
+            && let Some(index) = last_changed_cell(&self.notebook, &notebook)
+        {
+            self.selected = index;
+        }
+        self.notebook = notebook;
+        self.clamp_selection();
     }
 
     /// Keys the completion popup consumes. `None` passes the key through.
@@ -546,6 +666,26 @@ impl App {
     }
 }
 
+/// The last cell that differs between two versions of a notebook.
+///
+/// Matched by id where there is one, so a cell inserted above the one that ran
+/// does not read as "everything after it changed". Falls back to position for
+/// files old enough to have no ids (nbformat 4.4 and earlier).
+pub fn last_changed_cell(old: &Notebook, new: &Notebook) -> Option<usize> {
+    let mut changed = None;
+    for (index, cell) in new.cells.iter().enumerate() {
+        let previous = match cell.id() {
+            Some(id) => old.cells.iter().find(|c| c.id() == Some(id)),
+            None => old.cells.get(index),
+        };
+        let differs = previous.is_none_or(|previous| previous != cell);
+        if differs {
+            changed = Some(index);
+        }
+    }
+    changed
+}
+
 /// The key reference shown by `?`.
 pub const HELP: &[(&str, &str)] = &[
     ("j / k, ↓ / ↑", "select cell"),
@@ -571,10 +711,159 @@ pub const HELP: &[(&str, &str)] = &[
     ("q", "quit"),
 ];
 
+/// The key reference for a watcher, which can do almost none of the above.
+pub const WATCH_HELP: &[(&str, &str)] = &[
+    ("j / k, ↓ / ↑", "select cell (stops following)"),
+    ("g / G", "first / last cell"),
+    ("f", "follow the latest change"),
+    ("ii", "interrupt the running cell"),
+    ("?", "this help"),
+    ("q", "quit"),
+    ("", ""),
+    ("", "this pane is read-only: it never writes the notebook"),
+    ("", "and never holds the session, so an agent can keep"),
+    ("", "running cells while you watch. Use `view` to edit."),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::document::Cell;
+
+    fn watching_app(sources: &[&str]) -> App {
+        let mut notebook = Notebook::new("python3", "Python 3", "python");
+        for source in sources {
+            notebook.push(Cell::new_code(*source));
+        }
+        App::watching(std::path::PathBuf::from("t.ipynb"), notebook)
+    }
+
+    #[test]
+    fn a_watcher_refuses_every_key_that_would_change_the_notebook() {
+        let mut app = watching_app(&["a", "b"]);
+        // Delete, insert, run, run-all, restart, save, change type, move.
+        for code in [
+            'd', 'a', 'b', 'e', 'E', 'A', 'R', 's', 'm', 'y', 'r', 'o', 'J', 'K', '0',
+        ] {
+            let commands = app.on_key(key(KeyCode::Char(code)));
+            assert!(
+                commands.is_empty(),
+                "`{code}` produced {commands:?} in a read-only pane"
+            );
+        }
+        // Enter must not open the editor either.
+        assert!(app.on_key(key(KeyCode::Enter)).is_empty());
+        assert!(app.editor.is_none(), "a watcher opened an editor");
+        assert_eq!(app.mode, Mode::Command);
+        assert!(
+            app.message.contains("read-only"),
+            "a rejected key said nothing: {}",
+            app.message
+        );
+    }
+
+    #[test]
+    fn a_watcher_can_move_quit_and_interrupt() {
+        let mut app = watching_app(&["a", "b", "c"]);
+        assert!(app.on_key(key(KeyCode::Char('j'))).is_empty());
+        assert_eq!(app.selected, 1);
+        assert!(app.on_key(key(KeyCode::Char('G'))).is_empty());
+        assert_eq!(app.selected, 2);
+        assert!(app.on_key(key(KeyCode::Char('k'))).is_empty());
+        assert_eq!(app.selected, 1);
+
+        // `ii`, the one thing a watcher may do to somebody else's session.
+        assert!(app.on_key(key(KeyCode::Char('i'))).is_empty());
+        assert_eq!(
+            app.on_key(key(KeyCode::Char('i'))),
+            vec![Command::Interrupt]
+        );
+
+        assert_eq!(app.on_key(key(KeyCode::Char('q'))), vec![Command::Quit]);
+    }
+
+    #[test]
+    fn a_lone_i_is_not_an_interrupt() {
+        // The second key of the pair decides; anything else cancels it, or a
+        // stray `i` would stop a cell nobody meant to stop.
+        let mut app = watching_app(&["a"]);
+        assert!(app.on_key(key(KeyCode::Char('i'))).is_empty());
+        assert!(app.on_key(key(KeyCode::Char('j'))).is_empty());
+        assert_eq!(app.pending, None);
+        assert!(app.on_key(key(KeyCode::Char('i'))).is_empty());
+        assert!(app.on_key(key(KeyCode::Esc)).is_empty());
+    }
+
+    #[test]
+    fn following_tracks_the_cell_that_changed_and_stops_when_asked() {
+        let mut app = watching_app(&["a", "b", "c"]);
+        assert!(app.following, "a watcher opens following");
+
+        // Cell 2 gains an output, the way a cell that just ran does.
+        let mut next = app.notebook.clone();
+        next.cells[2]
+            .as_code_mut()
+            .unwrap()
+            .outputs
+            .push(Output::Stream(crate::document::StreamOutput {
+                name: crate::document::StreamName::Stdout,
+                text: "done".into(),
+                extra: Default::default(),
+            }));
+        app.on_watched_notebook(next);
+        assert_eq!(app.selected, 2, "the viewport did not follow the change");
+
+        // Moving by hand takes the wheel back.
+        app.on_key(key(KeyCode::Char('g')));
+        assert!(!app.following);
+        assert_eq!(app.selected, 0);
+
+        let mut next = app.notebook.clone();
+        next.push(Cell::new_code("d"));
+        app.on_watched_notebook(next);
+        assert_eq!(app.selected, 0, "the viewport moved after unfollowing");
+
+        // `f` puts it back.
+        app.on_key(key(KeyCode::Char('f')));
+        assert!(app.following);
+    }
+
+    #[test]
+    fn the_changed_cell_is_found_by_id_not_by_position() {
+        // Inserting above the cell that ran must not read as "everything after
+        // it changed", or following would jump to the end of the notebook on
+        // every edit.
+        let mut old = Notebook::new("python3", "Python 3", "python");
+        old.push(Cell::new_code("a"));
+        old.push(Cell::new_code("b"));
+
+        let mut new = old.clone();
+        new.insert(0, Cell::new_code("inserted"));
+        assert_eq!(
+            last_changed_cell(&old, &new),
+            Some(0),
+            "the inserted cell is the change, not the ones it displaced"
+        );
+
+        // No change at all is no movement.
+        assert_eq!(last_changed_cell(&old, &old.clone()), None);
+
+        // An edit to the first cell is found even though a later one exists.
+        let mut edited = old.clone();
+        edited.cells[0].set_source("a2".to_string());
+        assert_eq!(last_changed_cell(&old, &edited), Some(0));
+    }
+
+    #[test]
+    fn a_notebook_that_shrank_leaves_the_selection_in_range() {
+        let mut app = watching_app(&["a", "b", "c"]);
+        app.selected = 2;
+        app.following = false;
+        let mut smaller = Notebook::new("python3", "Python 3", "python");
+        smaller.push(Cell::new_code("a"));
+        app.on_watched_notebook(smaller);
+        assert_eq!(app.selected, 0);
+    }
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)

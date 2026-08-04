@@ -331,7 +331,7 @@ Each phase ends with something an agent can actually use.
 | N3 | `SqlKernel`, `%%sql`, Arrow handoff | **Done.** 291ms cold SQL cell against 1.6s for a Python kernel |
 | N4 | Editable TUI | **Done.** Verified by driving the real UI through a pty |
 | N5 | Export, images to disk, `--detach`, `h5i-db nb` mount | **Done** |
-| N6 | `watch` live view, `--split`, `ls`, SKILL.md | **Designed** (§12) |
+| N6 | `watch` live view, `--split`, `ls`, skill reference | **Done.** Watch panes verified through a pty; `--split` verified against a real tmux server |
 
 ### Known gaps in what is built
 
@@ -511,7 +511,7 @@ the machine); `ls` is running sessions (a property of the moment). The
 symmetry with `terminal-browser ls` is intentional: it is the discovery verb
 an agent tries unprompted.
 
-### 12.4 SKILL.md: teach the agent the verbs
+### 12.4 The skill reference: teach the agent the verbs
 
 The CLI was designed against an agent contract (stable exit codes, error
 codes, `--format json`, detach-and-poll), but that contract lives in
@@ -520,9 +520,13 @@ fix is the same one `terminal-browser` ships: a skill file whose frontmatter
 description sells the capability and whose body is the minimal operating
 manual.
 
-Canonical copy at `crates/h5i-db-notebook/SKILL.md`, installable by copy or
-symlink into a harness (`.claude/skills/h5i-nb/SKILL.md` in this repo).
-Content, in order of how often an agent needs it:
+It lives at `skills/h5i-db/references/notebook.md`, beside the other
+references, rather than as a separate skill: h5i-db is one tool with several
+surfaces, and an installer that copies `skills/` gets the notebook manual along
+with everything else. `skills/h5i-db/SKILL.md` gains a short section that says
+when to reach for a notebook at all and links here, because the entry point is
+what decides whether this file is ever read. Content, in order of how often an
+agent needs it:
 
 1. **The loop**: `new`, `exec --code`, `cells`, `output [--index]`, and the
    one-sentence thesis (state persists between invocations, so probe rather

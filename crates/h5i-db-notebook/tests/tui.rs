@@ -310,7 +310,95 @@ fn fixture(cells: &[&str]) -> Fixture {
     }
 }
 
+/// A notebook with no kernelspec anyone has to have installed.
+///
+/// Watching never starts a kernel, so its tests must not need one either:
+/// they are the part of this suite that can run everywhere.
+fn bare_fixture(cells: &[&str]) -> BareFixture {
+    let dir = tempfile::tempdir().unwrap();
+    let notebook = dir.path().join("watch.ipynb");
+    std::fs::write(
+        &notebook,
+        r#"{"cells": [], "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}}, "nbformat": 4, "nbformat_minor": 5}"#,
+    )
+    .unwrap();
+    let fixture = BareFixture {
+        _dir: dir,
+        notebook,
+    };
+    for source in cells {
+        fixture.insert(source);
+    }
+    fixture
+}
+
+struct BareFixture {
+    _dir: TempDir,
+    notebook: PathBuf,
+}
+
+impl BareFixture {
+    fn path(&self) -> &str {
+        self.notebook.to_str().unwrap()
+    }
+
+    /// Change the notebook from outside, the way an agent's `exec` would.
+    fn insert(&self, source: &str) {
+        let output = std::process::Command::new(binary())
+            .args(["edit", self.path(), "insert", "--code", source])
+            .current_dir(self._dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "insert failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn watch(&self) -> Pty {
+        Pty::spawn(binary(), &["watch", self.path()], &[], self._dir.path())
+    }
+
+    fn bytes(&self) -> Vec<u8> {
+        std::fs::read(&self.notebook).unwrap()
+    }
+}
+
 impl Fixture {
+    fn watch(&self) -> Pty {
+        Pty::spawn(
+            binary(),
+            &["watch", self.notebook.to_str().unwrap()],
+            &[("JUPYTER_PATH", self.jupyter_path.to_str().unwrap())],
+            self._dir.path(),
+        )
+    }
+
+    /// Run a cell the way an agent does: a separate process, through the
+    /// supervisor, with nobody attached to the UI.
+    fn exec(&self, code: &str) {
+        let output = std::process::Command::new(binary())
+            .args(["exec", self.notebook.to_str().unwrap(), "--code", code])
+            .env("JUPYTER_PATH", &self.jupyter_path)
+            .current_dir(self._dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "exec failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn stop(&self) {
+        let _ = std::process::Command::new(binary())
+            .args(["kernel", "stop", self.notebook.to_str().unwrap()])
+            .env("JUPYTER_PATH", &self.jupyter_path)
+            .current_dir(self._dir.path())
+            .output();
+    }
+
     fn view(&self) -> Pty {
         Pty::spawn(
             binary(),
@@ -458,4 +546,223 @@ fn ctrl_c_interrupts_the_cell_instead_of_killing_the_ui() {
         0,
         "Ctrl-C killed the UI"
     );
+}
+
+// ---------------------------------------------------------------------------
+// watch: no kernel needed, because watching never starts one
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watch_paints_the_notebook_and_says_it_is_read_only() {
+    let fixture = bare_fixture(&["x = 41"]);
+    let mut pty = fixture.watch();
+    let painted = visible(&pty.drain(Duration::from_secs(3)));
+
+    assert!(painted.contains("watch.ipynb"), "{painted}");
+    assert!(painted.contains("x = 41"), "{painted}");
+    assert!(
+        painted.contains("WATCH"),
+        "no badge to say this pane cannot edit: {painted}"
+    );
+
+    pty.send("q");
+    assert_eq!(pty.finish(Duration::from_secs(5)), 0);
+}
+
+#[test]
+fn watch_ignores_every_key_that_would_change_the_notebook() {
+    let fixture = bare_fixture(&["keep me"]);
+    let before = fixture.bytes();
+    let mut pty = fixture.watch();
+    pty.drain(Duration::from_secs(2));
+
+    // Delete a cell, open the editor, type into it, run it, save it: the whole
+    // editing vocabulary, none of which a watcher may use.
+    pty.send("dd");
+    pty.send("\r");
+    pty.send("junk");
+    pty.send("\x1b");
+    pty.send("es");
+    let after_keys = visible(&pty.drain(Duration::from_secs(2)));
+    assert!(
+        after_keys.contains("read-only"),
+        "a rejected key said nothing: {after_keys}"
+    );
+
+    pty.send("q");
+    assert_eq!(pty.finish(Duration::from_secs(5)), 0);
+    assert_eq!(
+        fixture.bytes(),
+        before,
+        "a read-only pane wrote to the notebook"
+    );
+}
+
+#[test]
+fn watch_shows_a_change_made_by_another_process_without_a_keypress() {
+    // The whole point: an agent runs a cell, and the human's pane updates.
+    let fixture = bare_fixture(&["first"]);
+    let mut pty = fixture.watch();
+    let painted = visible(&pty.drain(Duration::from_secs(3)));
+    assert!(painted.contains("first"), "{painted}");
+    assert!(
+        !painted.contains("second"),
+        "the cell existed before it was written: {painted}"
+    );
+
+    fixture.insert("second");
+
+    // Nothing is typed here. The pane has to notice on its own.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut updated = String::new();
+    while Instant::now() < deadline {
+        updated = visible(&pty.drain(Duration::from_millis(500)));
+        if updated.contains("second") {
+            break;
+        }
+    }
+    assert!(
+        updated.contains("second"),
+        "the change never reached the pane: {updated}"
+    );
+
+    pty.send("q");
+    assert_eq!(pty.finish(Duration::from_secs(5)), 0);
+}
+
+#[test]
+fn watch_help_offers_only_what_a_watcher_can_do() {
+    let fixture = bare_fixture(&["x = 1"]);
+    let mut pty = fixture.watch();
+    pty.drain(Duration::from_secs(2));
+
+    pty.send("?");
+    let help = visible(&pty.drain(Duration::from_secs(2)));
+    assert!(help.contains("follow"), "{help}");
+    assert!(help.contains("interrupt"), "{help}");
+    assert!(
+        !help.contains("delete cell"),
+        "the watcher was offered an edit it cannot make: {help}"
+    );
+
+    pty.send("q");
+    pty.send("q");
+    assert_eq!(pty.finish(Duration::from_secs(5)), 0);
+}
+
+#[test]
+fn ctrl_c_closes_a_watch_pane_rather_than_stopping_someone_elses_cell() {
+    // The opposite of `view`, deliberately: the cell running behind a watch
+    // pane belongs to whoever started it, and a reflex Ctrl-C must not be the
+    // thing that kills an agent's work. `ii` is the way to do that on purpose.
+    let fixture = bare_fixture(&["x = 1"]);
+    let mut pty = fixture.watch();
+    pty.drain(Duration::from_secs(2));
+
+    pty.send("\x03");
+    assert_eq!(
+        pty.finish(Duration::from_secs(5)),
+        0,
+        "Ctrl-C did not close the watch pane"
+    );
+}
+
+#[test]
+#[ignore = "requires an installed Jupyter kernel"]
+fn a_watch_pane_shows_cells_an_agent_runs_through_the_supervisor() {
+    // The workflow the whole feature exists for: the agent drives the session
+    // from another process, and the human's pane keeps up on its own.
+    let fixture = fixture(&["x = 1"]);
+    let mut pty = fixture.watch();
+    pty.drain(Duration::from_secs(2));
+
+    fixture.exec("print('hello from the agent')");
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut seen = String::new();
+    while Instant::now() < deadline {
+        seen = visible(&pty.drain(Duration::from_millis(500)));
+        if seen.contains("hello from the agent") {
+            break;
+        }
+    }
+    assert!(
+        seen.contains("hello from the agent"),
+        "the agent's output never reached the watch pane: {seen}"
+    );
+    // And the pane learned there is a live kernel behind the file, which the
+    // notebook alone cannot say.
+    assert!(
+        seen.contains("idle") || seen.contains("busy"),
+        "no kernel state in a watched session: {seen}"
+    );
+
+    pty.send("q");
+    assert_eq!(pty.finish(Duration::from_secs(5)), 0);
+    fixture.stop();
+}
+
+#[test]
+#[ignore = "spawns a real tmux server"]
+fn split_opens_a_pane_in_tmux() {
+    // The argv construction is unit-tested; this is the one test that proves
+    // a real multiplexer accepts what we build.
+    if std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .is_err()
+    {
+        eprintln!("tmux is not installed; skipping");
+        return;
+    }
+    let fixture = bare_fixture(&["x = 1"]);
+    // Its own server socket, so the test cannot disturb a human's tmux.
+    let socket = format!("h5i-nb-test-{}", std::process::id());
+    let tmux = |args: &[&str]| {
+        let mut full = vec!["-L", &socket];
+        full.extend_from_slice(args);
+        std::process::Command::new("tmux")
+            .args(&full)
+            .output()
+            .unwrap()
+    };
+
+    // A session whose first pane just waits, so there is something to split.
+    let started = tmux(&["new-session", "-d", "-s", "w", "sleep", "60"]);
+    assert!(started.status.success());
+
+    // $TMUX is how tmux finds its server, and $TMUX_PANE which pane to split.
+    // Both have to name the server this test started, or the split lands
+    // somewhere else or nowhere at all.
+    let ask = |format: &str| {
+        let out = tmux(&["display-message", "-p", "-t", "w", format]);
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let tmux_env = format!("{},{},0", ask("#{socket_path}"), ask("#{pid}"));
+    let pane = ask("#{pane_id}");
+
+    let split = std::process::Command::new(binary())
+        .args(["watch", fixture.path(), "--split", "right"])
+        .env("TMUX", tmux_env)
+        .env("TMUX_PANE", pane)
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .current_dir(fixture._dir.path())
+        .output()
+        .unwrap();
+
+    // The split must have been asked for through tmux; if this machine's tmux
+    // refuses the injected $TMUX, the command says so rather than silently
+    // taking over the current terminal.
+    let stderr = String::from_utf8_lossy(&split.stderr).to_string();
+    let panes = tmux(&["list-panes", "-t", "w"]);
+    let listed = String::from_utf8_lossy(&panes.stdout).lines().count();
+
+    let _ = tmux(&["kill-session", "-t", "w"]);
+    let _ = tmux(&["kill-server"]);
+
+    assert!(
+        split.status.success(),
+        "--split failed inside tmux: {stderr}"
+    );
+    assert_eq!(listed, 2, "no second pane was created");
 }

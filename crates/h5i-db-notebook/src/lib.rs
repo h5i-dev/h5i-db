@@ -15,6 +15,7 @@ pub mod kernel;
 pub mod magic;
 pub mod render;
 pub mod session;
+pub mod split;
 pub mod supervisor;
 pub mod tui;
 

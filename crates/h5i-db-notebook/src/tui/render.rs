@@ -15,7 +15,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
 use crate::document::{CellType, Output};
 use crate::kernel::KernelStatus;
 use crate::render::{DigestOptions, collapse_carriage_returns, strip_ansi};
-use crate::tui::app::{App, HELP, Mode};
+use crate::tui::app::{App, HELP, Mode, WATCH_HELP};
 use crate::tui::highlight::{Language, Token, highlight_line};
 use crate::tui::image::IMAGE_ROWS;
 
@@ -57,7 +57,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) -> DrawResult {
         result.images.clear();
     }
     if app.show_help {
-        let text = HELP
+        let keys = if app.read_only { WATCH_HELP } else { HELP };
+        let text = keys
             .iter()
             .map(|(keys, what)| format!("{keys:<16}{what}"))
             .collect::<Vec<_>>()
@@ -111,17 +112,22 @@ fn status_badge(status: KernelStatus) -> (&'static str, Color, &'static str) {
 }
 
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
-    let mode = match app.mode {
-        Mode::Command => ("COMMAND", Color::Blue),
-        Mode::Edit => ("EDIT", Color::Green),
+    let mode = match (app.read_only, app.mode) {
+        // A watcher's badge outranks the mode: the first thing to know about a
+        // pane is whether typing in it can change anything.
+        (true, _) => ("WATCH", Color::Magenta),
+        (false, Mode::Command) => ("COMMAND", Color::Blue),
+        (false, Mode::Edit) => ("EDIT", Color::Green),
     };
     let pending = match app.pending {
         Some(c) => format!(" {c}…"),
         None => String::new(),
     };
-    let hint = match app.mode {
-        Mode::Command => "⏎ edit  ⇧⏎ run  a/b insert  dd delete  ? keys  q quit",
-        Mode::Edit => "esc done  ⇧⏎ run  tab complete  ⇧tab dedent  ⌥i inspect",
+    let hint = match (app.read_only, app.mode) {
+        (true, _) if app.following => "following  f unfollow  ii interrupt  ? keys  q quit",
+        (true, _) => "f follow  j/k move  ii interrupt  ? keys  q quit",
+        (false, Mode::Command) => "⏎ edit  ⇧⏎ run  a/b insert  dd delete  ? keys  q quit",
+        (false, Mode::Edit) => "esc done  ⇧⏎ run  tab complete  ⇧tab dedent  ⌥i inspect",
     };
     let line = Line::from(vec![
         Span::styled(

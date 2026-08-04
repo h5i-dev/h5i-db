@@ -292,6 +292,123 @@ fn a_second_supervisor_refuses_to_take_over_a_live_session() {
 }
 
 #[test]
+fn ls_lists_a_running_session_and_forgets_it_afterwards() {
+    let nb = Nb::new();
+    nb.write_bare_notebook();
+
+    // A supervisor with no kernel is enough: `serve` opens the notebook and
+    // answers status without starting one.
+    let mut serving = nb.spawn(&["serve", nb.path()]);
+    assert!(
+        nb.wait_until_running(Duration::from_secs(10)),
+        "the supervisor never started serving"
+    );
+
+    let listed = nb.run(&["ls", "--format", "json"]);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&listed)).unwrap();
+    let sessions = parsed["sessions"].as_array().unwrap();
+    let mine = sessions
+        .iter()
+        .find(|s| {
+            s["notebook"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("test.ipynb"))
+        })
+        .unwrap_or_else(|| panic!("the running session was not listed: {}", stdout(&listed)));
+    // Absolute, because a session outlives the shell that started it and a
+    // relative path names nothing in particular afterwards.
+    assert!(
+        mine["notebook"].as_str().unwrap().starts_with('/'),
+        "{mine}"
+    );
+    assert_eq!(mine["busy"], false);
+    assert!(mine["pid"].as_u64().unwrap() > 0);
+
+    let _ = nb.run(&["kernel", "stop", nb.path()]);
+    let _ = serving.kill();
+    let _ = serving.wait();
+
+    // A stopped session leaves nothing behind to list.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut gone = false;
+    while Instant::now() < deadline {
+        let listed = nb.run(&["ls", "--format", "json"]);
+        let parsed: serde_json::Value = serde_json::from_str(&stdout(&listed)).unwrap();
+        gone = !parsed["sessions"].as_array().unwrap().iter().any(|s| {
+            s["notebook"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("test.ipynb"))
+        });
+        if gone {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(gone, "a stopped session was still listed");
+}
+
+#[test]
+fn ls_sweeps_a_socket_whose_supervisor_died() {
+    // A supervisor that is SIGKILLed leaves its socket behind. Nobody answers
+    // on it and nobody holds its lock, which is the definition of litter.
+    let nb = Nb::new();
+    nb.write_bare_notebook();
+    let mut serving = nb.spawn(&["serve", nb.path()]);
+    assert!(nb.wait_until_running(Duration::from_secs(10)));
+
+    // SIGKILL: no cleanup runs, so the socket file survives its owner.
+    let _ = serving.kill();
+    let _ = serving.wait();
+
+    let listed = nb.run(&["ls", "--format", "json"]);
+    assert_eq!(code(&listed), 0, "{}", stderr(&listed));
+    let parsed: serde_json::Value = serde_json::from_str(&stdout(&listed)).unwrap();
+    assert!(
+        !parsed["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["notebook"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("test.ipynb"))),
+        "a dead supervisor was listed as running: {}",
+        stdout(&listed)
+    );
+    assert!(
+        !parsed["swept"].as_array().unwrap().is_empty(),
+        "the dead session's socket was left behind: {}",
+        stdout(&listed)
+    );
+}
+
+#[test]
+fn split_without_a_multiplexer_says_what_it_looked_for() {
+    // Opening in the current pane instead would take over the terminal the
+    // caller is talking in, which is the one thing this must never do.
+    let nb = Nb::new();
+    nb.write_bare_notebook();
+    let mut command = nb.command(&["watch", nb.path(), "--split", "right"]);
+    for marker in ["TMUX", "ZELLIJ", "WEZTERM_PANE", "KITTY_WINDOW_ID"] {
+        command.env_remove(marker);
+    }
+    let output = command.output().unwrap();
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("TMUX"), "{text}");
+    assert!(text.contains("--split"), "{text}");
+}
+
+#[test]
+fn split_rejects_a_direction_that_is_not_one() {
+    let nb = Nb::new();
+    nb.write_bare_notebook();
+    let output = nb.run(&["watch", nb.path(), "--split", "sideways"]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert!(stderr(&output).contains("right"), "{}", stderr(&output));
+}
+
+#[test]
 fn exporting_over_the_notebook_is_refused() {
     // The export would overwrite the notebook with its own rendering, outputs
     // and all, and there is nothing to recover it from.

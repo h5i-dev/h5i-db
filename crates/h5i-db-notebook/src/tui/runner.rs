@@ -53,6 +53,11 @@ async fn handle(
     match command {
         Command::Quit => Ok(()),
 
+        // Raised only by a watcher, which does not run this task: the editing
+        // UI interrupts through the handle, out of band, because a running
+        // cell has this queue blocked.
+        Command::Interrupt => Ok(()),
+
         Command::Run(index) => run_cell(session, index, events).await,
 
         Command::RunAll => {

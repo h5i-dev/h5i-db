@@ -11,6 +11,7 @@ pub mod highlight;
 pub mod image;
 pub mod render;
 pub mod runner;
+pub mod watch;
 
 use std::io::{self, Write};
 use std::path::Path;
@@ -73,9 +74,54 @@ pub async fn run(path: impl AsRef<Path>) -> Result<()> {
     outcome
 }
 
-type Backend = CrosstermBackend<io::Stdout>;
+pub(crate) type Backend = CrosstermBackend<io::Stdout>;
 
-fn enter() -> Result<(Terminal<Backend>, bool)> {
+/// Draw one frame: the notebook, any images over it, and the cursor.
+///
+/// Shared by the editing loop and the watching one, which differ in what they
+/// do with keys, not in what they put on the screen.
+pub(crate) fn present(
+    terminal: &mut Terminal<Backend>,
+    app: &mut App,
+    protocol: ImageProtocol,
+) -> Result<()> {
+    let mut result = render::DrawResult::default();
+    terminal
+        .draw(|frame| {
+            result = render::draw(frame, app);
+        })
+        .map_err(|e| Error::io("terminal", e))?;
+
+    // Images are written over the frame ratatui just painted, because they
+    // are escape sequences its buffer knows nothing about.
+    if protocol.is_supported() && !result.images.is_empty() {
+        let mut out = io::stdout();
+        for pending in &result.images {
+            let _ = image::draw_at(
+                &mut out,
+                protocol,
+                &pending.base64,
+                pending.area.x,
+                pending.area.y,
+                pending.area.height,
+                pending.area.width,
+            );
+        }
+    }
+    match result.cursor {
+        Some((x, y)) => {
+            terminal.show_cursor().ok();
+            let _ = queue!(io::stdout(), crossterm::cursor::MoveTo(x, y));
+            let _ = io::stdout().flush();
+        }
+        None => {
+            terminal.hide_cursor().ok();
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn enter() -> Result<(Terminal<Backend>, bool)> {
     enable_raw_mode().map_err(|e| Error::io("terminal", e))?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
@@ -97,7 +143,7 @@ fn enter() -> Result<(Terminal<Backend>, bool)> {
     Ok((terminal, enhanced))
 }
 
-fn leave(terminal: &mut Terminal<Backend>, enhanced: bool) -> Result<()> {
+pub(crate) fn leave(terminal: &mut Terminal<Backend>, enhanced: bool) -> Result<()> {
     if enhanced {
         let _ = execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags);
     }
@@ -121,39 +167,7 @@ async fn event_loop(
 ) -> Result<()> {
     let mut keys = spawn_terminal_reader();
     loop {
-        let mut result = render::DrawResult::default();
-        terminal
-            .draw(|frame| {
-                result = render::draw(frame, app);
-            })
-            .map_err(|e| Error::io("terminal", e))?;
-
-        // Images are written over the frame ratatui just painted, because they
-        // are escape sequences its buffer knows nothing about.
-        if protocol.is_supported() && !result.images.is_empty() {
-            let mut out = io::stdout();
-            for pending in &result.images {
-                let _ = image::draw_at(
-                    &mut out,
-                    protocol,
-                    &pending.base64,
-                    pending.area.x,
-                    pending.area.y,
-                    pending.area.height,
-                    pending.area.width,
-                );
-            }
-        }
-        match result.cursor {
-            Some((x, y)) => {
-                terminal.show_cursor().ok();
-                let _ = queue!(io::stdout(), crossterm::cursor::MoveTo(x, y));
-                let _ = io::stdout().flush();
-            }
-            None => {
-                terminal.hide_cursor().ok();
-            }
-        }
+        present(terminal, app, protocol)?;
 
         tokio::select! {
             biased;
@@ -228,7 +242,7 @@ async fn event_loop(
 ///
 /// One thread, one channel, no cancellation: every key that arrives is
 /// delivered, whatever else the loop is doing.
-fn spawn_terminal_reader() -> mpsc::UnboundedReceiver<std::io::Result<TermEvent>> {
+pub(crate) fn spawn_terminal_reader() -> mpsc::UnboundedReceiver<std::io::Result<TermEvent>> {
     let (tx, rx) = mpsc::unbounded_channel();
     std::thread::spawn(move || {
         loop {
