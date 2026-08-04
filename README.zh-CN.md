@@ -53,25 +53,14 @@ h5i-db ui market.db                                                # 审阅与�
 **终端里的 notebook**
 
 ```bash
-h5i-db nb new research.ipynb --kernel python3 --db market.db
+h5i-db nb new research.ipynb --kernel python3 --db market.db   # SQL 单元格查询的数据库
 h5i-db nb view research.ipynb        # ⏎ 编辑 · e 运行 · a 插入单元格 · ? 全部按键 · q 退出
-```
-
-以 `%%sql` 开头的单元格直接查询数据库，中间不经过 Python：
-
-```sql
-%%sql
-SELECT symbol, count(*) AS trades FROM trades GROUP BY symbol
-```
-
-```bash
 h5i-db nb watch research.ipynb --split right   # 在旁边看着智能体运行单元格
 h5i-db nb export research.ipynb --to html
 ```
 
 写出的是标准 `.ipynb`，同一个文件 JupyterLab 也能打开。Python 内核需要
-`pip install ipykernel`；`%%sql` 单元格什么都不需要。智能体用
-`h5i-db nb exec` 以非交互方式驱动同一个会话。
+`pip install ipykernel`。智能体用 `h5i-db nb exec` 以非交互方式驱动同一个会话。
 
 **Python 库：DataFrame 与 SQL**
 

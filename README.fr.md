@@ -63,27 +63,15 @@ h5i-db ui market.db                                                # revue et ex
 **Notebook dans le terminal**
 
 ```bash
-h5i-db nb new research.ipynb --kernel python3 --db market.db
+h5i-db nb new research.ipynb --kernel python3 --db market.db   # la base interrogée par les cellules SQL
 h5i-db nb view research.ipynb        # ⏎ éditer · e exécuter · a insérer · ? toutes les touches · q quitter
-```
-
-Une cellule qui commence par `%%sql` interroge la base directement, sans passer
-par Python :
-
-```sql
-%%sql
-SELECT symbol, count(*) AS trades FROM trades GROUP BY symbol
-```
-
-```bash
 h5i-db nb watch research.ipynb --split right   # suivre pendant qu'un agent exécute les cellules
 h5i-db nb export research.ipynb --to html
 ```
 
 Le fichier écrit est un vrai `.ipynb` : JupyterLab ouvre le même. Un noyau
-Python demande `pip install ipykernel` ; les cellules `%%sql` n'ont besoin de
-rien. Les agents pilotent la même session en non interactif avec
-`h5i-db nb exec`.
+Python demande `pip install ipykernel`. Les agents pilotent la même session en
+non interactif avec `h5i-db nb exec`.
 
 **Bibliothèque Python pour DataFrames et SQL**
 
