@@ -71,6 +71,10 @@ It writes a real `.ipynb`, so JupyterLab opens the same file. A Python kernel
 needs `pip install ipykernel`. Agents drive the same session non-interactively
 with `h5i-db nb exec`.
 
+<p align="center">
+  <img src="./docs/_static/in-terminal-notebook-demo.png" width="99%" />
+</p>
+
 **Python Library for DataFrames and SQL**
 
 ```bash

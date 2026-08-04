@@ -65,6 +65,10 @@ h5i-db nb export research.ipynb --to html
 写出的是标准 `.ipynb`，同一个文件 JupyterLab 也能打开。Python 内核需要
 `pip install ipykernel`。智能体用 `h5i-db nb exec` 以非交互方式驱动同一个会话。
 
+<p align="center">
+  <img src="./docs/_static/in-terminal-notebook-demo.png" width="99%" />
+</p>
+
 **Python 库：DataFrame 与 SQL**
 
 ```bash

@@ -69,6 +69,10 @@ h5i-db nb export research.ipynb --to html
 Pythonカーネルには `pip install ipykernel` が必要。エージェントは同じ
 セッションを `h5i-db nb exec` から非対話で動かせる。
 
+<p align="center">
+  <img src="./docs/_static/in-terminal-notebook-demo.png" width="99%" />
+</p>
+
 **Pythonライブラリ（DataFrameとSQL）**
 
 ```bash

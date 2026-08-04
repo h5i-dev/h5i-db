@@ -76,6 +76,10 @@ Le fichier écrit est un vrai `.ipynb` : JupyterLab ouvre le même. Un noyau
 Python demande `pip install ipykernel`. Les agents pilotent la même session en
 non interactif avec `h5i-db nb exec`.
 
+<p align="center">
+  <img src="./docs/_static/in-terminal-notebook-demo.png" width="99%" />
+</p>
+
 **Bibliothèque Python pour DataFrames et SQL**
 
 ```bash
