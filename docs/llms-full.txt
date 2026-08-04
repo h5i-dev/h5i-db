@@ -65,7 +65,12 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
 - Running it in production? The [Operations guide](operations.html) covers
   backup, vacuum, compaction, and the recovery runbook.
 - Wiring it into an agent or pipeline? See
-  [Agents & automation](agents.html) for the machine contract.
+  [Agents & automation](agents.html) for the machine contract, and
+  [Notebooks](notebooks.html) for a session whose state survives between
+  commands.
+- Loading vendor data? The [Data on-ramp](data-onramp.html) turns archives,
+  bar files, trade dumps and live captures into the canonical tables a
+  [backtest](backtest.html) reads.
 
 
 
@@ -882,8 +887,8 @@ $ h5i-db rename market.db trades trades_raw
 
 ### `h5i-db drop-table`
 
-Drop a table and its data. Refuses if the table is pinned by a snapshot, and
-requires `--yes`:
+Drop a table and its data. Refuses if the table is pinned by a snapshot or a
+fork, and requires `--yes`:
 
 ```console
 $ h5i-db drop-table market.db scratch --yes
@@ -1171,9 +1176,9 @@ command returns a JSON list; without it, a single object as before.
 
 **The `--fork` flag.** Every data command takes `--fork <name>` and then reads
 and writes inside that workspace, so an existing script runs unchanged against
-a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`,
-`set-retention`) refuse it and say so: they move state a fork's siblings
-depend on. `fork create` is the exception: with `--fork` it creates the new
+a fork by adding one flag. Database-wide commands (`snapshot`, `vacuum`, fork
+management) refuse it and say so: they move state a fork's siblings depend
+on. `fork create` is the exception: with `--fork` it creates the new
 fork *inside* that one (see [Forks](concepts.html#forks-nest)).
 
 **Promotion conflicts.** `fork promote` compare-and-swaps against the version
@@ -1190,6 +1195,47 @@ while the fork still holds every row it inherited; a fork that deleted
 inherited rows cannot be replayed from metadata (a compacted segment may merge
 rows it dropped with rows it kept), so that case still conflicts and the
 message says why.
+
+---
+
+## Notebooks
+
+### `h5i-db nb`
+
+In-terminal, Jupyter-compatible notebooks whose kernel persists between
+invocations, with `%%sql` cells that run in-process against a database
+instead of through a Python driver. The same commands are on a standalone
+binary, `h5i-nb`; both drive the same sessions.
+
+```console
+$ h5i-db nb new research.ipynb --db market.db
+$ h5i-db nb exec research.ipynb --code "df = load()"    # the kernel outlives the command
+$ h5i-db nb exec research.ipynb --code "df.shape"
+$ h5i-db nb watch research.ipynb --split right          # live read-only pane
+```
+
+| Subcommand | Meaning |
+|---|---|
+| `nb new <nb>` | Create a notebook; `--kernel <spec>` (default `python3`), `--db <path>` for its `%%sql` default |
+| `nb exec <nb>` | Append a cell and run it; `--code <src>\|-`, `--timeout <secs>` (default 300), `--stream`, `--detach`, `--raw` |
+| `nb run <nb>` | Re-run existing cells; `--cells 3-7\|1,4,9\|all`, `--from-clean`, `--keep-going` |
+| `nb cells <nb>` | Index, id, type, execution count and output shape per cell |
+| `nb output <nb> <cell>` | One cell's output; `--index <n>`, `--raw`, `--save <path>` |
+| `nb edit <nb> …` | `set`, `insert`, `delete`, `move`, `clear-outputs` — no execution |
+| `nb view <nb>` | Editable terminal UI; `--split right\|left\|down\|up` |
+| `nb watch <nb>` | Live read-only view: no lock, no kernel, no writes |
+| `nb ls` | Notebook sessions running on this machine |
+| `nb export <nb>` | `--to md\|py\|html`, `-o <path>`, `--without-outputs` |
+| `nb inspect\|complete <nb> <code>` | The kernel's `?` and completion, from a shell; `--cursor <n>` |
+| `nb kernel …` | `list`, `start`, `status`, `interrupt`, `restart` (`--clear-outputs`), `stop` |
+
+Output is token-budgeted by default — long text elided in the middle, frames
+summarised by shape, images written to `<notebook>_files/` and reported as
+paths — with the untruncated bytes still in the `.ipynb` behind `--raw`.
+Notebook failures use their own codes (`cell_raised`, `execute_timeout`,
+`session_busy`, `kernel_died`) in the same error envelope.
+
+See [Notebooks](notebooks.html) for the full guide.
 
 ---
 
@@ -1277,6 +1323,295 @@ swarm against a database if you want to watch the tree move, and
 (`synth --symbols AAPL,MSFT,NVDA --db <db>`) or a day of real 1s bars from
 Binance's public archive (`binance --symbols BTCUSDT,ETHUSDT --db <db>`,
 no API key).
+
+
+
+---
+
+# Notebooks   (https://db.h5i.dev/manual/notebooks/)
+
+`h5i-db nb` is a notebook *client* for the terminal: it owns a real
+`.ipynb` file, drives a real Jupyter kernel, and renders results for two
+audiences at once — a human in a TUI, and a program reading a
+token-budgeted digest on stdout. The same commands are available on a
+standalone binary, `h5i-nb`, which drives the same sessions.
+
+The property everything else follows from: **the kernel persists between
+invocations.** `exec` twice and the second cell sees what the first defined,
+so a forty-second load is paid once instead of once per idea. If you would
+run a script once and never again, run the script; this is for the case
+where state accumulates.
+
+```console
+$ h5i-db nb new research.ipynb --kernel python3 --db market.db
+$ h5i-db nb exec research.ipynb --code "import pandas as pd; df = pd.read_parquet('big.parquet')"
+$ h5i-db nb exec research.ipynb --code "df.shape"          # df is still there
+```
+
+The file is nbformat v4.5 and stays readable in JupyterLab. Writes are
+atomic (temp file, fsync, rename) and byte-compatible with `nbformat`'s own
+writer, so opening a notebook in JupyterLab does not churn the diff.
+
+## Running cells
+
+`exec` appends a cell and runs it. `run` re-runs cells the notebook already
+has.
+
+```console
+$ h5i-db nb exec research.ipynb --code "edge(book)"
+$ h5i-db nb exec research.ipynb --code - <<'PY'
+def edge(book):
+    return book.bid - book.ask
+PY
+$ h5i-db nb run research.ipynb --cells 3-7
+$ h5i-db nb run research.ipynb --from-clean
+```
+
+`--code -` (the default) reads the cell from stdin, which is how code
+containing quotes and newlines gets in without fighting the shell.
+
+| `exec` flag | Meaning |
+|---|---|
+| `--code <src>` | Cell source, or `-` for stdin (default `-`) |
+| `--timeout <secs>` | Interrupt the cell after this many seconds; `0` disables (default 300) |
+| `--stream` | Print output as it arrives rather than only at the end |
+| `--detach` | Return as soon as the cell is queued |
+| `--raw` | Do not elide long output |
+
+| `run` flag | Meaning |
+|---|---|
+| `--cells <sel>` | `3`, `3-7`, `3-`, `1,4,9`, or `all` (default `all`) |
+| `--from-clean` | Restart the kernel and clear outputs first |
+| `--keep-going` | Keep going after a cell raises |
+| `--timeout`, `--raw` | As in `exec` |
+
+`run --from-clean` is the reproducibility check: if it passes, the notebook
+tells the truth about what produced its outputs.
+
+## Output is budgeted, and nothing is lost
+
+Cell output is summarised on stdout, not dumped:
+
+- **Text** is elided in the middle: head lines, tail lines, and a
+  `… 4,912 lines elided …` marker between them.
+- **Frames** are re-rendered as a compact aligned table — first and last
+  rows plus a `[10,000 rows x 12 columns]` shape line. For the next
+  decision, the shape is usually the whole information content.
+- **Images** are never inlined as base64. They are written to
+  `<notebook>_files/cell-<id>-<n>.png` (nbconvert's convention, so
+  JupyterLab renders them too) and reported as a path.
+- **Tracebacks** are printed in full, ANSI stripped. A tool that discards
+  the traceback on error forces a re-run to find out what broke.
+
+The untruncated output stays in the `.ipynb`. `--raw` prints it, and
+`nb output --save <path>` writes a binary output to a file.
+
+```console
+$ h5i-db nb cells research.ipynb          # index, id, type, exec count, output shape
+ #  id        type  exec  outputs                                           source
+ 0  a7822631  code  1     result(application/vnd.h5i.table+text+text/html)  %%sql
+ 1  5afe1a3f  code  2     -                                                 x = 41
+ 2  e00300f7  code  3     result                                            x + 1
+
+$ h5i-db nb output research.ipynb 2            # index or cell id
+$ h5i-db nb output research.ipynb 2 --index 1  # one output, when a cell made several
+$ h5i-db nb output research.ipynb 2 --raw
+```
+
+Reach for `--raw` when you need the bytes. The digest is what makes a
+notebook cost less context than a script, and `--raw` gives that back.
+
+## `%%sql`: querying without an interpreter
+
+A cell whose first line is `%%sql` runs against an h5i-db database
+**in-process**. The magic is resolved by the client, not by the kernel, so
+the statement never crosses into Python: no interpreter, no driver round
+trip. Schema discovery and the first twenty exploratory queries need no
+kernel at all.
+
+```console
+$ h5i-db nb exec research.ipynb --code - <<'SQL'
+%%sql
+SELECT symbol, count(*) AS n FROM trades GROUP BY symbol ORDER BY n DESC
+SQL
+[1] cell 0 · ok · 3ms
++--------+-----+
+| symbol | n   |
++--------+-----+
+| AAPL   | 120 |
+| MSFT   | 120 |
++--------+-----+
+[2 rows x 2 columns]
+```
+
+| Magic option | Meaning |
+|---|---|
+| `--db <path>` | Database for this cell; `--database` is accepted too |
+| `--fork <name>` | Query inside a [fork](concepts.html#forks) |
+| `--into <name>` | Bind the result in the Python kernel under this name |
+| `--max-rows <N>` | Cap the *rendered* table |
+| `--write` | Open the database read-write for this cell |
+
+`h5i-db nb new … --db market.db` records a notebook-wide default in the
+file's own metadata, so it travels with the notebook and the `%%sql` cells
+need no `--db`.
+
+Two options are worth reading twice:
+
+- **`--into` binds the full result, not the rendered one.** The handoff is
+  Arrow through a temp file, so `--max-rows 1 --into frame` prints one row
+  and still binds all of them.
+
+  ```console
+  $ h5i-db nb exec research.ipynb --code - <<'SQL'
+  %%sql --into frame --max-rows 1
+  SELECT symbol, price FROM trades LIMIT 5
+  SQL
+  [5] cell 4 · ok · 1ms
+  stderr: note: kept the first 1 rows of a larger result (--max-rows)
+  …
+  frame: pandas.DataFrame 5 rows x 2 columns
+  ```
+
+- **`--write` is required before a cell can modify anything.** Without it
+  the database is opened read-only, which also means opening it never runs
+  transaction recovery against a database another process may be using. Add
+  it deliberately, not by habit.
+
+The syntax deliberately matches IPython's `%%sql`, so the notebook still
+reads correctly in JupyterLab even though JupyterLab would run the cell a
+different way.
+
+## Long-running cells
+
+`--detach` returns as soon as the cell is queued. The session process owns
+the notebook, so outputs are recorded whether or not anyone is still
+attached — including the failure, if it fails.
+
+```console
+$ h5i-db nb exec research.ipynb --detach --code "backtest(years=10)"
+$ h5i-db nb cells research.ipynb              # poll, about once a second
+$ h5i-db nb output research.ipynb 7
+```
+
+There is never a state where "still running" and "died" look the same.
+
+```console
+$ h5i-db nb kernel interrupt research.ipynb   # stop the cell, keep the state
+$ h5i-db nb kernel restart research.ipynb     # throw the state away
+$ h5i-db nb kernel status research.ipynb      # answers even mid-cell
+```
+
+| `kernel` subcommand | Meaning |
+|---|---|
+| `kernel list` | Installed kernelspecs |
+| `kernel start <nb>` | Start the session and its kernel without running anything |
+| `kernel status <nb>` | Whether a session is running, and what the kernel is doing |
+| `kernel interrupt <nb>` | Interrupt the running cell, keeping in-memory state |
+| `kernel restart <nb>` | Restart the kernel; `--clear-outputs` also drops recorded outputs |
+| `kernel stop <nb>` | Stop the session and its kernel |
+
+!!! note "Why a supervisor, not `--existing`"
+    A supervisor process owns the kernel, subscribes to iopub continuously,
+    and serves a control socket under `$XDG_RUNTIME_DIR`. Reconnecting to a
+    kernel's connection file per invocation, the way `jupyter console
+    --existing` does, loses any output produced while no client was
+    attached — ZMQ PUB drops messages with no subscriber — which is exactly
+    the long-running cell output that matters most.
+
+## Editing without running
+
+```console
+$ h5i-db nb edit research.ipynb set 3 --code "fixed()"
+$ h5i-db nb edit research.ipynb insert --at 2 --kind markdown --code "## Findings"
+$ h5i-db nb edit research.ipynb delete 4
+$ h5i-db nb edit research.ipynb move 4 1
+$ h5i-db nb edit research.ipynb clear-outputs
+```
+
+`set` drops the cell's now-stale outputs. `insert` appends when `--at` is
+omitted and takes `--kind code|markdown|raw` (default `code`). Edits are
+routed through the running session, so they are safe while a kernel is
+alive.
+
+## Showing a human what you are doing
+
+```console
+$ h5i-db nb view research.ipynb                # editable TUI
+$ h5i-db nb watch research.ipynb --split right # live, read-only
+$ h5i-db nb ls                                 # sessions running on this machine
+```
+
+`view` is the full terminal UI: Jupyter's key bindings (`Esc`/`Enter` for
+command and edit mode, `a`/`b` to insert, `dd` to delete), a completion
+popup from `complete_request`, an inspection overlay from `inspect_request`,
+and inline images through the kitty and iTerm2 graphics protocols.
+`Ctrl-C` interrupts the running cell rather than killing the UI, because the
+notebook is the state.
+
+`watch` is a live read-only view. It writes nothing, holds no lock, and
+starts no kernel, so any number of them can follow a session someone else is
+driving; from it a human can interrupt the cell and nothing else. Both take
+`--split right|left|down|up`, which opens the view in a new pane beside the
+current one (tmux, zellij, WezTerm, kitty) and returns immediately.
+
+`ls` reports every notebook session on the machine with its kernel, state,
+cell count, pid and idle time, and clears up after sessions whose supervisor
+died.
+
+!!! note "`Shift+Enter` may not reach the TUI"
+    Most terminals cannot send it: without the kitty keyboard protocol it
+    arrives as a plain `Enter`. The protocol is requested where it is
+    supported, and `e` / `E` are the run bindings that always work.
+
+## Exporting
+
+```console
+$ h5i-db nb export research.ipynb --to md      # a readable summary for a PR
+$ h5i-db nb export research.ipynb --to py      # a runnable script, magics commented out
+$ h5i-db nb export research.ipynb --to html    # one self-contained file, images inlined
+$ h5i-db nb export research.ipynb --to md -o notes.md --without-outputs
+```
+
+`--without-outputs` leaves the outputs out, for a clean diff or a script
+meant to be run rather than read.
+
+## Introspection from a shell
+
+The two requests the TUI uses are also commands, which is what lets an
+editor or a script ask the kernel what it knows:
+
+```console
+$ h5i-db nb inspect research.ipynb "pd.read_parquet"    # what `?` does in IPython
+$ h5i-db nb complete research.ipynb "df.gro"            # completions at the cursor
+```
+
+Both take `--cursor <offset>` when the cursor is not at the end of the code.
+
+## Errors
+
+Failures print the usual [structured envelope](cli.html#errors-and-exit-codes)
+on stderr. Branch on `code`, not on the wording.
+
+| `code` | Exit | Retryable | Meaning |
+|---|---|---|---|
+| `cell_raised` | 2 | no | The code raised; the traceback is on stdout and in the cell |
+| `execute_timeout` | 4 | yes | Hit `--timeout`; the cell was interrupted and the kernel still works |
+| `session_busy` | 3 | yes | Another cell is running; wait, or interrupt it |
+| `kernel_died` | 5 | yes | The kernel is gone; restart, and the state is lost |
+| `kernel_not_found` | 2 | no | No such kernelspec; `nb kernel list` shows what exists |
+| `cell_index_out_of_range` | 2 | no | `nb cells` shows what exists |
+
+`cell_raised` is the ordinary outcome of exploring, not a tool failure. The
+traceback is the answer.
+
+## What does not render
+
+ipywidgets do not draw. Comm traffic is accepted so a widget-producing
+library does not crash the session, but nothing interactive appears.
+Markdown in exported HTML is shown as preformatted text rather than parsed.
+Syntax highlighting is a per-line lexer, so a multi-line string highlights
+only on its first line.
 
 
 
@@ -1445,6 +1780,29 @@ SELECT ts, price FROM tail('trades', 812) LIMIT 500;
 - Size `LIMIT` from `versions` row deltas to fetch "exactly what's new since
   version N", with no timestamp-cursor guesswork.
 
+### `latest_on`
+
+```sql
+latest_on('table', 'by_column')
+```
+
+One row per group: the most recent row per symbol, per instrument, per
+whatever `by_column` names. Both arguments are string literals, and the group
+column must be string-like.
+
+```sql
+SELECT ts, symbol, price FROM latest_on('trades', 'symbol');
+```
+
+It precomputes each immutable segment's last row per group and caches that as
+a checksummed sidecar, so an append-only table reuses every prior segment's
+contribution and scans only what is new — segments × groups rather than rows.
+The cache is a pure accelerator: a miss, a corrupt entry or a version
+mismatch rebuilds from the segment and never changes the answer. Sidecar
+writing follows the session's
+[`--predicate-cache`](cli.html#h5i-db-query) setting, so a default query reads
+caches without writing any.
+
 ## Scalar, aggregate & window functions
 
 ### `time_bucket`
@@ -1510,18 +1868,72 @@ FROM trades;
 
 ```sql
 rolling_avg(value, order_by, rows)
+rolling_avg(value, order_by, rows, partition_by)
 ```
 
 Convenience sugar, expanded before parsing into the standard window frame
-`AVG(value) OVER (ORDER BY order_by ROWS BETWEEN rows−1 PRECEDING AND
-CURRENT ROW)`. `rows` must be an integer literal in 1…1,000,000.
+`AVG(value) OVER (PARTITION BY partition_by ORDER BY order_by ROWS BETWEEN
+rows−1 PRECEDING AND CURRENT ROW)`. `rows` must be an integer literal in
+1…1,000,000. The `PARTITION BY` is emitted only when the fourth argument is
+given.
 
-!!! warning "Not partitioned"
-    The sugar has **no `PARTITION BY`**: it is a trailing n-row window in
-    global order and will mix symbols on a multi-symbol table. Use it on
-    single-key subsets, or write the explicit window:
-    `AVG(x) OVER (PARTITION BY symbol ORDER BY ts ROWS BETWEEN n−1 PRECEDING
-    AND CURRENT ROW)`. It also cannot take its own `OVER` clause.
+!!! warning "The three-argument form is not partitioned"
+    Without a fourth argument the window is a trailing n-row window in
+    **global** order, so on a multi-symbol table it averages across symbols
+    and returns a plausible, wrong number. Pass the partition column, use the
+    sugar on single-key subsets, or write the window out in full. Either form
+    still cannot take its own `OVER` clause.
+
+### Rolling window functions
+
+Eight window functions DataFusion does not have. Unlike the `rolling_avg`
+sugar above these are real window functions, so they take their own `OVER`
+clause and any frame you like:
+
+| Function | Over the frame |
+|---|---|
+| `mad(x)` | Mean absolute deviation |
+| `skew(x)` | Sample skewness |
+| `kurt(x)` | Excess kurtosis |
+| `ts_rank(x)` | The current row's rank within the frame, scaled to `(0, 1]` |
+| `idxmax(x)` / `idxmin(x)` | 1-based position of the frame's maximum / minimum |
+| `ts_corr(x, y)` / `ts_cov(x, y)` | Correlation and covariance of two columns |
+
+```sql
+SELECT ts, symbol,
+       mad(price)             OVER w AS mad_5,
+       ts_rank(price)         OVER w AS rank_5,
+       ts_corr(price, size)   OVER w AS corr_5
+FROM trades
+WINDOW w AS (PARTITION BY symbol ORDER BY ts ROWS 4 PRECEDING);
+```
+
+The rest of the rolling family (`rolling_mean`, `rolling_std`,
+`rolling_var`, `rolling_sum`, `rolling_min`, `rolling_max`, `rolling_count`)
+is reachable through stock DataFusion aggregates in an `OVER` clause; the
+[DataFrame builder](../api/dataframe.html#rolling-and-cross-sectional-operators)
+names them uniformly and compiles to exactly that.
+
+### Cross-sectional window functions
+
+Two operators for the "against everything else at this instant" shape.
+Partition by the timestamp, not by the asset:
+
+| Function | Result |
+|---|---|
+| `cs_rank(x)` | Rank within the partition, scaled to `(0, 1]` |
+| `cs_winsorize(x, lower_pct, upper_pct)` | `x` clipped to the partition's percentile bounds |
+
+```sql
+SELECT ts, symbol,
+       cs_rank(signal)                    OVER (PARTITION BY ts) AS rank,
+       cs_winsorize(signal, 0.05, 0.95)   OVER (PARTITION BY ts) AS clipped
+FROM signals;
+```
+
+`cs_demean` and `cs_zscore` are plain SQL over the same partition
+(`x - avg(x) OVER (PARTITION BY ts)`), and the DataFrame builder spells all
+four the same way.
 
 ### `first_value` / `last_value`
 
@@ -1811,6 +2223,162 @@ is passed. Values match `empyrical` to 1e-9; skew and kurtosis follow
 `quant.MONTHLY`, `quant.YEARLY`, or any number — `24 * 365` for hourly
 crypto bars.
 
+Both constructors take the same pins as `build_panel`. `quant.returns` reads
+a returns series (one row per bar, simple decimal returns);
+`quant.from_levels` reads an equity *level* series and differences it, which
+is what a backtest's `bt_equity` table is. Alongside `stats()` the series
+carries `equity_curve()`, `underwater()`, `drawdown_table(top=…)`,
+`rolling_sharpe(w)`, `rolling_volatility(w)` and `rolling_beta(w, benchmark)`.
+
+## Selection bias gets first-class statistics
+
+A number found by searching is worth less than the same number found once, so
+these are not optional footnotes.
+
+```python
+rets = db.sql("SELECT ret FROM strategy_returns ORDER BY ts").to_arrow()["ret"].to_pylist()
+
+quant.deflated_sharpe(rets, trials=40)        # .sharpe .benchmark .probability
+quant.minimum_track_record_length(rets)       # observations still needed
+
+trials = [[r * (1 + i / 10) for r in rets] for i in range(8)]
+quant.probability_of_backtest_overfitting(list(zip(*trials)))   # (observations, trials)
+```
+
+`deflated_sharpe` discounts a Sharpe by the size of the search that produced
+it, and reports `probability`: the chance the true Sharpe beats the
+benchmark. Below 0.95 the result is indistinguishable from the best of that
+many coin flips. When the variance of the trials' Sharpes is unknown it
+substitutes the returns' own sampling variance, which is conservative rather
+than an assumption of zero; pass `trial_sharpe_variance=` when you have it.
+`trials_source` records whether the trial count was declared or measured, so
+a report cannot quietly pass off a guess as a count.
+
+`minimum_track_record_length` returns `inf` when the observed Sharpe sits
+below the deflated benchmark. That is not a bug: it means no amount of
+further data makes *this* result significant, and the honest report is that
+the search found nothing.
+
+`probability_of_backtest_overfitting` takes a matrix of shape
+`(observations, trials)` — one column per trial's returns over the same
+period — and splits it into `partitions` (default 8). A PBO near 0.5 means
+the in-sample winner carried no information.
+
+Read the moments first. A hold-to-resolution book has an equity curve that is
+flat and then jumps, so its returns are one outlier surrounded by noise, and
+Sharpe assumes something much closer to normal. High skew and kurtosis mean
+the Sharpe is the wrong summary, not that the strategy is bad.
+
+## Purged cross-validation
+
+```python
+n = 90
+list(quant.purged_kfold(n, folds=5, horizons=[10] * n, embargo=0.01))
+list(quant.combinatorial_purged(n, groups=6, test_groups=2, horizons=[10] * n))
+list(quant.walk_forward(n, train_size=40, test_size=10, horizons=[10] * n))
+```
+
+Each yields `Split(train, test, purged)` index arrays. `horizons[i]` is how
+many observations forward observation *i*'s label depends on, so a label
+needing the next ten bars cannot leak into its own training fold. Omitting
+`horizons` says labels are instantaneous, which is rarely true and is never
+assumed silently; `embargo` is an additional gap as a fraction of `n`.
+
+`walk_forward` takes `step=` (defaults to `test_size`) and `expanding=True`
+for a growing rather than rolling training window.
+
+## Cost calibration
+
+```python
+samples = [
+    quant.SlippageSample(direction=1, fill_price=100.0 + 0.02 * q,
+                         reference_price=100.0, quantity=q, reference_size=500.0)
+    for q in (10.0, 25.0, 50.0, 80.0, 120.0, 200.0)
+]
+fit = quant.fit_impact(samples, shape="sqrt")     # or "linear"
+fit.predict(0.1), fit.is_usable, fit.r_squared
+```
+
+Calibrates a slippage model from realised fills instead of assuming a
+constant. A backtest run writes `calibration_samples` ready for this;
+`fit.is_usable` is the guard against fitting a curve to four fills.
+
+## Scoring a forecast against the market's own
+
+Event contracts quote a probability, so a strategy trading them is making a
+competing forecast. This is the one comparison an equity curve cannot make,
+and sizing cannot inflate it.
+
+```python
+strategy = [0.7, 0.4, 0.6, 0.2, 0.9]
+market   = [0.6, 0.5, 0.5, 0.3, 0.8]
+outcomes = [1.0, 0.0, 1.0, 0.0, 1.0]
+
+adv = quant.brier_advantage(strategy, market, outcomes)
+adv.advantage         # market_brier - strategy_brier; positive means you were closer
+adv.skill_score       # as a fraction of the market's own Brier
+adv.cumulative        # the path, for plotting
+
+quant.brier_decomposition(strategy, outcomes)  # reliability - resolution + uncertainty
+quant.reliability_curve(strategy, outcomes)    # bucketed, with the signed gap
+```
+
+The decomposition says *why* a score is what it is: sitting off the diagonal
+(reliability) is a different failure from not separating outcomes at all
+(resolution). Reliability is small in absolute terms — bucket gaps of five to
+nine points square down to thousandths — so the *sign structure* of the
+reliability curve is the tradeable finding, not the magnitude of that term.
+
+## Comparing many runs at once
+
+A sweep leaves one fork per trial, and opening twenty tearsheets is not
+comparing them. `basket_report` assembles one document from stored tables
+only, with no re-simulation:
+
+```
+quant.basket_report(db, {"th50": result_a, "th60": result_b},
+                    path="basket.html",
+                    panels=quant.PORTFOLIO_PANELS + ("equity", "price"),
+                    snapshot="panel-v1")
+```
+
+(`result_a` and `result_b` are [backtest results](backtest.html#opening-a-run-again);
+the [backtesting page](backtest.html#comparing-many-runs-at-once) has the
+worked version.)
+
+`quant.PORTFOLIO_PANELS` (`total_equity`, `total_drawdown`,
+`total_rolling_sharpe`, `total_cash_equity`, `periodic_pnl`, `leaderboard`)
+are safe at any basket size. Per-run panels draw one series each and are
+dropped past `per_run_limit` with the reason recorded in `report.skipped`,
+because silently thinning lines misrepresents the basket. `quant.PANELS` is
+every panel name. The `price` panel puts fill markers on the book the fills
+actually met, read at the same pin the runs used, and `brier_advantage` is
+the one panel needing an input the report cannot derive — your strategy's own
+probability — so it is passed in and skipped with a reason when absent.
+
+`quant.basket_payload(...)` returns the same content as a `BasketReport`
+object without rendering HTML.
+
+## Restatement impact
+
+```python
+quant.restatement_impact(
+    lambda pin: quant.build_panel(db, "signals", "prices", periods=(1,), **pin),
+    db,
+    before={"version": {"signals": 1, "prices": 1}},
+    after={"version": {"signals": 2, "prices": 1}},
+    metric=lambda panel: {"mean_ic": panel.mean_ic()},
+)
+```
+
+Runs one computation at two read points and reports what a vendor's revision
+moved — a question only a versioned store can answer. `build(pin)` receives
+the pin kwargs (`version`, `as_of`, `snapshot`) and produces the computation;
+`metric(built)` reduces it to a mapping of scalars, and the result carries
+`before`, `after`, `delta` and `changed` per key, with `tolerance` (default
+`1e-9`) deciding what counts as moved. Omitting `after` compares against the
+unpinned read.
+
 ## Sweeps
 
 A sweep runs a parameter grid with one fork per combination. Trials cannot
@@ -1832,12 +2400,63 @@ result.drop()                   # forks and their results go together
 
 ## Reports
 
-`quant.factor_report(panel)` and `quant.tearsheet(series)` render one
-self-contained HTML file: inline CSS and JS, data embedded as JSON, no
-network access at view time. Section one is always the provenance header, so
-a reader sees the data version before the numbers. `quant.report_payload()`
-returns the same content as a dict, which is what agents and the CLI should
-read instead of scraping HTML.
+`quant.factor_report(panel)`, `quant.tearsheet(series)` and
+`quant.backtest_report(result)` render one self-contained HTML file: inline
+CSS and JS, data embedded as JSON, no network access at view time. Section
+one is always the provenance header, so a reader sees the data version before
+the numbers. `quant.report_payload()` (and the per-kind
+`quant.backtest_payload` / `quant.basket_payload`) returns the same content
+as a dict, which is what agents and scripts should read instead of scraping
+HTML.
+
+## From the shell
+
+```bash
+python -m h5i_db.quant factor --db market.db --factor signals --prices prices \
+    --snapshot 2024-q1 --format html --out factor.html
+python -m h5i_db.quant tearsheet --db market.db --returns strategy_returns --out run.html
+python -m h5i_db.quant stats  --db market.db --returns strategy_returns --format json
+python -m h5i_db.quant verify --db market.db --factor signals --prices prices
+```
+
+Every verb takes the same pin flags (`--version`, `--as-of`, `--snapshot`,
+`--event-time-cutoff`) and `--format json|html|table`. `stats` prints the
+headline set without rendering a document, and `verify` re-runs a factor
+panel and checks it still produces its numbers.
+
+## Provenance objects
+
+Every computation carries a `Provenance` (`digest`, `warnings`) and the `Pin`
+it ran under (`version`, `as_of`, `snapshot`, `event_time_cutoff`, and
+`is_pinned`). `quant.verify(subject, rerun=…)` checks both halves: the
+provenance digest must be unchanged *and* the recomputed values must match,
+because a digest over the SQL cannot notice an engine that computes the same
+query differently. An unpinned subject raises `VerificationError` (or, with
+`strict=False`, is reported unverifiable) rather than passing: two runs
+against "latest" agreeing proves only that nothing changed in the seconds
+between them.
+
+The objects these return are part of the API, not implementation detail:
+
+| Type | Returned by | Carries |
+|---|---|---|
+| `FactorPanel` | `build_panel` | `ic`, `ic_decay`, `mean_ic`, `quantile_returns`, `spread`, `turnover`, `rank_autocorrelation`, `alpha_beta`, `weights`, `loss_report` |
+| `ReturnSeries` | `returns`, `from_levels` | `stats`, `equity_curve`, `underwater`, `drawdown_table`, `rolling_sharpe`, `rolling_volatility`, `rolling_beta` |
+| `SweepResult` | `sweep` | `compare`, `best`, `to_pandas`, `drop` |
+| `BasketReport` | `basket_payload` | `drawn`, `skipped`, `to_dict`, `to_html` |
+| `DeflatedSharpe` | `deflated_sharpe` | `sharpe`, `benchmark`, `probability`, `trials`, `skew`, `kurtosis`, `is_significant` |
+| `PBOResult` | `probability_of_backtest_overfitting` | `pbo`, `ranks`, `splits`, `strategies`, `is_overfit` |
+| `CostFit` | `fit_impact` | `intercept`, `coefficient`, `shape`, `r_squared`, `observations`, `predict`, `is_usable` |
+| `BrierAdvantage` | `brier_advantage` | `strategy_brier`, `market_brier`, `advantage`, `cumulative`, `win_rate`, `skill_score` |
+
+Both `FactorPanel` and `ReturnSeries` expose `sql()`, so the SQL a number was
+computed from is inspectable rather than implied.
+
+`build_panel` raises `MaxLossExceededError` when more of the input is dropped
+than `max_loss` allows (default 0.35), mirroring alphalens, so a panel built
+from a third of the data cannot be mistaken for a panel built from all of it.
+`panel.loss_report()` gives the same accounting alphalens prints: what was
+lost joining to forward returns, and what was lost assigning quantiles.
 
 
 
@@ -2155,6 +2774,388 @@ the table now stands.
 
 ---
 
+# Data on-ramp   (https://db.h5i.dev/manual/data-onramp/)
+
+`h5i_db.venues` turns vendor files **already on disk** into the canonical
+tables a [backtest](backtest.html) reads. It does not fetch. Downloading
+belongs in a script, where credentials, retries and rate limits belong; this
+layer is the part that has to be reproducible and testable offline.
+
+The canonical tables it writes are `book_deltas`, `trades`, `instruments`,
+`resolutions`, `bars`, `funding`, `references` and `corporate_actions`.
+`venues.CANONICAL_SCHEMAS` maps each name to its Arrow schema (the
+individual `TRADES_SCHEMA`, `BOOK_DELTAS_SCHEMA`, … constants are the same
+objects), and `venues.ensure_tables(db, names)` creates any that are
+missing.
+
+## Three steps, each usable alone
+
+```python
+from h5i_db import venues
+
+specs  = venues.polymarket_markets_from_json(payloads)   # slug -> outcomes, tokens
+venues.write_markets(db, specs)                          # instruments, resolutions
+report = venues.ingest_archive(                          # book_deltas, trades
+    db,
+    files=venues.discover("/mnt/pmxt"),
+    markets=specs,
+    layout=venues.PMXT_LAYOUT,
+    window=(start_ns, end_ns),
+)
+report.coverage, report.gaps, report.replayed, report.skipped
+```
+
+The same from a shell, with market definitions travelling as a JSON file
+rather than as flags:
+
+```bash
+python -m h5i_db.venues markets market.db specs.json
+python -m h5i_db.venues ingest  market.db specs.json --root /mnt/pmxt \
+    --start-ns 1777000000000000000 --end-ns 1777003600000000000 --min-coverage 0.95
+python -m h5i_db.venues bars    market.db --root /mnt/klines \
+    --layout binance-klines --instrument BINANCE:BTCUSDT
+python -m h5i_db.venues inspect market.db
+```
+
+The same four verbs are on the `h5i-venues` console script, and
+`h5i-backtest` / `h5i-capture` are the equivalents for the other two
+modules.
+
+`--min-coverage` exits non-zero rather than letting a short load pass
+quietly, which is what makes this usable in a scheduled backfill. Gating
+without a window is an error (exit `2`), not a silent pass; falling short of
+the threshold is `3`.
+
+## Market identity is positional, and refused when ambiguous
+
+`MarketSpec` pairs `outcome_labels` with `tokens` by index: index *i* of each
+describes the same outcome. Getting that backwards attributes every fill to
+the wrong side, so the constructor refuses every loose way of expressing it.
+
+Refused, each with a named reason: fewer than two outcomes; a token list that
+does not match the outcome list; duplicate tokens; a token two markets both
+claim; a `winner_outcome` with no `settlement_observable_ns` (settlement is
+gated on when the result became knowable, so a resolution without that
+instant is unusable); an observability instant before expiry.
+
+`polymarket_markets_from_json` handles the awkward real shapes: list fields
+arriving as JSON-encoded strings, a resolution expressed as settled
+`outcomePrices` plus a `closed` flag, ISO-8601 or epoch times. Pass
+`require_resolution=True` when a settlement study needs resolved markets
+only.
+
+## A vendor dialect is data, not a code path
+
+`ArchiveLayout` carries the column names, event vocabulary, timestamp unit
+and level shape. `PMXT_LAYOUT`, `TELONEX_LAYOUT`, `KALSHI_PMXT_LAYOUT`,
+`LIMITLESS_PMXT_LAYOUT`, `OPINION_PMXT_LAYOUT`,
+`KAGGLE_POLYMARKET_LAYOUT` and `KAGGLE_POLYMARKET_TRADES_LAYOUT` are
+literals of that type, and a new vendor is another literal rather than
+another module.
+
+Three level shapes exist:
+
+| `LevelLayout(style=…)` | Shape |
+|---|---|
+| `nested` | `bids`/`asks` are list columns of structs, one row per book state |
+| `flat` | One row per level, side in its own column |
+| `payload` | The whole event is a JSON string in one column — what a websocket capture written straight to Parquet looks like |
+
+Under `payload` the token usually lives inside the JSON, so filtering
+happens in two passes: cheaply on the instrument column, then on the decoded
+token.
+
+```python
+layout = venues.ArchiveLayout(
+    name="house-feed", timestamp_column="recv_ns", timestamp_unit="ns",
+    token_column="token", event_type_column="channel", snapshot_events=("depth",),
+    levels=venues.LevelLayout(style="nested", bids_column="buys", asks_column="sells",
+                              price_field="px", size_field="qty"),
+    max_levels=1,     # keep top of book; the drop count is reported
+)
+```
+
+No directory convention is assumed. Pass explicit `files=`, or a root plus a
+glob to `venues.discover(root, pattern=…)`: a mirror layout is not a data
+contract, and people mirror differently.
+
+## Four properties worth knowing before pointing it at a mirror
+
+**Re-running is a replay, not a duplicate.** Every commit is keyed by the
+hash of the *normalised* rows, so identical inputs produce identical keys and
+h5i-db recognises them. An interrupted backfill is safe to restart, and two
+sources serving the same hour converge on one commit. `report.replayed` says
+whether the whole ingest was already present.
+
+**Requested and loaded windows stay separate facts.** `report.coverage` is
+the loaded span over the requested one, and `None` when no window was asked
+for, because a ratio against an unbounded request means nothing. It says
+nothing about holes *inside* the span; those are `report.gaps`.
+
+**Nothing is guessed.** An event type present in the file but absent from the
+layout is counted in `report.skipped`; a file missing required columns is
+skipped with its name and the missing columns; an unparseable payload is
+counted; and `max_levels` records how many levels it dropped. A truncation
+nobody can see is how a wrong conclusion arrives three steps later.
+
+**Zero size means delete.** These venues spell "this level is gone" as a
+size-zero change, so the importer writes `delete`, not a level with no
+quantity.
+
+`IngestReport` carries `vendor`, `tables` (a `TableWrite` per table: rows,
+chunks, replayed chunks, idempotency keys), `sources` (a `SourceFile` each:
+path, size, rows read, rows kept), `requested_window`, `loaded_window`,
+`gaps`, `skipped` and `unknown_instruments`, plus the derived `coverage`,
+`rows` and `replayed`. `to_dict()` renders the lot.
+
+## Bars
+
+Anything shaped like OHLCV goes through one on-ramp, whatever produced it.
+
+```python
+# a vendor dump on disk
+venues.ingest_bars(db, files=[...], layout=venues.BINANCE_KLINES_LAYOUT,
+                   instrument_id="BINANCE:BTCUSDT")
+
+# anything already in memory: a broker export, yfinance, your own frame
+bars = venues.bars_from_dataframe(frame, instrument_id="AAPL")
+
+# a venue that publishes no candles at all
+venues.bars_from_trades(db, interval="1m")
+```
+
+`ts_init` is the bar **close** and `ts_event` the open, because a bar is not
+knowable until its interval ends. That is why a `BarLayout` must supply
+either a close-time column or an `interval`: there is no safe default, so
+there is no default. The same rule is why `references_from_series` makes you
+state `published_after` — a daily rate for Monday is published on Tuesday,
+and stamping it at Monday lets a strategy read it a day early.
+
+`GENERIC_OHLCV_LAYOUT` and `BINANCE_KLINES_LAYOUT` cover the common files;
+`read_bars_csv` and `bars_from_table` are the pieces underneath, for a file
+you want to inspect before writing it. `parse_interval("1m")` is the same
+interval parser the layouts use.
+
+Yahoo has had no official API since 2017, so `yfinance` is a scraper that
+breaks when Yahoo changes internals. Fetch with it if you like, then hand the
+frame to `bars_from_dataframe`: that keeps the breakage in your script rather
+than in a parser here. Stooq downloads now sit behind a browser check, so
+fetch those by hand and point `read_bars_csv` at the file.
+
+## Trades and corporate actions
+
+A venue that publishes bulk trade files gives you real microstructure for
+free.
+
+```python
+venues.ingest_trades(db, files=[...], layout=venues.BINANCE_TRADES_LAYOUT,
+                     instrument_id="BINANCE:BTCUSDT")
+```
+
+The one field worth reading twice is the aggressor. Binance ships
+`isBuyerMaker`, which is true when the **buyer** was resting, so the taker
+was the seller. Read straight through, it inverts every trade sign, and the
+result still balances and still sums to the right volume. `TradeLayout`
+therefore takes either `buyer_is_maker_column` or `aggressor_column`, never
+both. `BINANCE_TRADES_LAYOUT` and `BINANCE_AGG_TRADES_LAYOUT` are the
+shipped literals, and `read_trades_csv` / `trades_from_table` are the
+in-memory halves for a file you want to inspect first.
+
+Corporate actions are what make an equity backtest correct rather than
+plausible. Without them a 2-for-1 split reads as a 50% overnight crash.
+
+```python
+venues.ingest_corporate_actions(
+    db,
+    actions=[{"instrument_id": "AAPL", "kind": "split", "ratio": 2.0,
+              "effective": "2026-03-02", "announced": "2026-02-01"}],
+    known_by=simulated_now_ns,   # drop what had not been announced yet
+)
+```
+
+`effective` is the replay clock, because that is when positions and resting
+orders change. Past prices are never rewritten: nobody traded the adjusted
+price, and a strategy that bought at 50 the day before a 2-for-1 bought at
+50. `announced` is kept separately so `known_by` can reproduce what was
+knowable on a past date; rows with no announcement are dropped under a cutoff
+rather than assumed early enough, since assuming is how a run ends up
+trading a split nobody had heard of.
+
+`corporate_actions_from_rows` and `references_from_series` build the Arrow
+tables without writing them, and `ingest_references` appends a reference
+series (a benchmark, a rate, a vendor mark) that a strategy may read only
+after its `published_after` instant.
+
+## Kalshi and Predexon
+
+Kalshi's hourly archive quotes both outcomes as bids, and its deltas are
+signed changes in resting size, so it needs its own layout. Everything else
+is the same three steps. A market needs no `tokens=`: the files name the
+instrument and pick the outcome with a label, so the outcome order comes from
+`outcome_labels`.
+
+```python
+specs = [venues.MarketSpec(instrument_id="KXBTC15M-26JUN100815-15",
+                           venue="kalshi", outcome_labels=("yes", "no"))]
+report = venues.ingest_archive(
+    db,
+    files=venues.discover("/mnt/kalshi", pattern="kalshi_orderbook_*.parquet"),
+    markets=specs,
+    layout=venues.KALSHI_PMXT_LAYOUT,
+)
+```
+
+Read two numbers out of the report before trusting the result:
+
+- `report.gaps` carries a `snapshot_divergence` entry saying how many vendor
+  snapshots the reconstruction reproduced exactly. This feed has no sequence
+  numbers, so that comparison is the only integrity check available. A low
+  share almost always means the window's deltas are incomplete, and the fix
+  is to load the neighbouring hours, not to lower expectations.
+- `report.skipped` counts changes that arrived with no book to apply them to
+  (`delta_before_snapshot`). An hour that was never snapshotted for a market
+  contributes nothing rather than inventing a base of zero.
+
+Predexon serves snapshots instead of an archive:
+
+```python
+snapshots = fetch_pages(...)          # your script, your API key
+report = venues.ingest_predexon_orderbooks(db, snapshots=snapshots, markets=specs)
+```
+
+Check `report.gaps` for `snapshot_cadence` before trusting a window: it
+carries the measured median and worst gap between samples, and the worst gap
+is the number that matters. The vendor's `sequence` field is deliberately
+unread, because it is not a per-market counter — it steps by a median of 45,
+jumps by millions, and runs backwards — so differencing it invents holes that
+are not there.
+
+### One book, two sides
+
+Kalshi publishes `yes_bids` and `no_bids`, two books of bids, because an ask
+on YES is a bid on NO. Both the archive layout and the Predexon reader fold
+them into a single two-sided book on outcome 0, at `1 - price` for the NO
+side. A capture, an archive and a Predexon pull therefore give the same
+canonical shape.
+
+That fold is not cosmetic. Storing the two as separate one-sided books leaves
+a market with no asks at all, and an order that cannot fill is **cancelled**
+rather than rejected, so the run completes and the strategy simply reads as
+having declined to trade.
+
+## Manifold
+
+Manifold publishes markets and bets as JSON rather than as book files, so it
+has its own pair of readers:
+
+```python
+specs = venues.manifold_markets_from_json(payloads)
+venues.write_markets(db, specs)
+venues.ingest_manifold_bets(db, bets=bets, markets=specs)
+```
+
+`manifold_trades_from_json` is the same conversion without the write. Both
+take a `skipped=` collector, so payloads they refused are countable rather
+than silently absent.
+
+## Recording a live feed
+
+`h5i-capture` (from `pip install h5i-db[capture]`, or
+`python -m h5i_db.capture`) records a venue websocket to lz4-compressed
+newline-delimited JSON — the same format the archive readers consume, so a
+capture and a vendor archive load through one path.
+
+```bash
+export KALSHI_API_KEY_ID=…            # never a flag: a flag lands in ps output
+export KALSHI_PRIVATE_KEY_PATH=/path/to/key.pem
+h5i-capture --venue kalshi --out ./capture --market KXBTCD-25DEC31
+```
+
+| Flag | Meaning |
+|---|---|
+| `--venue kalshi\|polymarket` | Kalshi needs credentials; Polymarket is public |
+| `--out <dir>` | Files land in `<out>/<venue>/<date>/<hour>` |
+| `--market <id>` | Repeatable, or comma-separated |
+| `--channel <name>` | Override the venue's default channels |
+| `--url <ws>` | Point at a demo or staging endpoint |
+| `--flush-secs <n>` | How often completed lz4 blocks reach the file — this bounds what a `kill -9` can destroy |
+| `--keepalive-secs`, `--max-backoff-secs` | Keepalive cadence and reconnect ceiling |
+
+It stamps arrival in nanoseconds and writes the payload verbatim. Both rules
+exist for the same reason: an arrival stamp cannot be reconstructed later,
+and parsing on the write path means a parser bug costs the data rather than
+an afternoon.
+
+The same thing as a library, for a feed the CLI does not speak:
+
+```python
+from h5i_db.capture import CaptureWriter, archive_line, now_nanos, read_hour
+
+with CaptureWriter("./capture", "kalshi", flush_after=5.0) as writer:
+    received_at = now_nanos()
+    writer.write_line(received_at, archive_line(received_at, frame))
+
+read_hour("./capture/kalshi/2026-07-31", "14")   # or read_capture(path)
+```
+
+Credentials are read from `KALSHI_API_KEY_ID` + `KALSHI_PRIVATE_KEY_PATH`
+(or `KALSHI_API_TOKEN`), never from an argument; `sign_kalshi` and
+`kalshi_headers` are the signing pieces, and a missing credential raises
+`MissingCredential` rather than connecting anonymously and failing later.
+
+This is a separate package from `h5i_db.venues` on purpose. That package is
+parse-only — every function takes bytes the caller already downloaded, which
+is what makes the mapping a pure function testable offline against recorded
+payloads. Sockets, credentials and reconnect policy would end that, so they
+live here. The two meet at a file format, not at a function call. The extra's
+dependencies (`websockets`, `cryptography`, `lz4`) are imported inside the
+functions that need them, so a user who only reads archives never pays for a
+TLS stack.
+
+Record only what an archive cannot give you. For Kalshi after January 2026,
+`predexon_book_from_snapshots` is usually the better answer, and recording
+buys sub-cent precision, your own arrival clock, and independence from a free
+service rather than access to otherwise-missing data.
+
+## Replaying an account's ledger
+
+The strictest realism question available: given the trades an account
+actually took, does the engine reproduce the same portfolio? Usually not, and
+that is the point — a forced-fill simulator would reproduce the ledger by
+construction and test nothing.
+
+```python
+rows = [venues.LedgerRow(ts_ns=…, instrument_id=…, outcome=0,
+                         side="buy", quantity=…, price=…), …]
+commands = venues.commands_from_ledger(rows, specs)   # limit-IOC at the ledger price
+db.append("commands", commands)                       # sells are reduce_only
+result = backtest.execute(db, config)                 # DataConfig(commands="commands", …)
+venues.compare_to_ledger(result, typed_rows)          # per-market reconciliation
+```
+
+Compiled into *intent*, not fills, so the historical book accepts or refuses
+each order on its merits. `reduce_only` on sells stops a replay inventing
+short exposure the ledger never showed. The comparison reports per-market
+shortfalls rather than one pass/fail, because *where* the book refused is the
+finding. `ledger_table(rows)` writes the ledger itself as a table when you
+want the two side by side in SQL.
+
+## Fetching, when you have network
+
+Fetchers are scripts, not core API surface. Two limits are properties of the
+public APIs rather than of the tooling: Polymarket's book endpoint serves
+**live markets only**, so a resolved-market list is the right input for
+definitions and the wrong one for books, and historical coverage is price
+*points*, not books, so any depth or queue study needs a captured archive.
+
+One practical trap: these hosts answer `403` to the default `Python-urllib`
+user agent, which reads exactly like a blocked network and is not one. Set
+any `User-Agent`.
+
+
+
+---
+
 # Backtesting   (https://db.h5i.dev/manual/backtest/)
 
 `h5i-db-backtest` simulates venues against recorded market data. It never
@@ -2390,6 +3391,67 @@ works and now selects the run report, which contains that manifest.)
 Exit codes are distinct on purpose: a refused config (`2`) and a run that
 failed to reproduce (`3`) call for different responses, and a script should not
 have to parse stdout to tell them apart.
+
+## The config, and what comes back
+
+```python
+config = backtest.BacktestConfig(
+    run_id="momentum-001",
+    portfolio=backtest.PortfolioConfig(starting_cash=10_000.0),
+    data=backtest.DataConfig(signals="signals", snapshot="2024-q1",
+                             minimum_coverage=0.95),
+    execution=backtest.ExecutionConfig(fee_rate=0.02, queue_position=True,
+                                       latency_nanos=1_000_000),
+    risk=backtest.RiskConfig(max_abs_position=500.0),
+    output=backtest.OutputConfig(equity_interval_nanos=60_000_000_000),
+)
+config.to_json()        # a complete reproduction recipe
+config.trial_digest     # identity for the trial ledger; excludes run_id and metadata
+```
+
+| Section | Carries |
+|---|---|
+| `PortfolioConfig` | `starting_cash` |
+| `DataConfig` | `signals`, `commands`, `strategy_id`, the read pin (`snapshot`, `version`, `as_of`), `window`, `minimum_coverage` |
+| `ExecutionConfig` | `fee_kind`, `fee_rate`, `maker_rebate`, `maker_fee_rate`, `queue_position`, `optimistic_queue`, `latency_nanos`, `slippage_ticks`, `margin_kind`, `leverage`, `maintenance_margin_rate` |
+| `RiskConfig` | `max_order_quantity`, `max_abs_position`, `max_open_orders` |
+| `OutputConfig` | `equity_interval_nanos` |
+
+`backtest.inspect(db, config)` runs preflight alone and returns a
+`PreflightInspection` with the `config_digest`, the `ReplayFidelity` the data
+supports (`TICK_L2`, `SNAPSHOT_L2`, `TRADES_ONLY`, `BARS_SYNTHETIC`, `NONE`),
+per-table statistics, and `issues` split into `errors()` and `warnings()`.
+`raise_for_errors()` is the one-line gate; `execute()` calls it for you unless
+`preflight=False`. A config that changed shape across versions loads with a
+`ConfigCompatibilityWarning` rather than silently meaning something else.
+
+`backtest.run(db, run_id, starting_cash=…, …)` is the flat-keyword form of
+the same thing, for a run you are writing by hand rather than storing.
+
+### Opening a run again
+
+Every run lands in a `bt-<run_id>` fork holding the tables in
+`backtest.RESULT_TABLES` (`bt_run`, `bt_orders`, `bt_fills`, `bt_positions`,
+`bt_equity`), read from the market-data tables in
+`backtest.MARKET_DATA_TABLES`. The result is addressable long after the
+process that made it exited:
+
+```python
+result = backtest.open_result(db, "momentum-001")
+backtest.list_runs(db)                       # one summary per bt- fork
+backtest.find_trial(db, digest)              # the run with this trial digest, if any
+
+result.stats()          result.summary()     result.table("bt_run")
+result.equity           result.fills         result.orders    result.positions
+result.fork_name        result.run_id
+result.verify()         result.explain(order_id)   result.compare(other)
+result.report(path)     result.tearsheet(path)
+result.promote(["bt_equity"])                result.drop()
+```
+
+`BacktestResult` is also a mapping over the run summary, so `result["cached"]`
+and `result["final_cash"]` work directly. `drop()` removes the fork and
+everything it owns; `promote()` lands one of its tables on the base.
 
 ## Settlement
 
@@ -2865,6 +3927,77 @@ Two orderings inside the loop are load-bearing:
   produced them, which removes reentrancy and makes latency a property of
   the queue rather than of every call site.
 
+### Tier 2 from Python
+
+`backtest.EventStrategy` is the Python side of the same trait. Callbacks
+receive mappings and return one command mapping, an iterable of them, or
+`None`; the supported actions are `submit`, `amend`, `cancel`, `timer`,
+`mint`, `redeem`, `convert`, `twap` and `forecast`.
+
+```python
+from h5i_db import backtest
+
+class Momentum(backtest.EventStrategy):
+    def on_start(self, context):
+        self.last = {}
+
+    def on_event(self, context, event):
+        prev = self.last.get(event["instrument_id"])
+        self.last[event["instrument_id"]] = event.get("price")
+        if prev and event["price"] > prev * 1.01:
+            return {"action": "submit", "instrument_id": event["instrument_id"],
+                    "outcome": 0, "side": "buy", "quantity": 10.0,
+                    "kind": "market"}
+
+result = backtest.run_strategy(db, "momentum-001", Momentum(),
+                               starting_cash=10_000.0,
+                               data=backtest.DataConfig(...))
+```
+
+`context` is optional, and it is the parameter's **name** (`context` or
+`ctx`) that asks for it. Declare `def on_event(self, event)` and no context
+is built, which saves an object and a snapshot of every open position on
+every event; declare `def on_event(self, context, event)` and it is. Both
+forms work everywhere — the shorter one is simply not charged for what it
+does not ask for. Any further parameter needs a default, and a signature the
+engine cannot call is refused when the run starts rather than misbound during
+it. Callbacks left at the base class's do-nothing versions are never called.
+
+Declarative signals or command tables stay preferable when callbacks are not
+needed: they avoid crossing the Python boundary on every event, and only they
+have a complete identity in the typed config, which is what makes a trial
+reusable (see [the trial ledger](#agent-trial-ledger)).
+
+### Building the signals table
+
+A signals table is ordinary data, so anything that produces the right columns
+works. The builders exist so the common shapes do not have to be spelled out
+row by row:
+
+```python
+backtest.create_signal_table(db, "signals")     # or create_command_table(db, "commands")
+
+db.append("signals", backtest.signal_table(rows))          # from dicts
+db.append("commands", backtest.command_table(rows))        # the richer stream
+db.append("signals", backtest.from_signals(                # from boolean arrays
+    timestamps, instrument_id="AAPL", entries=entries, exits=exits, size=10.0))
+db.append("signals", backtest.target_positions(            # from a target series
+    timestamps, targets, instrument_id="AAPL"))
+```
+
+`backtest.SIGNAL_SCHEMA` is `ts`, `instrument_id`, `outcome`, `side`,
+`quantity`, `kind`, `limit_price`, `time_in_force`, `tag`, `reduce_only`,
+`post_only`; `COMMAND_SCHEMA` adds `action` and `client_order_id` for the
+richer command stream (`amend`, `cancel`, `twap`, set operations).
+
+`from_signals` takes two aligned boolean arrays over one timeline and stamps
+exits `reduce_only`, so a replay cannot invent short exposure the signals
+never asked for. It never shifts a signal or assumes bar-close execution: the
+timestamps you pass must already be the instants the features were available.
+`target_positions` is the other common shape — a desired position per
+timestamp — and emits the minimum sequence of orders that reaches it, so a
+flat target produces nothing.
+
 ### Stamp a signal after the quote it came from
 
 Market data is merged on the total order `(ts_init, stream priority, stream,
@@ -2927,6 +4060,22 @@ warnings. Merely scanning a list does not mark work reviewed:
 `StudyResult.open_trial(n)` marks in-process state, while `h5i-db-ui` marks a
 trial seen only when its detail is opened and persists that review state in
 the browser. The leaderboard remains a separate tab.
+
+The same ordering is available without the UI, so a script can triage a
+sweep the way the tab does:
+
+```python
+result.attention()          # trials in the order a reviewer should visit them
+result.attention_state      # the group's own state, rolled up
+result.warning_badge        # how many finished trials carry unseen warnings
+result.leaderboard("realized_pnl")
+```
+
+Underneath, `backtest.attention_for_trial(row)` turns one trial row into a
+`TrialAttention` (`state`, `seen`, `warnings`, `needs_decision`, `priority`)
+and `backtest.rollup_attention(items)` takes the maximum. `AttentionState` is
+the five-value ordering above: `NEEDS_DECISION`, `FAILED_WARNED`,
+`FINISHED_UNSEEN`, `RUNNING`, `SEEN`.
 
 ## What is not here
 
@@ -2991,8 +4140,9 @@ settlement is gated on when the result became knowable.
 
 ## Searching without fooling yourself
 
-`backtest.study` runs a grid by default. Three additions make the search
-shape explicit when it matters.
+`backtest.study` runs a `GridSearch` by default. Three additions make the
+search shape explicit when it matters. (`backtest.BacktestStudy` is the same
+thing as an object, for a study you want to build once and `run(db)` later.)
 
 ```python
 from h5i_db import backtest
@@ -3079,6 +4229,10 @@ as a price move. Every generator stamps its orders a microsecond after the quote
 they were decided from. `STRATEGIES` maps name to generator for sweeping the
 pack itself; `pair_arbitrage` is outside it because it reads both outcomes from
 the database rather than one side's panel.
+
+A generator returns a `SignalPlan`: the `signals` table plus the `strategy`
+name and `parameters` that produced it, and `to_metadata()` folds those into
+a config's `metadata` so a run records what generated its intents.
 
 ## Replaying an account's ledger
 
@@ -3180,12 +4334,28 @@ except h5i_db.ConflictError:
 
 See [Exceptions](exceptions.html) for the full hierarchy and code table.
 
+## The subpackages
+
+Four public subpackages sit on top of `Database`. Each has its own manual
+page, because each is a workflow rather than a class:
+
+| Import | What it does | Guide |
+|---|---|---|
+| `h5i_db.backtest` | Typed run configs, signal and command tables, Python callback strategies, studies and stored results | [Backtesting](../manual/backtest.html) |
+| `h5i_db.quant` | Factor panels, performance statistics, selection-bias corrections, purged CV, reports | [Quant workflows](../manual/quant.html) |
+| `h5i_db.venues` | Vendor archives, bars, trades and corporate actions into canonical tables | [Data on-ramp](../manual/data-onramp.html) |
+| `h5i_db.capture` | Recording a venue websocket to the same format the archive readers consume | [Data on-ramp](../manual/data-onramp.html#recording-a-live-feed) |
+
+`h5i_db.backtest` and `h5i_db.venues` import with the package;
+`h5i_db.quant` and `h5i_db.capture` are imported explicitly, and `capture`
+needs the `h5i-db[capture]` extra.
+
 ## Versioning note
 
 `h5i_db.__version__` reports the installed engine version. The pure-Python
 wrapper (`Database`, `QueryResult`, `MutationPlan`) sits on the private
-native module `h5i_db._native`; treat everything not exported from `h5i_db`
-itself as internal.
+native module `h5i_db._native`; treat anything not exported from `h5i_db` or
+one of the subpackages above as internal.
 
 
 
@@ -3579,6 +4749,142 @@ Pin current table versions under a name. Address it later from SQL as
 `note` (`str`, optional)
 :   Free-text note.
 
+## Forks
+
+A fork is a writable workspace over a pinned view of every table: one small
+metadata object, no data copied, so one dataset can back many parallel lines
+of work. See [Forks](../manual/concepts.html#forks) for the model and
+[`h5i-db fork`](../manual/cli.html#h5i-db-fork) for the command-line
+equivalent.
+
+```python
+db.create_fork("agent-01", meta={"hypothesis": "momentum"})
+work = db.fork("agent-01")          # a Database handle scoped to the fork
+work.append("features", batch)      # copy-on-write; the base never moves
+db.fork_diff("agent-01")            # what it changed, from manifests alone
+db.promote("agent-01", "features")  # land one table on the base
+db.drop_fork("agent-01")
+```
+
+### `Database.create_fork`
+
+```python
+create_fork(name, note=None, as_of=None, meta=None) -> dict
+```
+
+Create a fork pinning every table at its current version.
+
+**Parameters**
+
+`as_of` (`str` | `int` | `datetime`, optional)
+:   Pin each table at its last version committed at or before this instant,
+    giving a workspace over a frozen past; tables that did not exist then are
+    not pinned. Strings and datetimes carry microsecond resolution while
+    commits are stamped in nanoseconds, so pass an int of nanoseconds when
+    you need to name one exact commit rather than a moment.
+
+`meta` (`dict`, optional)
+:   Carried verbatim and never interpreted. Use it to tie a fork back to the
+    run or hypothesis that produced it; the review UI surfaces it.
+
+### `Database.create_forks` / `Database.fork_many`
+
+```python
+create_forks(names, note=None, as_of=None, meta=None) -> list[dict]
+fork_many(prefix, count, note=None, as_of=None, meta=None) -> list[dict]
+```
+
+Create many forks over a **single** resolution of the base. Every fork of one
+base at one instant pins the same versions, so a wide fanout costs one pass
+over the catalog rather than one per branch — which is what makes a few
+hundred short-lived branches reasonable to create and throw away.
+
+```python
+db.create_forks([f"trial-{i}" for i in range(500)])
+db.fork_many("trial", 500)          # trial-0000 … trial-0499
+```
+
+Names must be distinct and none may already exist; both are checked before
+anything is written, so the usual mistakes leave no partial fanout behind.
+`fork_many`'s zero-padded suffix keeps name order equal to creation order,
+which is the order every listing sorts by.
+
+### `Database.fork`
+
+```python
+fork(name) -> Database
+```
+
+A `Database` handle scoped to the fork. Table lookups resolve to the fork's
+own tables first and fall back to its pinned view of the base, so existing
+code runs unchanged inside a fork; writes to a base table's name
+transparently copy-on-write into the fork, and the base is never modified.
+`Database.fork_name` is the fork a handle is scoped to, or `None` on a base
+handle.
+
+### `Database.forks` / `Database.fork_names` / `Database.fork_info`
+
+```python
+forks() -> list[dict]
+fork_names() -> list[str]
+fork_info(name) -> dict
+```
+
+`forks()` reports every fork with its lineage, what it owns, and what it
+holds back from reclamation (`bytes_pinned`). `fork_names()` is one read of
+the fork index, where `forks()` reads a manifest per table per fork to report
+sizes — use it when you only need the names.
+
+### `Database.fork_diff`
+
+```python
+fork_diff(name, table=None) -> dict
+```
+
+What a fork changed, computed from manifests alone: no segment is read.
+
+### `Database.fork_scan`
+
+```python
+fork_scan(name, forks=None) -> LazyFrame
+```
+
+A lazy query reading one table **across forks at once**, with a `__fork`
+column naming the source. Forks share their base's segments, so a segment
+several forks can see is read once.
+
+```python
+db.fork_scan("bt_equity").group_by("__fork").agg(...).collect()
+db.fork_scan("trades", ["agent-01", "agent-02"]).sql()
+```
+
+Schemas are not coerced; use `fork_diff` to see how they differ.
+
+### `Database.promote`
+
+```python
+promote(fork, table) -> dict
+```
+
+Promote one of a fork's tables into the base. Compare-and-swap against the
+version the fork was created from: the first promote wins and a later one
+raises rather than merging, because the work was computed against a base that
+no longer exists. The conflict unit is the whole table.
+
+### `Database.drop_fork` / `Database.drop_forks`
+
+```python
+drop_fork(name) -> int
+drop_forks(names) -> int
+```
+
+Delete forks and everything they own, releasing their pins; both return the
+table count. `drop_forks` takes the batch under one metadata lock, which is
+the shape mass pruning wants. A name that does not exist stops the batch
+rather than being skipped, so a typo in a list you believe you deleted is
+reported instead of swallowed; forks dropped before the failure stay dropped,
+and re-running with what `fork_names()` still reports completes the job.
+
 ## Mutation plans
 
 The previewable plan/apply flow. These return a
@@ -3906,9 +5212,9 @@ from h5i_db import col, lit, when
 col("price") * col("size")              # arithmetic
 (col("price") > 100) & (col("size") < 5)   # & | ~ , not and/or/not
 col("symbol").is_in(["AAPL", "MSFT"])
-col("px").is_null()
+col("px").is_null()                     # and .is_not_null()
 col("ts").between(t0, t1)
-col("symbol").like("A%")
+col("symbol").like("A%")                # .not_like(), .ilike() for case-insensitive
 col("size").cast("DOUBLE")
 when(col("price") > 100).then(lit(1)).otherwise(lit(0))
 ```
@@ -3940,6 +5246,10 @@ Aggregates are methods: `.sum()`, `.mean()`, `.min()`, `.max()`, `.count()`,
 
 A `when(...).then(...)` chain is already a complete expression (a `CASE`
 with no `ELSE` yields NULL), so it can be aliased without `.otherwise()`.
+
+`.alias(name)` renames; `.output_name()` reports the name an expression will
+carry in the result, which is what `select()` and `agg()` use when nothing
+was aliased.
 
 The idiomatic OHLCV query, built:
 

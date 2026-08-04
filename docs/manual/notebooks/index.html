@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>h5i-db notebooks: a kernel that outlives the command</title>
+  <meta name="description" content="In-terminal Jupyter notebooks whose kernel outlives the command, with %%sql cells that skip the interpreter entirely.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/notebooks/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="h5i-db notebooks: a kernel that outlives the command">
+  <meta property="og:description" content="In-terminal Jupyter notebooks whose kernel outlives the command, with %%sql cells that skip the interpreter entirely.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/notebooks/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="h5i-db notebooks: a kernel that outlives the command">
+  <meta name="twitter:description" content="In-terminal Jupyter notebooks whose kernel outlives the command, with %%sql cells that skip the interpreter entirely.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/notebooks/#article","headline":"h5i-db notebooks: a kernel that outlives the command","name":"h5i-db notebooks: a kernel that outlives the command","description":"In-terminal Jupyter notebooks whose kernel outlives the command, with %%sql cells that skip the interpreter entirely.","url":"https://db.h5i.dev/manual/notebooks/","inLanguage":"en","dateModified":"2026-08-03","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/notebooks/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Notebooks","item":"https://db.h5i.dev/manual/notebooks/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" class="active">Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" >Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/notebooks/" class="active">Notebooks</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/data-onramp/">Data on-ramp</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/manual/">Manual</a>
+<span class="sep">/</span>
+<span>Notebooks</span></div>
+<h1 id="notebooks">Notebooks<a class="headerlink" href="#notebooks" title="Permanent link">#</a></h1>
+<p><code>h5i-db nb</code> is a notebook <em>client</em> for the terminal: it owns a real
+<code>.ipynb</code> file, drives a real Jupyter kernel, and renders results for two
+audiences at once — a human in a TUI, and a program reading a
+token-budgeted digest on stdout. The same commands are available on a
+standalone binary, <code>h5i-nb</code>, which drives the same sessions.</p>
+<p>The property everything else follows from: <strong>the kernel persists between
+invocations.</strong> <code>exec</code> twice and the second cell sees what the first defined,
+so a forty-second load is paid once instead of once per idea. If you would
+run a script once and never again, run the script; this is for the case
+where state accumulates.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>new<span class="w"> </span>research.ipynb<span class="w"> </span>--kernel<span class="w"> </span>python3<span class="w"> </span>--db<span class="w"> </span>market.db
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>research.ipynb<span class="w"> </span>--code<span class="w"> </span><span class="s2">&quot;import pandas as pd; df = pd.read_parquet(&#39;big.parquet&#39;)&quot;</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>research.ipynb<span class="w"> </span>--code<span class="w"> </span><span class="s2">&quot;df.shape&quot;</span><span class="w">          </span><span class="c1"># df is still there</span>
+</code></pre></div>
+
+<p>The file is nbformat v4.5 and stays readable in JupyterLab. Writes are
+atomic (temp file, fsync, rename) and byte-compatible with <code>nbformat</code>'s own
+writer, so opening a notebook in JupyterLab does not churn the diff.</p>
+<h2 id="running-cells">Running cells<a class="headerlink" href="#running-cells" title="Permanent link">#</a></h2>
+<p><code>exec</code> appends a cell and runs it. <code>run</code> re-runs cells the notebook already
+has.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>research.ipynb<span class="w"> </span>--code<span class="w"> </span><span class="s2">&quot;edge(book)&quot;</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>research.ipynb<span class="w"> </span>--code<span class="w"> </span>-<span class="w"> </span>&lt;&lt;<span class="s1">&#39;PY&#39;</span>
+<span class="go">def edge(book):</span>
+<span class="go">    return book.bid - book.ask</span>
+<span class="go">PY</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>run<span class="w"> </span>research.ipynb<span class="w"> </span>--cells<span class="w"> </span><span class="m">3</span>-7
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>run<span class="w"> </span>research.ipynb<span class="w"> </span>--from-clean
+</code></pre></div>
+
+<p><code>--code -</code> (the default) reads the cell from stdin, which is how code
+containing quotes and newlines gets in without fighting the shell.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th><code>exec</code> flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--code &lt;src&gt;</code></td>
+<td>Cell source, or <code>-</code> for stdin (default <code>-</code>)</td>
+</tr>
+<tr>
+<td><code>--timeout &lt;secs&gt;</code></td>
+<td>Interrupt the cell after this many seconds; <code>0</code> disables (default 300)</td>
+</tr>
+<tr>
+<td><code>--stream</code></td>
+<td>Print output as it arrives rather than only at the end</td>
+</tr>
+<tr>
+<td><code>--detach</code></td>
+<td>Return as soon as the cell is queued</td>
+</tr>
+<tr>
+<td><code>--raw</code></td>
+<td>Do not elide long output</td>
+</tr>
+</tbody>
+</table></div>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th><code>run</code> flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--cells &lt;sel&gt;</code></td>
+<td><code>3</code>, <code>3-7</code>, <code>3-</code>, <code>1,4,9</code>, or <code>all</code> (default <code>all</code>)</td>
+</tr>
+<tr>
+<td><code>--from-clean</code></td>
+<td>Restart the kernel and clear outputs first</td>
+</tr>
+<tr>
+<td><code>--keep-going</code></td>
+<td>Keep going after a cell raises</td>
+</tr>
+<tr>
+<td><code>--timeout</code>, <code>--raw</code></td>
+<td>As in <code>exec</code></td>
+</tr>
+</tbody>
+</table></div>
+<p><code>run --from-clean</code> is the reproducibility check: if it passes, the notebook
+tells the truth about what produced its outputs.</p>
+<h2 id="output-is-budgeted-and-nothing-is-lost">Output is budgeted, and nothing is lost<a class="headerlink" href="#output-is-budgeted-and-nothing-is-lost" title="Permanent link">#</a></h2>
+<p>Cell output is summarised on stdout, not dumped:</p>
+<ul>
+<li><strong>Text</strong> is elided in the middle: head lines, tail lines, and a
+  <code>… 4,912 lines elided …</code> marker between them.</li>
+<li><strong>Frames</strong> are re-rendered as a compact aligned table — first and last
+  rows plus a <code>[10,000 rows x 12 columns]</code> shape line. For the next
+  decision, the shape is usually the whole information content.</li>
+<li><strong>Images</strong> are never inlined as base64. They are written to
+  <code>&lt;notebook&gt;_files/cell-&lt;id&gt;-&lt;n&gt;.png</code> (nbconvert's convention, so
+  JupyterLab renders them too) and reported as a path.</li>
+<li><strong>Tracebacks</strong> are printed in full, ANSI stripped. A tool that discards
+  the traceback on error forces a re-run to find out what broke.</li>
+</ul>
+<p>The untruncated output stays in the <code>.ipynb</code>. <code>--raw</code> prints it, and
+<code>nb output --save &lt;path&gt;</code> writes a binary output to a file.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>cells<span class="w"> </span>research.ipynb<span class="w">          </span><span class="c1"># index, id, type, exec count, output shape</span>
+<span class="gp"> #  </span>id<span class="w">        </span><span class="nb">type</span><span class="w">  </span><span class="nb">exec</span><span class="w">  </span>outputs<span class="w">                                           </span><span class="nb">source</span>
+<span class="go"> 0  a7822631  code  1     result(application/vnd.h5i.table+text+text/html)  %%sql</span>
+<span class="go"> 1  5afe1a3f  code  2     -                                                 x = 41</span>
+<span class="go"> 2  e00300f7  code  3     result                                            x + 1</span>
+
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>output<span class="w"> </span>research.ipynb<span class="w"> </span><span class="m">2</span><span class="w">            </span><span class="c1"># index or cell id</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>output<span class="w"> </span>research.ipynb<span class="w"> </span><span class="m">2</span><span class="w"> </span>--index<span class="w"> </span><span class="m">1</span><span class="w">  </span><span class="c1"># one output, when a cell made several</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>output<span class="w"> </span>research.ipynb<span class="w"> </span><span class="m">2</span><span class="w"> </span>--raw
+</code></pre></div>
+
+<p>Reach for <code>--raw</code> when you need the bytes. The digest is what makes a
+notebook cost less context than a script, and <code>--raw</code> gives that back.</p>
+<h2 id="sql-querying-without-an-interpreter"><code>%%sql</code>: querying without an interpreter<a class="headerlink" href="#sql-querying-without-an-interpreter" title="Permanent link">#</a></h2>
+<p>A cell whose first line is <code>%%sql</code> runs against an h5i-db database
+<strong>in-process</strong>. The magic is resolved by the client, not by the kernel, so
+the statement never crosses into Python: no interpreter, no driver round
+trip. Schema discovery and the first twenty exploratory queries need no
+kernel at all.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>research.ipynb<span class="w"> </span>--code<span class="w"> </span>-<span class="w"> </span>&lt;&lt;<span class="s1">&#39;SQL&#39;</span>
+<span class="gp">%</span>%sql
+<span class="go">SELECT symbol, count(*) AS n FROM trades GROUP BY symbol ORDER BY n DESC</span>
+<span class="go">SQL</span>
+<span class="go">[1] cell 0 · ok · 3ms</span>
+<span class="go">+--------+-----+</span>
+<span class="go">| symbol | n   |</span>
+<span class="go">+--------+-----+</span>
+<span class="go">| AAPL   | 120 |</span>
+<span class="go">| MSFT   | 120 |</span>
+<span class="go">+--------+-----+</span>
+<span class="go">[2 rows x 2 columns]</span>
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Magic option</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--db &lt;path&gt;</code></td>
+<td>Database for this cell; <code>--database</code> is accepted too</td>
+</tr>
+<tr>
+<td><code>--fork &lt;name&gt;</code></td>
+<td>Query inside a <a href="/manual/concepts/#forks">fork</a></td>
+</tr>
+<tr>
+<td><code>--into &lt;name&gt;</code></td>
+<td>Bind the result in the Python kernel under this name</td>
+</tr>
+<tr>
+<td><code>--max-rows &lt;N&gt;</code></td>
+<td>Cap the <em>rendered</em> table</td>
+</tr>
+<tr>
+<td><code>--write</code></td>
+<td>Open the database read-write for this cell</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>h5i-db nb new … --db market.db</code> records a notebook-wide default in the
+file's own metadata, so it travels with the notebook and the <code>%%sql</code> cells
+need no <code>--db</code>.</p>
+<p>Two options are worth reading twice:</p>
+<ul>
+<li><strong><code>--into</code> binds the full result, not the rendered one.</strong> The handoff is
+  Arrow through a temp file, so <code>--max-rows 1 --into frame</code> prints one row
+  and still binds all of them.</li>
+</ul>
+<p><code>console
+  $ h5i-db nb exec research.ipynb --code - &lt;&lt;'SQL'
+  %%sql --into frame --max-rows 1
+  SELECT symbol, price FROM trades LIMIT 5
+  SQL
+  [5] cell 4 · ok · 1ms
+  stderr: note: kept the first 1 rows of a larger result (--max-rows)
+  …
+  frame: pandas.DataFrame 5 rows x 2 columns</code></p>
+<ul>
+<li><strong><code>--write</code> is required before a cell can modify anything.</strong> Without it
+  the database is opened read-only, which also means opening it never runs
+  transaction recovery against a database another process may be using. Add
+  it deliberately, not by habit.</li>
+</ul>
+<p>The syntax deliberately matches IPython's <code>%%sql</code>, so the notebook still
+reads correctly in JupyterLab even though JupyterLab would run the cell a
+different way.</p>
+<h2 id="long-running-cells">Long-running cells<a class="headerlink" href="#long-running-cells" title="Permanent link">#</a></h2>
+<p><code>--detach</code> returns as soon as the cell is queued. The session process owns
+the notebook, so outputs are recorded whether or not anyone is still
+attached — including the failure, if it fails.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>research.ipynb<span class="w"> </span>--detach<span class="w"> </span>--code<span class="w"> </span><span class="s2">&quot;backtest(years=10)&quot;</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>cells<span class="w"> </span>research.ipynb<span class="w">              </span><span class="c1"># poll, about once a second</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>output<span class="w"> </span>research.ipynb<span class="w"> </span><span class="m">7</span>
+</code></pre></div>
+
+<p>There is never a state where "still running" and "died" look the same.</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>kernel<span class="w"> </span>interrupt<span class="w"> </span>research.ipynb<span class="w">   </span><span class="c1"># stop the cell, keep the state</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>kernel<span class="w"> </span>restart<span class="w"> </span>research.ipynb<span class="w">     </span><span class="c1"># throw the state away</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>kernel<span class="w"> </span>status<span class="w"> </span>research.ipynb<span class="w">      </span><span class="c1"># answers even mid-cell</span>
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th><code>kernel</code> subcommand</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>kernel list</code></td>
+<td>Installed kernelspecs</td>
+</tr>
+<tr>
+<td><code>kernel start &lt;nb&gt;</code></td>
+<td>Start the session and its kernel without running anything</td>
+</tr>
+<tr>
+<td><code>kernel status &lt;nb&gt;</code></td>
+<td>Whether a session is running, and what the kernel is doing</td>
+</tr>
+<tr>
+<td><code>kernel interrupt &lt;nb&gt;</code></td>
+<td>Interrupt the running cell, keeping in-memory state</td>
+</tr>
+<tr>
+<td><code>kernel restart &lt;nb&gt;</code></td>
+<td>Restart the kernel; <code>--clear-outputs</code> also drops recorded outputs</td>
+</tr>
+<tr>
+<td><code>kernel stop &lt;nb&gt;</code></td>
+<td>Stop the session and its kernel</td>
+</tr>
+</tbody>
+</table></div>
+<div class="admonition note">
+<p class="admonition-title">Why a supervisor, not <code>--existing</code></p>
+<p>A supervisor process owns the kernel, subscribes to iopub continuously,
+and serves a control socket under <code>$XDG_RUNTIME_DIR</code>. Reconnecting to a
+kernel's connection file per invocation, the way <code>jupyter console
+--existing</code> does, loses any output produced while no client was
+attached — ZMQ PUB drops messages with no subscriber — which is exactly
+the long-running cell output that matters most.</p>
+</div>
+<h2 id="editing-without-running">Editing without running<a class="headerlink" href="#editing-without-running" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>edit<span class="w"> </span>research.ipynb<span class="w"> </span><span class="nb">set</span><span class="w"> </span><span class="m">3</span><span class="w"> </span>--code<span class="w"> </span><span class="s2">&quot;fixed()&quot;</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>edit<span class="w"> </span>research.ipynb<span class="w"> </span>insert<span class="w"> </span>--at<span class="w"> </span><span class="m">2</span><span class="w"> </span>--kind<span class="w"> </span>markdown<span class="w"> </span>--code<span class="w"> </span><span class="s2">&quot;## Findings&quot;</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>edit<span class="w"> </span>research.ipynb<span class="w"> </span>delete<span class="w"> </span><span class="m">4</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>edit<span class="w"> </span>research.ipynb<span class="w"> </span>move<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="m">1</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>edit<span class="w"> </span>research.ipynb<span class="w"> </span>clear-outputs
+</code></pre></div>
+
+<p><code>set</code> drops the cell's now-stale outputs. <code>insert</code> appends when <code>--at</code> is
+omitted and takes <code>--kind code|markdown|raw</code> (default <code>code</code>). Edits are
+routed through the running session, so they are safe while a kernel is
+alive.</p>
+<h2 id="showing-a-human-what-you-are-doing">Showing a human what you are doing<a class="headerlink" href="#showing-a-human-what-you-are-doing" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>view<span class="w"> </span>research.ipynb<span class="w">                </span><span class="c1"># editable TUI</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>watch<span class="w"> </span>research.ipynb<span class="w"> </span>--split<span class="w"> </span>right<span class="w"> </span><span class="c1"># live, read-only</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>ls<span class="w">                                 </span><span class="c1"># sessions running on this machine</span>
+</code></pre></div>
+
+<p><code>view</code> is the full terminal UI: Jupyter's key bindings (<code>Esc</code>/<code>Enter</code> for
+command and edit mode, <code>a</code>/<code>b</code> to insert, <code>dd</code> to delete), a completion
+popup from <code>complete_request</code>, an inspection overlay from <code>inspect_request</code>,
+and inline images through the kitty and iTerm2 graphics protocols.
+<code>Ctrl-C</code> interrupts the running cell rather than killing the UI, because the
+notebook is the state.</p>
+<p><code>watch</code> is a live read-only view. It writes nothing, holds no lock, and
+starts no kernel, so any number of them can follow a session someone else is
+driving; from it a human can interrupt the cell and nothing else. Both take
+<code>--split right|left|down|up</code>, which opens the view in a new pane beside the
+current one (tmux, zellij, WezTerm, kitty) and returns immediately.</p>
+<p><code>ls</code> reports every notebook session on the machine with its kernel, state,
+cell count, pid and idle time, and clears up after sessions whose supervisor
+died.</p>
+<div class="admonition note">
+<p class="admonition-title"><code>Shift+Enter</code> may not reach the TUI</p>
+<p>Most terminals cannot send it: without the kitty keyboard protocol it
+arrives as a plain <code>Enter</code>. The protocol is requested where it is
+supported, and <code>e</code> / <code>E</code> are the run bindings that always work.</p>
+</div>
+<h2 id="exporting">Exporting<a class="headerlink" href="#exporting" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">export</span><span class="w"> </span>research.ipynb<span class="w"> </span>--to<span class="w"> </span>md<span class="w">      </span><span class="c1"># a readable summary for a PR</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">export</span><span class="w"> </span>research.ipynb<span class="w"> </span>--to<span class="w"> </span>py<span class="w">      </span><span class="c1"># a runnable script, magics commented out</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">export</span><span class="w"> </span>research.ipynb<span class="w"> </span>--to<span class="w"> </span>html<span class="w">    </span><span class="c1"># one self-contained file, images inlined</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">export</span><span class="w"> </span>research.ipynb<span class="w"> </span>--to<span class="w"> </span>md<span class="w"> </span>-o<span class="w"> </span>notes.md<span class="w"> </span>--without-outputs
+</code></pre></div>
+
+<p><code>--without-outputs</code> leaves the outputs out, for a clean diff or a script
+meant to be run rather than read.</p>
+<h2 id="introspection-from-a-shell">Introspection from a shell<a class="headerlink" href="#introspection-from-a-shell" title="Permanent link">#</a></h2>
+<p>The two requests the TUI uses are also commands, which is what lets an
+editor or a script ask the kernel what it knows:</p>
+<div class="highlight"><pre><span></span><code><span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span>inspect<span class="w"> </span>research.ipynb<span class="w"> </span><span class="s2">&quot;pd.read_parquet&quot;</span><span class="w">    </span><span class="c1"># what `?` does in IPython</span>
+<span class="gp">$ </span>h5i-db<span class="w"> </span>nb<span class="w"> </span><span class="nb">complete</span><span class="w"> </span>research.ipynb<span class="w"> </span><span class="s2">&quot;df.gro&quot;</span><span class="w">            </span><span class="c1"># completions at the cursor</span>
+</code></pre></div>
+
+<p>Both take <code>--cursor &lt;offset&gt;</code> when the cursor is not at the end of the code.</p>
+<h2 id="errors">Errors<a class="headerlink" href="#errors" title="Permanent link">#</a></h2>
+<p>Failures print the usual <a href="/manual/cli/#errors-and-exit-codes">structured envelope</a>
+on stderr. Branch on <code>code</code>, not on the wording.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th><code>code</code></th>
+<th>Exit</th>
+<th>Retryable</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cell_raised</code></td>
+<td>2</td>
+<td>no</td>
+<td>The code raised; the traceback is on stdout and in the cell</td>
+</tr>
+<tr>
+<td><code>execute_timeout</code></td>
+<td>4</td>
+<td>yes</td>
+<td>Hit <code>--timeout</code>; the cell was interrupted and the kernel still works</td>
+</tr>
+<tr>
+<td><code>session_busy</code></td>
+<td>3</td>
+<td>yes</td>
+<td>Another cell is running; wait, or interrupt it</td>
+</tr>
+<tr>
+<td><code>kernel_died</code></td>
+<td>5</td>
+<td>yes</td>
+<td>The kernel is gone; restart, and the state is lost</td>
+</tr>
+<tr>
+<td><code>kernel_not_found</code></td>
+<td>2</td>
+<td>no</td>
+<td>No such kernelspec; <code>nb kernel list</code> shows what exists</td>
+</tr>
+<tr>
+<td><code>cell_index_out_of_range</code></td>
+<td>2</td>
+<td>no</td>
+<td><code>nb cells</code> shows what exists</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>cell_raised</code> is the ordinary outcome of exploring, not a tool failure. The
+traceback is the answer.</p>
+<h2 id="what-does-not-render">What does not render<a class="headerlink" href="#what-does-not-render" title="Permanent link">#</a></h2>
+<p>ipywidgets do not draw. Comm traffic is accepted so a widget-producing
+library does not crash the session, but nothing interactive appears.
+Markdown in exported HTML is shown as preformatted text rather than parsed.
+Syntax highlighting is a per-line lexer, so a multi-line string highlights
+only on its first line.</p>
+    <nav class="page-nav"><a class="prev" href="/manual/cli/"><span class="dir">← Previous</span><span class="pn-title">CLI reference</span></a><a class="next" href="/manual/sql/"><span class="dir">Next →</span><span class="pn-title">SQL reference</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#running-cells">Running cells</a></li><li><a href="#output-is-budgeted-and-nothing-is-lost">Output is budgeted, and nothing is lost</a></li><li><a href="#sql-querying-without-an-interpreter">%%sql: querying without an interpreter</a></li><li><a href="#long-running-cells">Long-running cells</a></li><li><a href="#editing-without-running">Editing without running</a></li><li><a href="#showing-a-human-what-you-are-doing">Showing a human what you are doing</a></li><li><a href="#exporting">Exporting</a></li><li><a href="#introspection-from-a-shell">Introspection from a shell</a></li><li><a href="#errors">Errors</a></li><li><a href="#what-does-not-render">What does not render</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

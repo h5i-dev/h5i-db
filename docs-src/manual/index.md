@@ -72,6 +72,11 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
     <span class="card-title">SQL reference</span>
     <span class="card-desc">Time travel, ASOF joins, and the time-series function library beyond stock DataFusion.</span>
   </a>
+  <a class="card" href="notebooks.html">
+    <span class="card-no">MANUAL</span>
+    <span class="card-title">Notebooks</span>
+    <span class="card-desc">In-terminal Jupyter notebooks with a kernel that outlives the command, and <code>%%sql</code> cells that skip the interpreter.</span>
+  </a>
   <a class="card" href="../api/">
     <span class="card-no">REFERENCE</span>
     <span class="card-title">Python API</span>
@@ -94,4 +99,9 @@ df = db.sql("SELECT * FROM h5i('trades', 42)").to_pandas()   # time travel
 - Running it in production? The [Operations guide](operations.html) covers
   backup, vacuum, compaction, and the recovery runbook.
 - Wiring it into an agent or pipeline? See
-  [Agents & automation](agents.html) for the machine contract.
+  [Agents & automation](agents.html) for the machine contract, and
+  [Notebooks](notebooks.html) for a session whose state survives between
+  commands.
+- Loading vendor data? The [Data on-ramp](data-onramp.html) turns archives,
+  bar files, trade dumps and live captures into the canonical tables a
+  [backtest](backtest.html) reads.

@@ -21,7 +21,7 @@ use h5i_db_core::{Error, Result};
 pub enum Format {
     /// Human-readable aligned table.
     Table,
-    /// One JSON array of row objects (with a schema envelope via --envelope).
+    /// One JSON array of row objects.
     Json,
     /// One JSON object per row per line.
     Jsonl,

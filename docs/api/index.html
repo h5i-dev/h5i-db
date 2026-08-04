@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"APIReference","@id":"https://db.h5i.dev/api/#article","headline":"h5i-db Python API (h5i_db)","name":"h5i-db Python API (h5i_db)","description":"The h5i_db Python library: install, the five-minute tour, data interchange, and error handling.","url":"https://db.h5i.dev/api/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/api/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Python API","item":"https://db.h5i.dev/api/"},{"@type":"ListItem","position":3,"name":"Overview","item":"https://db.h5i.dev/api/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"APIReference","@id":"https://db.h5i.dev/api/#article","headline":"h5i-db Python API (h5i_db)","name":"h5i-db Python API (h5i_db)","description":"The h5i_db Python library: install, the five-minute tour, data interchange, and error handling.","url":"https://db.h5i.dev/api/","inLanguage":"en","dateModified":"2026-08-03","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/api/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Python API","item":"https://db.h5i.dev/api/"},{"@type":"ListItem","position":3,"name":"Overview","item":"https://db.h5i.dev/api/"}]}]}</script>
 </head>
 <body>
 
@@ -60,7 +60,7 @@
       <kbd>/</kbd>
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
-<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/notebooks/">Notebooks</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/data-onramp/">Data on-ramp</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/" class="active">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
   </aside>
@@ -125,6 +125,11 @@ directly into pyarrow, pandas, and Polars.</p>
     <span class="card-title">Error types</span>
     <span class="card-desc">The typed hierarchy under H5iError, with .code, .hint, and .retryable on every error.</span>
   </a>
+  <a class="card" href="/manual/data-onramp/">
+    <span class="card-no">SUBPACKAGE</span>
+    <span class="card-title">h5i_db.venues</span>
+    <span class="card-desc">Vendor archives, bar files, trade dumps and live captures into the canonical tables.</span>
+  </a>
   <a class="card" href="../cookbook/">
     <span class="card-no">TUTORIALS</span>
     <span class="card-title">Cookbook</span>
@@ -159,15 +164,52 @@ try next), <code>.retryable</code> (whether a retry can help).</p>
 </code></pre></div>
 
 <p>See <a href="/api/exceptions/">Exceptions</a> for the full hierarchy and code table.</p>
+<h2 id="the-subpackages">The subpackages<a class="headerlink" href="#the-subpackages" title="Permanent link">#</a></h2>
+<p>Four public subpackages sit on top of <code>Database</code>. Each has its own manual
+page, because each is a workflow rather than a class:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Import</th>
+<th>What it does</th>
+<th>Guide</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>h5i_db.backtest</code></td>
+<td>Typed run configs, signal and command tables, Python callback strategies, studies and stored results</td>
+<td><a href="/manual/backtest/">Backtesting</a></td>
+</tr>
+<tr>
+<td><code>h5i_db.quant</code></td>
+<td>Factor panels, performance statistics, selection-bias corrections, purged CV, reports</td>
+<td><a href="/manual/quant/">Quant workflows</a></td>
+</tr>
+<tr>
+<td><code>h5i_db.venues</code></td>
+<td>Vendor archives, bars, trades and corporate actions into canonical tables</td>
+<td><a href="/manual/data-onramp/">Data on-ramp</a></td>
+</tr>
+<tr>
+<td><code>h5i_db.capture</code></td>
+<td>Recording a venue websocket to the same format the archive readers consume</td>
+<td><a href="/manual/data-onramp/#recording-a-live-feed">Data on-ramp</a></td>
+</tr>
+</tbody>
+</table></div>
+<p><code>h5i_db.backtest</code> and <code>h5i_db.venues</code> import with the package;
+<code>h5i_db.quant</code> and <code>h5i_db.capture</code> are imported explicitly, and <code>capture</code>
+needs the <code>h5i-db[capture]</code> extra.</p>
 <h2 id="versioning-note">Versioning note<a class="headerlink" href="#versioning-note" title="Permanent link">#</a></h2>
 <p><code>h5i_db.__version__</code> reports the installed engine version. The pure-Python
 wrapper (<code>Database</code>, <code>QueryResult</code>, <code>MutationPlan</code>) sits on the private
-native module <code>h5i_db._native</code>; treat everything not exported from <code>h5i_db</code>
-itself as internal.</p>
+native module <code>h5i_db._native</code>; treat anything not exported from <code>h5i_db</code> or
+one of the subpackages above as internal.</p>
     <nav class="page-nav"><a class="prev" href="/manual/backtest/"><span class="dir">← Previous</span><span class="pn-title">Backtesting</span></a><a class="next" href="/api/database/"><span class="dir">Next →</span><span class="pn-title">Database</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-five-minute-tour">The five-minute tour</a></li><li><a href="#the-pieces">The pieces</a></li><li><a href="#data-in-data-out">Data in, data out</a></li><li><a href="#error-handling">Error handling</a></li><li><a href="#versioning-note">Versioning note</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#the-five-minute-tour">The five-minute tour</a></li><li><a href="#the-pieces">The pieces</a></li><li><a href="#data-in-data-out">Data in, data out</a></li><li><a href="#error-handling">Error handling</a></li><li><a href="#the-subpackages">The subpackages</a></li><li><a href="#versioning-note">Versioning note</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

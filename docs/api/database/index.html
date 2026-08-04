@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>h5i_db.Database Python API reference · h5i-db docs</title>
-  <meta name="description" content="h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, mutation plans, policy, and maintenance.">
+  <meta name="description" content="h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, forks, mutation plans, policy, and maintenance.">
   <meta name="author" content="h5i-dev">
   <meta name="theme-color" content="#D21C1C">
   <meta name="color-scheme" content="dark">
@@ -16,19 +16,19 @@
   <meta property="og:type" content="article">
   <meta property="og:site_name" content="h5i-db">
   <meta property="og:title" content="h5i_db.Database Python API reference · h5i-db docs">
-  <meta property="og:description" content="h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, mutation plans, policy, and maintenance.">
+  <meta property="og:description" content="h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, forks, mutation plans, policy, and maintenance.">
   <meta property="og:url" content="https://db.h5i.dev/api/database/">
   <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="h5i_db.Database Python API reference · h5i-db docs">
-  <meta name="twitter:description" content="h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, mutation plans, policy, and maintenance.">
+  <meta name="twitter:description" content="h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, forks, mutation plans, policy, and maintenance.">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"APIReference","@id":"https://db.h5i.dev/api/database/#article","headline":"h5i_db.Database Python API reference","name":"h5i_db.Database Python API reference","description":"h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, mutation plans, policy, and maintenance.","url":"https://db.h5i.dev/api/database/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/api/database/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Python API","item":"https://db.h5i.dev/api/"},{"@type":"ListItem","position":3,"name":"Database","item":"https://db.h5i.dev/api/database/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"APIReference","@id":"https://db.h5i.dev/api/database/#article","headline":"h5i_db.Database Python API reference","name":"h5i_db.Database Python API reference","description":"h5i_db.Database reference: lifecycle, tables, writing, reading and SQL, time travel, forks, mutation plans, policy, and maintenance.","url":"https://db.h5i.dev/api/database/","inLanguage":"en","dateModified":"2026-08-03","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/api/database/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Python API","item":"https://db.h5i.dev/api/"},{"@type":"ListItem","position":3,"name":"Database","item":"https://db.h5i.dev/api/database/"}]}]}</script>
 </head>
 <body>
 
@@ -60,7 +60,7 @@
       <kbd>/</kbd>
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
-<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/notebooks/">Notebooks</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/data-onramp/">Data on-ramp</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/" class="active">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
   </aside>
@@ -347,6 +347,102 @@ evidence. <code>notes</code> carries both caveats on every run.</p>
 <dt><code>note</code> (<code>str</code>, optional)</dt>
 <dd>Free-text note.</dd>
 </dl>
+</div></section><h2 id="forks">Forks<a class="headerlink" href="#forks" title="Permanent link">#</a></h2>
+<p>A fork is a writable workspace over a pinned view of every table: one small
+metadata object, no data copied, so one dataset can back many parallel lines
+of work. See <a href="/manual/concepts/#forks">Forks</a> for the model and
+<a href="/manual/cli/#h5i-db-fork"><code>h5i-db fork</code></a> for the command-line
+equivalent.</p>
+<div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">create_fork</span><span class="p">(</span><span class="s2">&quot;agent-01&quot;</span><span class="p">,</span> <span class="n">meta</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;hypothesis&quot;</span><span class="p">:</span> <span class="s2">&quot;momentum&quot;</span><span class="p">})</span>
+<span class="n">work</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">fork</span><span class="p">(</span><span class="s2">&quot;agent-01&quot;</span><span class="p">)</span>          <span class="c1"># a Database handle scoped to the fork</span>
+<span class="n">work</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;features&quot;</span><span class="p">,</span> <span class="n">batch</span><span class="p">)</span>      <span class="c1"># copy-on-write; the base never moves</span>
+<span class="n">db</span><span class="o">.</span><span class="n">fork_diff</span><span class="p">(</span><span class="s2">&quot;agent-01&quot;</span><span class="p">)</span>            <span class="c1"># what it changed, from manifests alone</span>
+<span class="n">db</span><span class="o">.</span><span class="n">promote</span><span class="p">(</span><span class="s2">&quot;agent-01&quot;</span><span class="p">,</span> <span class="s2">&quot;features&quot;</span><span class="p">)</span>  <span class="c1"># land one table on the base</span>
+<span class="n">db</span><span class="o">.</span><span class="n">drop_fork</span><span class="p">(</span><span class="s2">&quot;agent-01&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<section class="api-member"><h3 id="databasecreate_fork"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">create_fork</span></code><a class="headerlink" href="#databasecreate_fork" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">create_fork</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">meta</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p>Create a fork pinning every table at its current version.</p>
+<p class="api-label">Parameters</p>
+<dl>
+<dt><code>as_of</code> (<code>str</code> | <code>int</code> | <code>datetime</code>, optional)</dt>
+<dd>Pin each table at its last version committed at or before this instant,
+giving a workspace over a frozen past; tables that did not exist then are
+not pinned. Strings and datetimes carry microsecond resolution while
+commits are stamped in nanoseconds, so pass an int of nanoseconds when
+you need to name one exact commit rather than a moment.</dd>
+<dt><code>meta</code> (<code>dict</code>, optional)</dt>
+<dd>Carried verbatim and never interpreted. Use it to tie a fork back to the
+run or hypothesis that produced it; the review UI surfaces it.</dd>
+</dl>
+</div></section><section class="api-member"><h3 id="databasecreate_forks-databasefork_many"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">create_forks</span></code> / <code>Database.fork_many</code><a class="headerlink" href="#databasecreate_forks-databasefork_many" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">create_forks</span><span class="p">(</span><span class="n">names</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">meta</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span>
+<span class="n">fork_many</span><span class="p">(</span><span class="n">prefix</span><span class="p">,</span> <span class="n">count</span><span class="p">,</span> <span class="n">note</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">as_of</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">meta</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span>
+</code></pre></div><div class="api-body">
+
+<p>Create many forks over a <strong>single</strong> resolution of the base. Every fork of one
+base at one instant pins the same versions, so a wide fanout costs one pass
+over the catalog rather than one per branch — which is what makes a few
+hundred short-lived branches reasonable to create and throw away.</p>
+<div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">create_forks</span><span class="p">([</span><span class="sa">f</span><span class="s2">&quot;trial-</span><span class="si">{</span><span class="n">i</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">500</span><span class="p">)])</span>
+<span class="n">db</span><span class="o">.</span><span class="n">fork_many</span><span class="p">(</span><span class="s2">&quot;trial&quot;</span><span class="p">,</span> <span class="mi">500</span><span class="p">)</span>          <span class="c1"># trial-0000 … trial-0499</span>
+</code></pre></div>
+
+<p>Names must be distinct and none may already exist; both are checked before
+anything is written, so the usual mistakes leave no partial fanout behind.
+<code>fork_many</code>'s zero-padded suffix keeps name order equal to creation order,
+which is the order every listing sorts by.</p>
+</div></section><section class="api-member"><h3 id="databasefork"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">fork</span></code><a class="headerlink" href="#databasefork" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">fork</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Database</span>
+</code></pre></div><div class="api-body">
+
+<p>A <code>Database</code> handle scoped to the fork. Table lookups resolve to the fork's
+own tables first and fall back to its pinned view of the base, so existing
+code runs unchanged inside a fork; writes to a base table's name
+transparently copy-on-write into the fork, and the base is never modified.
+<code>Database.fork_name</code> is the fork a handle is scoped to, or <code>None</code> on a base
+handle.</p>
+</div></section><section class="api-member"><h3 id="databaseforks-databasefork_names-databasefork_info"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">forks</span></code> / <code>Database.fork_names</code> / <code>Database.fork_info</code><a class="headerlink" href="#databaseforks-databasefork_names-databasefork_info" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">forks</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">]</span>
+<span class="n">fork_names</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<span class="n">fork_info</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p><code>forks()</code> reports every fork with its lineage, what it owns, and what it
+holds back from reclamation (<code>bytes_pinned</code>). <code>fork_names()</code> is one read of
+the fork index, where <code>forks()</code> reads a manifest per table per fork to report
+sizes — use it when you only need the names.</p>
+</div></section><section class="api-member"><h3 id="databasefork_diff"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">fork_diff</span></code><a class="headerlink" href="#databasefork_diff" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">fork_diff</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">table</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p>What a fork changed, computed from manifests alone: no segment is read.</p>
+</div></section><section class="api-member"><h3 id="databasefork_scan"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">fork_scan</span></code><a class="headerlink" href="#databasefork_scan" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">fork_scan</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">forks</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">LazyFrame</span>
+</code></pre></div><div class="api-body">
+
+<p>A lazy query reading one table <strong>across forks at once</strong>, with a <code>__fork</code>
+column naming the source. Forks share their base's segments, so a segment
+several forks can see is read once.</p>
+<div class="highlight"><pre><span></span><code><span class="n">db</span><span class="o">.</span><span class="n">fork_scan</span><span class="p">(</span><span class="s2">&quot;bt_equity&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span><span class="s2">&quot;__fork&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="o">...</span><span class="p">)</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="n">db</span><span class="o">.</span><span class="n">fork_scan</span><span class="p">(</span><span class="s2">&quot;trades&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;agent-01&quot;</span><span class="p">,</span> <span class="s2">&quot;agent-02&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">sql</span><span class="p">()</span>
+</code></pre></div>
+
+<p>Schemas are not coerced; use <code>fork_diff</code> to see how they differ.</p>
+</div></section><section class="api-member"><h3 id="databasepromote"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">promote</span></code><a class="headerlink" href="#databasepromote" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">promote</span><span class="p">(</span><span class="n">fork</span><span class="p">,</span> <span class="n">table</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</code></pre></div><div class="api-body">
+
+<p>Promote one of a fork's tables into the base. Compare-and-swap against the
+version the fork was created from: the first promote wins and a later one
+raises rather than merging, because the work was computed against a base that
+no longer exists. The conflict unit is the whole table.</p>
+</div></section><section class="api-member"><h3 id="databasedrop_fork-databasedrop_forks"><code><span class="api-name">Database</span><span class="api-dot">.</span><span class="api-name">drop_fork</span></code> / <code>Database.drop_forks</code><a class="headerlink" href="#databasedrop_fork-databasedrop_forks" title="Permanent link">#</a></h3><div class="highlight api-sig"><pre><span></span><code><span class="n">drop_fork</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span>
+<span class="n">drop_forks</span><span class="p">(</span><span class="n">names</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span>
+</code></pre></div><div class="api-body">
+
+<p>Delete forks and everything they own, releasing their pins; both return the
+table count. <code>drop_forks</code> takes the batch under one metadata lock, which is
+the shape mass pruning wants. A name that does not exist stops the batch
+rather than being skipped, so a typo in a list you believe you deleted is
+reported instead of swallowed; forks dropped before the failure stay dropped,
+and re-running with what <code>fork_names()</code> still reports completes the job.</p>
 </div></section><h2 id="mutation-plans">Mutation plans<a class="headerlink" href="#mutation-plans" title="Permanent link">#</a></h2>
 <p>The previewable plan/apply flow. These return a
 <a href="/api/results-and-plans/#mutationplan"><code>MutationPlan</code></a>: the staged segments
@@ -483,7 +579,7 @@ history is never touched.</p>
     <nav class="page-nav"><a class="prev" href="/api/"><span class="dir">← Previous</span><span class="pn-title">Overview</span></a><a class="next" href="/api/dataframe/"><span class="dir">Next →</span><span class="pn-title">DataFrame builder</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#constructor">Constructor</a><ul><li><a href="#h5i_dbdatabase">h5i_db.Database</a></li></ul></li><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li><li><a href="#databasearrival_delta">Database.arrival_delta</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#data-safety-policy">Data-safety policy</a><ul><li><a href="#databasedata_policy">Database.data_policy</a></li><li><a href="#databaseset_data_policy">Database.set_data_policy</a></li><li><a href="#databaseclear_data_policy">Database.clear_data_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#constructor">Constructor</a><ul><li><a href="#h5i_dbdatabase">h5i_db.Database</a></li></ul></li><li><a href="#lifecycle">Lifecycle</a><ul><li><a href="#databaseclose">Database.close</a></li><li><a href="#databaseclosed">Database.closed</a></li><li><a href="#databasepath">Database.path</a></li></ul></li><li><a href="#tables">Tables</a><ul><li><a href="#databasecreate_table">Database.create_table</a></li><li><a href="#databasetables">Database.tables</a></li><li><a href="#databaseschema">Database.schema</a></li><li><a href="#databaseversions">Database.versions</a></li><li><a href="#databasedrop_table">Database.drop_table</a></li></ul></li><li><a href="#writing">Writing</a><ul><li><a href="#databaseappend">Database.append</a></li><li><a href="#databasewrite">Database.write</a></li><li><a href="#databaserestore">Database.restore</a></li></ul></li><li><a href="#reading-sql">Reading &amp; SQL</a><ul><li><a href="#databasesql">Database.sql</a></li><li><a href="#databaseread">Database.read</a></li><li><a href="#databasearrival_delta">Database.arrival_delta</a></li></ul></li><li><a href="#snapshots">Snapshots</a><ul><li><a href="#databasesnapshot">Database.snapshot</a></li></ul></li><li><a href="#forks">Forks</a><ul><li><a href="#databasecreate_fork">Database.create_fork</a></li><li><a href="#databasecreate_forks-databasefork_many">Database.create_forks / Database.fork_many</a></li><li><a href="#databasefork">Database.fork</a></li><li><a href="#databaseforks-databasefork_names-databasefork_info">Database.forks / Database.fork_names / Database.fork_info</a></li><li><a href="#databasefork_diff">Database.fork_diff</a></li><li><a href="#databasefork_scan">Database.fork_scan</a></li><li><a href="#databasepromote">Database.promote</a></li><li><a href="#databasedrop_fork-databasedrop_forks">Database.drop_fork / Database.drop_forks</a></li></ul></li><li><a href="#mutation-plans">Mutation plans</a><ul><li><a href="#databaseplan_replace_range">Database.plan_replace_range</a></li><li><a href="#databaseplan_delete_range">Database.plan_delete_range</a></li><li><a href="#databaselist_plans">Database.list_plans</a></li></ul></li><li><a href="#policy">Policy</a><ul><li><a href="#databasepolicy">Database.policy</a></li><li><a href="#databaseset_policy">Database.set_policy</a></li></ul></li><li><a href="#data-safety-policy">Data-safety policy</a><ul><li><a href="#databasedata_policy">Database.data_policy</a></li><li><a href="#databaseset_data_policy">Database.set_data_policy</a></li><li><a href="#databaseclear_data_policy">Database.clear_data_policy</a></li></ul></li><li><a href="#maintenance">Maintenance</a><ul><li><a href="#databasecompact">Database.compact</a></li><li><a href="#databasevacuum">Database.vacuum</a></li><li><a href="#databaseverify">Database.verify</a></li></ul></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

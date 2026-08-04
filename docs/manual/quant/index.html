@@ -28,7 +28,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/_static/docs.css">
 
-  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/quant/#article","headline":"Quant workflows","name":"Quant workflows","description":"Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.","url":"https://db.h5i.dev/manual/quant/","inLanguage":"en","dateModified":"2026-07-30","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/quant/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Quant workflows","item":"https://db.h5i.dev/manual/quant/"}]}]}</script>
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/quant/#article","headline":"Quant workflows","name":"Quant workflows","description":"Factor evaluation and performance tearsheets on pinned data: h5i_db.quant, its alphalens/empyrical parity, and the divergences that are deliberate.","url":"https://db.h5i.dev/manual/quant/","inLanguage":"en","dateModified":"2026-08-03","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/quant/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Quant workflows","item":"https://db.h5i.dev/manual/quant/"}]}]}</script>
 </head>
 <body>
 
@@ -60,7 +60,7 @@
       <kbd>/</kbd>
       <div class="search-results" id="search-results" role="listbox"></div>
     </div>
-<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/" class="active">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/notebooks/">Notebooks</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/" class="active">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/data-onramp/">Data on-ramp</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
 <div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
   </aside>
@@ -230,6 +230,134 @@ is passed. Values match <code>empyrical</code> to 1e-9; skew and kurtosis follow
 <p><code>annualization</code> is bars per year: <code>quant.DAILY</code> (252), <code>quant.WEEKLY</code>,
 <code>quant.MONTHLY</code>, <code>quant.YEARLY</code>, or any number — <code>24 * 365</code> for hourly
 crypto bars.</p>
+<p>Both constructors take the same pins as <code>build_panel</code>. <code>quant.returns</code> reads
+a returns series (one row per bar, simple decimal returns);
+<code>quant.from_levels</code> reads an equity <em>level</em> series and differences it, which
+is what a backtest's <code>bt_equity</code> table is. Alongside <code>stats()</code> the series
+carries <code>equity_curve()</code>, <code>underwater()</code>, <code>drawdown_table(top=…)</code>,
+<code>rolling_sharpe(w)</code>, <code>rolling_volatility(w)</code> and <code>rolling_beta(w, benchmark)</code>.</p>
+<h2 id="selection-bias-gets-first-class-statistics">Selection bias gets first-class statistics<a class="headerlink" href="#selection-bias-gets-first-class-statistics" title="Permanent link">#</a></h2>
+<p>A number found by searching is worth less than the same number found once, so
+these are not optional footnotes.</p>
+<div class="highlight"><pre><span></span><code><span class="n">rets</span> <span class="o">=</span> <span class="n">db</span><span class="o">.</span><span class="n">sql</span><span class="p">(</span><span class="s2">&quot;SELECT ret FROM strategy_returns ORDER BY ts&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_arrow</span><span class="p">()[</span><span class="s2">&quot;ret&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">to_pylist</span><span class="p">()</span>
+
+<span class="n">quant</span><span class="o">.</span><span class="n">deflated_sharpe</span><span class="p">(</span><span class="n">rets</span><span class="p">,</span> <span class="n">trials</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span>        <span class="c1"># .sharpe .benchmark .probability</span>
+<span class="n">quant</span><span class="o">.</span><span class="n">minimum_track_record_length</span><span class="p">(</span><span class="n">rets</span><span class="p">)</span>       <span class="c1"># observations still needed</span>
+
+<span class="n">trials</span> <span class="o">=</span> <span class="p">[[</span><span class="n">r</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1</span> <span class="o">+</span> <span class="n">i</span> <span class="o">/</span> <span class="mi">10</span><span class="p">)</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rets</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">8</span><span class="p">)]</span>
+<span class="n">quant</span><span class="o">.</span><span class="n">probability_of_backtest_overfitting</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="o">*</span><span class="n">trials</span><span class="p">)))</span>   <span class="c1"># (observations, trials)</span>
+</code></pre></div>
+
+<p><code>deflated_sharpe</code> discounts a Sharpe by the size of the search that produced
+it, and reports <code>probability</code>: the chance the true Sharpe beats the
+benchmark. Below 0.95 the result is indistinguishable from the best of that
+many coin flips. When the variance of the trials' Sharpes is unknown it
+substitutes the returns' own sampling variance, which is conservative rather
+than an assumption of zero; pass <code>trial_sharpe_variance=</code> when you have it.
+<code>trials_source</code> records whether the trial count was declared or measured, so
+a report cannot quietly pass off a guess as a count.</p>
+<p><code>minimum_track_record_length</code> returns <code>inf</code> when the observed Sharpe sits
+below the deflated benchmark. That is not a bug: it means no amount of
+further data makes <em>this</em> result significant, and the honest report is that
+the search found nothing.</p>
+<p><code>probability_of_backtest_overfitting</code> takes a matrix of shape
+<code>(observations, trials)</code> — one column per trial's returns over the same
+period — and splits it into <code>partitions</code> (default 8). A PBO near 0.5 means
+the in-sample winner carried no information.</p>
+<p>Read the moments first. A hold-to-resolution book has an equity curve that is
+flat and then jumps, so its returns are one outlier surrounded by noise, and
+Sharpe assumes something much closer to normal. High skew and kurtosis mean
+the Sharpe is the wrong summary, not that the strategy is bad.</p>
+<h2 id="purged-cross-validation">Purged cross-validation<a class="headerlink" href="#purged-cross-validation" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">n</span> <span class="o">=</span> <span class="mi">90</span>
+<span class="nb">list</span><span class="p">(</span><span class="n">quant</span><span class="o">.</span><span class="n">purged_kfold</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">folds</span><span class="o">=</span><span class="mi">5</span><span class="p">,</span> <span class="n">horizons</span><span class="o">=</span><span class="p">[</span><span class="mi">10</span><span class="p">]</span> <span class="o">*</span> <span class="n">n</span><span class="p">,</span> <span class="n">embargo</span><span class="o">=</span><span class="mf">0.01</span><span class="p">))</span>
+<span class="nb">list</span><span class="p">(</span><span class="n">quant</span><span class="o">.</span><span class="n">combinatorial_purged</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">groups</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span> <span class="n">test_groups</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">horizons</span><span class="o">=</span><span class="p">[</span><span class="mi">10</span><span class="p">]</span> <span class="o">*</span> <span class="n">n</span><span class="p">))</span>
+<span class="nb">list</span><span class="p">(</span><span class="n">quant</span><span class="o">.</span><span class="n">walk_forward</span><span class="p">(</span><span class="n">n</span><span class="p">,</span> <span class="n">train_size</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">test_size</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">horizons</span><span class="o">=</span><span class="p">[</span><span class="mi">10</span><span class="p">]</span> <span class="o">*</span> <span class="n">n</span><span class="p">))</span>
+</code></pre></div>
+
+<p>Each yields <code>Split(train, test, purged)</code> index arrays. <code>horizons[i]</code> is how
+many observations forward observation <em>i</em>'s label depends on, so a label
+needing the next ten bars cannot leak into its own training fold. Omitting
+<code>horizons</code> says labels are instantaneous, which is rarely true and is never
+assumed silently; <code>embargo</code> is an additional gap as a fraction of <code>n</code>.</p>
+<p><code>walk_forward</code> takes <code>step=</code> (defaults to <code>test_size</code>) and <code>expanding=True</code>
+for a growing rather than rolling training window.</p>
+<h2 id="cost-calibration">Cost calibration<a class="headerlink" href="#cost-calibration" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">samples</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">quant</span><span class="o">.</span><span class="n">SlippageSample</span><span class="p">(</span><span class="n">direction</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">fill_price</span><span class="o">=</span><span class="mf">100.0</span> <span class="o">+</span> <span class="mf">0.02</span> <span class="o">*</span> <span class="n">q</span><span class="p">,</span>
+                         <span class="n">reference_price</span><span class="o">=</span><span class="mf">100.0</span><span class="p">,</span> <span class="n">quantity</span><span class="o">=</span><span class="n">q</span><span class="p">,</span> <span class="n">reference_size</span><span class="o">=</span><span class="mf">500.0</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">q</span> <span class="ow">in</span> <span class="p">(</span><span class="mf">10.0</span><span class="p">,</span> <span class="mf">25.0</span><span class="p">,</span> <span class="mf">50.0</span><span class="p">,</span> <span class="mf">80.0</span><span class="p">,</span> <span class="mf">120.0</span><span class="p">,</span> <span class="mf">200.0</span><span class="p">)</span>
+<span class="p">]</span>
+<span class="n">fit</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">fit_impact</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="n">shape</span><span class="o">=</span><span class="s2">&quot;sqrt&quot;</span><span class="p">)</span>     <span class="c1"># or &quot;linear&quot;</span>
+<span class="n">fit</span><span class="o">.</span><span class="n">predict</span><span class="p">(</span><span class="mf">0.1</span><span class="p">),</span> <span class="n">fit</span><span class="o">.</span><span class="n">is_usable</span><span class="p">,</span> <span class="n">fit</span><span class="o">.</span><span class="n">r_squared</span>
+</code></pre></div>
+
+<p>Calibrates a slippage model from realised fills instead of assuming a
+constant. A backtest run writes <code>calibration_samples</code> ready for this;
+<code>fit.is_usable</code> is the guard against fitting a curve to four fills.</p>
+<h2 id="scoring-a-forecast-against-the-markets-own">Scoring a forecast against the market's own<a class="headerlink" href="#scoring-a-forecast-against-the-markets-own" title="Permanent link">#</a></h2>
+<p>Event contracts quote a probability, so a strategy trading them is making a
+competing forecast. This is the one comparison an equity curve cannot make,
+and sizing cannot inflate it.</p>
+<div class="highlight"><pre><span></span><code><span class="n">strategy</span> <span class="o">=</span> <span class="p">[</span><span class="mf">0.7</span><span class="p">,</span> <span class="mf">0.4</span><span class="p">,</span> <span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.2</span><span class="p">,</span> <span class="mf">0.9</span><span class="p">]</span>
+<span class="n">market</span>   <span class="o">=</span> <span class="p">[</span><span class="mf">0.6</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.3</span><span class="p">,</span> <span class="mf">0.8</span><span class="p">]</span>
+<span class="n">outcomes</span> <span class="o">=</span> <span class="p">[</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">]</span>
+
+<span class="n">adv</span> <span class="o">=</span> <span class="n">quant</span><span class="o">.</span><span class="n">brier_advantage</span><span class="p">(</span><span class="n">strategy</span><span class="p">,</span> <span class="n">market</span><span class="p">,</span> <span class="n">outcomes</span><span class="p">)</span>
+<span class="n">adv</span><span class="o">.</span><span class="n">advantage</span>         <span class="c1"># market_brier - strategy_brier; positive means you were closer</span>
+<span class="n">adv</span><span class="o">.</span><span class="n">skill_score</span>       <span class="c1"># as a fraction of the market&#39;s own Brier</span>
+<span class="n">adv</span><span class="o">.</span><span class="n">cumulative</span>        <span class="c1"># the path, for plotting</span>
+
+<span class="n">quant</span><span class="o">.</span><span class="n">brier_decomposition</span><span class="p">(</span><span class="n">strategy</span><span class="p">,</span> <span class="n">outcomes</span><span class="p">)</span>  <span class="c1"># reliability - resolution + uncertainty</span>
+<span class="n">quant</span><span class="o">.</span><span class="n">reliability_curve</span><span class="p">(</span><span class="n">strategy</span><span class="p">,</span> <span class="n">outcomes</span><span class="p">)</span>    <span class="c1"># bucketed, with the signed gap</span>
+</code></pre></div>
+
+<p>The decomposition says <em>why</em> a score is what it is: sitting off the diagonal
+(reliability) is a different failure from not separating outcomes at all
+(resolution). Reliability is small in absolute terms — bucket gaps of five to
+nine points square down to thousandths — so the <em>sign structure</em> of the
+reliability curve is the tradeable finding, not the magnitude of that term.</p>
+<h2 id="comparing-many-runs-at-once">Comparing many runs at once<a class="headerlink" href="#comparing-many-runs-at-once" title="Permanent link">#</a></h2>
+<p>A sweep leaves one fork per trial, and opening twenty tearsheets is not
+comparing them. <code>basket_report</code> assembles one document from stored tables
+only, with no re-simulation:</p>
+<div class="highlight"><pre><span></span><code>quant.basket_report(db, {&quot;th50&quot;: result_a, &quot;th60&quot;: result_b},
+                    path=&quot;basket.html&quot;,
+                    panels=quant.PORTFOLIO_PANELS + (&quot;equity&quot;, &quot;price&quot;),
+                    snapshot=&quot;panel-v1&quot;)
+</code></pre></div>
+
+<p>(<code>result_a</code> and <code>result_b</code> are <a href="/manual/backtest/#opening-a-run-again">backtest results</a>;
+the <a href="/manual/backtest/#comparing-many-runs-at-once">backtesting page</a> has the
+worked version.)</p>
+<p><code>quant.PORTFOLIO_PANELS</code> (<code>total_equity</code>, <code>total_drawdown</code>,
+<code>total_rolling_sharpe</code>, <code>total_cash_equity</code>, <code>periodic_pnl</code>, <code>leaderboard</code>)
+are safe at any basket size. Per-run panels draw one series each and are
+dropped past <code>per_run_limit</code> with the reason recorded in <code>report.skipped</code>,
+because silently thinning lines misrepresents the basket. <code>quant.PANELS</code> is
+every panel name. The <code>price</code> panel puts fill markers on the book the fills
+actually met, read at the same pin the runs used, and <code>brier_advantage</code> is
+the one panel needing an input the report cannot derive — your strategy's own
+probability — so it is passed in and skipped with a reason when absent.</p>
+<p><code>quant.basket_payload(...)</code> returns the same content as a <code>BasketReport</code>
+object without rendering HTML.</p>
+<h2 id="restatement-impact">Restatement impact<a class="headerlink" href="#restatement-impact" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="n">quant</span><span class="o">.</span><span class="n">restatement_impact</span><span class="p">(</span>
+    <span class="k">lambda</span> <span class="n">pin</span><span class="p">:</span> <span class="n">quant</span><span class="o">.</span><span class="n">build_panel</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="s2">&quot;signals&quot;</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">,</span> <span class="n">periods</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,),</span> <span class="o">**</span><span class="n">pin</span><span class="p">),</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">before</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;version&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;signals&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">}},</span>
+    <span class="n">after</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;version&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;signals&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;prices&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">}},</span>
+    <span class="n">metric</span><span class="o">=</span><span class="k">lambda</span> <span class="n">panel</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;mean_ic&quot;</span><span class="p">:</span> <span class="n">panel</span><span class="o">.</span><span class="n">mean_ic</span><span class="p">()},</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>Runs one computation at two read points and reports what a vendor's revision
+moved — a question only a versioned store can answer. <code>build(pin)</code> receives
+the pin kwargs (<code>version</code>, <code>as_of</code>, <code>snapshot</code>) and produces the computation;
+<code>metric(built)</code> reduces it to a mapping of scalars, and the result carries
+<code>before</code>, <code>after</code>, <code>delta</code> and <code>changed</code> per key, with <code>tolerance</code> (default
+<code>1e-9</code>) deciding what counts as moved. Omitting <code>after</code> compares against the
+unpinned read.</p>
 <h2 id="sweeps">Sweeps<a class="headerlink" href="#sweeps" title="Permanent link">#</a></h2>
 <p>A sweep runs a parameter grid with one fork per combination. Trials cannot
 contaminate each other or the base data, and they compare in one query
@@ -247,16 +375,99 @@ because forks share their base's segments.</p>
 </code></pre></div>
 
 <h2 id="reports">Reports<a class="headerlink" href="#reports" title="Permanent link">#</a></h2>
-<p><code>quant.factor_report(panel)</code> and <code>quant.tearsheet(series)</code> render one
-self-contained HTML file: inline CSS and JS, data embedded as JSON, no
-network access at view time. Section one is always the provenance header, so
-a reader sees the data version before the numbers. <code>quant.report_payload()</code>
-returns the same content as a dict, which is what agents and the CLI should
-read instead of scraping HTML.</p>
+<p><code>quant.factor_report(panel)</code>, <code>quant.tearsheet(series)</code> and
+<code>quant.backtest_report(result)</code> render one self-contained HTML file: inline
+CSS and JS, data embedded as JSON, no network access at view time. Section
+one is always the provenance header, so a reader sees the data version before
+the numbers. <code>quant.report_payload()</code> (and the per-kind
+<code>quant.backtest_payload</code> / <code>quant.basket_payload</code>) returns the same content
+as a dict, which is what agents and scripts should read instead of scraping
+HTML.</p>
+<h2 id="from-the-shell">From the shell<a class="headerlink" href="#from-the-shell" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>h5i_db.quant<span class="w"> </span>factor<span class="w"> </span>--db<span class="w"> </span>market.db<span class="w"> </span>--factor<span class="w"> </span>signals<span class="w"> </span>--prices<span class="w"> </span>prices<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--snapshot<span class="w"> </span><span class="m">2024</span>-q1<span class="w"> </span>--format<span class="w"> </span>html<span class="w"> </span>--out<span class="w"> </span>factor.html
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.quant<span class="w"> </span>tearsheet<span class="w"> </span>--db<span class="w"> </span>market.db<span class="w"> </span>--returns<span class="w"> </span>strategy_returns<span class="w"> </span>--out<span class="w"> </span>run.html
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.quant<span class="w"> </span>stats<span class="w">  </span>--db<span class="w"> </span>market.db<span class="w"> </span>--returns<span class="w"> </span>strategy_returns<span class="w"> </span>--format<span class="w"> </span>json
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.quant<span class="w"> </span>verify<span class="w"> </span>--db<span class="w"> </span>market.db<span class="w"> </span>--factor<span class="w"> </span>signals<span class="w"> </span>--prices<span class="w"> </span>prices
+</code></pre></div>
+
+<p>Every verb takes the same pin flags (<code>--version</code>, <code>--as-of</code>, <code>--snapshot</code>,
+<code>--event-time-cutoff</code>) and <code>--format json|html|table</code>. <code>stats</code> prints the
+headline set without rendering a document, and <code>verify</code> re-runs a factor
+panel and checks it still produces its numbers.</p>
+<h2 id="provenance-objects">Provenance objects<a class="headerlink" href="#provenance-objects" title="Permanent link">#</a></h2>
+<p>Every computation carries a <code>Provenance</code> (<code>digest</code>, <code>warnings</code>) and the <code>Pin</code>
+it ran under (<code>version</code>, <code>as_of</code>, <code>snapshot</code>, <code>event_time_cutoff</code>, and
+<code>is_pinned</code>). <code>quant.verify(subject, rerun=…)</code> checks both halves: the
+provenance digest must be unchanged <em>and</em> the recomputed values must match,
+because a digest over the SQL cannot notice an engine that computes the same
+query differently. An unpinned subject raises <code>VerificationError</code> (or, with
+<code>strict=False</code>, is reported unverifiable) rather than passing: two runs
+against "latest" agreeing proves only that nothing changed in the seconds
+between them.</p>
+<p>The objects these return are part of the API, not implementation detail:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Returned by</th>
+<th>Carries</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>FactorPanel</code></td>
+<td><code>build_panel</code></td>
+<td><code>ic</code>, <code>ic_decay</code>, <code>mean_ic</code>, <code>quantile_returns</code>, <code>spread</code>, <code>turnover</code>, <code>rank_autocorrelation</code>, <code>alpha_beta</code>, <code>weights</code>, <code>loss_report</code></td>
+</tr>
+<tr>
+<td><code>ReturnSeries</code></td>
+<td><code>returns</code>, <code>from_levels</code></td>
+<td><code>stats</code>, <code>equity_curve</code>, <code>underwater</code>, <code>drawdown_table</code>, <code>rolling_sharpe</code>, <code>rolling_volatility</code>, <code>rolling_beta</code></td>
+</tr>
+<tr>
+<td><code>SweepResult</code></td>
+<td><code>sweep</code></td>
+<td><code>compare</code>, <code>best</code>, <code>to_pandas</code>, <code>drop</code></td>
+</tr>
+<tr>
+<td><code>BasketReport</code></td>
+<td><code>basket_payload</code></td>
+<td><code>drawn</code>, <code>skipped</code>, <code>to_dict</code>, <code>to_html</code></td>
+</tr>
+<tr>
+<td><code>DeflatedSharpe</code></td>
+<td><code>deflated_sharpe</code></td>
+<td><code>sharpe</code>, <code>benchmark</code>, <code>probability</code>, <code>trials</code>, <code>skew</code>, <code>kurtosis</code>, <code>is_significant</code></td>
+</tr>
+<tr>
+<td><code>PBOResult</code></td>
+<td><code>probability_of_backtest_overfitting</code></td>
+<td><code>pbo</code>, <code>ranks</code>, <code>splits</code>, <code>strategies</code>, <code>is_overfit</code></td>
+</tr>
+<tr>
+<td><code>CostFit</code></td>
+<td><code>fit_impact</code></td>
+<td><code>intercept</code>, <code>coefficient</code>, <code>shape</code>, <code>r_squared</code>, <code>observations</code>, <code>predict</code>, <code>is_usable</code></td>
+</tr>
+<tr>
+<td><code>BrierAdvantage</code></td>
+<td><code>brier_advantage</code></td>
+<td><code>strategy_brier</code>, <code>market_brier</code>, <code>advantage</code>, <code>cumulative</code>, <code>win_rate</code>, <code>skill_score</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Both <code>FactorPanel</code> and <code>ReturnSeries</code> expose <code>sql()</code>, so the SQL a number was
+computed from is inspectable rather than implied.</p>
+<p><code>build_panel</code> raises <code>MaxLossExceededError</code> when more of the input is dropped
+than <code>max_loss</code> allows (default 0.35), mirroring alphalens, so a panel built
+from a third of the data cannot be mistaken for a panel built from all of it.
+<code>panel.loss_report()</code> gives the same accounting alphalens prints: what was
+lost joining to forward returns, and what was lost assigning quantiles.</p>
     <nav class="page-nav"><a class="prev" href="/manual/agents/"><span class="dir">← Previous</span><span class="pn-title">Agents &amp; automation</span></a><a class="next" href="/manual/operations/"><span class="dir">Next →</span><span class="pn-title">Operations guide</span></a></nav>
   </article>
 
-  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#inputs">Inputs</a></li><li><a href="#pinning-and-the-embargo">Pinning and the embargo</a></li><li><a href="#reproducibility">Reproducibility</a></li><li><a href="#divergences-from-the-reference-implementations">Divergences from the reference implementations</a></li><li><a href="#performance-statistics">Performance statistics</a></li><li><a href="#sweeps">Sweeps</a></li><li><a href="#reports">Reports</a></li></ul></aside>
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#inputs">Inputs</a></li><li><a href="#pinning-and-the-embargo">Pinning and the embargo</a></li><li><a href="#reproducibility">Reproducibility</a></li><li><a href="#divergences-from-the-reference-implementations">Divergences from the reference implementations</a></li><li><a href="#performance-statistics">Performance statistics</a></li><li><a href="#selection-bias-gets-first-class-statistics">Selection bias gets first-class statistics</a></li><li><a href="#purged-cross-validation">Purged cross-validation</a></li><li><a href="#cost-calibration">Cost calibration</a></li><li><a href="#scoring-a-forecast-against-the-markets-own">Scoring a forecast against the market's own</a></li><li><a href="#comparing-many-runs-at-once">Comparing many runs at once</a></li><li><a href="#restatement-impact">Restatement impact</a></li><li><a href="#sweeps">Sweeps</a></li><li><a href="#reports">Reports</a></li><li><a href="#from-the-shell">From the shell</a></li><li><a href="#provenance-objects">Provenance objects</a></li></ul></aside>
 </div>
 
 <footer class="docs-footer">

@@ -64,6 +64,11 @@ db.close()                                    # or use `with h5i_db.Database(...
     <span class="card-title">Error types</span>
     <span class="card-desc">The typed hierarchy under H5iError, with .code, .hint, and .retryable on every error.</span>
   </a>
+  <a class="card" href="../manual/data-onramp.html">
+    <span class="card-no">SUBPACKAGE</span>
+    <span class="card-title">h5i_db.venues</span>
+    <span class="card-desc">Vendor archives, bar files, trade dumps and live captures into the canonical tables.</span>
+  </a>
   <a class="card" href="../cookbook/">
     <span class="card-no">TUTORIALS</span>
     <span class="card-title">Cookbook</span>
@@ -104,9 +109,25 @@ except h5i_db.ConflictError:
 
 See [Exceptions](exceptions.html) for the full hierarchy and code table.
 
+## The subpackages
+
+Four public subpackages sit on top of `Database`. Each has its own manual
+page, because each is a workflow rather than a class:
+
+| Import | What it does | Guide |
+|---|---|---|
+| `h5i_db.backtest` | Typed run configs, signal and command tables, Python callback strategies, studies and stored results | [Backtesting](../manual/backtest.html) |
+| `h5i_db.quant` | Factor panels, performance statistics, selection-bias corrections, purged CV, reports | [Quant workflows](../manual/quant.html) |
+| `h5i_db.venues` | Vendor archives, bars, trades and corporate actions into canonical tables | [Data on-ramp](../manual/data-onramp.html) |
+| `h5i_db.capture` | Recording a venue websocket to the same format the archive readers consume | [Data on-ramp](../manual/data-onramp.html#recording-a-live-feed) |
+
+`h5i_db.backtest` and `h5i_db.venues` import with the package;
+`h5i_db.quant` and `h5i_db.capture` are imported explicitly, and `capture`
+needs the `h5i-db[capture]` extra.
+
 ## Versioning note
 
 `h5i_db.__version__` reports the installed engine version. The pure-Python
 wrapper (`Database`, `QueryResult`, `MutationPlan`) sits on the private
-native module `h5i_db._native`; treat everything not exported from `h5i_db`
-itself as internal.
+native module `h5i_db._native`; treat anything not exported from `h5i_db` or
+one of the subpackages above as internal.

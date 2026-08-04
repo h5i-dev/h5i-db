@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>h5i-db data on-ramp: vendor archives to canonical tables</title>
+  <meta name="description" content="h5i_db.venues: turning vendor archives, bar files, trade dumps and live captures into the canonical tables a replay reads.">
+  <meta name="author" content="h5i-dev">
+  <meta name="theme-color" content="#D21C1C">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://db.h5i.dev/manual/data-onramp/">
+  <link rel="icon" type="image/png" href="/_static/logo.png">
+  <link rel="apple-touch-icon" href="/_static/logo.png">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="h5i-db">
+  <meta property="og:title" content="h5i-db data on-ramp: vendor archives to canonical tables">
+  <meta property="og:description" content="h5i_db.venues: turning vendor archives, bar files, trade dumps and live captures into the canonical tables a replay reads.">
+  <meta property="og:url" content="https://db.h5i.dev/manual/data-onramp/">
+  <meta property="og:image" content="https://db.h5i.dev/_static/logo.png">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="h5i-db data on-ramp: vendor archives to canonical tables">
+  <meta name="twitter:description" content="h5i_db.venues: turning vendor archives, bar files, trade dumps and live captures into the canonical tables a replay reads.">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/_static/docs.css">
+
+  <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://db.h5i.dev/manual/data-onramp/#article","headline":"h5i-db data on-ramp: vendor archives to canonical tables","name":"h5i-db data on-ramp: vendor archives to canonical tables","description":"h5i_db.venues: turning vendor archives, bar files, trade dumps and live captures into the canonical tables a replay reads.","url":"https://db.h5i.dev/manual/data-onramp/","inLanguage":"en","dateModified":"2026-08-03","isPartOf":{"@type":"WebSite","@id":"https://db.h5i.dev/#website"},"publisher":{"@type":"Organization","@id":"https://h5i.dev/#org"},"about":{"@type":"SoftwareApplication","name":"h5i-db","applicationCategory":"DeveloperApplication"}},{"@type":"BreadcrumbList","@id":"https://db.h5i.dev/manual/data-onramp/#breadcrumb","itemListElement":[{"@type":"ListItem","position":1,"name":"h5i-db","item":"https://db.h5i.dev/"},{"@type":"ListItem","position":2,"name":"Manual","item":"https://db.h5i.dev/manual/"},{"@type":"ListItem","position":3,"name":"Data on-ramp","item":"https://db.h5i.dev/manual/data-onramp/"}]}]}</script>
+</head>
+<body>
+
+<a class="skip-link" href="#content">Skip to content</a>
+<div class="bg-grid"></div>
+
+<nav class="topnav">
+  <a class="nav-logo" href="/">
+    <img src="/_static/logo.png" alt="h5i-db">
+    <span>h5i-db</span>
+  </a>
+  <ul class="nav-links" id="nav-links">
+    <li><a href="/manual/" class="active">Manual</a></li>
+    <li><a href="/api/" >Python API</a></li>
+    <li><a href="/cookbook/" >Cookbook</a></li>
+    <li><a href="/#benchmarks">Benchmarks</a></li>
+    <li><a href="https://github.com/h5i-dev/h5i-db" class="nav-cta">GitHub →</a></li>
+  </ul>
+  <button class="nav-hamburger" id="hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </button>
+</nav>
+
+<div class="docs-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="search-box">
+      <input type="search" id="doc-search" placeholder="Search docs" autocomplete="off"
+             aria-label="Search documentation">
+      <kbd>/</kbd>
+      <div class="search-results" id="search-results" role="listbox"></div>
+    </div>
+<div class="sidebar-group"><div class="group-label">Manual</div><ul><li><a href="/manual/">Overview</a></li><li><a href="/manual/installation/">Installation</a></li><li><a href="/manual/quickstart/">Quickstart</a></li><li><a href="/manual/migrating-from-duckdb/">Migrating from DuckDB</a></li><li><a href="/manual/concepts/">Core concepts</a></li><li><a href="/manual/cli/">CLI reference</a></li><li><a href="/manual/notebooks/">Notebooks</a></li><li><a href="/manual/sql/">SQL reference</a></li><li><a href="/manual/agents/">Agents &amp; automation</a></li><li><a href="/manual/quant/">Quant workflows</a></li><li><a href="/manual/operations/">Operations guide</a></li><li><a href="/manual/data-onramp/" class="active">Data on-ramp</a></li><li><a href="/manual/backtest/">Backtesting</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Python API</div><ul><li><a href="/api/">Overview</a></li><li><a href="/api/database/">Database</a></li><li><a href="/api/dataframe/">DataFrame builder</a></li><li><a href="/api/results-and-plans/">QueryResult &amp; MutationPlan</a></li><li><a href="/api/exceptions/">Exceptions</a></li></ul></div>
+<div class="sidebar-group"><div class="group-label">Cookbook</div><ul><li><a href="/cookbook/">Cookbook</a></li></ul></div>
+  </aside>
+
+  <article class="doc" id="content">
+    <button class="sidebar-toggle" id="sidebar-toggle">☰&nbsp; Menu</button>
+    <div class="breadcrumb"><a href="/">h5i-db</a>
+<span class="sep">/</span>
+<a href="/manual/">Manual</a>
+<span class="sep">/</span>
+<span>Data on-ramp</span></div>
+<h1 id="data-on-ramp">Data on-ramp<a class="headerlink" href="#data-on-ramp" title="Permanent link">#</a></h1>
+<p><code>h5i_db.venues</code> turns vendor files <strong>already on disk</strong> into the canonical
+tables a <a href="/manual/backtest/">backtest</a> reads. It does not fetch. Downloading
+belongs in a script, where credentials, retries and rate limits belong; this
+layer is the part that has to be reproducible and testable offline.</p>
+<p>The canonical tables it writes are <code>book_deltas</code>, <code>trades</code>, <code>instruments</code>,
+<code>resolutions</code>, <code>bars</code>, <code>funding</code>, <code>references</code> and <code>corporate_actions</code>.
+<code>venues.CANONICAL_SCHEMAS</code> maps each name to its Arrow schema (the
+individual <code>TRADES_SCHEMA</code>, <code>BOOK_DELTAS_SCHEMA</code>, … constants are the same
+objects), and <code>venues.ensure_tables(db, names)</code> creates any that are
+missing.</p>
+<h2 id="three-steps-each-usable-alone">Three steps, each usable alone<a class="headerlink" href="#three-steps-each-usable-alone" title="Permanent link">#</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db</span> <span class="kn">import</span> <span class="n">venues</span>
+
+<span class="n">specs</span>  <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">polymarket_markets_from_json</span><span class="p">(</span><span class="n">payloads</span><span class="p">)</span>   <span class="c1"># slug -&gt; outcomes, tokens</span>
+<span class="n">venues</span><span class="o">.</span><span class="n">write_markets</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">specs</span><span class="p">)</span>                          <span class="c1"># instruments, resolutions</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>                          <span class="c1"># book_deltas, trades</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">files</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">discover</span><span class="p">(</span><span class="s2">&quot;/mnt/pmxt&quot;</span><span class="p">),</span>
+    <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">PMXT_LAYOUT</span><span class="p">,</span>
+    <span class="n">window</span><span class="o">=</span><span class="p">(</span><span class="n">start_ns</span><span class="p">,</span> <span class="n">end_ns</span><span class="p">),</span>
+<span class="p">)</span>
+<span class="n">report</span><span class="o">.</span><span class="n">coverage</span><span class="p">,</span> <span class="n">report</span><span class="o">.</span><span class="n">gaps</span><span class="p">,</span> <span class="n">report</span><span class="o">.</span><span class="n">replayed</span><span class="p">,</span> <span class="n">report</span><span class="o">.</span><span class="n">skipped</span>
+</code></pre></div>
+
+<p>The same from a shell, with market definitions travelling as a JSON file
+rather than as flags:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>h5i_db.venues<span class="w"> </span>markets<span class="w"> </span>market.db<span class="w"> </span>specs.json
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.venues<span class="w"> </span>ingest<span class="w">  </span>market.db<span class="w"> </span>specs.json<span class="w"> </span>--root<span class="w"> </span>/mnt/pmxt<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--start-ns<span class="w"> </span><span class="m">1777000000000000000</span><span class="w"> </span>--end-ns<span class="w"> </span><span class="m">1777003600000000000</span><span class="w"> </span>--min-coverage<span class="w"> </span><span class="m">0</span>.95
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.venues<span class="w"> </span>bars<span class="w">    </span>market.db<span class="w"> </span>--root<span class="w"> </span>/mnt/klines<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--layout<span class="w"> </span>binance-klines<span class="w"> </span>--instrument<span class="w"> </span>BINANCE:BTCUSDT
+python<span class="w"> </span>-m<span class="w"> </span>h5i_db.venues<span class="w"> </span>inspect<span class="w"> </span>market.db
+</code></pre></div>
+
+<p>The same four verbs are on the <code>h5i-venues</code> console script, and
+<code>h5i-backtest</code> / <code>h5i-capture</code> are the equivalents for the other two
+modules.</p>
+<p><code>--min-coverage</code> exits non-zero rather than letting a short load pass
+quietly, which is what makes this usable in a scheduled backfill. Gating
+without a window is an error (exit <code>2</code>), not a silent pass; falling short of
+the threshold is <code>3</code>.</p>
+<h2 id="market-identity-is-positional-and-refused-when-ambiguous">Market identity is positional, and refused when ambiguous<a class="headerlink" href="#market-identity-is-positional-and-refused-when-ambiguous" title="Permanent link">#</a></h2>
+<p><code>MarketSpec</code> pairs <code>outcome_labels</code> with <code>tokens</code> by index: index <em>i</em> of each
+describes the same outcome. Getting that backwards attributes every fill to
+the wrong side, so the constructor refuses every loose way of expressing it.</p>
+<p>Refused, each with a named reason: fewer than two outcomes; a token list that
+does not match the outcome list; duplicate tokens; a token two markets both
+claim; a <code>winner_outcome</code> with no <code>settlement_observable_ns</code> (settlement is
+gated on when the result became knowable, so a resolution without that
+instant is unusable); an observability instant before expiry.</p>
+<p><code>polymarket_markets_from_json</code> handles the awkward real shapes: list fields
+arriving as JSON-encoded strings, a resolution expressed as settled
+<code>outcomePrices</code> plus a <code>closed</code> flag, ISO-8601 or epoch times. Pass
+<code>require_resolution=True</code> when a settlement study needs resolved markets
+only.</p>
+<h2 id="a-vendor-dialect-is-data-not-a-code-path">A vendor dialect is data, not a code path<a class="headerlink" href="#a-vendor-dialect-is-data-not-a-code-path" title="Permanent link">#</a></h2>
+<p><code>ArchiveLayout</code> carries the column names, event vocabulary, timestamp unit
+and level shape. <code>PMXT_LAYOUT</code>, <code>TELONEX_LAYOUT</code>, <code>KALSHI_PMXT_LAYOUT</code>,
+<code>LIMITLESS_PMXT_LAYOUT</code>, <code>OPINION_PMXT_LAYOUT</code>,
+<code>KAGGLE_POLYMARKET_LAYOUT</code> and <code>KAGGLE_POLYMARKET_TRADES_LAYOUT</code> are
+literals of that type, and a new vendor is another literal rather than
+another module.</p>
+<p>Three level shapes exist:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th><code>LevelLayout(style=…)</code></th>
+<th>Shape</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nested</code></td>
+<td><code>bids</code>/<code>asks</code> are list columns of structs, one row per book state</td>
+</tr>
+<tr>
+<td><code>flat</code></td>
+<td>One row per level, side in its own column</td>
+</tr>
+<tr>
+<td><code>payload</code></td>
+<td>The whole event is a JSON string in one column — what a websocket capture written straight to Parquet looks like</td>
+</tr>
+</tbody>
+</table></div>
+<p>Under <code>payload</code> the token usually lives inside the JSON, so filtering
+happens in two passes: cheaply on the instrument column, then on the decoded
+token.</p>
+<div class="highlight"><pre><span></span><code><span class="n">layout</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ArchiveLayout</span><span class="p">(</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">&quot;house-feed&quot;</span><span class="p">,</span> <span class="n">timestamp_column</span><span class="o">=</span><span class="s2">&quot;recv_ns&quot;</span><span class="p">,</span> <span class="n">timestamp_unit</span><span class="o">=</span><span class="s2">&quot;ns&quot;</span><span class="p">,</span>
+    <span class="n">token_column</span><span class="o">=</span><span class="s2">&quot;token&quot;</span><span class="p">,</span> <span class="n">event_type_column</span><span class="o">=</span><span class="s2">&quot;channel&quot;</span><span class="p">,</span> <span class="n">snapshot_events</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;depth&quot;</span><span class="p">,),</span>
+    <span class="n">levels</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">LevelLayout</span><span class="p">(</span><span class="n">style</span><span class="o">=</span><span class="s2">&quot;nested&quot;</span><span class="p">,</span> <span class="n">bids_column</span><span class="o">=</span><span class="s2">&quot;buys&quot;</span><span class="p">,</span> <span class="n">asks_column</span><span class="o">=</span><span class="s2">&quot;sells&quot;</span><span class="p">,</span>
+                              <span class="n">price_field</span><span class="o">=</span><span class="s2">&quot;px&quot;</span><span class="p">,</span> <span class="n">size_field</span><span class="o">=</span><span class="s2">&quot;qty&quot;</span><span class="p">),</span>
+    <span class="n">max_levels</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span>     <span class="c1"># keep top of book; the drop count is reported</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>No directory convention is assumed. Pass explicit <code>files=</code>, or a root plus a
+glob to <code>venues.discover(root, pattern=…)</code>: a mirror layout is not a data
+contract, and people mirror differently.</p>
+<h2 id="four-properties-worth-knowing-before-pointing-it-at-a-mirror">Four properties worth knowing before pointing it at a mirror<a class="headerlink" href="#four-properties-worth-knowing-before-pointing-it-at-a-mirror" title="Permanent link">#</a></h2>
+<p><strong>Re-running is a replay, not a duplicate.</strong> Every commit is keyed by the
+hash of the <em>normalised</em> rows, so identical inputs produce identical keys and
+h5i-db recognises them. An interrupted backfill is safe to restart, and two
+sources serving the same hour converge on one commit. <code>report.replayed</code> says
+whether the whole ingest was already present.</p>
+<p><strong>Requested and loaded windows stay separate facts.</strong> <code>report.coverage</code> is
+the loaded span over the requested one, and <code>None</code> when no window was asked
+for, because a ratio against an unbounded request means nothing. It says
+nothing about holes <em>inside</em> the span; those are <code>report.gaps</code>.</p>
+<p><strong>Nothing is guessed.</strong> An event type present in the file but absent from the
+layout is counted in <code>report.skipped</code>; a file missing required columns is
+skipped with its name and the missing columns; an unparseable payload is
+counted; and <code>max_levels</code> records how many levels it dropped. A truncation
+nobody can see is how a wrong conclusion arrives three steps later.</p>
+<p><strong>Zero size means delete.</strong> These venues spell "this level is gone" as a
+size-zero change, so the importer writes <code>delete</code>, not a level with no
+quantity.</p>
+<p><code>IngestReport</code> carries <code>vendor</code>, <code>tables</code> (a <code>TableWrite</code> per table: rows,
+chunks, replayed chunks, idempotency keys), <code>sources</code> (a <code>SourceFile</code> each:
+path, size, rows read, rows kept), <code>requested_window</code>, <code>loaded_window</code>,
+<code>gaps</code>, <code>skipped</code> and <code>unknown_instruments</code>, plus the derived <code>coverage</code>,
+<code>rows</code> and <code>replayed</code>. <code>to_dict()</code> renders the lot.</p>
+<h2 id="bars">Bars<a class="headerlink" href="#bars" title="Permanent link">#</a></h2>
+<p>Anything shaped like OHLCV goes through one on-ramp, whatever produced it.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># a vendor dump on disk</span>
+<span class="n">venues</span><span class="o">.</span><span class="n">ingest_bars</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">files</span><span class="o">=</span><span class="p">[</span><span class="o">...</span><span class="p">],</span> <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">BINANCE_KLINES_LAYOUT</span><span class="p">,</span>
+                   <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;BINANCE:BTCUSDT&quot;</span><span class="p">)</span>
+
+<span class="c1"># anything already in memory: a broker export, yfinance, your own frame</span>
+<span class="n">bars</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">bars_from_dataframe</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;AAPL&quot;</span><span class="p">)</span>
+
+<span class="c1"># a venue that publishes no candles at all</span>
+<span class="n">venues</span><span class="o">.</span><span class="n">bars_from_trades</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">interval</span><span class="o">=</span><span class="s2">&quot;1m&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>ts_init</code> is the bar <strong>close</strong> and <code>ts_event</code> the open, because a bar is not
+knowable until its interval ends. That is why a <code>BarLayout</code> must supply
+either a close-time column or an <code>interval</code>: there is no safe default, so
+there is no default. The same rule is why <code>references_from_series</code> makes you
+state <code>published_after</code> — a daily rate for Monday is published on Tuesday,
+and stamping it at Monday lets a strategy read it a day early.</p>
+<p><code>GENERIC_OHLCV_LAYOUT</code> and <code>BINANCE_KLINES_LAYOUT</code> cover the common files;
+<code>read_bars_csv</code> and <code>bars_from_table</code> are the pieces underneath, for a file
+you want to inspect before writing it. <code>parse_interval("1m")</code> is the same
+interval parser the layouts use.</p>
+<p>Yahoo has had no official API since 2017, so <code>yfinance</code> is a scraper that
+breaks when Yahoo changes internals. Fetch with it if you like, then hand the
+frame to <code>bars_from_dataframe</code>: that keeps the breakage in your script rather
+than in a parser here. Stooq downloads now sit behind a browser check, so
+fetch those by hand and point <code>read_bars_csv</code> at the file.</p>
+<h2 id="trades-and-corporate-actions">Trades and corporate actions<a class="headerlink" href="#trades-and-corporate-actions" title="Permanent link">#</a></h2>
+<p>A venue that publishes bulk trade files gives you real microstructure for
+free.</p>
+<div class="highlight"><pre><span></span><code><span class="n">venues</span><span class="o">.</span><span class="n">ingest_trades</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">files</span><span class="o">=</span><span class="p">[</span><span class="o">...</span><span class="p">],</span> <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">BINANCE_TRADES_LAYOUT</span><span class="p">,</span>
+                     <span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;BINANCE:BTCUSDT&quot;</span><span class="p">)</span>
+</code></pre></div>
+
+<p>The one field worth reading twice is the aggressor. Binance ships
+<code>isBuyerMaker</code>, which is true when the <strong>buyer</strong> was resting, so the taker
+was the seller. Read straight through, it inverts every trade sign, and the
+result still balances and still sums to the right volume. <code>TradeLayout</code>
+therefore takes either <code>buyer_is_maker_column</code> or <code>aggressor_column</code>, never
+both. <code>BINANCE_TRADES_LAYOUT</code> and <code>BINANCE_AGG_TRADES_LAYOUT</code> are the
+shipped literals, and <code>read_trades_csv</code> / <code>trades_from_table</code> are the
+in-memory halves for a file you want to inspect first.</p>
+<p>Corporate actions are what make an equity backtest correct rather than
+plausible. Without them a 2-for-1 split reads as a 50% overnight crash.</p>
+<div class="highlight"><pre><span></span><code><span class="n">venues</span><span class="o">.</span><span class="n">ingest_corporate_actions</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">actions</span><span class="o">=</span><span class="p">[{</span><span class="s2">&quot;instrument_id&quot;</span><span class="p">:</span> <span class="s2">&quot;AAPL&quot;</span><span class="p">,</span> <span class="s2">&quot;kind&quot;</span><span class="p">:</span> <span class="s2">&quot;split&quot;</span><span class="p">,</span> <span class="s2">&quot;ratio&quot;</span><span class="p">:</span> <span class="mf">2.0</span><span class="p">,</span>
+              <span class="s2">&quot;effective&quot;</span><span class="p">:</span> <span class="s2">&quot;2026-03-02&quot;</span><span class="p">,</span> <span class="s2">&quot;announced&quot;</span><span class="p">:</span> <span class="s2">&quot;2026-02-01&quot;</span><span class="p">}],</span>
+    <span class="n">known_by</span><span class="o">=</span><span class="n">simulated_now_ns</span><span class="p">,</span>   <span class="c1"># drop what had not been announced yet</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p><code>effective</code> is the replay clock, because that is when positions and resting
+orders change. Past prices are never rewritten: nobody traded the adjusted
+price, and a strategy that bought at 50 the day before a 2-for-1 bought at
+50. <code>announced</code> is kept separately so <code>known_by</code> can reproduce what was
+knowable on a past date; rows with no announcement are dropped under a cutoff
+rather than assumed early enough, since assuming is how a run ends up
+trading a split nobody had heard of.</p>
+<p><code>corporate_actions_from_rows</code> and <code>references_from_series</code> build the Arrow
+tables without writing them, and <code>ingest_references</code> appends a reference
+series (a benchmark, a rate, a vendor mark) that a strategy may read only
+after its <code>published_after</code> instant.</p>
+<h2 id="kalshi-and-predexon">Kalshi and Predexon<a class="headerlink" href="#kalshi-and-predexon" title="Permanent link">#</a></h2>
+<p>Kalshi's hourly archive quotes both outcomes as bids, and its deltas are
+signed changes in resting size, so it needs its own layout. Everything else
+is the same three steps. A market needs no <code>tokens=</code>: the files name the
+instrument and pick the outcome with a label, so the outcome order comes from
+<code>outcome_labels</code>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">specs</span> <span class="o">=</span> <span class="p">[</span><span class="n">venues</span><span class="o">.</span><span class="n">MarketSpec</span><span class="p">(</span><span class="n">instrument_id</span><span class="o">=</span><span class="s2">&quot;KXBTC15M-26JUN100815-15&quot;</span><span class="p">,</span>
+                           <span class="n">venue</span><span class="o">=</span><span class="s2">&quot;kalshi&quot;</span><span class="p">,</span> <span class="n">outcome_labels</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;yes&quot;</span><span class="p">,</span> <span class="s2">&quot;no&quot;</span><span class="p">))]</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_archive</span><span class="p">(</span>
+    <span class="n">db</span><span class="p">,</span>
+    <span class="n">files</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">discover</span><span class="p">(</span><span class="s2">&quot;/mnt/kalshi&quot;</span><span class="p">,</span> <span class="n">pattern</span><span class="o">=</span><span class="s2">&quot;kalshi_orderbook_*.parquet&quot;</span><span class="p">),</span>
+    <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">,</span>
+    <span class="n">layout</span><span class="o">=</span><span class="n">venues</span><span class="o">.</span><span class="n">KALSHI_PMXT_LAYOUT</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>Read two numbers out of the report before trusting the result:</p>
+<ul>
+<li><code>report.gaps</code> carries a <code>snapshot_divergence</code> entry saying how many vendor
+  snapshots the reconstruction reproduced exactly. This feed has no sequence
+  numbers, so that comparison is the only integrity check available. A low
+  share almost always means the window's deltas are incomplete, and the fix
+  is to load the neighbouring hours, not to lower expectations.</li>
+<li><code>report.skipped</code> counts changes that arrived with no book to apply them to
+  (<code>delta_before_snapshot</code>). An hour that was never snapshotted for a market
+  contributes nothing rather than inventing a base of zero.</li>
+</ul>
+<p>Predexon serves snapshots instead of an archive:</p>
+<div class="highlight"><pre><span></span><code><span class="n">snapshots</span> <span class="o">=</span> <span class="n">fetch_pages</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>          <span class="c1"># your script, your API key</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">ingest_predexon_orderbooks</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">snapshots</span><span class="o">=</span><span class="n">snapshots</span><span class="p">,</span> <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Check <code>report.gaps</code> for <code>snapshot_cadence</code> before trusting a window: it
+carries the measured median and worst gap between samples, and the worst gap
+is the number that matters. The vendor's <code>sequence</code> field is deliberately
+unread, because it is not a per-market counter — it steps by a median of 45,
+jumps by millions, and runs backwards — so differencing it invents holes that
+are not there.</p>
+<h3 id="one-book-two-sides">One book, two sides<a class="headerlink" href="#one-book-two-sides" title="Permanent link">#</a></h3>
+<p>Kalshi publishes <code>yes_bids</code> and <code>no_bids</code>, two books of bids, because an ask
+on YES is a bid on NO. Both the archive layout and the Predexon reader fold
+them into a single two-sided book on outcome 0, at <code>1 - price</code> for the NO
+side. A capture, an archive and a Predexon pull therefore give the same
+canonical shape.</p>
+<p>That fold is not cosmetic. Storing the two as separate one-sided books leaves
+a market with no asks at all, and an order that cannot fill is <strong>cancelled</strong>
+rather than rejected, so the run completes and the strategy simply reads as
+having declined to trade.</p>
+<h2 id="manifold">Manifold<a class="headerlink" href="#manifold" title="Permanent link">#</a></h2>
+<p>Manifold publishes markets and bets as JSON rather than as book files, so it
+has its own pair of readers:</p>
+<div class="highlight"><pre><span></span><code><span class="n">specs</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">manifold_markets_from_json</span><span class="p">(</span><span class="n">payloads</span><span class="p">)</span>
+<span class="n">venues</span><span class="o">.</span><span class="n">write_markets</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">specs</span><span class="p">)</span>
+<span class="n">venues</span><span class="o">.</span><span class="n">ingest_manifold_bets</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">bets</span><span class="o">=</span><span class="n">bets</span><span class="p">,</span> <span class="n">markets</span><span class="o">=</span><span class="n">specs</span><span class="p">)</span>
+</code></pre></div>
+
+<p><code>manifold_trades_from_json</code> is the same conversion without the write. Both
+take a <code>skipped=</code> collector, so payloads they refused are countable rather
+than silently absent.</p>
+<h2 id="recording-a-live-feed">Recording a live feed<a class="headerlink" href="#recording-a-live-feed" title="Permanent link">#</a></h2>
+<p><code>h5i-capture</code> (from <code>pip install h5i-db[capture]</code>, or
+<code>python -m h5i_db.capture</code>) records a venue websocket to lz4-compressed
+newline-delimited JSON — the same format the archive readers consume, so a
+capture and a vendor archive load through one path.</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">KALSHI_API_KEY_ID</span><span class="o">=</span>…<span class="w">            </span><span class="c1"># never a flag: a flag lands in ps output</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">KALSHI_PRIVATE_KEY_PATH</span><span class="o">=</span>/path/to/key.pem
+h5i-capture<span class="w"> </span>--venue<span class="w"> </span>kalshi<span class="w"> </span>--out<span class="w"> </span>./capture<span class="w"> </span>--market<span class="w"> </span>KXBTCD-25DEC31
+</code></pre></div>
+
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--venue kalshi\|polymarket</code></td>
+<td>Kalshi needs credentials; Polymarket is public</td>
+</tr>
+<tr>
+<td><code>--out &lt;dir&gt;</code></td>
+<td>Files land in <code>&lt;out&gt;/&lt;venue&gt;/&lt;date&gt;/&lt;hour&gt;</code></td>
+</tr>
+<tr>
+<td><code>--market &lt;id&gt;</code></td>
+<td>Repeatable, or comma-separated</td>
+</tr>
+<tr>
+<td><code>--channel &lt;name&gt;</code></td>
+<td>Override the venue's default channels</td>
+</tr>
+<tr>
+<td><code>--url &lt;ws&gt;</code></td>
+<td>Point at a demo or staging endpoint</td>
+</tr>
+<tr>
+<td><code>--flush-secs &lt;n&gt;</code></td>
+<td>How often completed lz4 blocks reach the file — this bounds what a <code>kill -9</code> can destroy</td>
+</tr>
+<tr>
+<td><code>--keepalive-secs</code>, <code>--max-backoff-secs</code></td>
+<td>Keepalive cadence and reconnect ceiling</td>
+</tr>
+</tbody>
+</table></div>
+<p>It stamps arrival in nanoseconds and writes the payload verbatim. Both rules
+exist for the same reason: an arrival stamp cannot be reconstructed later,
+and parsing on the write path means a parser bug costs the data rather than
+an afternoon.</p>
+<p>The same thing as a library, for a feed the CLI does not speak:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">h5i_db.capture</span> <span class="kn">import</span> <span class="n">CaptureWriter</span><span class="p">,</span> <span class="n">archive_line</span><span class="p">,</span> <span class="n">now_nanos</span><span class="p">,</span> <span class="n">read_hour</span>
+
+<span class="k">with</span> <span class="n">CaptureWriter</span><span class="p">(</span><span class="s2">&quot;./capture&quot;</span><span class="p">,</span> <span class="s2">&quot;kalshi&quot;</span><span class="p">,</span> <span class="n">flush_after</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span> <span class="k">as</span> <span class="n">writer</span><span class="p">:</span>
+    <span class="n">received_at</span> <span class="o">=</span> <span class="n">now_nanos</span><span class="p">()</span>
+    <span class="n">writer</span><span class="o">.</span><span class="n">write_line</span><span class="p">(</span><span class="n">received_at</span><span class="p">,</span> <span class="n">archive_line</span><span class="p">(</span><span class="n">received_at</span><span class="p">,</span> <span class="n">frame</span><span class="p">))</span>
+
+<span class="n">read_hour</span><span class="p">(</span><span class="s2">&quot;./capture/kalshi/2026-07-31&quot;</span><span class="p">,</span> <span class="s2">&quot;14&quot;</span><span class="p">)</span>   <span class="c1"># or read_capture(path)</span>
+</code></pre></div>
+
+<p>Credentials are read from <code>KALSHI_API_KEY_ID</code> + <code>KALSHI_PRIVATE_KEY_PATH</code>
+(or <code>KALSHI_API_TOKEN</code>), never from an argument; <code>sign_kalshi</code> and
+<code>kalshi_headers</code> are the signing pieces, and a missing credential raises
+<code>MissingCredential</code> rather than connecting anonymously and failing later.</p>
+<p>This is a separate package from <code>h5i_db.venues</code> on purpose. That package is
+parse-only — every function takes bytes the caller already downloaded, which
+is what makes the mapping a pure function testable offline against recorded
+payloads. Sockets, credentials and reconnect policy would end that, so they
+live here. The two meet at a file format, not at a function call. The extra's
+dependencies (<code>websockets</code>, <code>cryptography</code>, <code>lz4</code>) are imported inside the
+functions that need them, so a user who only reads archives never pays for a
+TLS stack.</p>
+<p>Record only what an archive cannot give you. For Kalshi after January 2026,
+<code>predexon_book_from_snapshots</code> is usually the better answer, and recording
+buys sub-cent precision, your own arrival clock, and independence from a free
+service rather than access to otherwise-missing data.</p>
+<h2 id="replaying-an-accounts-ledger">Replaying an account's ledger<a class="headerlink" href="#replaying-an-accounts-ledger" title="Permanent link">#</a></h2>
+<p>The strictest realism question available: given the trades an account
+actually took, does the engine reproduce the same portfolio? Usually not, and
+that is the point — a forced-fill simulator would reproduce the ledger by
+construction and test nothing.</p>
+<div class="highlight"><pre><span></span><code><span class="n">rows</span> <span class="o">=</span> <span class="p">[</span><span class="n">venues</span><span class="o">.</span><span class="n">LedgerRow</span><span class="p">(</span><span class="n">ts_ns</span><span class="o">=</span><span class="err">…</span><span class="p">,</span> <span class="n">instrument_id</span><span class="o">=</span><span class="err">…</span><span class="p">,</span> <span class="n">outcome</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+                         <span class="n">side</span><span class="o">=</span><span class="s2">&quot;buy&quot;</span><span class="p">,</span> <span class="n">quantity</span><span class="o">=</span><span class="err">…</span><span class="p">,</span> <span class="n">price</span><span class="o">=</span><span class="err">…</span><span class="p">),</span> <span class="err">…</span><span class="p">]</span>
+<span class="n">commands</span> <span class="o">=</span> <span class="n">venues</span><span class="o">.</span><span class="n">commands_from_ledger</span><span class="p">(</span><span class="n">rows</span><span class="p">,</span> <span class="n">specs</span><span class="p">)</span>   <span class="c1"># limit-IOC at the ledger price</span>
+<span class="n">db</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;commands&quot;</span><span class="p">,</span> <span class="n">commands</span><span class="p">)</span>                       <span class="c1"># sells are reduce_only</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">backtest</span><span class="o">.</span><span class="n">execute</span><span class="p">(</span><span class="n">db</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span>                 <span class="c1"># DataConfig(commands=&quot;commands&quot;, …)</span>
+<span class="n">venues</span><span class="o">.</span><span class="n">compare_to_ledger</span><span class="p">(</span><span class="n">result</span><span class="p">,</span> <span class="n">typed_rows</span><span class="p">)</span>          <span class="c1"># per-market reconciliation</span>
+</code></pre></div>
+
+<p>Compiled into <em>intent</em>, not fills, so the historical book accepts or refuses
+each order on its merits. <code>reduce_only</code> on sells stops a replay inventing
+short exposure the ledger never showed. The comparison reports per-market
+shortfalls rather than one pass/fail, because <em>where</em> the book refused is the
+finding. <code>ledger_table(rows)</code> writes the ledger itself as a table when you
+want the two side by side in SQL.</p>
+<h2 id="fetching-when-you-have-network">Fetching, when you have network<a class="headerlink" href="#fetching-when-you-have-network" title="Permanent link">#</a></h2>
+<p>Fetchers are scripts, not core API surface. Two limits are properties of the
+public APIs rather than of the tooling: Polymarket's book endpoint serves
+<strong>live markets only</strong>, so a resolved-market list is the right input for
+definitions and the wrong one for books, and historical coverage is price
+<em>points</em>, not books, so any depth or queue study needs a captured archive.</p>
+<p>One practical trap: these hosts answer <code>403</code> to the default <code>Python-urllib</code>
+user agent, which reads exactly like a blocked network and is not one. Set
+any <code>User-Agent</code>.</p>
+    <nav class="page-nav"><a class="prev" href="/manual/operations/"><span class="dir">← Previous</span><span class="pn-title">Operations guide</span></a><a class="next" href="/manual/backtest/"><span class="dir">Next →</span><span class="pn-title">Backtesting</span></a></nav>
+  </article>
+
+  <aside class="toc" id="toc"><div class="toc-label">On this page</div><ul><li><a href="#three-steps-each-usable-alone">Three steps, each usable alone</a></li><li><a href="#market-identity-is-positional-and-refused-when-ambiguous">Market identity is positional, and refused when ambiguous</a></li><li><a href="#a-vendor-dialect-is-data-not-a-code-path">A vendor dialect is data, not a code path</a></li><li><a href="#four-properties-worth-knowing-before-pointing-it-at-a-mirror">Four properties worth knowing before pointing it at a mirror</a></li><li><a href="#bars">Bars</a></li><li><a href="#trades-and-corporate-actions">Trades and corporate actions</a></li><li><a href="#kalshi-and-predexon">Kalshi and Predexon</a><ul><li><a href="#one-book-two-sides">One book, two sides</a></li></ul></li><li><a href="#manifold">Manifold</a></li><li><a href="#recording-a-live-feed">Recording a live feed</a></li><li><a href="#replaying-an-accounts-ledger">Replaying an account's ledger</a></li><li><a href="#fetching-when-you-have-network">Fetching, when you have network</a></li></ul></aside>
+</div>
+
+<footer class="docs-footer">
+  <div class="footer-inner">
+    <div class="footer-brand">
+      <img src="/_static/logo.png" alt="h5i-db">
+      <span>h5i-db<span class="sub"> / part of the h5i toolchain</span></span>
+    </div>
+    <nav class="footer-links">
+      <a href="/">Home</a>
+      <a href="/manual/">Manual</a>
+      <a href="/api/">Python API</a>
+      <a href="/cookbook/">Cookbook</a>
+      <a href="https://github.com/h5i-dev/h5i-db">GitHub</a>
+      <a href="https://github.com/h5i-dev/h5i-db/blob/main/LICENSE">License</a>
+    </nav>
+    <div class="footer-legal">Apache 2.0 · Built with Rust</div>
+  </div>
+</footer>
+
+<script>window.__DOCS_ROOT__ = "/";</script>
+<script src="/_static/docs.js" defer></script>
+</body>
+</html>

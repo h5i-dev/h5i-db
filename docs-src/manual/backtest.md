@@ -240,6 +240,67 @@ Exit codes are distinct on purpose: a refused config (`2`) and a run that
 failed to reproduce (`3`) call for different responses, and a script should not
 have to parse stdout to tell them apart.
 
+## The config, and what comes back
+
+```python
+config = backtest.BacktestConfig(
+    run_id="momentum-001",
+    portfolio=backtest.PortfolioConfig(starting_cash=10_000.0),
+    data=backtest.DataConfig(signals="signals", snapshot="2024-q1",
+                             minimum_coverage=0.95),
+    execution=backtest.ExecutionConfig(fee_rate=0.02, queue_position=True,
+                                       latency_nanos=1_000_000),
+    risk=backtest.RiskConfig(max_abs_position=500.0),
+    output=backtest.OutputConfig(equity_interval_nanos=60_000_000_000),
+)
+config.to_json()        # a complete reproduction recipe
+config.trial_digest     # identity for the trial ledger; excludes run_id and metadata
+```
+
+| Section | Carries |
+|---|---|
+| `PortfolioConfig` | `starting_cash` |
+| `DataConfig` | `signals`, `commands`, `strategy_id`, the read pin (`snapshot`, `version`, `as_of`), `window`, `minimum_coverage` |
+| `ExecutionConfig` | `fee_kind`, `fee_rate`, `maker_rebate`, `maker_fee_rate`, `queue_position`, `optimistic_queue`, `latency_nanos`, `slippage_ticks`, `margin_kind`, `leverage`, `maintenance_margin_rate` |
+| `RiskConfig` | `max_order_quantity`, `max_abs_position`, `max_open_orders` |
+| `OutputConfig` | `equity_interval_nanos` |
+
+`backtest.inspect(db, config)` runs preflight alone and returns a
+`PreflightInspection` with the `config_digest`, the `ReplayFidelity` the data
+supports (`TICK_L2`, `SNAPSHOT_L2`, `TRADES_ONLY`, `BARS_SYNTHETIC`, `NONE`),
+per-table statistics, and `issues` split into `errors()` and `warnings()`.
+`raise_for_errors()` is the one-line gate; `execute()` calls it for you unless
+`preflight=False`. A config that changed shape across versions loads with a
+`ConfigCompatibilityWarning` rather than silently meaning something else.
+
+`backtest.run(db, run_id, starting_cash=…, …)` is the flat-keyword form of
+the same thing, for a run you are writing by hand rather than storing.
+
+### Opening a run again
+
+Every run lands in a `bt-<run_id>` fork holding the tables in
+`backtest.RESULT_TABLES` (`bt_run`, `bt_orders`, `bt_fills`, `bt_positions`,
+`bt_equity`), read from the market-data tables in
+`backtest.MARKET_DATA_TABLES`. The result is addressable long after the
+process that made it exited:
+
+```python
+result = backtest.open_result(db, "momentum-001")
+backtest.list_runs(db)                       # one summary per bt- fork
+backtest.find_trial(db, digest)              # the run with this trial digest, if any
+
+result.stats()          result.summary()     result.table("bt_run")
+result.equity           result.fills         result.orders    result.positions
+result.fork_name        result.run_id
+result.verify()         result.explain(order_id)   result.compare(other)
+result.report(path)     result.tearsheet(path)
+result.promote(["bt_equity"])                result.drop()
+```
+
+`BacktestResult` is also a mapping over the run summary, so `result["cached"]`
+and `result["final_cash"]` work directly. `drop()` removes the fork and
+everything it owns; `promote()` lands one of its tables on the base.
+
 ## Settlement
 
 Settlement is not an event in the replay stream. It is a policy applied
@@ -714,6 +775,77 @@ Two orderings inside the loop are load-bearing:
   produced them, which removes reentrancy and makes latency a property of
   the queue rather than of every call site.
 
+### Tier 2 from Python
+
+`backtest.EventStrategy` is the Python side of the same trait. Callbacks
+receive mappings and return one command mapping, an iterable of them, or
+`None`; the supported actions are `submit`, `amend`, `cancel`, `timer`,
+`mint`, `redeem`, `convert`, `twap` and `forecast`.
+
+```python
+from h5i_db import backtest
+
+class Momentum(backtest.EventStrategy):
+    def on_start(self, context):
+        self.last = {}
+
+    def on_event(self, context, event):
+        prev = self.last.get(event["instrument_id"])
+        self.last[event["instrument_id"]] = event.get("price")
+        if prev and event["price"] > prev * 1.01:
+            return {"action": "submit", "instrument_id": event["instrument_id"],
+                    "outcome": 0, "side": "buy", "quantity": 10.0,
+                    "kind": "market"}
+
+result = backtest.run_strategy(db, "momentum-001", Momentum(),
+                               starting_cash=10_000.0,
+                               data=backtest.DataConfig(...))
+```
+
+`context` is optional, and it is the parameter's **name** (`context` or
+`ctx`) that asks for it. Declare `def on_event(self, event)` and no context
+is built, which saves an object and a snapshot of every open position on
+every event; declare `def on_event(self, context, event)` and it is. Both
+forms work everywhere — the shorter one is simply not charged for what it
+does not ask for. Any further parameter needs a default, and a signature the
+engine cannot call is refused when the run starts rather than misbound during
+it. Callbacks left at the base class's do-nothing versions are never called.
+
+Declarative signals or command tables stay preferable when callbacks are not
+needed: they avoid crossing the Python boundary on every event, and only they
+have a complete identity in the typed config, which is what makes a trial
+reusable (see [the trial ledger](#agent-trial-ledger)).
+
+### Building the signals table
+
+A signals table is ordinary data, so anything that produces the right columns
+works. The builders exist so the common shapes do not have to be spelled out
+row by row:
+
+```python
+backtest.create_signal_table(db, "signals")     # or create_command_table(db, "commands")
+
+db.append("signals", backtest.signal_table(rows))          # from dicts
+db.append("commands", backtest.command_table(rows))        # the richer stream
+db.append("signals", backtest.from_signals(                # from boolean arrays
+    timestamps, instrument_id="AAPL", entries=entries, exits=exits, size=10.0))
+db.append("signals", backtest.target_positions(            # from a target series
+    timestamps, targets, instrument_id="AAPL"))
+```
+
+`backtest.SIGNAL_SCHEMA` is `ts`, `instrument_id`, `outcome`, `side`,
+`quantity`, `kind`, `limit_price`, `time_in_force`, `tag`, `reduce_only`,
+`post_only`; `COMMAND_SCHEMA` adds `action` and `client_order_id` for the
+richer command stream (`amend`, `cancel`, `twap`, set operations).
+
+`from_signals` takes two aligned boolean arrays over one timeline and stamps
+exits `reduce_only`, so a replay cannot invent short exposure the signals
+never asked for. It never shifts a signal or assumes bar-close execution: the
+timestamps you pass must already be the instants the features were available.
+`target_positions` is the other common shape — a desired position per
+timestamp — and emits the minimum sequence of orders that reaches it, so a
+flat target produces nothing.
+
 ### Stamp a signal after the quote it came from
 
 Market data is merged on the total order `(ts_init, stream priority, stream,
@@ -776,6 +908,22 @@ warnings. Merely scanning a list does not mark work reviewed:
 `StudyResult.open_trial(n)` marks in-process state, while `h5i-db-ui` marks a
 trial seen only when its detail is opened and persists that review state in
 the browser. The leaderboard remains a separate tab.
+
+The same ordering is available without the UI, so a script can triage a
+sweep the way the tab does:
+
+```python
+result.attention()          # trials in the order a reviewer should visit them
+result.attention_state      # the group's own state, rolled up
+result.warning_badge        # how many finished trials carry unseen warnings
+result.leaderboard("realized_pnl")
+```
+
+Underneath, `backtest.attention_for_trial(row)` turns one trial row into a
+`TrialAttention` (`state`, `seen`, `warnings`, `needs_decision`, `priority`)
+and `backtest.rollup_attention(items)` takes the maximum. `AttentionState` is
+the five-value ordering above: `NEEDS_DECISION`, `FAILED_WARNED`,
+`FINISHED_UNSEEN`, `RUNNING`, `SEEN`.
 
 ## What is not here
 
@@ -840,8 +988,9 @@ settlement is gated on when the result became knowable.
 
 ## Searching without fooling yourself
 
-`backtest.study` runs a grid by default. Three additions make the search
-shape explicit when it matters.
+`backtest.study` runs a `GridSearch` by default. Three additions make the
+search shape explicit when it matters. (`backtest.BacktestStudy` is the same
+thing as an object, for a study you want to build once and `run(db)` later.)
 
 ```python
 from h5i_db import backtest
@@ -928,6 +1077,10 @@ as a price move. Every generator stamps its orders a microsecond after the quote
 they were decided from. `STRATEGIES` maps name to generator for sweeping the
 pack itself; `pair_arbitrage` is outside it because it reads both outcomes from
 the database rather than one side's panel.
+
+A generator returns a `SignalPlan`: the `signals` table plus the `strategy`
+name and `parameters` that produced it, and `to_metadata()` folds those into
+a config's `metadata` so a run records what generated its intents.
 
 ## Replaying an account's ledger
 

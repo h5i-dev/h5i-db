@@ -127,9 +127,9 @@ from h5i_db import col, lit, when
 col("price") * col("size")              # arithmetic
 (col("price") > 100) & (col("size") < 5)   # & | ~ , not and/or/not
 col("symbol").is_in(["AAPL", "MSFT"])
-col("px").is_null()
+col("px").is_null()                     # and .is_not_null()
 col("ts").between(t0, t1)
-col("symbol").like("A%")
+col("symbol").like("A%")                # .not_like(), .ilike() for case-insensitive
 col("size").cast("DOUBLE")
 when(col("price") > 100).then(lit(1)).otherwise(lit(0))
 ```
@@ -161,6 +161,10 @@ Aggregates are methods: `.sum()`, `.mean()`, `.min()`, `.max()`, `.count()`,
 
 A `when(...).then(...)` chain is already a complete expression (a `CASE`
 with no `ELSE` yields NULL), so it can be aliased without `.otherwise()`.
+
+`.alias(name)` renames; `.output_name()` reports the name an expression will
+carry in the result, which is what `select()` and `agg()` use when nothing
+was aliased.
 
 The idiomatic OHLCV query, built:
 

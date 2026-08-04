@@ -167,6 +167,29 @@ SELECT ts, price FROM tail('trades', 812) LIMIT 500;
 - Size `LIMIT` from `versions` row deltas to fetch "exactly what's new since
   version N", with no timestamp-cursor guesswork.
 
+### `latest_on`
+
+```sql
+latest_on('table', 'by_column')
+```
+
+One row per group: the most recent row per symbol, per instrument, per
+whatever `by_column` names. Both arguments are string literals, and the group
+column must be string-like.
+
+```sql
+SELECT ts, symbol, price FROM latest_on('trades', 'symbol');
+```
+
+It precomputes each immutable segment's last row per group and caches that as
+a checksummed sidecar, so an append-only table reuses every prior segment's
+contribution and scans only what is new — segments × groups rather than rows.
+The cache is a pure accelerator: a miss, a corrupt entry or a version
+mismatch rebuilds from the segment and never changes the answer. Sidecar
+writing follows the session's
+[`--predicate-cache`](cli.html#h5i-db-query) setting, so a default query reads
+caches without writing any.
+
 ## Scalar, aggregate & window functions
 
 ### `time_bucket`
@@ -247,6 +270,57 @@ given.
     and returns a plausible, wrong number. Pass the partition column, use the
     sugar on single-key subsets, or write the window out in full. Either form
     still cannot take its own `OVER` clause.
+
+### Rolling window functions
+
+Eight window functions DataFusion does not have. Unlike the `rolling_avg`
+sugar above these are real window functions, so they take their own `OVER`
+clause and any frame you like:
+
+| Function | Over the frame |
+|---|---|
+| `mad(x)` | Mean absolute deviation |
+| `skew(x)` | Sample skewness |
+| `kurt(x)` | Excess kurtosis |
+| `ts_rank(x)` | The current row's rank within the frame, scaled to `(0, 1]` |
+| `idxmax(x)` / `idxmin(x)` | 1-based position of the frame's maximum / minimum |
+| `ts_corr(x, y)` / `ts_cov(x, y)` | Correlation and covariance of two columns |
+
+```sql
+SELECT ts, symbol,
+       mad(price)             OVER w AS mad_5,
+       ts_rank(price)         OVER w AS rank_5,
+       ts_corr(price, size)   OVER w AS corr_5
+FROM trades
+WINDOW w AS (PARTITION BY symbol ORDER BY ts ROWS 4 PRECEDING);
+```
+
+The rest of the rolling family (`rolling_mean`, `rolling_std`,
+`rolling_var`, `rolling_sum`, `rolling_min`, `rolling_max`, `rolling_count`)
+is reachable through stock DataFusion aggregates in an `OVER` clause; the
+[DataFrame builder](../api/dataframe.html#rolling-and-cross-sectional-operators)
+names them uniformly and compiles to exactly that.
+
+### Cross-sectional window functions
+
+Two operators for the "against everything else at this instant" shape.
+Partition by the timestamp, not by the asset:
+
+| Function | Result |
+|---|---|
+| `cs_rank(x)` | Rank within the partition, scaled to `(0, 1]` |
+| `cs_winsorize(x, lower_pct, upper_pct)` | `x` clipped to the partition's percentile bounds |
+
+```sql
+SELECT ts, symbol,
+       cs_rank(signal)                    OVER (PARTITION BY ts) AS rank,
+       cs_winsorize(signal, 0.05, 0.95)   OVER (PARTITION BY ts) AS clipped
+FROM signals;
+```
+
+`cs_demean` and `cs_zscore` are plain SQL over the same partition
+(`x - avg(x) OVER (PARTITION BY ts)`), and the DataFrame builder spells all
+four the same way.
 
 ### `first_value` / `last_value`
 
