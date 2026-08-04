@@ -14,6 +14,7 @@ members = [
     "crates/h5i-db-ui",
     "crates/h5i-db-backtest",
     "crates/h5i-db-venues",
+    "crates/h5i-db-notebook",
 ]
 default-members = [
     "crates/h5i-db-core",
@@ -33,6 +34,7 @@ rust-version = "1.89"
 # version alongside path so `cargo publish` can rewrite these for crates.io.
 h5i-db-core = { path = "crates/h5i-db-core", version = "0.1.4" }
 h5i-db-query = { path = "crates/h5i-db-query", version = "0.1.4" }
+h5i-db-notebook = { path = "crates/h5i-db-notebook", version = "0.1.4" }
 h5i-db-observability = { path = "crates/h5i-db-observability", version = "0.1.4" }
 h5i-db-backtest = { path = "crates/h5i-db-backtest", version = "0.1.4" }
 h5i-db-venues = { path = "crates/h5i-db-venues", version = "0.1.4" }

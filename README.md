@@ -55,6 +55,19 @@ h5i-db query market.db "SELECT count(*) FROM trades" \
 h5i-db ui market.db                                                # review + experiments surface
 ```
 
+**Notebook in the terminal**
+
+```bash
+h5i-db nb new research.ipynb --kernel python3 --db market.db   # the database SQL cells query
+h5i-db nb view research.ipynb        # ⏎ edit · e run · a insert · ? all keys · q quit
+h5i-db nb watch research.ipynb --split right   # follow along while an agent runs cells
+h5i-db nb export research.ipynb --to html
+```
+
+It writes a real `.ipynb`, so JupyterLab opens the same file. A Python kernel
+needs `pip install ipykernel`. Agents drive the same session non-interactively
+with `h5i-db nb exec`.
+
 **Python Library for DataFrames and SQL**
 
 ```bash

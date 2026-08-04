@@ -38,6 +38,23 @@ allow = [
 ]
 confidence-threshold = 0.9
 
+# Narrow, per-crate escapes rather than widening `allow` above: the blanket
+# policy stays "permissive only", and each of these is a deliberate decision
+# about one crate we did not choose directly.
+exceptions = [
+    # Weak (file-level) copyleft, reached transitively through
+    # jupyter-zmq-client -> dirs -> dirs-sys. It backs that crate's Jupyter
+    # directory lookup, which we do not call: kernelspec discovery is
+    # implemented in h5i-db-notebook because the upstream one mishandles
+    # JUPYTER_PATH and skips the venv prefix. Unmodified use imposes nothing
+    # on this repo, and the exception keeps MPL-2.0 from becoming allowable
+    # anywhere else.
+    { name = "option-ext", allow = ["MPL-2.0"] },
+    # Public-domain dedication, strictly more permissive than MIT. Windows
+    # only, via zeromq's ipc-transport feature.
+    { name = "win_uds", allow = ["Unlicense"] },
+]
+
 [bans]
 # Duplicate major versions bloat the binary but are routine in the arrow
 # ecosystem during upgrades — surface them without failing the build.
