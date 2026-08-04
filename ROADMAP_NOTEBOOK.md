@@ -290,6 +290,8 @@ h5i-nb cells <file>                    # index, type, status, output shape
 h5i-nb kernel list|start|status|interrupt|restart|stop
 h5i-nb edit <file> set|insert|delete|move|clear-outputs
 h5i-nb view <file>                     # TUI (N4, not built)
+h5i-nb watch <file> [--split right]    # read-only live view (N6, designed)
+h5i-nb ls                              # running sessions on this machine (N6)
 h5i-nb export <file> --to md|py|html   # also -o <path>, --without-outputs
 h5i-nb inspect|complete <file> <code>  # what the TUI uses, from a shell
 ```
@@ -329,6 +331,7 @@ Each phase ends with something an agent can actually use.
 | N3 | `SqlKernel`, `%%sql`, Arrow handoff | **Done.** 291ms cold SQL cell against 1.6s for a Python kernel |
 | N4 | Editable TUI | **Done.** Verified by driving the real UI through a pty |
 | N5 | Export, images to disk, `--detach`, `h5i-db nb` mount | **Done** |
+| N6 | `watch` live view, `--split`, `ls`, SKILL.md | **Designed** (§12) |
 
 ### Known gaps in what is built
 
@@ -369,3 +372,191 @@ Each phase ends with something an agent can actually use.
   `h5i-nb status` talk to the same kernel. The supervisor is started by
   re-executing the running binary, so each entry point declares how `serve` is
   reached rather than guessing from the executable's name.
+
+---
+
+## 12. N6: the pair-programming surface
+
+Everything so far serves one reader at a time: the agent through the CLI, or a
+human inside the TUI. N6 is about both at once. The agent drives cells through
+the supervisor; the human watches them land, live, in a pane beside the
+conversation, outputs and figures included. The shape is borrowed from
+`terminal-browser`, whose headline workflow ("ask an agent to make HTML plans
+and open them in a split pane next to your agent") is exactly this with a
+browser where we have a notebook. Their hard part, rendering chromium pixels
+into a terminal, is not our problem: our document already renders in a
+terminal. What transfers is the *interaction grammar*: a read-only live
+surface, a `--split` that puts it next to the human unprompted, an `ls` that
+names the running instances, and a skill file that teaches agents the verbs.
+
+Four pieces, in build order. Each is independently useful; together they
+compose into the demo: the agent says "watch this" and the human sees every
+cell arrive as it runs.
+
+### 12.1 `watch`: a read-only live view
+
+`h5i-nb watch <file>` opens the notebook in the TUI's rendering, updates it
+whenever the file changes, and can neither edit nor execute. It is the
+spectator to `view`'s player.
+
+**Ownership.** `watch` is read-only in the strongest sense: it never writes
+the file, never takes the supervisor lock, and never starts a kernel or a
+supervisor. `view` keeps its existing exclusive semantics (it stops a running
+supervisor before taking the notebook, because two writers to one file was the
+data-loss bug of the last review). `watch` is the mode that *coexists*: with a
+supervisor mid-cell, with a `view` in another terminal, with other watches.
+Any number may run at once, which is also what makes `--split` safe to hand to
+an agent: opening a pane can never steal a session.
+
+**Change detection: poll the file, no notify crate.** The supervisor rewrites
+the whole `.ipynb` after every cell (§7), and saves are atomic renames (§5),
+so the file is the broadcast channel and a reader can never observe a torn
+write. The watcher polls `(mtime, len)` every 250ms and re-reads on change; a
+byte-compare against the previous content drops no-op wakeups, which the
+canonical writer makes meaningful (identical state is identical bytes). The
+`notify` crate would trade that loop for inotify/kqueue backends and a
+dependency tree, buying latency nobody can see next to cells that take
+seconds; the project has spent this argument before on pure-Rust ZeroMQ and
+the hand-written lexer, and it comes out the same way here.
+
+**Reuse: a watcher task where the runner was.** The TUI already receives a
+replacement document as an event (`Event::Notebook`), with selection clamping
+and redraw handled downstream. `watch` reuses the whole `App`/`render` stack
+and swaps the runner task for a watcher task that reads the file and emits
+that event. Keys are filtered at the top of `on_key`: navigation, scrolling,
+overlays, and quit pass through; every mutating key is ignored and flashes
+"read-only" in the status bar, which also gets a `WATCH` badge so a human is
+never unsure which mode owns the keyboard.
+
+**Kernel status without ownership.** The file cannot say whether the kernel is
+busy. The supervisor's `Status` request answers without the session lock (that
+is the point of it), so the watcher polls it at 1s and feeds the existing
+status badge. No supervisor running renders as the badge's "not running"; the
+file is still watched, so `watch` is also a passable way to eyeball a notebook
+another machine is syncing.
+
+**Follow mode.** On a file change, the watcher diffs old against new cells (by
+id, then by outputs and execution count) and selects the last cell that
+changed, so the human's viewport tracks the agent's activity without touching
+the keyboard. Any manual navigation disables following; `f` re-enables it.
+This mirrors pager follow (`less +F`), which is the muscle memory that exists
+for "watch a thing grow".
+
+**One deliberate exception to read-only: `ii` interrupts.** Interrupt goes
+through the supervisor's lock-free `Interrupt` request and mutates no document
+state, and the person staring at a runaway cell in a watch pane is precisely
+the person who needs it. Everything else stays inert.
+
+**The v2 that this explicitly is not.** A `Watch` request in the supervisor
+protocol, holding the connection open and broadcasting `StreamEvent`s, would
+push output live instead of at cell-save granularity. It became feasible when
+connections moved to per-task handling, and it is the right upgrade if
+polling granularity ever matters (streaming a ten-minute cell's stdout as it
+prints). It is not v1 because the file-watching version needs no protocol
+change, no broadcast list in the supervisor, and no reconnect logic, and it
+delivers the workflow: cells land when they finish, which for the pairing use
+case is when the human cares.
+
+### 12.2 `--split`: put it next to the human
+
+`--split right|left|down|up` on `watch` (and `view`) asks the surrounding
+multiplexer for a new pane and runs the command there. The invoking process
+spawns the pane and exits 0 immediately, which is what makes it agent-shaped:
+an agent can call `h5i-db nb watch nb.ipynb --split right` mid-turn without
+blocking on a UI a human will sit in for an hour.
+
+Detection is by environment, first match wins, and the spawned command is the
+current binary re-executed with the same arguments minus `--split` (the same
+re-exec pattern, and the same `command_prefix` plumbing, that supervisor
+spawning already uses):
+
+| Environment | Spawn |
+| --- | --- |
+| `$TMUX` | `tmux split-window -h\|-v [-b] <shell-quoted cmd>` |
+| `$KITTY_WINDOW_ID` | `kitten @ launch --location=vsplit\|hsplit --cwd=current <argv>` |
+| `$WEZTERM_PANE` | `wezterm cli split-pane --right\|... -- <argv>` |
+| `$ZELLIJ` | `zellij action new-pane -d right\|... -- <argv>` |
+
+Only tmux takes a shell string and therefore needs quoting; the rest take
+argv vectors and get them verbatim. No match is a plain error (exit 2) that
+names what was looked for, because "silently open in the current pane
+instead" would take over the very terminal the agent is talking in, which is
+the one surprise this feature exists to avoid. Kitty's remote control is off
+by default (`allow_remote_control`); the error for a refused kitten call says
+so. Terminal-native splits beyond these four (iTerm2 AppleScript, Windows
+Terminal) are out of scope: the four cover tmux users and the three
+multiplexing terminals this crate's image protocols already target.
+
+### 12.3 `ls`: what is running
+
+`h5i-nb ls` answers "what sessions exist on this machine", which today cannot
+be asked without already knowing each notebook's path. It reads the session
+directory (`$XDG_RUNTIME_DIR/h5i-db/nb/`), sends the lock-free `Status`
+request to every `*.sock` with a short per-socket timeout, and prints one row
+per live session: notebook path, kernel name, idle/busy, cell count,
+supervisor pid, idle seconds. `Status` answers mid-cell from the file, so a
+busy session lists as readily as an idle one. `--format json` emits the same
+rows as the rest of the CLI contract.
+
+A socket that refuses connection is a leftover from a supervisor that died
+without cleanup. `ls` confirms that by taking the paired ownership lock
+non-blocking (acquirable means no owner; the lock is the liveness authority
+precisely so pid recycling cannot lie), unlinks the socket and lock, and
+reports what it cleaned. Listing doubles as the sweep, the same way kernel
+start sweeps orphaned kernels; the janitor work rides on the command people
+run when things look wrong.
+
+Naming: `kernel list` stays what it is (installed kernelspecs, a property of
+the machine); `ls` is running sessions (a property of the moment). The
+symmetry with `terminal-browser ls` is intentional: it is the discovery verb
+an agent tries unprompted.
+
+### 12.4 SKILL.md: teach the agent the verbs
+
+The CLI was designed against an agent contract (stable exit codes, error
+codes, `--format json`, detach-and-poll), but that contract lives in
+`DESIGN.md` §8 and code comments, where no agent harness will find it. The
+fix is the same one `terminal-browser` ships: a skill file whose frontmatter
+description sells the capability and whose body is the minimal operating
+manual.
+
+Canonical copy at `crates/h5i-db-notebook/SKILL.md`, installable by copy or
+symlink into a harness (`.claude/skills/h5i-nb/SKILL.md` in this repo).
+Content, in order of how often an agent needs it:
+
+1. **The loop**: `new`, `exec --code`, `cells`, `output [--index]`, and the
+   one-sentence thesis (state persists between invocations, so probe rather
+   than re-run).
+2. **Long cells**: `exec --detach`, poll `cells`, fetch `output`; failures
+   land in the cell's outputs, so polling is sufficient.
+3. **SQL**: `%%sql` runs natively (no Python startup), `--into df` hands the
+   frame to Python, `--write` is required before anything can mutate.
+4. **Errors**: the code table (code, exit, retryable, meaning), because
+   `session_busy`/exit 3/retryable is a different next action than
+   `cell_raised`/exit 2/not.
+5. **Digest contract**: outputs are token-budgeted, figures come back as
+   paths, `--raw` rehydrates; the same summarize-then-rehydrate shape as
+   `h5i capture run`.
+6. **Showing the human**: `watch --split right` opens a live pane; when to do
+   it (built something visual, starting a long run) and that it never blocks
+   or steals the session.
+
+Budget: about 150 lines. A skill is loaded into a context window, so it obeys
+the same economy as the digest renderer: the untruncated story stays in this
+file, the skill carries what changes an agent's next action.
+
+### 12.5 Testing
+
+- **`watch`** through the existing forkpty harness (`tests/tui.rs`): open a
+  watch on a file, run `exec` against the same notebook from outside, assert
+  the new output paints without a keypress; press mutating keys, assert the
+  file's bytes did not change; kill the supervisor, assert the badge degrades
+  instead of the pane dying.
+- **`ls`** in `tests/cli.rs`: empty directory lists nothing; a started
+  session lists with the right busy flag; a hand-planted dead socket is
+  cleaned exactly when its lock is acquirable.
+- **`--split`**: multiplexer detection and argv construction are pure
+  functions over an injected environment, tested as such (including tmux
+  quoting). Actually spawning panes is covered by one `#[ignore]` smoke test
+  that runs inside a throwaway `tmux -L <tmp>` server when tmux exists, and
+  otherwise stays manual: CI owes us the logic, not a terminal zoo.
