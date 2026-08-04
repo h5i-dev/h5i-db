@@ -25,6 +25,9 @@ et pensés pour les agents, au service de la recherche quantitative. Embarqués,
 - **Analyse statistique professionnelle :** métriques de facteurs et de
   performance à parité `alphalens` et `empyrical`, plus le Sharpe dégonflé et la
   détection de la probabilité de surapprentissage.
+- **Des notebooks dans le terminal :** agents et humains explorent les données
+  sans quitter le terminal. `h5i-db nb view` exécute des fichiers `.ipynb`
+  ordinaires sur un vrai noyau Jupyter et trace les figures matplotlib sur place.
 - **Forkez une base en quelques millisecondes :** les forks partagent les
   données au lieu de les copier. Un agent peut enchaîner de larges boucles
   d'essai et d'erreur (forker, muter, évaluer, jeter) pour un coût quasi nul.
@@ -215,6 +218,11 @@ son propre fork et y écrit ses ordres, exécutions, positions et
 courbe de capital comme des tables ordinaires. Deux exécutions se comparent donc au
 niveau de l'exécution avec `fork_diff`, un balayage entier s'agrège en une seule
 requête inter-forks, celle qui en vaut la peine est `promote`, et le reste est jeté.
+- **Des notebooks dans le terminal, pour ce qui fait déjà l'intérêt de Jupyter
+chez les quants.** Exécution partielle, un noyau qui garde son état d'une étape à
+l'autre, des résultats consignés à côté du code qui les a produits. Un agent
+obtient les trois depuis la ligne de commande, avec `nb exec` et
+`nb run --cells 3-7`.
 - **La surface de revue répartit l'attention plutôt qu'elle ne classe.**
 `h5i-db ui` trie les essais selon ce qui réclame un humain ensuite : décision
 requise, puis en échec ou avec avertissement, puis terminés et non vus, puis en

@@ -22,6 +22,9 @@ Embedded, written in Rust.**
 - **Professional statistical analysis:** factor and performance metrics at
   `alphalens` and `empyrical` parity, plus deflated Sharpe and
   overfitting-probability detection.
+- **In-terminal notebooks:** agents and humans explore data without leaving the
+  shell. `h5i-db nb view` runs ordinary `.ipynb` files on a real Jupyter kernel
+  and draws matplotlib plots inline.
 - **Fork a database in milliseconds:** forks share data instead of copying it. 
   Agents can run wide trial-and-error loops (fork, mutate, evaluate, discard) 
   at almost zero cost.
@@ -201,6 +204,10 @@ fork and writes its orders, fills, positions and equity curve there as ordinary
 tables. So two runs diff at fill level with `fork_diff`, a whole sweep aggregates
 in one cross-fork query, the one worth keeping is `promote`d and the rest are
 dropped.
+- **In-terminal notebooks, for the reasons quants already use Jupyter.** Partial
+execution, a kernel that holds state between steps, results recorded beside the
+code that made them. An agent gets all three from the command line, through
+`nb exec` and `nb run --cells 3-7`.
 - **The review surface routes attention rather than ranking.** `h5i-db ui` orders
 trials by what needs a human next: decision required, then failed or warned, then
 finished and unseen, then running, then seen. Scanning a list does not mark work
