@@ -74,7 +74,11 @@ pub fn digest_with_images(
     for (index, output) in outputs.iter().enumerate() {
         match output {
             Output::Stream(stream) => {
-                let text = collapse_carriage_returns(&stream.text);
+                // Stripped like every other path here. Left in, the escapes a
+                // cell printed would move the reader's cursor and erase lines
+                // it never wrote: a cell can otherwise overwrite the failure
+                // reported above it.
+                let text = collapse_carriage_returns(&strip_ansi(&stream.text));
                 let body = elide(&text, options);
                 if body.trim().is_empty() {
                     continue;
@@ -175,6 +179,31 @@ pub struct ImageWriter {
     directory: PathBuf,
 }
 
+/// A cell id reduced to something that can be part of a file name.
+///
+/// nbformat requires ids to be plain, but a file this crate is asked to open
+/// may not obey that, and the id lands in a path: one containing a separator
+/// silently writes nothing (the directory does not exist) or, given the right
+/// existing directory, writes outside the attachment directory entirely.
+fn file_safe(label: &str) -> String {
+    let cleaned: String = label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect();
+    if cleaned.is_empty() {
+        "cell".to_string()
+    } else {
+        cleaned
+    }
+}
+
 impl ImageWriter {
     pub fn for_notebook(notebook: &Path) -> Self {
         let stem = notebook
@@ -228,9 +257,10 @@ impl ImageWriter {
             *created = true;
         }
 
-        let path = self
-            .directory
-            .join(format!("cell-{cell_label}-{index}.{extension}"));
+        let path = self.directory.join(format!(
+            "cell-{}-{index}.{extension}",
+            file_safe(cell_label)
+        ));
         let bytes = if *mime == "image/svg+xml" {
             // SVG is stored as text, not base64.
             payload.as_bytes().to_vec()

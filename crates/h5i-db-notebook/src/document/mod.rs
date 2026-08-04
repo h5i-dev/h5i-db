@@ -85,13 +85,24 @@ impl Notebook {
     pub fn from_json_str(text: &str, path_for_errors: &str) -> Result<Self> {
         let value = json::parse_to_value(text).map_err(|e| Error::NotebookParse {
             path: path_for_errors.to_string(),
-            detail: e.to_string(),
+            detail: match non_json_token(text) {
+                Some(token) => format!(
+                    "{e}; the file contains a bare `{token}`, which Python writes but JSON does \
+                     not allow. Re-saving it from Jupyter with `allow_nan=False`, or replacing \
+                     the value with null, makes it readable"
+                ),
+                None => e.to_string(),
+            },
         })?;
         let nb: Notebook = serde_json::from_value(value).map_err(|e| Error::NotebookParse {
             path: path_for_errors.to_string(),
             detail: e.to_string(),
         })?;
-        if nb.nbformat != NBFORMAT_MAJOR || !(0..=NBFORMAT_MINOR).contains(&nb.nbformat_minor) {
+        // Only the major version is a compatibility barrier. A future *minor*
+        // adds fields, and this build preserves the fields it does not model,
+        // so refusing one would reject notebooks that Jupyter itself opens and
+        // that would survive a round trip here intact.
+        if nb.nbformat != NBFORMAT_MAJOR || nb.nbformat_minor < 0 {
             return Err(Error::UnsupportedNbformat {
                 path: path_for_errors.to_string(),
                 major: nb.nbformat,
@@ -128,8 +139,14 @@ impl Notebook {
             .unwrap_or_else(|| PathBuf::from("."));
         std::fs::create_dir_all(&dir).map_err(|e| Error::io(dir.display(), e))?;
 
+        // The temp name carries a counter as well as the pid: two saves of one
+        // notebook from the same process (an autosave racing an explicit save)
+        // would otherwise share a temp path, and the second `create` would
+        // truncate what the first was still writing.
+        static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let ticket = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let tmp = dir.join(format!(
-            ".{}.{}.tmp",
+            ".{}.{}.{ticket}.tmp",
             path.file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "notebook".into()),
@@ -320,9 +337,84 @@ impl Notebook {
     }
 }
 
+/// A bare `NaN` or `Infinity` in `text`, outside any string literal.
+///
+/// Python's `json.dumps` writes these by default and nbformat does not turn
+/// that off, so they do occur in files Jupyter wrote and can reopen. JSON has
+/// no syntax for them, so serde rejects the whole document with "expected
+/// value", which says nothing about what is wrong or what would fix it. This
+/// finds the token so the error can.
+fn non_json_token(text: &str) -> Option<&'static str> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        let byte = bytes[i];
+        if in_string {
+            match byte {
+                b'\\' => i += 2,
+                b'"' => {
+                    in_string = false;
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+            i += 1;
+            continue;
+        }
+        // Only at the start of a token: a key or an identifier cannot appear
+        // here unquoted anyway, and this keeps `Infinity` inside a longer run
+        // of letters from matching.
+        for token in ["NaN", "Infinity"] {
+            if bytes[i..].starts_with(token.as_bytes())
+                && !bytes
+                    .get(i + token.len())
+                    .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
+            {
+                return Some(token);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_future_minor_version_is_readable() {
+        // nbformat treats a minor bump as read-compatible, and this build
+        // preserves fields it does not model, so refusing one would reject
+        // notebooks that Jupyter opens and that round-trip here intact.
+        let text = r#"{"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 9}"#;
+        let nb = Notebook::from_json_str(text, "t.ipynb").expect("a 4.9 notebook should open");
+        assert_eq!(nb.nbformat_minor, 9);
+        // A different major is still refused: that is a real barrier.
+        let text = r#"{"cells": [], "metadata": {}, "nbformat": 3, "nbformat_minor": 0}"#;
+        assert!(Notebook::from_json_str(text, "t.ipynb").is_err());
+    }
+
+    #[test]
+    fn a_bare_nan_is_explained_rather_than_just_rejected() {
+        // Python writes these by default, so they occur in real files; the
+        // bare serde message ("expected value") says nothing useful.
+        let text = r#"{"cells": [], "metadata": {"x": NaN}, "nbformat": 4, "nbformat_minor": 5}"#;
+        let error = Notebook::from_json_str(text, "t.ipynb").unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("NaN"), "unhelpful: {message}");
+
+        // A `NaN` inside a string is data, not a syntax error, and must not
+        // be blamed for an unrelated parse failure.
+        assert_eq!(non_json_token(r#"{"a": "NaN"}"#), None);
+        assert_eq!(non_json_token(r#"{"a": "NaNo\""}"#), None);
+        assert_eq!(non_json_token(r#"{"a": Infinity}"#), Some("Infinity"));
+    }
 
     /// What `nbformat.write` produces for a two-cell notebook. Written out in
     /// full rather than generated, so the test fails if our writer drifts.

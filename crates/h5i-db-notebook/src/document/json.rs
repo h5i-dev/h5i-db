@@ -52,7 +52,11 @@ fn python_splitlines(s: &str) -> Vec<String> {
                     (true, 1)
                 }
             }
-            b'\n' | 0x0b | 0x0c => (true, 1),
+            // 0x1c-0x1e are the file, group and record separators, which
+            // Python's `splitlines` breaks on and nbformat therefore splits a
+            // source at. Missing them meant re-serialising such a source as
+            // one line, so the file churned on every save.
+            b'\n' | 0x0b | 0x0c | 0x1c | 0x1d | 0x1e => (true, 1),
             0xc2 if bytes.get(i + 1) == Some(&0x85) => (true, 2), // U+0085 NEL
             0xe2 if bytes.get(i + 1) == Some(&0x80)
                 && matches!(bytes.get(i + 2), Some(0xa8) | Some(0xa9)) =>

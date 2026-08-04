@@ -74,18 +74,18 @@ fn markdown(notebook: &Notebook, options: &ExportOptions) -> String {
             CellType::Raw => {
                 // Raw cells are by definition not markdown, so they are fenced
                 // rather than pasted in and left to be interpreted.
-                let _ = writeln!(out, "```\n{}\n```", cell.source());
+                write_fence(&mut out, "", cell.source());
                 out.push('\n');
             }
             _ => {
-                let fence_language = if cell.source().starts_with("%%sql") {
+                let fence_language = if is_sql_cell(cell.source()) {
                     "sql"
                 } else {
                     &language
                 };
                 let source = strip_magic(cell.source());
                 if !source.trim().is_empty() {
-                    let _ = writeln!(out, "```{fence_language}\n{source}\n```");
+                    write_fence(&mut out, fence_language, source);
                     out.push('\n');
                 }
                 if options.without_outputs {
@@ -110,7 +110,8 @@ fn markdown_output(out: &mut String, output: &Output) {
             if text.trim().is_empty() {
                 return;
             }
-            let _ = writeln!(out, "```\n{}\n```\n", text.trim_end());
+            write_fence(out, "", text.trim_end());
+            out.push('\n');
         }
         Output::Error(error) => {
             let body = if error.traceback.is_empty() {
@@ -123,7 +124,8 @@ fn markdown_output(out: &mut String, output: &Output) {
                     .collect::<Vec<_>>()
                     .join("\n")
             };
-            let _ = writeln!(out, "```\n{}\n```\n", body.trim_end());
+            write_fence(out, "", body.trim_end());
+            out.push('\n');
         }
         Output::ExecuteResult(_) | Output::DisplayData(_) => {
             let Some(bundle) = output.data() else { return };
@@ -144,7 +146,8 @@ fn markdown_output(out: &mut String, output: &Output) {
             if let Some(text) = bundle.text_plain() {
                 let text = strip_ansi(text);
                 if !text.trim().is_empty() {
-                    let _ = writeln!(out, "```\n{}\n```\n", text.trim_end());
+                    write_fence(out, "", text.trim_end());
+                    out.push('\n');
                 }
             }
         }
@@ -195,18 +198,23 @@ fn python(notebook: &Notebook, options: &ExportOptions) -> String {
                 // A `%%sql` cell is not Python. Commenting it out keeps the
                 // script importable, and losing it silently would be worse
                 // than a comment the reader has to act on.
-                if cell.source().starts_with("%%sql") {
+                if is_sql_cell(cell.source()) {
                     let _ = writeln!(out, "# (h5i-db SQL cell, not runnable as Python)");
                     for line in cell.source().split('\n') {
                         let _ = writeln!(out, "# {line}");
                     }
                 } else {
+                    let mut strings = TripleQuoteScanner::default();
                     for line in cell.source().split('\n') {
                         // IPython line magics and shell escapes are not Python
                         // and would make the script a SyntaxError. Commenting
                         // them out is what jupytext does, and it keeps the
                         // script runnable while leaving the intent visible.
-                        if is_ipython_line(line) {
+                        // Inside a triple-quoted string they are data, and
+                        // commenting them there changes the string's value.
+                        let inside_string = strings.inside();
+                        strings.feed(line);
+                        if !inside_string && is_ipython_line(line) {
                             let _ = writeln!(out, "# {line}");
                         } else {
                             let _ = writeln!(out, "{line}");
@@ -353,6 +361,30 @@ fn html_bundle(bundle: &MimeBundle) -> String {
     }
 }
 
+/// Write `body` inside a fence long enough to contain it.
+///
+/// Markdown ends a fenced block at the first line whose backtick run is at
+/// least as long as the opening fence, so a cell that prints ```` ``` ````
+/// closes its own output block: everything after it renders as prose, and
+/// every later fence in the document is inverted. CommonMark's answer is a
+/// longer fence, so the fence is sized to the content.
+fn write_fence(out: &mut String, info: &str, body: &str) {
+    let longest = body
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("```") {
+                trimmed.chars().take_while(|c| *c == '`').count()
+            } else {
+                0
+            }
+        })
+        .max()
+        .unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    let _ = writeln!(out, "{fence}{info}\n{body}\n{fence}");
+}
+
 /// Base64 with the line breaks nbformat may have stored removed.
 fn compact_base64(payload: &str) -> String {
     payload.chars().filter(|c| !c.is_whitespace()).collect()
@@ -375,18 +407,105 @@ fn escape(text: &str) -> String {
 
 /// Whether a line is IPython syntax rather than Python.
 ///
-/// No Python statement can begin with `%` or `!`, so this cannot misfire on
-/// real code.
+/// No Python *statement* can begin with `%` or `!`. A line inside a
+/// triple-quoted string can, which is why callers track that separately: it is
+/// text, and commenting it out would change what the program contains.
 fn is_ipython_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.starts_with('%') || trimmed.starts_with('!')
 }
 
+/// Tracks whether a line falls inside a triple-quoted Python string.
+///
+/// Deliberately not a Python parser: it follows `"""` and `'''` and the
+/// escapes and single-quoted strings that could hide one, which is what it
+/// takes to answer "is this line code or text". Anything subtler than that
+/// (a `#` comment containing `"""`, say) errs towards leaving the line alone,
+/// because printing a line unchanged is always safe and commenting one out
+/// is not.
+#[derive(Default)]
+struct TripleQuoteScanner {
+    open: Option<&'static str>,
+}
+
+impl TripleQuoteScanner {
+    fn inside(&self) -> bool {
+        self.open.is_some()
+    }
+
+    fn feed(&mut self, line: &str) {
+        let bytes = line.as_bytes();
+        let mut i = 0;
+        // Only tracked while outside a triple-quoted string: a `'` inside one
+        // is just a character.
+        let mut short_quote: Option<u8> = None;
+        while i < bytes.len() {
+            let rest = &bytes[i..];
+            if let Some(delimiter) = self.open {
+                if rest.starts_with(delimiter.as_bytes()) {
+                    self.open = None;
+                    i += 3;
+                    continue;
+                }
+                // A backslash inside a string escapes whatever follows.
+                i += if rest[0] == b'\\' { 2 } else { 1 };
+                continue;
+            }
+            match short_quote {
+                Some(quote) => {
+                    if rest[0] == b'\\' {
+                        i += 2;
+                        continue;
+                    }
+                    if rest[0] == quote {
+                        short_quote = None;
+                    }
+                    i += 1;
+                }
+                None => {
+                    if rest.starts_with(b"\"\"\"") {
+                        self.open = Some("\"\"\"");
+                        i += 3;
+                        continue;
+                    }
+                    if rest.starts_with(b"'''") {
+                        self.open = Some("'''");
+                        i += 3;
+                        continue;
+                    }
+                    // A comment cannot open a string, and the rest of the line
+                    // is not code.
+                    if rest[0] == b'#' {
+                        return;
+                    }
+                    if rest[0] == b'"' || rest[0] == b'\'' {
+                        short_quote = Some(rest[0]);
+                    }
+                    i += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Whether this cell is one the SQL kernel would run.
+///
+/// Asked of [`magic::route`] rather than tested with `starts_with("%%sql")`,
+/// so export agrees with what actually executes: `%%sqlalchemy` is somebody
+/// else's magic and runs as Python, and treating it as ours commented a
+/// working cell out of the exported script.
+fn is_sql_cell(source: &str) -> bool {
+    matches!(
+        crate::magic::route(source),
+        Ok((crate::magic::CellRoute::Sql(_), _))
+    )
+}
+
 /// Drop a leading `%%sql` line so exported source reads as the SQL it is.
 fn strip_magic(source: &str) -> &str {
-    match source.strip_prefix("%%sql") {
-        Some(rest) => rest.split_once('\n').map(|(_, body)| body).unwrap_or(""),
-        None => source,
+    match crate::magic::route(source) {
+        Ok((crate::magic::CellRoute::Sql(_), body)) => body,
+        _ => source,
     }
 }
 
@@ -426,6 +545,85 @@ mod tests {
             code.execution_count = Some(1);
         }
         cell
+    }
+
+    #[test]
+    fn a_fence_grows_past_backticks_in_the_content() {
+        // A cell that prints ``` used to close its own output block, so
+        // everything after it rendered as prose and every later fence in the
+        // document was inverted.
+        let mut nb = Notebook::new("python3", "Python 3", "python");
+        let mut cell = Cell::new_code("print('```')");
+        if let Some(code) = cell.as_code_mut() {
+            code.outputs
+                .push(Output::Stream(crate::document::StreamOutput {
+                    name: StreamName::Stdout,
+                    text: "```\nnot a fence\n```\n".to_string(),
+                    extra: Default::default(),
+                }));
+        }
+        nb.push(cell);
+        let text = markdown(&nb, &ExportOptions::default());
+
+        // The output's own backticks must sit inside a longer fence.
+        assert!(text.contains("````\n```\nnot a fence\n```\n````"), "{text}");
+    }
+
+    #[test]
+    fn a_cell_whose_source_holds_a_fence_is_still_fenced_correctly() {
+        let mut nb = Notebook::new("python3", "Python 3", "python");
+        nb.push(Cell::new_code("doc = \"\"\"\n```\n\"\"\""));
+        let text = markdown(&nb, &ExportOptions::default());
+        let opening = text.lines().next().unwrap();
+        assert!(
+            opening.starts_with("````"),
+            "the fence did not grow: {text}"
+        );
+    }
+
+    #[test]
+    fn only_our_own_sql_magic_is_treated_as_sql() {
+        // `%%sqlalchemy` belongs to some other extension and runs as Python,
+        // so exporting it as a commented-out SQL cell deleted working code
+        // from the script.
+        let mut nb = Notebook::new("python3", "Python 3", "python");
+        nb.push(Cell::new_code("%%sqlalchemy\nengine.execute(q)"));
+        let script = python(&nb, &ExportOptions::default());
+        assert!(
+            script.contains("engine.execute(q)"),
+            "the cell was lost: {script}"
+        );
+        assert!(
+            !script.contains("not runnable as Python"),
+            "a Python cell was labelled SQL: {script}"
+        );
+
+        let text = markdown(&nb, &ExportOptions::default());
+        assert!(
+            text.contains("%%sqlalchemy"),
+            "the magic line was stripped: {text}"
+        );
+    }
+
+    #[test]
+    fn magic_lines_inside_a_string_are_left_alone() {
+        // Commenting one out changes what the string contains, so the script
+        // no longer does what the notebook did.
+        let mut nb = Notebook::new("python3", "Python 3", "python");
+        nb.push(Cell::new_code(
+            "template = \"\"\"\n% total\n!important\n\"\"\"\n%time run()",
+        ));
+        let script = python(&nb, &ExportOptions::default());
+        assert!(
+            script.contains("\n% total\n"),
+            "string was edited: {script}"
+        );
+        assert!(
+            script.contains("\n!important\n"),
+            "string was edited: {script}"
+        );
+        // The real magic, outside the string, still gets commented out.
+        assert!(script.contains("# %time run()"), "{script}");
     }
 
     #[test]

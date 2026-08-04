@@ -57,7 +57,7 @@ pub enum Error {
     #[error("cell {index} is a {actual} cell, not a code cell")]
     NotACodeCell { index: usize, actual: &'static str },
 
-    #[error("cell {index} has no output at index {output}(it has {len})")]
+    #[error("cell {index} has no output at index {output} (it has {len})")]
     OutputIndexOutOfRange {
         index: usize,
         output: usize,

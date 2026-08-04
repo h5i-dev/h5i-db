@@ -292,6 +292,56 @@ fn a_second_supervisor_refuses_to_take_over_a_live_session() {
 }
 
 #[test]
+fn exporting_over_the_notebook_is_refused() {
+    // The export would overwrite the notebook with its own rendering, outputs
+    // and all, and there is nothing to recover it from.
+    let nb = Nb::new();
+    nb.write_bare_notebook();
+    let before = std::fs::read_to_string(&nb.notebook).unwrap();
+
+    let output = nb.run(&["export", nb.path(), "--to", "md", "-o", nb.path()]);
+    assert_eq!(code(&output), 2, "{}", stderr(&output));
+    assert_eq!(
+        std::fs::read_to_string(&nb.notebook).unwrap(),
+        before,
+        "the notebook was overwritten by its own export"
+    );
+}
+
+#[test]
+fn output_index_selects_one_output_without_saving() {
+    // `--index` was consulted only when saving, so asking for one output of a
+    // cell printed all of them.
+    let nb = Nb::new();
+    std::fs::write(
+        &nb.notebook,
+        r#"{"cells": [{"cell_type": "code", "execution_count": 1, "id": "a", "metadata": {},
+             "outputs": [
+               {"output_type": "stream", "name": "stdout", "text": "FIRST\n"},
+               {"output_type": "stream", "name": "stdout", "text": "SECOND\n"}
+             ], "source": "print(1)"}],
+           "metadata": {}, "nbformat": 4, "nbformat_minor": 5}"#,
+    )
+    .unwrap();
+
+    let both = nb.run(&["output", nb.path(), "0"]);
+    assert!(stdout(&both).contains("FIRST"), "{}", stdout(&both));
+    assert!(stdout(&both).contains("SECOND"), "{}", stdout(&both));
+
+    let one = nb.run(&["output", nb.path(), "0", "--index", "1"]);
+    assert_eq!(code(&one), 0, "{}", stderr(&one));
+    assert!(stdout(&one).contains("SECOND"), "{}", stdout(&one));
+    assert!(
+        !stdout(&one).contains("FIRST"),
+        "--index printed every output: {}",
+        stdout(&one)
+    );
+
+    let missing = nb.run(&["output", nb.path(), "0", "--index", "9"]);
+    assert_eq!(code(&missing), 2, "{}", stderr(&missing));
+}
+
+#[test]
 fn a_detached_cell_that_fails_says_so_in_the_notebook() {
     // A detached run has nobody to return an error to, so an error that only
     // lived in the return value left the cell looking exactly like one that

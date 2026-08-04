@@ -113,9 +113,10 @@ pub enum Command {
         /// Write a binary output (an image) to this path instead of stdout.
         #[arg(long)]
         save: Option<PathBuf>,
-        /// Which output of the cell, when it produced several.
-        #[arg(long, default_value = "0")]
-        index: usize,
+        /// Which output of the cell, when it produced several. Defaults to
+        /// all of them, or to the first when saving.
+        #[arg(long)]
+        index: Option<usize>,
     },
 
     /// Edit the notebook without running anything.
@@ -411,8 +412,22 @@ pub async fn run_command(command: Command, format: Format) -> Result<()> {
             let position = notebook.resolve(&cell)?;
             let outputs = notebook.get(position)?.outputs();
             if let Some(save_to) = save {
-                return save_output(outputs, index, position, &save_to);
+                return save_output(outputs, index.unwrap_or(0), position, &save_to);
             }
+            // `--index` selects one output whether or not it is being saved:
+            // it used to be read only on the save path, so asking for one
+            // output of a cell silently printed all of them.
+            let outputs = match index {
+                Some(index) => {
+                    let one = outputs.get(index).ok_or(Error::OutputIndexOutOfRange {
+                        index: position,
+                        output: index,
+                        len: outputs.len(),
+                    })?;
+                    std::slice::from_ref(one)
+                }
+                None => outputs,
+            };
             let options = DigestOptions {
                 raw,
                 ..Default::default()
@@ -454,6 +469,16 @@ pub async fn run_command(command: Command, format: Format) -> Result<()> {
             );
             match output {
                 Some(path) => {
+                    // Exporting over the notebook destroys it, outputs and
+                    // all, and an export is not something you can undo from.
+                    // One mistyped tab completion should not cost the work.
+                    if same_file(&path, &notebook) {
+                        return Err(Error::invalid(format!(
+                            "--output {} is the notebook being exported; \
+                             pass a different path",
+                            path.display()
+                        )));
+                    }
                     std::fs::write(&path, &text).map_err(|e| Error::io(path.display(), e))?;
                     emit(
                         cli.format,
@@ -639,8 +664,12 @@ fn save_output(outputs: &[Output], index: usize, cell: usize, path: &PathBuf) ->
     let bytes = match binary {
         Some((_, data)) => {
             use base64::Engine;
+            // All whitespace, not just the ends: nbformat stores a payload as
+            // a list of lines, which rejoins with newlines inside it. Every
+            // other reader of these payloads already strips them.
+            let compact: String = data.chars().filter(|c| !c.is_whitespace()).collect();
             base64::engine::general_purpose::STANDARD
-                .decode(data.trim())
+                .decode(&compact)
                 .map_err(|e| Error::invalid(format!("output is not valid base64: {e}")))?
         }
         None => {
@@ -691,6 +720,18 @@ async fn edit(format: Format, path: PathBuf, action: EditAction) -> Result<()> {
         serde_json::json!({"notebook": path.display().to_string(), "result": message}),
         || message.clone(),
     )
+}
+
+/// Whether two paths name the same file.
+///
+/// Compared after canonicalising so `./nb.ipynb` and an absolute path to it
+/// are recognised as one file; a path that does not exist yet cannot be the
+/// notebook we just read, so failing to canonicalise means "different".
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// Apply an edit to the file, for a notebook nobody is holding.
