@@ -18,6 +18,15 @@
 //! a cache in front of it: PNG dimensions by digest (a header read, not a
 //! decode) to size the reserved rows, and encoded protocols by digest and box
 //! so a scroll or a keystroke does not re-encode every plot on screen.
+//!
+//! **Where it lands, under tmux.** Sixel and iTerm2 images reach the terminal
+//! wrapped in a tmux passthrough, and tmux writes those bytes out without
+//! moving the real cursor first: it leaves the cursor parked wherever it last
+//! drew, which is the *active* pane. A notebook being watched in a pane that
+//! does not have focus therefore paints its plots into the neighbouring pane,
+//! and only looks right when it is the pane in focus. Since the passthrough
+//! payload is handed to the outer terminal verbatim, the fix is to put an
+//! absolute cursor move inside it: see [`with_absolute_cursor`].
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -52,6 +61,15 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 /// Dropping the lot is fine: the next frame re-encodes only what is on screen.
 const CACHE_LIMIT: usize = 16;
 
+/// How often the pane's position on the screen is asked for again.
+///
+/// Only paid while a plot is on screen, and only as one `tmux display-message`.
+/// A pane can move without changing size (a swapped pane, a new split next
+/// door) and nothing tells the program inside it, so this cannot be answered
+/// once at startup; a plot drawn at the old offset for one interval after a
+/// layout change is the trade.
+const PANE_OFFSET_TTL: Duration = Duration::from_millis(500);
+
 /// Decoded images, ready to draw, and the terminal's answer about how.
 pub struct Images {
     /// `None` when the terminal was never asked (tests) or refused to answer.
@@ -59,7 +77,29 @@ pub struct Images {
     /// PNG dimensions by payload digest. Cheap, and never invalidated.
     sizes: HashMap<[u8; 16], (u32, u32)>,
     /// Encoded protocols by payload digest and the box they were encoded for.
-    encoded: HashMap<([u8; 16], u16, u16), Protocol>,
+    encoded: HashMap<([u8; 16], u16, u16), Cached>,
+    /// Where this pane sits in the terminal, when there is a tmux to ask.
+    pane: Option<Pane>,
+}
+
+/// An encoded image, and what it looked like before it was aimed at a pane.
+struct Cached {
+    protocol: Protocol,
+    /// The passthrough payload as `ratatui-image` produced it. Kept because
+    /// aiming rewrites the protocol's data in place and each frame has to
+    /// start from the unaimed version rather than from the last position.
+    /// `None` for anything that is not a tmux passthrough.
+    pristine: Option<String>,
+}
+
+/// The tmux pane this notebook is being drawn in.
+struct Pane {
+    /// `$TMUX_PANE`, the `%N` id that names it to `tmux display-message`.
+    id: String,
+    /// Its top-left corner in the terminal, zero-based, or `None` if tmux has
+    /// not answered yet.
+    offset: Option<(u16, u16)>,
+    asked: Instant,
 }
 
 impl Images {
@@ -78,6 +118,7 @@ impl Images {
             picker: None,
             sizes: HashMap::new(),
             encoded: HashMap::new(),
+            pane: None,
         }
     }
 
@@ -121,6 +162,7 @@ impl Images {
             picker: Some(picker),
             sizes: HashMap::new(),
             encoded: HashMap::new(),
+            pane: Pane::current(),
         }
     }
 
@@ -152,11 +194,16 @@ impl Images {
         (rows_for_pixels(width_px, height_px, columns, font_w, font_h)) as u16
     }
 
-    /// The encoded image for `area`, or `None` if it cannot be drawn.
+    /// The encoded image for `area`, aimed at `screen`, or `None` if it cannot
+    /// be drawn.
     ///
     /// Encoding is where the cost is (a decode, a resample, and for sixel a
     /// colour quantisation), so the result is kept until the box changes.
-    pub fn protocol(&mut self, base64_png: &str, area: Rect) -> Option<&Protocol> {
+    /// `area` is the box it is encoded for and `screen` where it is about to
+    /// be drawn: the two differ only in that `screen` may be the clipped part,
+    /// and under tmux the position it names has to be written into the image
+    /// itself.
+    pub fn protocol(&mut self, base64_png: &str, area: Rect, screen: Rect) -> Option<&Protocol> {
         self.picker.as_ref()?;
         if area.width == 0 || area.height == 0 {
             return None;
@@ -180,9 +227,31 @@ impl Images {
                     Resize::Fit(None),
                 )
                 .ok()?;
-            self.encoded.insert(key, protocol);
+            let pristine = passthrough_payload(&protocol).map(str::to_string);
+            self.encoded.insert(key, Cached { protocol, pristine });
         }
-        self.encoded.get(&key)
+        // Aiming has to happen per draw, not per encode: the same cached image
+        // is redrawn at a new row on every scrolled line.
+        if let Some(offset) = self.pane_offset() {
+            let (row, column) = absolute_position(offset, screen);
+            if let Some(cached) = self.encoded.get_mut(&key)
+                && let Some(pristine) = cached.pristine.as_ref()
+            {
+                let aimed = with_absolute_cursor(pristine, row, column);
+                set_passthrough_payload(&mut cached.protocol, aimed);
+            }
+        }
+        self.encoded.get(&key).map(|cached| &cached.protocol)
+    }
+
+    /// Where this pane's top-left corner is, asking tmux again when stale.
+    fn pane_offset(&mut self) -> Option<(u16, u16)> {
+        let pane = self.pane.as_mut()?;
+        if pane.offset.is_none() || pane.asked.elapsed() >= PANE_OFFSET_TTL {
+            pane.offset = query_pane_offset(&pane.id);
+            pane.asked = Instant::now();
+        }
+        pane.offset
     }
 
     /// PNG dimensions, read from the header rather than by decoding.
@@ -219,6 +288,115 @@ impl std::fmt::Debug for Images {
     }
 }
 
+impl Pane {
+    /// The pane this process is running in, or `None` outside tmux.
+    fn current() -> Option<Self> {
+        let inside = std::env::var("TMUX").is_ok_and(|v| !v.is_empty());
+        let id = std::env::var("TMUX_PANE").ok().filter(|v| !v.is_empty())?;
+        inside.then(|| Pane {
+            id,
+            offset: None,
+            // Far enough in the past that the first draw asks.
+            asked: Instant::now() - PANE_OFFSET_TTL,
+        })
+    }
+}
+
+/// Ask tmux where a pane's top-left corner is, zero-based.
+///
+/// `pane_left`/`pane_top` already account for the status bar and for pane
+/// borders, so this is the whole of the translation between what the notebook
+/// thinks its screen is and what the terminal underneath tmux calls the same
+/// spot.
+fn query_pane_offset(pane_id: &str) -> Option<(u16, u16)> {
+    let out = std::process::Command::new("tmux")
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            pane_id,
+            "#{pane_left} #{pane_top}",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    let (left, top) = text.trim().split_once(' ')?;
+    Some((left.parse().ok()?, top.parse().ok()?))
+}
+
+/// The one-based cursor position, in the terminal's coordinates, of the
+/// top-left corner of `screen` in a pane at `offset`.
+fn absolute_position((left, top): (u16, u16), screen: Rect) -> (u16, u16) {
+    (
+        top.saturating_add(screen.y).saturating_add(1),
+        left.saturating_add(screen.x).saturating_add(1),
+    )
+}
+
+/// The payload of a tmux passthrough, for the protocols that use one.
+///
+/// Kitty is deliberately not among them. It transmits its pixels through a
+/// passthrough too, but places them with ordinary text cells holding unicode
+/// placeholders, and those go through tmux's own screen: kitty images already
+/// land in the right pane, and moving the cursor around them would break that.
+fn passthrough_payload(protocol: &Protocol) -> Option<&str> {
+    let data = match protocol {
+        Protocol::Sixel(sixel) => sixel.data.as_str(),
+        Protocol::ITerm2(iterm2) => iterm2.data.as_str(),
+        _ => return None,
+    };
+    data.starts_with(TMUX_START).then_some(data)
+}
+
+fn set_passthrough_payload(protocol: &mut Protocol, data: String) {
+    match protocol {
+        Protocol::Sixel(sixel) => sixel.data = data,
+        Protocol::ITerm2(iterm2) => iterm2.data = data,
+        _ => {}
+    }
+}
+
+const TMUX_START: &str = "\x1bPtmux;";
+const TMUX_END: &str = "\x1b\\";
+
+/// A tmux passthrough payload, made to say where it goes.
+///
+/// tmux hands the bytes between `\ePtmux;` and the terminator to the terminal
+/// underneath it without touching the real cursor first, so the image lands
+/// whereever tmux last drew — the active pane. Moving the cursor from *inside*
+/// the passthrough is therefore the only positioning that survives: the escape
+/// is acted on by the outer terminal, in its own coordinates, immediately
+/// before the pixels. It is saved and restored around the image so tmux's next
+/// write still finds the cursor where it left it.
+///
+/// Escapes inside a passthrough are doubled, which is what makes this string
+/// surgery rather than a `write!`: everything between the markers is already
+/// escaped that way, and the prefix has to match.
+fn with_absolute_cursor(payload: &str, row: u16, column: u16) -> String {
+    let Some(body) = payload
+        .strip_prefix(TMUX_START)
+        .and_then(|rest| rest.strip_suffix(TMUX_END))
+    else {
+        // Not a passthrough after all: leave it exactly as it was.
+        return payload.to_string();
+    };
+    format!("{TMUX_START}\x1b\x1b7\x1b\x1b[{row};{column}H{body}\x1b\x1b8{TMUX_END}")
+}
+
+/// Does this terminal answer a device status report within [`PROBE_TIMEOUT`]?
+///
+/// Public to the crate because the image query is not the only thing that must
+/// not be asked of a terminal that has gone quiet: see the call in
+/// [`crate::tui::enter`].
+pub(crate) fn still_answering() -> bool {
+    answers_a_status_report(PROBE_TIMEOUT)
+}
+
 /// Does this terminal answer a device status report within `timeout`?
 ///
 /// The one question every terminal since the VT100 can answer, asked here only
@@ -226,13 +404,23 @@ impl std::fmt::Debug for Images {
 /// for why a terminal that stays silent must never be queried again.
 ///
 /// Read with `poll` rather than a plain read so that a silent terminal costs
-/// the timeout and nothing more. The caller must already be in raw mode, or
-/// the reply sits in the line buffer until the user presses Enter.
+/// the timeout and nothing more, and non-blocking so that a *stolen* reply
+/// costs the same. Both matter: `poll` saying stdin is readable does not mean
+/// the byte will still be there by the time this reads it, because the
+/// abandoned reader thread described above is racing for the same descriptor.
+/// A blocking read that loses that race never returns, and the notebook never
+/// paints its first frame at all.
+///
+/// The caller must already be in raw mode, or the reply sits in the line
+/// buffer until the user presses Enter.
 fn answers_a_status_report(timeout: Duration) -> bool {
     let mut out = std::io::stdout();
     if out.write_all(b"\x1b[5n").is_err() || out.flush().is_err() {
         return false;
     }
+    let Some(_restore) = NonBlockingStdin::set() else {
+        return false;
+    };
 
     let deadline = Instant::now() + timeout;
     let mut seen: Vec<u8> = Vec::with_capacity(64);
@@ -255,8 +443,17 @@ fn answers_a_status_report(timeout: Duration) -> bool {
         // SAFETY: reading into a buffer we own, for at most its own length.
         let read =
             unsafe { libc::read(libc::STDIN_FILENO, buffer.as_mut_ptr().cast(), buffer.len()) };
+        if read < 0 {
+            let error = std::io::Error::last_os_error();
+            match error.kind() {
+                // Somebody else took it, or the read was interrupted: neither
+                // says the terminal is silent, so keep waiting for the answer.
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted => continue,
+                _ => return false,
+            }
+        }
         // Nothing more is coming: stdin is closed, or not a terminal at all.
-        if read <= 0 {
+        if read == 0 {
             return false;
         }
         seen.extend_from_slice(&buffer[..read as usize]);
@@ -268,6 +465,35 @@ fn answers_a_status_report(timeout: Duration) -> bool {
         if seen.len() > 512 {
             return false;
         }
+    }
+}
+
+/// `O_NONBLOCK` on stdin, put back when this is dropped.
+///
+/// The flag lives on the open file description, so it is visible to every
+/// other reader of this terminal for as long as it is set. That is the point
+/// — a competing reader blocking forever is the failure being avoided — but it
+/// is also why it goes back the moment the probe is done.
+struct NonBlockingStdin(libc::c_int);
+
+impl NonBlockingStdin {
+    fn set() -> Option<Self> {
+        // SAFETY: plain fcntl on a descriptor this process owns.
+        let flags = unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_GETFL) };
+        if flags < 0 {
+            return None;
+        }
+        // SAFETY: as above, writing back the flags just read plus one bit.
+        let set =
+            unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+        (set >= 0).then_some(NonBlockingStdin(flags))
+    }
+}
+
+impl Drop for NonBlockingStdin {
+    fn drop(&mut self) {
+        // SAFETY: restoring the flags this type read at construction.
+        unsafe { libc::fcntl(libc::STDIN_FILENO, libc::F_SETFL, self.0) };
     }
 }
 
@@ -348,11 +574,8 @@ mod tests {
     fn a_disabled_picker_draws_nothing_and_still_reserves_rows() {
         let mut images = Images::disabled();
         assert!(!images.is_supported());
-        assert!(
-            images
-                .protocol(&png_4x2(), Rect::new(0, 0, 40, 15))
-                .is_none()
-        );
+        let area = Rect::new(0, 0, 40, 15);
+        assert!(images.protocol(&png_4x2(), area, area).is_none());
         // The rows are still reserved, so the layout does not jump between a
         // terminal that can draw and one that cannot.
         assert_eq!(images.rows_for(&png_4x2(), 40), IMAGE_ROWS);
@@ -447,6 +670,53 @@ mod tests {
         // not an answer: treating it as one would let the query that hangs
         // run against a terminal that never replies.
         assert!(!is_status_report(b"\x1b[5n"));
+    }
+
+    #[test]
+    fn a_passthrough_is_given_an_absolute_cursor_move() {
+        // The bug this guards: without the move, tmux writes these bytes at
+        // the cursor of whichever pane has focus, and a plot watched from an
+        // unfocused pane is drawn into the neighbouring one.
+        let aimed = with_absolute_cursor("\x1bPtmux;\x1b\x1bPq#0~~\x1b\x1b\\\x1b\\", 5, 44);
+        assert_eq!(
+            aimed,
+            "\x1bPtmux;\x1b\x1b7\x1b\x1b[5;44H\x1b\x1bPq#0~~\x1b\x1b\\\x1b\x1b8\x1b\\"
+        );
+        // Still one passthrough, and the image itself is untouched.
+        assert_eq!(aimed.matches(TMUX_START).count(), 1);
+        assert!(aimed.contains("\x1b\x1bPq#0~~"));
+    }
+
+    #[test]
+    fn anything_that_is_not_a_passthrough_is_left_alone() {
+        // Kitty's placeholders and a plain sixel outside tmux both arrive
+        // here when the pane offset happens to be known, and prefixing either
+        // with a cursor move would put the image somewhere of its own.
+        let raw = "\x1bPq#0;2;100;0;0#0~~\x1b\\";
+        assert_eq!(with_absolute_cursor(raw, 5, 44), raw);
+        assert_eq!(with_absolute_cursor("", 1, 1), "");
+    }
+
+    #[test]
+    fn aiming_starts_from_the_unaimed_payload_every_time() {
+        // Scrolling redraws the same cached image at a new row; aiming the
+        // already-aimed string would stack a second cursor move on the first
+        // and pin the plot to wherever it first appeared.
+        let pristine = "\x1bPtmux;\x1b\x1bPq#0~~\x1b\x1b\\\x1b\\";
+        let first = with_absolute_cursor(pristine, 5, 44);
+        let second = with_absolute_cursor(pristine, 9, 44);
+        assert!(second.contains("\x1b\x1b[9;44H"));
+        assert!(!second.contains("\x1b\x1b[5;44H"));
+        assert_eq!(first.len(), second.len());
+    }
+
+    #[test]
+    fn the_pane_offset_is_added_to_the_position_on_screen() {
+        // A pane at column 82 drawing at its own column 4 is at terminal
+        // column 87: 82 + 4, and one more because cursor moves are 1-based.
+        assert_eq!(absolute_position((82, 0), Rect::new(4, 6, 30, 10)), (7, 87));
+        // The first cell of a pane at the origin is 1;1, not 0;0.
+        assert_eq!(absolute_position((0, 0), Rect::new(0, 0, 1, 1)), (1, 1));
     }
 
     #[test]

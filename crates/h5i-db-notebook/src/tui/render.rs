@@ -347,7 +347,7 @@ fn place(frame: &mut Frame, images: &mut Images, base64: &str, full: Rect, visib
     if visible.width == 0 || visible.height == 0 {
         return false;
     }
-    let Some(protocol) = images.protocol(base64, full) else {
+    let Some(protocol) = images.protocol(base64, full, visible) else {
         return false;
     };
     if protocol.needs_placeholder(visible).is_some() {

@@ -188,6 +188,26 @@ $ h5i-db nb kernel status research.ipynb      # answers even mid-cell
 | `kernel restart <nb>` | Restart the kernel; `--clear-outputs` also drops recorded outputs |
 | `kernel stop <nb>` | Stop the session and its kernel |
 
+### Plots in a tmux pane
+
+Sixel and iTerm2 images reach the terminal through a tmux passthrough, and tmux
+writes those bytes out without moving the cursor first: it leaves the cursor
+wherever it last drew, which is the pane that has focus. A notebook watched in
+an unfocused pane therefore used to paint its plots into the neighbouring pane,
+and only looked right when it was the pane you were typing in. The image now
+carries its own absolute cursor move, worked out from `pane_left`/`pane_top`,
+so it lands in its own pane whichever one has focus.
+
+Two consequences worth knowing. The pane position is re-read a few times a
+second, so a plot drawn in the instant after a layout change can be a beat
+behind. And because tmux does not know those pixels exist, anything that makes
+tmux repaint that region erases the plot until the notebook next redraws it;
+scrolling the notebook, or any change to the cell, brings it back.
+
+`H5I_NB_IMAGES=off` falls back to a text label if a terminal or multiplexer
+misbehaves, and `H5I_NB_IMAGES=halfblocks` draws with block characters, which
+go through tmux as ordinary text and are never misplaced.
+
 ### Which interpreter a kernel name resolves to
 
 `--kernel python3` is a name, not a path, and the same name usually exists in

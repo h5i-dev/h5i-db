@@ -452,11 +452,14 @@ fn the_notebook_is_painted_and_quitting_restores_the_terminal() {
 fn running_a_cell_shows_its_output_and_execution_count() {
     let fixture = fixture(&["print('the answer is', 6 * 7)"]);
     let mut pty = fixture.view();
-    pty.drain(Duration::from_secs(2));
+    // The opening frame is kept rather than drained away: it carries the cells
+    // that later frames only touch, and a terminal that answers nothing now
+    // finishes starting up well inside this wait.
+    let mut raw = pty.drain(Duration::from_secs(2));
 
     // `e` is the binding that works without the kitty keyboard protocol.
     pty.send("e");
-    let raw = pty.drain(Duration::from_secs(20));
+    raw.push_str(&pty.drain(Duration::from_secs(20)));
     let text = visible(&raw);
     assert!(text.contains("the answer is 42"), "{text}");
     assert!(text.contains("[  1]"), "no execution count: {text}");
@@ -641,6 +644,228 @@ fn watch_shows_a_change_made_by_another_process_without_a_keypress() {
 
     pty.send("q");
     assert_eq!(pty.finish(Duration::from_secs(5)), 0);
+}
+
+/// A 240x120 PNG, big enough to be worth several rows of cells.
+const RED_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAPAAAAB4CAIAAABD1OhwAAABXElEQVR4nO3SQQkAIADAQDWI/aMYyxKCMO4S7LF59h5QsX4HwEuGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE2KoUkxNCmGJsXQpBiaFEOTYmhSDE3KBRozAfSFclCgAAAAAElFTkSuQmCC";
+
+/// A plot in an unfocused tmux pane is drawn into that pane, not the focused one.
+///
+/// tmux hands passthrough bytes to the terminal without moving the real cursor
+/// first, so an image that does not say where it goes lands wherever tmux last
+/// drew: the pane with the focus. Watching a notebook beside an agent that is
+/// working in the neighbouring pane is exactly that case, and the plot used to
+/// appear in the agent's pane.
+///
+/// Ignored because it needs tmux; the assertion is on what the notebook writes
+/// into its own pane, so it does not depend on how tmux then forwards it.
+#[test]
+#[ignore]
+fn a_plot_in_an_unfocused_tmux_pane_says_where_it_goes() {
+    if std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping: no tmux");
+        return;
+    }
+    let socket = "h5i-nb-tmux-test";
+    let tmux = |args: &[&str]| {
+        std::process::Command::new("tmux")
+            .args(["-L", socket])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    tmux(&["kill-server"]);
+
+    let dir = tempfile::tempdir().unwrap();
+    let notebook = dir.path().join("plot.ipynb");
+    // Written the way the supervisor writes: a rename, so a watcher polling
+    // the file can never read a half-written document and give up on it.
+    //
+    // Each round adds a line of source above the plot, which moves it down a
+    // row. That is what makes the image redraw at all: only cells that differ
+    // from the last frame are sent, and an image whose position has not
+    // changed is left alone on the screen.
+    let write_notebook = |round: usize| {
+        let source = "# pad\\n".repeat(round) + "plot()";
+        let scratch = notebook.with_extension("tmp");
+        std::fs::write(
+            &scratch,
+            format!(
+                r#"{{"cells": [{{"cell_type": "code", "execution_count": 1, "id": "a1",
+                   "metadata": {{}}, "source": "{source}",
+                   "outputs": [{{"output_type": "display_data", "metadata": {{}},
+                     "data": {{"image/png": "{RED_PNG}", "text/plain": "<Figure>"}}}}]}}],
+                   "metadata": {{"kernelspec": {{"display_name": "Python 3",
+                   "language": "python", "name": "python3"}}}},
+                   "nbformat": 4, "nbformat_minor": 5}}"#
+            ),
+        )
+        .unwrap();
+        std::fs::rename(&scratch, &notebook).unwrap();
+    };
+    write_notebook(0);
+
+    // default-terminal matters: it is what tells the image layer underneath us
+    // that it is inside tmux and has to use a passthrough at all.
+    let conf = dir.path().join("tmux.conf");
+    std::fs::write(
+        &conf,
+        "set -g status off\nset -g default-terminal \"tmux-256color\"\n",
+    )
+    .unwrap();
+    let transcript = dir.path().join("pane.out");
+
+    let pty = Pty::spawn(
+        "tmux",
+        &[
+            "-L",
+            socket,
+            "-f",
+            conf.to_str().unwrap(),
+            "new-session",
+            "-x",
+            &COLUMNS.to_string(),
+            "-y",
+            &ROWS.to_string(),
+            "--",
+            "sh",
+        ],
+        &[("TERM", "xterm-256color")],
+        dir.path(),
+    );
+    // A real terminal reads continuously, and tmux needs one: a server blocked
+    // writing to a pty nobody is draining stops serving its panes, and then
+    // nothing is ever drawn. Reading on a thread is the only way to hold that
+    // up while this test also talks to tmux and waits on files.
+    let watcher = pty.master.try_clone().unwrap();
+    set_nonblocking(&watcher, false);
+    let reading = std::thread::spawn(move || {
+        let mut watcher = watcher;
+        let mut buffer = [0u8; 8192];
+        loop {
+            match watcher.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(_) => {}
+                // A signal interrupting the read must not end the draining:
+                // that is how the whole session stalls.
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => return,
+            }
+        }
+    });
+    std::thread::sleep(Duration::from_millis(800));
+
+    tmux(&[
+        "split-window",
+        "-h",
+        "-e",
+        "H5I_NB_IMAGES=sixel",
+        "--",
+        binary(),
+        "watch",
+        notebook.to_str().unwrap(),
+    ]);
+    std::thread::sleep(Duration::from_millis(500));
+    let geometry = tmux(&[
+        "display-message",
+        "-p",
+        "-t",
+        "1",
+        "#{pane_left} #{pane_top} #{pane_width} #{pane_height}",
+    ]);
+    let geometry = String::from_utf8_lossy(&geometry.stdout);
+    let numbers: Vec<u16> = geometry
+        .split_whitespace()
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    let [left, top, width, height] = numbers[..] else {
+        panic!("tmux did not describe the pane: {geometry:?}");
+    };
+
+    // The focus goes to the other pane: this is the case that used to break.
+    tmux(&["select-pane", "-t", "0"]);
+    // Record what the pane writes from the start, so the first frame — the one
+    // with the plot in it — is in the transcript rather than raced against.
+    // Unbuffered, or `cat` holds a frame in its own 4K buffer and the plot
+    // looks like it was never drawn.
+    tmux(&[
+        "pipe-pane",
+        "-o",
+        "-t",
+        "1",
+        &format!("stdbuf -o0 cat > {}", transcript.display()),
+    ]);
+
+    // Each round moves the plot down a line, so a frame that missed the first
+    // paint still has a reason to redraw the image: only cells that differ
+    // from the last frame are sent.
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut written = String::new();
+    for round in 1..20 {
+        std::thread::sleep(Duration::from_millis(500));
+        written = std::fs::read_to_string(&transcript).unwrap_or_default();
+        if written.contains("\x1bPtmux;") || Instant::now() >= deadline {
+            break;
+        }
+        write_notebook(round);
+    }
+    let state = tmux(&[
+        "display-message",
+        "-p",
+        "-t",
+        "1",
+        "cmd=#{pane_current_command} dead=#{pane_dead} size=#{pane_width}x#{pane_height}",
+    ]);
+    let state = String::from_utf8_lossy(&state.stdout).into_owned();
+    let state = format!(
+        "{state} showing:\n{}",
+        String::from_utf8_lossy(&tmux(&["capture-pane", "-p", "-t", "1"]).stdout)
+    );
+    tmux(&["kill-server"]);
+    pty.finish(Duration::from_secs(5));
+    let _ = reading.join();
+
+    assert!(
+        written.contains("\x1bPtmux;"),
+        "the pane never drew an image at all, so there is nothing to place. \
+         Pane: {state}It wrote {} bytes: {:?}",
+        written.len(),
+        visible(&written),
+    );
+    // Escapes are doubled inside a passthrough: save cursor, move, restore.
+    let marker = "\x1bPtmux;\x1b\x1b7\x1b\x1b[";
+    let at = written
+        .find(marker)
+        .unwrap_or_else(|| panic!("the image carries no cursor move of its own"));
+    let rest = &written[at + marker.len()..];
+    let end = rest.find('H').expect("unterminated cursor move");
+    let (row, column) = rest[..end].split_once(';').expect("malformed cursor move");
+    let (row, column): (u16, u16) = (row.parse().unwrap(), column.parse().unwrap());
+
+    // One-based, and inside this pane rather than the focused one next door.
+    assert!(
+        column > left && column <= left + width,
+        "image aimed at column {column}, outside a pane spanning {}..={}",
+        left + 1,
+        left + width
+    );
+    assert!(
+        row > top && row <= top + height,
+        "image aimed at row {row}, outside a pane spanning {}..={}",
+        top + 1,
+        top + height
+    );
+    assert!(
+        written[at..].contains("\x1b\x1b8"),
+        "the cursor is never put back, so tmux's next write starts from ours"
+    );
 }
 
 #[test]
