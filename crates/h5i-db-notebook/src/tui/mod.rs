@@ -132,7 +132,18 @@ pub(crate) fn enter() -> Result<(Terminal<Backend>, bool, Images)> {
     // terminal cannot express them in the legacy encoding at all. Terminals
     // that implement the kitty keyboard protocol can, so ask for it and fall
     // back to the `e` / `E` bindings everywhere else.
-    let enhanced = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    //
+    // Asked only while the terminal is still answering, and that check is not
+    // paranoia: when the graphics query above goes unanswered, the reader
+    // thread it spawned is abandoned rather than stopped, and it sits on stdin
+    // eating whatever arrives next. What arrives next is the reply crossterm
+    // is blocking on, and crossterm blocks with no timeout, so the notebook
+    // never paints its first frame at all. Inside tmux this is the common
+    // case, because tmux answers the status report itself while the terminal
+    // behind it answers nothing. One more status report, read the same bounded
+    // way, says whether anything is still listening.
+    let enhanced = image::still_answering()
+        && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
     if enhanced {
         let _ = execute!(
             stdout,
